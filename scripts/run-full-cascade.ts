@@ -58,9 +58,13 @@ function transcribeWav(wavPath: string): Promise<{ transcript: string; confidenc
       for (let i = 0; i < pcm.length; i += chunkSize) {
         ws.send(pcm.subarray(i, Math.min(i + chunkSize, pcm.length)));
       }
+      // Send trailing silence for endpointing (1.5s), then CloseStream
+      const silenceFrames = Math.floor(sampleRate / 50) * 75;
+      ws.send(Buffer.alloc(silenceFrames * 2));
+      // Give Deepgram time to process trailing audio before closing
       setTimeout(() => {
         try { ws.send(Buffer.from(JSON.stringify({ type: "CloseStream" }))); } catch {}
-      }, 2000);
+      }, 3000);
     });
 
     ws.on("message", (data: import("ws").RawData) => {
@@ -70,8 +74,12 @@ function transcribeWav(wavPath: string): Promise<{ transcript: string; confidenc
         if (alt?.transcript) {
           result = alt.transcript.trim();
           confidence = alt.confidence ?? 0;
+          if (!msg.is_final) {
+            console.log(`  [interim] "${result}"`);
+          }
         }
         if (msg.is_final) {
+          console.log(`  [FINAL]   "${result}" (conf: ${confidence.toFixed(2)})`);
           ws.close();
           resolve({ transcript: result, confidence, durationMs: Date.now() - start });
         }
@@ -86,7 +94,7 @@ function transcribeWav(wavPath: string): Promise<{ transcript: string; confidenc
       reject(err);
     });
 
-    setTimeout(() => reject(new Error("STT timeout")), 20_000);
+    setTimeout(() => reject(new Error("STT timeout")), 40_000);
   });
 }
 
