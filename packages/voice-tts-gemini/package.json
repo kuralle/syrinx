@@ -1,0 +1,1 @@
+{"name":"@asyncdot/voice-tts-gemini","version":"2.0.0","private":false,"type":"module","license":"MIT","main":"./src/index.ts","types":"./src/index.ts","dependencies":{"@asyncdot/voice":"workspace:*","@google/genai":"^1.0.0"},"devDependencies":{"typescript":"^5.7.0","vitest":"^2.1.0"}}
