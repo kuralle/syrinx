@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Syrinx Voice Studio — v2 Kernel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; display: flex; height: 100vh; overflow: hidden; }
+    #sidebar { width: 320px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; padding: 20px; gap: 16px; overflow-y: auto; }
+    #main { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow-y: auto; }
+    h1 { font-size: 18px; color: #58a6ff; margin-bottom: 8px; }
+    h2 { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    button { background: #238636; color: #fff; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #30363d; color: #484f58; cursor: not-allowed; }
+    button.danger { background: #da3633; }
+    button.danger:hover { background: #f85149; }
+    select, input { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 10px; border-radius: 6px; font-size: 13px; width: 100%; }
+    label { font-size: 12px; color: #8b949e; display: block; margin-bottom: 4px; }
+    .metric { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 13px; }
+    .metric .value { color: #58a6ff; font-family: 'SF Mono', monospace; }
+    .metric .value.good { color: #3fb950; }
+    .metric .value.warn { color: #d29922; }
+    .metric .value.bad { color: #f85149; }
+    #log { flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 12px; line-height: 1.6; min-height: 200px; }
+    .log-entry { margin-bottom: 2px; }
+    .log-entry.pipeline { color: #8b949e; }
+    .log-entry.user { color: #58a6ff; }
+    .log-entry.agent { color: #3fb950; }
+    .log-entry.error { color: #f85149; }
+    .log-entry.latency { color: #d29922; }
+    #visualizer { height: 60px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; position: relative; }
+    #visualizer canvas { width: 100%; height: 100%; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .status-dot.connected { background: #3fb950; }
+    .status-dot.disconnected { background: #f85149; }
+    .status-dot.connecting { background: #d29922; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>🎙️ Syrinx Studio</h1>
+    <div>
+      <h2>Connection</h2>
+      <div style="margin-top:8px;font-size:13px">
+        <span class="status-dot disconnected" id="statusDot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <input id="wsUrl" value="ws://localhost:9000/ws" placeholder="WebSocket URL" style="margin-top:8px" />
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+      </div>
+    </div>
+
+    <div>
+      <h2>Microphone</h2>
+      <select id="micSelect"><option>Loading...</option></select>
+      <button id="micBtn" onclick="toggleMic()" disabled style="margin-top:8px;width:100%">🎤 Start Mic</button>
+      <div id="visualizer"><canvas id="vizCanvas"></canvas></div>
+    </div>
+
+    <div>
+      <h2>Pipeline</h2>
+      <label>Provider Chain</label>
+      <div style="font-size:12px;color:#8b949e;margin-top:4px">
+        Audio → <span style="color:#58a6ff">Deepgram STT</span> → <span style="color:#3fb950">Gemini LLM</span> → <span style="color:#d29922">Gemini TTS</span> → Speaker
+      </div>
+    </div>
+
+    <div style="flex:1;display:flex;flex-direction:column;gap:12px">
+      <div>
+        <h2>Latency</h2>
+        <div class="metric"><span>STT</span><span class="value" id="metStt">--</span></div>
+        <div class="metric"><span>LLM TTFT</span><span class="value" id="metLlm">--</span></div>
+        <div class="metric"><span>TTS TTFB</span><span class="value" id="metTts">--</span></div>
+        <div class="metric"><span>E2E Voice→Voice</span><span class="value" id="metE2e">--</span></div>
+        <div class="metric"><span>Target</span><span class="value good">800ms</span></div>
+      </div>
+      <div style="margin-top:auto">
+        <button style="width:100%;font-size:11px;background:#21262d;color:#8b949e" onclick="document.getElementById('log').innerHTML=''">Clear Log</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h1>Conversation</h1>
+      <span style="font-size:12px;color:#8b949e">Kernel v2.0.0 | gemini-3.1-flash-tts-preview</span>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <audio id="audioOut" style="display:none"></audio>
+
+  <script type="module">
+    // ===================================================================
+    // WebSocket + Audio Pipeline Client
+    // ===================================================================
+
+    const wsUrl = document.getElementById('wsUrl');
+    const connectBtn = document.getElementById('connectBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const log = document.getElementById('log');
+    const audioOut = document.getElementById('audioOut');
+    const vizCanvas = document.getElementById('vizCanvas');
+
+    let ws = null;
+    let mediaStream = null;
+    let audioContext = null;
+    let processor = null;
+    let micActive = false;
+    let connected = false;
+
+    // Visualizer
+    const vizCtx = vizCanvas.getContext('2d');
+    let vizData = new Uint8Array(128).fill(128);
+    function drawViz() {
+      const w = vizCanvas.width, h = vizCanvas.height;
+      vizCtx.fillStyle = '#161b22'; vizCtx.fillRect(0, 0, w, h);
+      vizCtx.strokeStyle = '#58a6ff'; vizCtx.lineWidth = 2; vizCtx.beginPath();
+      const step = w / vizData.length;
+      for (let i = 0; i < vizData.length; i++) {
+        const y = (vizData[i] / 255) * h;
+        i === 0 ? vizCtx.moveTo(0, h - y) : vizCtx.lineTo(i * step, h - y);
+      }
+      vizCtx.stroke();
+      requestAnimationFrame(drawViz);
+    }
+    requestAnimationFrame(drawViz);
+
+    function logLine(text, cls = 'pipeline') {
+      const div = document.createElement('div');
+      div.className = 'log-entry ' + cls;
+      div.textContent = new Date().toLocaleTimeString() + ' ' + text;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setMetric(id, ms, target) {
+      const el = document.getElementById(id);
+      el.textContent = ms + 'ms';
+      el.className = 'value';
+      if (target) {
+        if (ms <= target) el.classList.add('good');
+        else if (ms <= target * 1.5) el.classList.add('warn');
+        else el.classList.add('bad');
+      }
+    }
+
+    async function toggleConnection() {
+      if (connected) {
+        ws?.close();
+        return;
+      }
+      try {
+        ws = new WebSocket(wsUrl.value);
+        statusDot.className = 'status-dot connecting';
+        statusText.textContent = 'Connecting...';
+        connectBtn.textContent = 'Connecting...';
+        connectBtn.disabled = true;
+
+        ws.onopen = () => {
+          connected = true;
+          statusDot.className = 'status-dot connected';
+          statusText.textContent = 'Connected';
+          connectBtn.textContent = 'Disconnect';
+          connectBtn.disabled = false;
+          document.getElementById('micBtn').disabled = false;
+          logLine('Connected to ' + wsUrl.value);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'tts_chunk' && msg.audio) {
+              playAudio(msg.audio);
+            } else if (msg.type === 'stt_chunk') {
+              logLine('🎤 ' + msg.transcript, 'user');
+            } else if (msg.type === 'stt_output') {
+              logLine('📝 Final: ' + msg.transcript, 'user');
+            } else if (msg.type === 'agent_chunk') {
+              logLine('🤖 ' + msg.text, 'agent');
+            } else if (msg.type === 'agent_end') {
+              logLine('✅ Turn complete', 'pipeline');
+            } else if (msg.type === 'metrics') {
+              if (msg.sttMs) setMetric('metStt', msg.sttMs, 300);
+              if (msg.llmTTFTMs) setMetric('metLlm', msg.llmTTFTMs, 380);
+              if (msg.ttsTTFBMs) setMetric('metTts', msg.ttsTTFBMs, 190);
+              if (msg.e2eMs) setMetric('metE2e', msg.e2eMs, 800);
+              logLine('⏱ STT:' + (msg.sttMs || '?') + 'ms LLM:' + (msg.llmTTFTMs || '?') + 'ms TTS:' + (msg.ttsTTFBMs || '?') + 'ms E2E:' + (msg.e2eMs || '?') + 'ms', 'latency');
+            }
+          } catch (e) {
+            // Binary audio frame
+            if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+              playAudio(event.data);
+            }
+          }
+        };
+
+        ws.onerror = () => { logLine('WebSocket error', 'error'); };
+        ws.onclose = () => {
+          connected = false;
+          statusDot.className = 'status-dot disconnected';
+          statusText.textContent = 'Disconnected';
+          connectBtn.textContent = 'Connect';
+          connectBtn.disabled = false;
+          logLine('Disconnected');
+        };
+      } catch (e) {
+        logLine('Connection failed: ' + e.message, 'error');
+        connectBtn.textContent = 'Connect';
+        connectBtn.disabled = false;
+      }
+    }
+
+    async function toggleMic() {
+      if (micActive) { stopMic(); return; }
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        
+        processor.onaudioprocess = (e) => {
+          if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
+          const input = e.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) {
+            pcm[i] = Math.max(-32768, Math.min(32767, Math.floor(input[i] * 32767)));
+          }
+          ws.send(pcm.buffer);
+          // Update visualizer
+          const viz = new Uint8Array(128);
+          for (let i = 0; i < 128; i++) {
+            const idx = Math.floor(i * input.length / 128);
+            viz[i] = Math.min(255, Math.abs(Math.floor(input[Math.min(idx, input.length-1)] * 255)));
+          }
+          vizData = viz;
+        };
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+        micActive = true;
+        document.getElementById('micBtn').textContent = '🔴 Stop Mic';
+        document.getElementById('micBtn').classList.add('danger');
+        logLine('Microphone active');
+      } catch (e) {
+        logLine('Mic error: ' + e.message, 'error');
+      }
+    }
+
+    function stopMic() {
+      processor?.disconnect();
+      audioContext?.close();
+      mediaStream?.getTracks().forEach(t => t.stop());
+      micActive = false;
+      document.getElementById('micBtn').textContent = '🎤 Start Mic';
+      document.getElementById('micBtn').classList.remove('danger');
+      logLine('Microphone stopped');
+    }
+
+    function playAudio(data) {
+      const blob = data instanceof Blob ? data : new Blob([data], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      audioOut.src = url;
+      audioOut.play().catch(() => {});
+    }
+
+    // Populate mic list
+    navigator.mediaDevices?.enumerateDevices().then(devices => {
+      const sel = document.getElementById('micSelect');
+      sel.innerHTML = '';
+      for (const d of devices.filter(d => d.kind === 'audioinput')) {
+        sel.innerHTML += '<option value="' + d.deviceId + '">' + (d.label || 'Mic ' + d.deviceId.slice(0,8)) + '</option>';
+      }
+    });
+  </script>
+</body>
+</html>
