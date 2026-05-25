@@ -35,10 +35,11 @@ export type GeminiVoice =
   | "Orus";
 
 export type GeminiTTSModel =
+  | "gemini-3.1-flash-tts-preview"
   | "gemini-2.5-flash-preview-tts"
   | "gemini-2.5-pro-preview-tts";
 
-const DEFAULT_MODEL: GeminiTTSModel = "gemini-2.5-flash-preview-tts";
+const DEFAULT_MODEL: GeminiTTSModel = "gemini-3.1-flash-tts-preview";
 const DEFAULT_VOICE: GeminiVoice = "Kore";
 const SAMPLE_RATE = 24000;
 
