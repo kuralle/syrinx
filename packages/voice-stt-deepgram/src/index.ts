@@ -34,7 +34,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private sampleRate: number = 16000;
   private model: string = "nova-2";
   private language: string = "en-US";
-  private endpointing: number = 5000;
+  private endpointing: number = 300;
   private smartFormat: boolean = true;
   private interimResults: boolean = true;
   private confidenceThreshold: number = 0;
@@ -57,7 +57,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.sampleRate = (config["sample_rate"] as number) ?? 16000;
     this.model = optionalStringConfig(config, "model") ?? "nova-2";
     this.language = optionalStringConfig(config, "language") ?? "en-US";
-    this.endpointing = (config["endpointing"] as number) ?? 5000;
+    this.endpointing = (config["endpointing"] as number) ?? 300;
     this.smartFormat = (config["smart_format"] as boolean) ?? true;
     this.interimResults = (config["interim_results"] as boolean) ?? true;
     this.confidenceThreshold =
