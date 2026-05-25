@@ -74,6 +74,13 @@ export interface VoiceAgentSessionConfig {
     bgCapacity?: number;
     criticalBatchSize?: number;
   };
+  /**
+   * Maximum ms to wait for an STT final transcript after audio injection stops.
+   * Guards against Deepgram's 5000ms endpointing never firing on short audio.
+   * When this timer fires, force-finalize the turn with the last interim transcript.
+   * Default: 7000 (endpointing + 2s grace)
+   */
+  sttForceFinalizeTimeoutMs?: number;
 }
 
 export interface VoiceAgentSessionEvents {

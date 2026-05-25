@@ -10,6 +10,11 @@
 //   - Interim transcripts for real-time display
 //   - Final transcripts trigger eos.turn_complete
 //
+// Guards (Syrinx additions beyond Rapida):
+//   - Tracks last interim transcript for force-finalization
+//   - forceFinalize() emits pending transcript as final on close/timeout
+//   - Prevents silent drop when audio < endpointing duration
+//
 // Reference: Rapida transformer/deepgram/stt.go + internal/stt_callback.go
 
 import type { PipelineBus } from "@asyncdot/voice";
@@ -22,10 +27,6 @@ import {
   categorizeSttError,
   isRecoverable,
 } from "@asyncdot/voice";
-
-// =============================================================================
-// Plugin
-// =============================================================================
 
 export class DeepgramSTTPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -45,6 +46,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private currentContextId = "";
   private streamStartTime = 0;
 
+  // Guard: track last interim for force-finalization on short audio
+  private lastInterimTranscript = "";
+  private lastInterimConfidence = 0;
+  private hasFinalForCurrentTurn = false;
+
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
     this.apiKey = requireStringConfig(config, "api_key");
@@ -54,7 +60,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.endpointing = (config["endpointing"] as number) ?? 5000;
     this.smartFormat = (config["smart_format"] as boolean) ?? true;
     this.interimResults = (config["interim_results"] as boolean) ?? true;
-    this.confidenceThreshold = (config["confidence_threshold"] as number) ?? 0;
+    this.confidenceThreshold =
+      (config["confidence_threshold"] as number) ?? 0;
 
     // Open session-long WebSocket (Rapida pattern)
     const { default: WebSocket } = await import("ws");
@@ -89,8 +96,15 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         const transcript = alt.transcript.trim();
         const confidence = alt.confidence ?? 0;
 
+        // Guard: track last interim for force-finalize
+        this.lastInterimTranscript = transcript;
+        this.lastInterimConfidence = confidence;
+
         // Confidence threshold filter (Rapida pattern)
-        if (this.confidenceThreshold > 0 && confidence < this.confidenceThreshold) {
+        if (
+          this.confidenceThreshold > 0 &&
+          confidence < this.confidenceThreshold
+        ) {
           this.bus?.push(Route.Background, {
             kind: "metric.conversation",
             contextId: this.currentContextId,
@@ -102,42 +116,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         }
 
         if (msg.is_final) {
-          // Final transcript — turn complete (Rapida pattern: push STT result + EOS)
-          const ctxId = this.currentContextId;
-          this.bus?.push(Route.Main, {
-            kind: "stt.result",
-            contextId: ctxId,
-            timestampMs: Date.now(),
-            text: transcript,
-            confidence,
-            language: this.language,
-          });
-
-          // EndOfSpeech turn complete — triggers LLM processing
-          this.bus?.push(Route.Main, {
-            kind: "eos.turn_complete",
-            contextId: ctxId,
-            timestampMs: Date.now(),
-            text: transcript,
-            transcripts: [],
-          });
-
-          // Debug event
-          this.bus?.push(Route.Background, {
-            kind: "metric.conversation",
-            contextId: ctxId,
-            timestampMs: Date.now(),
-            name: "stt_latency_ms",
-            value: String(Date.now() - this.streamStartTime),
-          });
+          this.hasFinalForCurrentTurn = true;
+          this.pushFinal(transcript, confidence);
         } else {
-          // Interim transcript — real-time display only
-          this.bus?.push(Route.Main, {
-            kind: "stt.interim",
-            contextId: this.currentContextId,
-            timestampMs: Date.now(),
-            text: transcript,
-          });
+          this.pushInterim(transcript);
         }
       } catch {
         // Parse errors are non-critical
@@ -159,16 +141,9 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
     this.ws.on("close", () => {
       this.ready = false;
-      this.bus?.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: this.currentContextId,
-        timestampMs: Date.now(),
-        name: "stt_connection_closed",
-        value: "1",
-      });
     });
 
-    // Listen for audio packets on the bus — stream immediately (Rapida pattern)
+    // Listen for audio packets — stream immediately
     bus.on("stt.audio", async (pkt: unknown) => {
       const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
       await this.sendAudio(audioPkt.audio);
@@ -178,40 +153,100 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       if (this.streamStartTime === 0) {
         this.streamStartTime = Date.now();
       }
+      // Guard: new audio = new turn, reset final flag
+      this.hasFinalForCurrentTurn = false;
     });
 
-    // Handle turn changes — reset latency tracking (Rapida pattern)
+    // Turn change handler
     bus.on("turn.change", (pkt: unknown) => {
       const tc = pkt as { contextId: string };
       this.currentContextId = tc.contextId;
       this.streamStartTime = Date.now();
+      this.hasFinalForCurrentTurn = false;
     });
 
-    // Handle STT interrupts — reset tracking (Rapida pattern)
+    // STT interrupt handler
     bus.on("interrupt.stt", () => {
       this.streamStartTime = Date.now();
+      this.hasFinalForCurrentTurn = false;
     });
   }
 
-  /**
-   * Stream audio to Deepgram immediately. No batching, no CloseStream.
-   * Deepgram's built-in endpointing (5000ms) handles turn boundaries.
-   * This is the Rapida pattern.
-   */
+  /** Stream audio to Deepgram immediately. No batching, no CloseStream. */
   async sendAudio(audio: Uint8Array): Promise<void> {
     if (!this.ready) {
       await new Promise<void>((r) => {
         this.connResolver = r;
       });
     }
-    if (this.ws?.readyState === (this.ws as import("ws").WebSocket).OPEN) {
+    if (
+      this.ws?.readyState === (this.ws as import("ws").WebSocket).OPEN
+    ) {
       this.ws.send(audio);
     }
   }
 
+  /**
+   * Force-finalize the current turn with the last known interim transcript.
+   *
+   * Guard for: short audio clips (< 5s) where Deepgram's 5000ms endpointing
+   * never fires. Also called on session close() for pending transcription.
+   */
+  forceFinalize(contextId?: string): void {
+    const ctxId = contextId ?? this.currentContextId;
+    const transcript = this.lastInterimTranscript;
+    const confidence = this.lastInterimConfidence;
+
+    // Don't force-finalize if we already got a final for this turn
+    if (this.hasFinalForCurrentTurn) return;
+    if (!transcript || !this.bus) return;
+
+    this.hasFinalForCurrentTurn = true;
+    this.pushFinal(transcript, confidence);
+
+    // Clear tracking
+    this.lastInterimTranscript = "";
+    this.lastInterimConfidence = 0;
+  }
+
+  /** Emit final transcript + EOS turn complete. */
+  private pushFinal(transcript: string, confidence: number): void {
+    const ctxId = this.currentContextId;
+    this.bus?.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctxId,
+      timestampMs: Date.now(),
+      text: transcript,
+      confidence,
+      language: this.language,
+    });
+
+    this.bus?.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: ctxId,
+      timestampMs: Date.now(),
+      text: transcript,
+      transcripts: [],
+    });
+  }
+
+  /** Emit interim transcript for real-time display. */
+  private pushInterim(transcript: string): void {
+    this.bus?.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: this.currentContextId,
+      timestampMs: Date.now(),
+      text: transcript,
+    });
+  }
+
   async close(): Promise<void> {
+    // Guard: force-finalize pending transcription (short audio, no endpointing)
+    if (this.lastInterimTranscript && !this.hasFinalForCurrentTurn) {
+      this.forceFinalize();
+    }
+
     if (this.ws) {
-      // Rapida pattern: client.Stop() — gracefully close the session-long connection
       this.ws.close();
       this.ws = null;
     }
