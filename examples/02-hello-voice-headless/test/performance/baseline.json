@@ -1,0 +1,75 @@
+{
+  "kernelVersion": "0.1.0",
+  "runAt": "2026-05-25",
+  "transport": "websocket",
+  "providers": {
+    "stt": "deepgram",
+    "llm": "gemini-2.5-flash",
+    "tts": "cartesia-sonic-2"
+  },
+  "note": "TARGET METRICS (not live measurements). Deepgram WebSocket streaming key returned 402 — likely insufficient credits on temporary sprint key. Re-run with RUN_LIVE=1 once a funded key is available. See scripts/run-multi-turn-baseline.ts for the harness.",
+  "conversation": {
+    "turnCount": 5,
+    "turns": [
+      {
+        "turnIndex": 0,
+        "transcript": "Hi, I'd like to order a sandwich please.",
+        "sttLatencyMs": 400,
+        "llmTTFTMs": 300,
+        "ttsTTFBMs": 200,
+        "e2eLatencyMs": 900,
+        "agentTokens": 12,
+        "playedMs": 1800
+      },
+      {
+        "turnIndex": 1,
+        "transcript": "Can I get turkey with swiss cheese?",
+        "sttLatencyMs": 400,
+        "llmTTFTMs": 300,
+        "ttsTTFBMs": 200,
+        "e2eLatencyMs": 900,
+        "agentTokens": 14,
+        "playedMs": 2100
+      },
+      {
+        "turnIndex": 2,
+        "transcript": "And add lettuce and tomato.",
+        "sttLatencyMs": 400,
+        "llmTTFTMs": 300,
+        "ttsTTFBMs": 200,
+        "e2eLatencyMs": 900,
+        "agentTokens": 10,
+        "playedMs": 1500
+      },
+      {
+        "turnIndex": 3,
+        "transcript": "Actually, make that provolone instead of swiss.",
+        "sttLatencyMs": 400,
+        "llmTTFTMs": 300,
+        "ttsTTFBMs": 200,
+        "e2eLatencyMs": 900,
+        "agentTokens": 13,
+        "playedMs": 1950
+      },
+      {
+        "turnIndex": 4,
+        "transcript": "Yes, that's everything. Thanks!",
+        "sttLatencyMs": 400,
+        "llmTTFTMs": 300,
+        "ttsTTFBMs": 200,
+        "e2eLatencyMs": 900,
+        "agentTokens": 18,
+        "playedMs": 2700
+      }
+    ],
+    "aggregate": {
+      "totalDurationMs": 15000,
+      "avgE2eLatencyMs": 900,
+      "avgSttLatencyMs": 400,
+      "avgLlmTTFTMs": 300,
+      "avgTtsTTFBMs": 200,
+      "totalAgentTokens": 67,
+      "totalPlayedMs": 10050
+    }
+  }
+}

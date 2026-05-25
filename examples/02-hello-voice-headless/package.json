@@ -1,0 +1,37 @@
+{
+  "name": "@asyncdot-example/02-hello-voice-headless",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx src/cli.ts public/fixtures/hello.wav",
+    "build": "tsc --noEmit -p tsconfig.json && mkdir -p dist && touch dist/.buildstamp",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src test scripts --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^3.0.0",
+    "@asyncdot/voice": "workspace:*",
+    "@asyncdot/voice-bridge-aisdk": "workspace:*",
+    "@asyncdot/voice-stt-deepgram": "workspace:*",
+    "@asyncdot/voice-tts-cartesia": "workspace:*",
+    "@asyncdot/voice-vad-silero": "workspace:*",
+    "@asyncdot/voice-recorder": "workspace:*",
+    "@asyncdot/voice-test": "workspace:*",
+    "ai": "^6.0.0",
+    "dotenv": "^16.6.1",
+    "wavefile": "^11.0.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.2",
+    "@typescript-eslint/parser": "^8.59.2",
+    "eslint": "^10.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}
