@@ -8,9 +8,15 @@ importers:
 
   .:
     devDependencies:
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
 
   examples/02-hello-voice-headless:
     dependencies:

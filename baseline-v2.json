@@ -1,0 +1,101 @@
+{
+  "kernelVersion": "2.0.0",
+  "runAt": "2026-05-25T11:33:39.677Z",
+  "transport": "headless-direct",
+  "providers": {
+    "stt": "deepgram",
+    "llm": "gemini-2.5-flash",
+    "tts": "cartesia-sonic-2"
+  },
+  "conversation": {
+    "turnCount": 5,
+    "turns": [
+      {
+        "turnIndex": 0,
+        "expectedTranscript": "Hi, I'd like to order a sandwich please.",
+        "actualTranscript": "",
+        "agentReply": "Great! What kind of sandwich can I get started for you?",
+        "sttLatencyMs": 0,
+        "llmTTFTMs": 1211,
+        "ttsTTFBMs": 0,
+        "e2eLatencyMs": 0,
+        "sttConfidence": 0,
+        "ttsChunks": 0,
+        "wordCount": 11,
+        "truncated": true,
+        "transcriptFidelity": "missing"
+      },
+      {
+        "turnIndex": 1,
+        "expectedTranscript": "Can I get turkey with swiss cheese?",
+        "actualTranscript": "",
+        "agentReply": "Absolutely. What kind of bread would you like for your turkey and swiss?",
+        "sttLatencyMs": 0,
+        "llmTTFTMs": 827,
+        "ttsTTFBMs": 0,
+        "e2eLatencyMs": 0,
+        "sttConfidence": 0,
+        "ttsChunks": 0,
+        "wordCount": 13,
+        "truncated": true,
+        "transcriptFidelity": "missing"
+      },
+      {
+        "turnIndex": 2,
+        "expectedTranscript": "And add lettuce and tomato.",
+        "actualTranscript": "",
+        "agentReply": "Lettuce and tomato it is. What kind of bread would you prefer for your turkey and swiss?",
+        "sttLatencyMs": 0,
+        "llmTTFTMs": 1255,
+        "ttsTTFBMs": 0,
+        "e2eLatencyMs": 0,
+        "sttConfidence": 0,
+        "ttsChunks": 0,
+        "wordCount": 17,
+        "truncated": true,
+        "transcriptFidelity": "missing"
+      },
+      {
+        "turnIndex": 3,
+        "expectedTranscript": "Actually, make that provolone instead of swiss.",
+        "actualTranscript": "",
+        "agentReply": "No problem at all! Turkey with provolone, lettuce, and tomato. What bread will that be on today?",
+        "sttLatencyMs": 0,
+        "llmTTFTMs": 759,
+        "ttsTTFBMs": 0,
+        "e2eLatencyMs": 0,
+        "sttConfidence": 0,
+        "ttsChunks": 0,
+        "wordCount": 17,
+        "truncated": true,
+        "transcriptFidelity": "missing"
+      },
+      {
+        "turnIndex": 4,
+        "expectedTranscript": "Yes, that's everything. Thanks!",
+        "actualTranscript": "",
+        "agentReply": "Perfect! What kind of bread would you like for your turkey and provolone sandwich?",
+        "sttLatencyMs": 0,
+        "llmTTFTMs": 1094,
+        "ttsTTFBMs": 0,
+        "e2eLatencyMs": 0,
+        "sttConfidence": 0,
+        "ttsChunks": 0,
+        "wordCount": 14,
+        "truncated": true,
+        "transcriptFidelity": "missing"
+      }
+    ],
+    "aggregate": {
+      "totalDurationMs": 87175,
+      "avgE2eLatencyMs": 0,
+      "avgSTTLatencyMs": 0,
+      "avgLLMTTFTMs": 1029,
+      "avgTTSTTFBMs": 0,
+      "totalTtsChunks": 0,
+      "truncationCount": 5,
+      "avgWordCount": 14,
+      "fidelitySummary": "0 exact, 0 partial, 5 missing"
+    }
+  }
+}
