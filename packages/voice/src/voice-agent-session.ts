@@ -1,0 +1,718 @@
+// SPDX-License-Identifier: MIT
+//
+// Syrinx Kernel v2 — Voice Agent Session
+//
+// The central orchestrator. Wires together PipelineBus, plugins, init chain,
+// error handler, idle timeout, mode switcher, and debug event stream.
+//
+// Breaking changes from v0.1:
+//   - Plugins accept PipelineBus directly (no callbacks).
+//   - Explicit init/finalize chains with stage-level error reporting.
+//   - Categorized errors with recoverable flag.
+//   - Priority bus with Critical/Main/Background routes.
+//   - Unified ConversationEvent debug stream.
+//   - Idle timeout with consecutive backoff.
+//   - Mode switching (text ↔ audio).
+//
+// Backward compat: on/off event emitter stays for client-side consumers
+// (bridges bus packets to legacy event names like "user_started_speaking").
+
+import { PipelineBusImpl, Route, type PipelineBus } from "./pipeline-bus.js";
+import { runInitChain, runFinalizeChain, type InitStep } from "./init-chain.js";
+import type { VoicePlugin, PluginConfig } from "./plugin-contract.js";
+import { IdleTimeoutManager, type IdleTimeoutConfig } from "./idle-timeout.js";
+import { ModeSwitcher } from "./mode-switcher.js";
+import { createConversationEventStream, type ConversationEvent } from "./conversation-event.js";
+import { isRecoverable } from "./error-handler.js";
+import type {
+  VoicePacket,
+  VoiceErrorPacket,
+  UserAudioReceivedPacket,
+  UserTextReceivedPacket,
+  InterruptionDetectedPacket,
+  InterruptTtsPacket,
+  InterruptLlmPacket,
+  LlmDeltaPacket,
+  LlmResponseDonePacket,
+  LlmToolCallPacket,
+  LlmToolResultPacket,
+  TextToSpeechAudioPacket,
+  TextToSpeechTextPacket,
+  TextToSpeechDonePacket,
+  TextToSpeechEndPacket,
+  SttResultPacket,
+  SttInterimPacket,
+  VadSpeechStartedPacket,
+  VadSpeechEndedPacket,
+  EndOfSpeechPacket,
+  InterimEndOfSpeechPacket,
+  InjectMessagePacket,
+  DisconnectRequestedPacket,
+  InitializationFailedPacket,
+  ModeSwitchRequestedPacket,
+  StartIdleTimeoutPacket,
+  StopIdleTimeoutPacket,
+} from "./packets.js";
+import {
+  SessionState,
+  InitStage,
+  ErrorCategory,
+} from "./packets.js";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+export interface VoiceAgentSessionConfig {
+  /** Plugin configurations, keyed by plugin name. */
+  plugins: Record<string, PluginConfig>;
+  /** Idle timeout configuration. */
+  idleTimeout?: Partial<IdleTimeoutConfig>;
+  /** PipelineBus configuration. */
+  busConfig?: {
+    mainCapacity?: number;
+    bgCapacity?: number;
+    criticalBatchSize?: number;
+  };
+}
+
+export interface VoiceAgentSessionEvents {
+  user_started_speaking: (event: { tsMs: number; turnId: string }) => void;
+  user_stopped_speaking: (event: { tsMs: number; turnId: string }) => void;
+  user_input_partial: (event: { tsMs: number; turnId: string; text: string }) => void;
+  user_input_final: (event: { tsMs: number; turnId: string; text: string; confidence: number }) => void;
+  agent_text_delta: (event: { tsMs: number; turnId: string; delta: string }) => void;
+  agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
+  agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
+  agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
+  agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
+  error: (event: { tsMs: number; stage: string; category: string; message: string }) => void;
+  closed: (event: { tsMs: number; reason: string }) => void;
+  state_changed: (event: { tsMs: number; from: SessionState; to: SessionState }) => void;
+}
+
+type EventHandler<T> = (event: T) => void;
+
+// =============================================================================
+// Session Implementation
+// =============================================================================
+
+export class VoiceAgentSession {
+  readonly bus: PipelineBus;
+  readonly debugEvents: ReadableStream<ConversationEvent>;
+  private _state: SessionState = SessionState.Uninitialized;
+  private plugins: Map<string, VoicePlugin> = new Map();
+  private initSteps: InitStep[] = [];
+  private idleTimeout: IdleTimeoutManager;
+  private modeSwitcher: ModeSwitcher;
+  private debugPush: (event: ConversationEvent) => void;
+  private eventListeners = new Map<string, Set<EventHandler<unknown>>>();
+  private currentTurnId = "";
+  private busStartPromise: Promise<void> | null = null;
+
+  constructor(config: VoiceAgentSessionConfig) {
+    // PipelineBus
+    this.bus = new PipelineBusImpl(config.busConfig);
+
+    // Debug events
+    const [stream, push] = createConversationEventStream();
+    this.debugEvents = stream;
+    this.debugPush = push;
+
+    // Idle timeout — starts after bus handlers are wired
+    this.idleTimeout = new IdleTimeoutManager(this.bus, config.idleTimeout);
+
+    // Mode switcher
+    this.modeSwitcher = new ModeSwitcher(this.bus);
+  }
+
+  // =========================================================================
+  // Public API
+  // =========================================================================
+
+  get state(): SessionState {
+    return this._state;
+  }
+
+  /** Register a plugin. Must be called before start(). */
+  registerPlugin(name: string, plugin: VoicePlugin): void {
+    this.plugins.set(name, plugin);
+  }
+
+  /** Start the session. Runs init chain, starts bus draining. */
+  async start(): Promise<void> {
+    if (this._state !== SessionState.Uninitialized) {
+      throw new Error(`Cannot start session in state ${this._state}`);
+    }
+    this._state = SessionState.Initializing;
+
+    // 1. Wire all bus handlers
+    this.wireBusHandlers();
+
+    // 2. Start bus drain loop
+    this.busStartPromise = this.bus.start();
+
+    // 3. Build init chain from registered plugins
+    this.buildInitChain();
+
+    // 4. Run init chain
+    try {
+      await runInitChain(this.bus, this.initSteps);
+    } catch (err) {
+      this._state = SessionState.Failed;
+      throw err;
+    }
+
+    this._state = SessionState.Ready;
+  }
+
+  /** Shut down the session. Runs finalize chain in reverse order. */
+  async close(): Promise<void> {
+    if (this._state === SessionState.Closed) return;
+    this._state = SessionState.Finalizing;
+
+    // 1. Stop idle timeout
+    this.idleTimeout.dispose();
+
+    // 2. Run finalize chain (reverse order)
+    await runFinalizeChain(this.initSteps);
+
+    // 3. Stop bus
+    this.bus.stop();
+    await this.busStartPromise;
+
+    // 4. Emit debug event
+    this.emitDebug("session", "disconnected", { reason: "close" });
+
+    this._state = SessionState.Closed;
+  }
+
+  /** Switch between text and audio mode. */
+  async switchMode(mode: "text" | "audio"): Promise<void> {
+    const pkt: ModeSwitchRequestedPacket = {
+      kind: "mode.switch_requested",
+      contextId: this.currentTurnId,
+      timestampMs: Date.now(),
+      mode,
+    };
+    this.bus.push(Route.Main, pkt);
+  }
+
+  // =========================================================================
+  // Legacy Event Emitter (client-side consumers)
+  // =========================================================================
+
+  on<K extends keyof VoiceAgentSessionEvents>(
+    event: K,
+    handler: VoiceAgentSessionEvents[K],
+  ): void {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(handler as EventHandler<unknown>);
+  }
+
+  off<K extends keyof VoiceAgentSessionEvents>(
+    event: K,
+    handler: VoiceAgentSessionEvents[K],
+  ): void {
+    this.eventListeners.get(event)?.delete(handler as EventHandler<unknown>);
+  }
+
+  private emit<K extends keyof VoiceAgentSessionEvents>(
+    event: K,
+    payload: Parameters<VoiceAgentSessionEvents[K]>[0],
+  ): void {
+    const listeners = this.eventListeners.get(event);
+    if (!listeners) return;
+    for (const fn of listeners) {
+      try {
+        (fn as EventHandler<unknown>)(payload);
+      } catch {
+        // Don't let listener errors crash the session
+      }
+    }
+  }
+
+  // =========================================================================
+  // Bus Handler Wiring
+  // =========================================================================
+
+  private wireBusHandlers(): void {
+    // Input pipeline
+    this.bus.on("user.audio_received", this.handleUserAudio.bind(this));
+    this.bus.on("user.text_received", this.handleUserText.bind(this));
+
+    // STT results
+    this.bus.on("stt.interim", this.handleSttInterim.bind(this));
+    this.bus.on("stt.result", this.handleSttResult.bind(this));
+
+    // VAD
+    this.bus.on("vad.speech_started", this.handleVadSpeechStarted.bind(this));
+    this.bus.on("vad.speech_ended", this.handleVadSpeechEnded.bind(this));
+
+    // EOS
+    this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
+    this.bus.on("eos.interim", this.handleEosInterim.bind(this));
+
+    // LLM
+    this.bus.on("llm.delta", this.handleLlmDelta.bind(this));
+    this.bus.on("llm.done", this.handleLlmDone.bind(this));
+    this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
+    this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
+
+    // TTS
+    this.bus.on("tts.audio", this.handleTtsAudio.bind(this));
+    this.bus.on("tts.end", this.handleTtsEnd.bind(this));
+
+    // Interrupts
+    this.bus.on("interrupt.detected", this.handleInterruptDetected.bind(this));
+
+    // Errors
+    this.bus.on("stt.error", this.handleComponentError.bind(this));
+    this.bus.on("tts.error", this.handleComponentError.bind(this));
+    this.bus.on("llm.error", this.handleComponentError.bind(this));
+    this.bus.on("pipeline.error", this.handleComponentError.bind(this));
+
+    // Lifecycle
+    this.bus.on("init.failed", this.handleInitFailed.bind(this));
+
+    // Behavior
+    this.bus.on("behavior.idle_timeout_start", (pkt: unknown) => {
+      this.idleTimeout.handleStart(pkt as StartIdleTimeoutPacket);
+    });
+    this.bus.on("behavior.idle_timeout_stop", (pkt: unknown) => {
+      this.idleTimeout.handleStop(pkt as StopIdleTimeoutPacket);
+    });
+
+    // Injected messages — push through LLM path for natural TTS
+    this.bus.on("inject.message", this.handleInjectMessage.bind(this));
+
+    // Disconnect
+    this.bus.on("session.disconnect", this.handleDisconnect.bind(this));
+
+    // Mode switching
+    this.bus.on("mode.switch_requested", async (pkt: unknown) => {
+      await this.modeSwitcher.handleSwitchRequested(pkt as ModeSwitchRequestedPacket);
+    });
+  }
+
+  // =========================================================================
+  // Handler Implementations
+  // =========================================================================
+
+  private handleUserAudio(pkt: UserAudioReceivedPacket): void {
+    this.debugPush({
+      component: "input",
+      type: "audio_received",
+      data: { context_id: pkt.contextId, bytes: String(pkt.audio.length) },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleUserText(pkt: UserTextReceivedPacket): void {
+    // Treat text input as an immediate EOS turn complete
+    this.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      text: pkt.text,
+      transcripts: [] as readonly SttResultPacket[],
+    } as EndOfSpeechPacket);
+  }
+
+  private handleSttInterim(pkt: SttInterimPacket): void {
+    this.currentTurnId = pkt.contextId;
+    this.emit("user_input_partial", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      text: pkt.text,
+    });
+    this.debugPush({
+      component: "stt",
+      type: "interim",
+      data: { context_id: pkt.contextId, text: pkt.text },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleSttResult(pkt: SttResultPacket): void {
+    this.currentTurnId = pkt.contextId;
+    this.emit("user_input_final", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      text: pkt.text,
+      confidence: pkt.confidence,
+    });
+    this.debugPush({
+      component: "stt",
+      type: "final",
+      data: {
+        context_id: pkt.contextId,
+        text: pkt.text,
+        confidence: String(pkt.confidence),
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
+    this.emit("user_started_speaking", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+    });
+    this.debugPush({
+      component: "vad",
+      type: "speech_started",
+      data: {
+        context_id: pkt.contextId,
+        confidence: String(pkt.confidence),
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
+    this.emit("user_stopped_speaking", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+    });
+    this.debugPush({
+      component: "vad",
+      type: "speech_ended",
+      data: { context_id: pkt.contextId },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleTurnComplete(pkt: EndOfSpeechPacket): void {
+    this.currentTurnId = pkt.contextId;
+    this.idleTimeout.setContextId(pkt.contextId);
+
+    this.emit("user_input_final", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      text: pkt.text,
+      confidence: 1.0,
+    });
+    this.debugPush({
+      component: "eos",
+      type: "turn_complete",
+      data: { context_id: pkt.contextId, text: pkt.text },
+      timestampMs: pkt.timestampMs,
+    });
+
+    // Stop idle timeout while LLM is processing
+    this.bus.push(Route.Main, {
+      kind: "behavior.idle_timeout_stop",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      resetCount: false,
+    } as StopIdleTimeoutPacket);
+  }
+
+  private handleEosInterim(pkt: InterimEndOfSpeechPacket): void {
+    this.debugPush({
+      component: "eos",
+      type: "interim",
+      data: { context_id: pkt.contextId, text: pkt.text },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleLlmDelta(pkt: LlmDeltaPacket): void {
+    this.emit("agent_text_delta", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      delta: pkt.text,
+    });
+    this.debugPush({
+      component: "llm",
+      type: "delta",
+      data: { context_id: pkt.contextId, text: pkt.text },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleLlmDone(pkt: LlmResponseDonePacket): void {
+    this.emit("agent_finished", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+    });
+    this.debugPush({
+      component: "llm",
+      type: "done",
+      data: { context_id: pkt.contextId },
+      timestampMs: pkt.timestampMs,
+    });
+
+    // Start idle timeout after agent finishes
+    this.bus.push(Route.Main, {
+      kind: "behavior.idle_timeout_start",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+    } as StartIdleTimeoutPacket);
+  }
+
+  private handleLlmToolCall(pkt: LlmToolCallPacket): void {
+    this.emit("agent_tool_call", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      id: pkt.toolId,
+      name: pkt.toolName,
+      args: pkt.toolArgs,
+    });
+    this.debugPush({
+      component: "tool",
+      type: "call_started",
+      data: {
+        context_id: pkt.contextId,
+        tool_id: pkt.toolId,
+        tool_name: pkt.toolName,
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleLlmToolResult(pkt: LlmToolResultPacket): void {
+    this.emit("agent_tool_result", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      id: pkt.toolId,
+      result: pkt.result,
+      durationMs: 0,
+    });
+    this.debugPush({
+      component: "tool",
+      type: "call_completed",
+      data: {
+        context_id: pkt.contextId,
+        tool_id: pkt.toolId,
+        tool_name: pkt.toolName,
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
+    // Extend idle timeout by audio duration to prevent timeout during playback
+    const audioDurationMs = estimatePcm16Duration(pkt.audio, 24000);
+    this.idleTimeout.extend(audioDurationMs);
+
+    this.debugPush({
+      component: "tts",
+      type: "audio",
+      data: {
+        context_id: pkt.contextId,
+        bytes: String(pkt.audio.length),
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleTtsEnd(_pkt: TextToSpeechEndPacket): void {
+    this.debugPush({
+      component: "tts",
+      type: "end",
+      data: {},
+      timestampMs: Date.now(),
+    });
+  }
+
+  private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
+    this.debugPush({
+      component: "turn",
+      type: "interrupt_detected",
+      data: {
+        context_id: pkt.contextId,
+        source: pkt.source,
+      },
+      timestampMs: pkt.timestampMs,
+    });
+
+    // Stop idle timeout
+    this.bus.push(Route.Critical, {
+      kind: "behavior.idle_timeout_stop",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      resetCount: true,
+    } as StopIdleTimeoutPacket);
+
+    // Interrupt TTS
+    const interruptTts: InterruptTtsPacket = {
+      kind: "interrupt.tts",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+    };
+    this.bus.push(Route.Critical, interruptTts);
+
+    // Interrupt LLM
+    const interruptLlm: InterruptLlmPacket = {
+      kind: "interrupt.llm",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+    };
+    this.bus.push(Route.Critical, interruptLlm);
+  }
+
+  private handleComponentError(pkt: VoiceErrorPacket): void {
+    this.emit("error", {
+      tsMs: pkt.timestampMs,
+      stage: `${pkt.component}.error`,
+      category: pkt.category,
+      message: pkt.cause.message,
+    });
+
+    this.debugPush({
+      component: pkt.component,
+      type: "error",
+      data: {
+        category: pkt.category,
+        message: pkt.cause.message,
+        recoverable: String(pkt.isRecoverable),
+      },
+      timestampMs: pkt.timestampMs,
+    });
+
+    if (!isRecoverable(pkt.category)) {
+      // Fatal error — close session
+      void this.close().catch(() => {
+        // Best effort
+      });
+    }
+    // Recoverable errors are handled by individual component retry logic
+  }
+
+  private handleInitFailed(pkt: InitializationFailedPacket): void {
+    this.emit("error", {
+      tsMs: pkt.timestampMs,
+      stage: `init.${pkt.stage}`,
+      category: ErrorCategory.InternalFault,
+      message: `Initialization failed: ${pkt.stage}/${pkt.component} — ${pkt.cause.message}`,
+    });
+  }
+
+  private handleInjectMessage(pkt: InjectMessagePacket): void {
+    // Inject as synthetic LLM output — goes through normal TTS path
+    this.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      text: pkt.text,
+    } as LlmDeltaPacket);
+    this.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      text: pkt.text,
+    } as LlmResponseDonePacket);
+  }
+
+  private handleDisconnect(pkt: DisconnectRequestedPacket): void {
+    this.emit("closed", { tsMs: pkt.timestampMs, reason: pkt.reason });
+    this.debugPush({
+      component: "session",
+      type: "disconnect_requested",
+      data: { reason: pkt.reason },
+      timestampMs: pkt.timestampMs,
+    });
+    void this.close().catch(() => {
+      // Best effort
+    });
+  }
+
+  // =========================================================================
+  // Init Chain
+  // =========================================================================
+
+  private buildInitChain(): void {
+    const steps: InitStep[] = [];
+
+    for (const [name, plugin] of this.plugins) {
+      steps.push({
+        name,
+        stage: pluginStage(name),
+        run: () => {
+          // Plugins get the bus and their config
+          // Config resolution: plugin reads from this.config.plugins[name]
+          return plugin.initialize(this.bus, {});
+        },
+        cleanup: () => plugin.close(),
+      });
+    }
+
+    // Behavior is always last (idle timeout, max session)
+    steps.push({
+      name: "idle_timeout",
+      stage: InitStage.Behavior,
+      run: async () => {
+        this.idleTimeout.start();
+      },
+      cleanup: async () => {
+        this.idleTimeout.dispose();
+      },
+    });
+
+    this.initSteps = steps;
+  }
+
+  // =========================================================================
+  // Helpers
+  // =========================================================================
+
+  private emitDebug(
+    component: string,
+    type: string,
+    data: Record<string, string>,
+  ): void {
+    this.debugPush({
+      component,
+      type,
+      data,
+      timestampMs: Date.now(),
+    });
+  }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+function pluginStage(name: string): InitStage {
+  switch (name) {
+    case "stt":
+    case "deepgram":
+      return InitStage.STT;
+    case "tts":
+    case "cartesia":
+    case "elevenlabs":
+      return InitStage.TTS;
+    case "vad":
+    case "silero":
+      return InitStage.VAD;
+    case "eos":
+    case "pipecat":
+      return InitStage.EOS;
+    case "denoiser":
+    case "rnnoise":
+      return InitStage.Denoiser;
+    case "bridge":
+    case "aisdk":
+      return InitStage.Assistant;
+    case "recorder":
+      return InitStage.Recorder;
+    case "auth":
+      return InitStage.Auth;
+    default:
+      return InitStage.Assistant;
+  }
+}
+
+function estimatePcm16Duration(
+  audio: Uint8Array,
+  sampleRate: number,
+): number {
+  // Each sample is 2 bytes (16-bit), mono = 1 channel
+  const samples = audio.length / 2;
+  return (samples / sampleRate) * 1000;
+}

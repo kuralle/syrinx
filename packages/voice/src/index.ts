@@ -1,0 +1,110 @@
+// SPDX-License-Identifier: MIT
+//
+// Syrinx Kernel v2 — Public API
+//
+// Everything a consumer needs to build voice agents with the new kernel.
+
+// Core types
+export {
+  type VoicePacket,
+  type AsyncPacket,
+  type VoiceErrorPacket,
+  ErrorCategory,
+  SessionState,
+  InitStage,
+  type InitStepCompletedPacket,
+  type InitializationFailedPacket,
+  type InitializationCompletedPacket,
+} from "./packets.js";
+
+// Pipeline packets — input
+export {
+  type UserAudioReceivedPacket,
+  type UserTextReceivedPacket,
+  type DenoiseAudioPacket,
+  type DenoisedAudioPacket,
+  type VadAudioPacket,
+  type VadSpeechStartedPacket,
+  type VadSpeechEndedPacket,
+  type VadSpeechActivityPacket,
+  type SpeechToTextAudioPacket,
+  type SttInterimPacket,
+  type SttResultPacket,
+  type SttErrorPacket,
+  type EndOfSpeechAudioPacket,
+  type EndOfSpeechPacket,
+  type InterimEndOfSpeechPacket,
+  type UserInputPacket,
+} from "./packets.js";
+
+// Pipeline packets — interruption
+export {
+  type InterruptionDetectedPacket,
+  type InterruptTtsPacket,
+  type InterruptLlmPacket,
+  type InterruptSttPacket,
+  type TurnChangePacket,
+} from "./packets.js";
+
+// Pipeline packets — LLM
+export {
+  type LlmDeltaPacket,
+  type LlmResponseDonePacket,
+  type LlmErrorPacket,
+  type LlmToolCallPacket,
+  type LlmToolResultPacket,
+} from "./packets.js";
+
+// Pipeline packets — TTS
+export {
+  type TextToSpeechTextPacket,
+  type TextToSpeechDonePacket,
+  type TextToSpeechAudioPacket,
+  type TextToSpeechEndPacket,
+  type TtsErrorPacket,
+} from "./packets.js";
+
+// Pipeline packets — behavior
+export {
+  type StartIdleTimeoutPacket,
+  type StopIdleTimeoutPacket,
+  type InjectMessagePacket,
+  type DisconnectRequestedPacket,
+} from "./packets.js";
+
+// Pipeline packets — mode
+export {
+  type ModeSwitchRequestedPacket,
+  type ModeSwitchCompletedPacket,
+} from "./packets.js";
+
+// Pipeline packets — persistence
+export {
+  type MessageCreatePacket,
+  type ConversationMetricPacket,
+  type PipelineErrorPacket,
+} from "./packets.js";
+
+// PipelineBus
+export { PipelineBusImpl, Route, type PipelineBus, type PipelineBusConfig, type PacketHandler } from "./pipeline-bus.js";
+
+// Init chain
+export { runInitChain, runFinalizeChain, type InitStep, InitializationError } from "./init-chain.js";
+
+// Plugin contract
+export { type VoicePlugin, type PluginConfig, requireStringConfig, optionalStringConfig } from "./plugin-contract.js";
+
+// Error handler
+export { categorizeSttError, categorizeTtsError, categorizeLlmError, isRecoverable, isFatalError } from "./error-handler.js";
+
+// Idle timeout
+export { IdleTimeoutManager, type IdleTimeoutConfig, DEFAULT_IDLE_TIMEOUT_CONFIG } from "./idle-timeout.js";
+
+// Mode switcher
+export { ModeSwitcher, type ModeSwitchHandlers } from "./mode-switcher.js";
+
+// Conversation events
+export { type ConversationEvent, createConversationEventStream } from "./conversation-event.js";
+
+// VoiceAgentSession
+export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";
