@@ -1,0 +1,14 @@
+{
+  "turnId": "11be6aea-f318-446e-845d-a44d2dd430e1",
+  "inputAudioMs": 8963,
+  "speechEndToFinalTranscriptMs": 979,
+  "speechEndToFirstAudioMs": 4160,
+  "endpointingMs": 10361,
+  "llmTTFTMs": 2765,
+  "ttsTTFBMs": 416,
+  "e2eLatencyMs": 13542,
+  "agentTokens": 30,
+  "playedMs": 8127,
+  "truncated": false,
+  "toolCalls": 1
+}

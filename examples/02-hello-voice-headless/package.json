@@ -9,6 +9,7 @@
     "build": "tsc --noEmit -p tsconfig.json && mkdir -p dist && touch dist/.buildstamp",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src test scripts --ext .ts",
+    "smoke:university-support": "tsx scripts/run-university-support-baseline.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -23,10 +24,12 @@
     "ai": "^6.0.0",
     "dotenv": "^16.6.1",
     "wavefile": "^11.0.0",
+    "ws": "^8.21.0",
     "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
     "eslint": "^10.3.0",

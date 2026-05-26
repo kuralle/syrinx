@@ -1,0 +1,53 @@
+{
+  "scenario": "university_student_relations_late_add",
+  "generatedAt": "2026-05-26T12:58:54.840Z",
+  "model": "gemini-2.5-flash",
+  "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
+  "expectedBehavior": [
+    "Use the student-relations tool before answering.",
+    "Tell the student to submit the Late Add Petition.",
+    "Mention approvals instead of inventing a direct enrollment action.",
+    "Produce non-silent assistant speech audio."
+  ],
+  "transcript": {
+    "sttFinal": "Hi. I'm Maya Chen, student ID s 10042. I need to know whether I can still add biology one, o one after the deadline. And what form I should submit.",
+    "agentReply": "Maya, you can submit a Late Add Petition through the Student Relations portal. You will need to route it to your course instructor, academic advisor, and the registrar for approval."
+  },
+  "latencyMs": {
+    "inputAudio": 8963,
+    "sttFinalAfterSpeechEnd": 979,
+    "llmTimeToFirstToken": 2765,
+    "ttsTimeToFirstAudio": 416,
+    "speechEndToFirstAssistantAudio": 4160,
+    "feedStartToFirstAssistantAudio": 13542,
+    "feedStartToTtsEnd": 17276,
+    "assistantPlayedAudio": 8127
+  },
+  "toolCalls": 1,
+  "audio": {
+    "input": {
+      "path": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z/audio-in.wav",
+      "durationMs": 9780,
+      "bytes": 313004,
+      "peak": 0.9999,
+      "rms": 0.1637
+    },
+    "assistant": {
+      "path": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z/audio-out.wav",
+      "durationMs": 8127,
+      "bytes": 260104,
+      "peak": 0.9965,
+      "rms": 0.1524
+    }
+  },
+  "artifacts": {
+    "sessionDir": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z",
+    "eventsJsonlPath": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z/events.jsonl",
+    "transcriptJsonPath": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z/transcript.json",
+    "metricsJsonPath": "test/performance/runs/university-support-2026-05-26T12-58-37-306Z/metrics.json"
+  },
+  "qualityGate": {
+    "passed": true,
+    "failures": []
+  }
+}
