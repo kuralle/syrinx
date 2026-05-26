@@ -45,6 +45,27 @@ Baseline artifacts:
 
 Important interpretation: this smoke is a reliability baseline, not an interactive latency baseline. It uses 24kHz Gemini-generated user WAVs, Deepgram endpointing at 5000ms, `finalize_on_speech_final: false`, 5s trailing silence, and a 15s force-finalize timer so internal pauses do not cut user turns. That proves websocket audio completeness across long turns, but it intentionally pushes endpoint latency high.
 
+The interactive websocket baseline is:
+
+| Item | Value |
+|---|---:|
+| Scenario | `websocket_university_student_relations_interactive` |
+| Turns | 3 |
+| Input/output PCM | 16kHz mono s16le |
+| TTS provider | Cartesia streaming websocket |
+| Trailing silence sent by client | 1,400ms |
+| Avg STT final after speech end | 2,644ms |
+| Avg LLM first text after STT final | 3,380ms |
+| Avg TTS first audio after first agent text | 358ms |
+| Avg speech end to first assistant audio | 6,382ms |
+
+Interactive artifacts:
+
+- `examples/02-hello-voice-headless/scripts/run-websocket-university-interactive.ts`
+- `examples/02-hello-voice-headless/test/performance/websocket-university-interactive-baseline.json`
+
+Interpretation: the websocket audio path, STT transcript, agent stream, and TTS output all work with browser-style 16kHz frames and normal Deepgram speech-final finalize. LLM TTFT remains the dominant provider bottleneck. Turn 3 still showed a 5.9s STT final delay, so endpointing/VAD fusion remains a production hardening target.
+
 ---
 
 ## Recent Package Changes
@@ -74,6 +95,12 @@ Run the full websocket multi-turn smoke:
 pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
 ```
 
+Run the interactive websocket latency smoke:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
+```
+
 Start the human review studio:
 
 ```bash
@@ -95,11 +122,11 @@ git diff --check
 
 Critical next hardening:
 
-- Add a separate low-latency interactive websocket baseline with normal Deepgram speech-final finalize enabled and shorter endpointing.
 - Add a response-completeness gate for the smoke. The current gate proves transport continuity and minimum tool coverage, but it does not fail short/truncated agent text.
 - Replace conservative fixture endpointing with Pipecat-style STT/VAD turn fusion for production; keep the long-form conservative mode as a regression test for pause safety.
 - Add provider-level streaming TTS for the interactive path. Gemini TTS is currently chunked/non-streaming; Cartesia should be preferred for live review when its key is present.
 - Add browser/telephony resampling tests. The fixture smoke runs 24kHz PCM; browser mic capture should be normalized to a declared STT sample rate before crossing the websocket.
+- Add client/server barge-in semantics: user speech start should interrupt current assistant output and flush queued audio immediately.
 
 Provider/business constraints still matter:
 
@@ -113,4 +140,10 @@ Provider/business constraints still matter:
 - Do not delete `test-cartesia-output.pcm` unless the user explicitly asks; it is an unrelated untracked local artifact.
 - The long-form websocket baseline was completed live. The final quality gate was adjusted afterward to match the intended "tools on most/critical turns" behavior, then the completed run baseline was re-evaluated.
 - The review studio live smoke passed on 2026-05-26 using a 16kHz WAV sent over JSON websocket audio frames: Deepgram produced a final transcript, Gemini/AI SDK produced agent text, Cartesia returned 353,686 bytes of PCM, and `tts_end` arrived with no websocket errors.
+- The interactive baseline smoke passed on 2026-05-26 with 3 turns, normal Deepgram speech-final finalize, Cartesia TTS, 16kHz websocket PCM, and quality gate `passed: true`.
+- Research takeaways to keep applying:
+  - Voice-to-voice latency must be measured from user speech end to assistant audio start, not only provider inference time.
+  - Production websocket agents need explicit sample-rate contracts and boundary resampling; browser Safari cannot be trusted to honor an `AudioContext` sample-rate request.
+  - Endpointing should err slightly long over cutting users off, and should adapt after questions or thinking moments.
+  - Barge-in should flush queued assistant audio as soon as user speech starts, not after the old reply finishes.
 - If optimizing latency next, keep two profiles: `reliability-longform` for pause safety and `interactive-review` for live talk latency. Mixing both goals into one endpointing config hides regressions.
