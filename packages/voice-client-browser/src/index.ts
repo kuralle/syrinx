@@ -2,10 +2,13 @@
 
 export type SyrinxStudioMessage =
   | { readonly type: "ready"; readonly sessionId?: string }
-  | { readonly type: "stt_chunk"; readonly transcript: string }
-  | { readonly type: "stt_output"; readonly transcript: string; readonly confidence?: number }
-  | { readonly type: "agent_chunk"; readonly text: string }
+  | { readonly type: "stt_chunk"; readonly turnId?: string; readonly transcript: string }
+  | { readonly type: "stt_output"; readonly turnId?: string; readonly transcript: string; readonly confidence?: number }
+  | { readonly type: "agent_chunk"; readonly turnId?: string; readonly text: string }
+  | { readonly type: "agent_tool_call"; readonly turnId?: string; readonly id?: string; readonly name: string; readonly args?: unknown }
+  | { readonly type: "agent_tool_result"; readonly turnId?: string; readonly id?: string; readonly result?: unknown }
   | { readonly type: "agent_end"; readonly turnId?: string }
+  | { readonly type: "tts_end"; readonly turnId?: string }
   | { readonly type: "tts_chunk"; readonly audio: string }
   | {
       readonly type: "metrics";
@@ -81,6 +84,10 @@ export class SyrinxBrowserClient {
       return;
     }
     socket.send(audio);
+  }
+
+  sendAudioBase64(audio: string, contextId?: string): void {
+    this.sendJson({ type: "audio", audio, contextId });
   }
 
   sendText(text: string): void {

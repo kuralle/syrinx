@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "fixtures:gemini-university": "tsx scripts/generate-gemini-university-fixtures.ts",
     "lint": "eslint src test scripts --ext .ts",
+    "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
     "smoke:university-support": "tsx scripts/run-university-support-baseline.ts",
     "smoke:websocket-university": "tsx scripts/run-websocket-university-multiturn.ts",
     "test": "vitest run"
