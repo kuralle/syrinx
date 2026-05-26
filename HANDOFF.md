@@ -10,6 +10,11 @@
 
 The v2 kernel is the active path. Do not preserve v1 compatibility unless explicitly requested.
 
+Two websocket paths are now available:
+
+- `reliability-longform`: generated WAV fixtures, conservative finalization, long multi-turn smoke.
+- `interactive-review`: browser push-to-talk, 16kHz PCM over websocket, normal Deepgram speech-final finalize, Cartesia TTS by default when the key is present.
+
 The main cascade now has a long-form websocket smoke:
 
 ```
@@ -50,6 +55,7 @@ Important interpretation: this smoke is a reliability baseline, not an interacti
 | `@asyncdot/voice-stt-deepgram` | Adds `finalize_on_speech_final` config. Default remains `true`; long-form smoke can disable it and rely on force-finalize. |
 | `@asyncdot/voice-bridge-aisdk` | Keeps bounded conversation history, supports `tool_choice`, and wraps streaming with an idle timeout. |
 | `@asyncdot/voice-tts-gemini` | Uses documented non-streaming Gemini TTS `generateContent`, adds timeout, retries, and zero-audio failure. |
+| `@asyncdot/voice-client-browser` | Review console for push-to-talk websocket testing, turn-scoped JSON audio frames, PCM16 playback, transcript/tool/agent timeline, and client-side latency markers. |
 | `@asyncdot-example/02-hello-voice-headless` | Adds Gemini fixture generation and websocket university multi-turn smoke scripts. Uses `ai@^6.0.0`. |
 
 ---
@@ -68,6 +74,13 @@ Run the full websocket multi-turn smoke:
 pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
 ```
 
+Start the human review studio:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless review:studio
+# open http://127.0.0.1:4173
+```
+
 Run local verification:
 
 ```bash
@@ -82,7 +95,6 @@ git diff --check
 
 Critical next hardening:
 
-- Add an interactive browser review studio wired to the websocket agent so humans can talk through the live path.
 - Add a separate low-latency interactive websocket baseline with normal Deepgram speech-final finalize enabled and shorter endpointing.
 - Add a response-completeness gate for the smoke. The current gate proves transport continuity and minimum tool coverage, but it does not fail short/truncated agent text.
 - Replace conservative fixture endpointing with Pipecat-style STT/VAD turn fusion for production; keep the long-form conservative mode as a regression test for pause safety.
@@ -100,4 +112,5 @@ Provider/business constraints still matter:
 
 - Do not delete `test-cartesia-output.pcm` unless the user explicitly asks; it is an unrelated untracked local artifact.
 - The long-form websocket baseline was completed live. The final quality gate was adjusted afterward to match the intended "tools on most/critical turns" behavior, then the completed run baseline was re-evaluated.
+- The review studio live smoke passed on 2026-05-26 using a 16kHz WAV sent over JSON websocket audio frames: Deepgram produced a final transcript, Gemini/AI SDK produced agent text, Cartesia returned 353,686 bytes of PCM, and `tts_end` arrived with no websocket errors.
 - If optimizing latency next, keep two profiles: `reliability-longform` for pause safety and `interactive-review` for live talk latency. Mixing both goals into one endpointing config hides regressions.

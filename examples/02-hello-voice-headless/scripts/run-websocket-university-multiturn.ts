@@ -5,15 +5,9 @@ import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { tool } from "ai";
 import WebSocket, { type RawData } from "ws";
-import { z } from "zod";
 
-import { VoiceAgentSession } from "@asyncdot/voice";
-import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
 import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
-import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
-import { GeminiTTSPlugin } from "@asyncdot/voice-tts-gemini";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,
@@ -22,6 +16,7 @@ import {
   readPcm16Wav,
 } from "./generate-gemini-university-fixtures.js";
 import { DEFAULT_MODEL, coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
+import { createUniversitySupportSession } from "../src/university-support-agent.js";
 
 const require = createRequire(import.meta.url);
 const { WaveFile } = require("wavefile") as typeof import("wavefile");
@@ -32,72 +27,6 @@ const BASELINE_PATH = join(SCRIPT_DIR, "..", "test", "performance", "websocket-u
 const INPUT_SAMPLE_RATE = 24000;
 const FRAME_SAMPLES = 480;
 const MIN_MODELED_CONVERSATION_MS = 480_000;
-
-const SYSTEM_PROMPT = [
-  "You are Syrinx University's Student Relations voice agent.",
-  "This is one ongoing phone conversation. Use the previous turns for references like it, that, the case, or the petition.",
-  "Call studentRelationsLookup before answering each student-services request.",
-  "Never invent deadlines, approvals, holds, fees, visa guidance, accommodations, appointments, or case status.",
-  "For voice, answer in two complete sentences. Confirm the action first, then mention the constraint or next owner.",
-  "Never end with an incomplete sentence or phrase. Every answer must end with punctuation.",
-].join("\n");
-
-const studentRelationsTool = {
-  studentRelationsLookup: tool({
-    description:
-      "Lookup Student Relations data for a student's registration, late-add, holds, aid, housing, visa, accessibility, athletics, fee, case, appointment, or summary request.",
-    inputSchema: z.object({
-      studentId: z.string().optional(),
-      name: z.string().optional(),
-      requestType: z.string().describe("Short request type, for example late_add, holds, aid, visa, case, appointment."),
-      courseCode: z.string().optional(),
-      summary: z.string().optional(),
-    }),
-    execute: async ({ studentId, name, requestType, courseCode, summary }) => ({
-      requestType,
-      summary,
-      student: {
-        studentId: studentId ?? "S10042",
-        name: name ?? "Maya Chen",
-        academicStanding: "good",
-        activeHolds: [],
-        advisor: "Dr. Priya Raman",
-        backupAdvisor: "Student Relations advising desk",
-        internationalOfficeRequired: true,
-        athleticsCoordinator: "Jordan Lee",
-      },
-      registration: {
-        courseCode: courseCode ?? "Biology 101",
-        term: "Spring 2027",
-        addDeadline: "2027-02-05",
-        currentDate: "2027-02-09",
-        status: "late_add_required",
-        form: "Late Add Petition",
-        approvals: ["course instructor", "academic advisor or advising desk", "registrar"],
-        portal: "Student Relations portal",
-        labFee: "$85 biology lab fee, posted after registrar processing",
-      },
-      relatedOffices: {
-        financialAid: "Full-time status review is Friday at 5 PM.",
-        internationalOffice: "Notify International Student Services while the petition is pending.",
-        housing: "Use pending late-add case number on the renewal form.",
-        accessibility: "Accessibility office should review lab-time accommodation before registrar processing.",
-        athletics: "Athletics academic coordinator can be added as a case watcher.",
-      },
-      case: {
-        caseId: "SR-2027-004812",
-        status: "open",
-        nextSteps: [
-          "Upload instructor email and department lab-seat confirmation.",
-          "Route the Late Add Petition to the instructor, advising desk, and registrar.",
-          "Notify International Student Services and Financial Aid today.",
-          "Add accessibility and athletics notes as case watchers.",
-        ],
-        appointment: "Video appointment available tomorrow at 2:45 PM.",
-      },
-    }),
-  }),
-};
 
 interface TurnCapture {
   readonly id: string;
@@ -205,47 +134,12 @@ async function main(): Promise<void> {
   }
 }
 
-function createSession(): VoiceAgentSession {
-  const session = new VoiceAgentSession({
-    plugins: {
-      stt: {
-        api_key: process.env["DEEPGRAM_API_KEY"],
-        sample_rate: INPUT_SAMPLE_RATE,
-        endpointing: 5000,
-        model: "nova-2",
-        language: "en-US",
-        smart_format: true,
-        finalize_on_speech_final: false,
-      },
-      bridge: {
-        api_key: process.env["GOOGLE_GENERATIVE_AI_API_KEY"],
-        model: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
-        system_prompt: SYSTEM_PROMPT,
-        tools: studentRelationsTool,
-        temperature: 0.2,
-        max_output_tokens: 420,
-        max_steps: 3,
-        max_history_turns: 20,
-        timeout_ms: 60_000,
-      },
-      tts: {
-        api_key: process.env["GOOGLE_GENERATIVE_AI_API_KEY"],
-        model: process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-2.5-flash-preview-tts",
-        voice_name: process.env["SYRINX_GEMINI_TTS_VOICE"]?.trim() || "Kore",
-        retry_max_attempts: 2,
-        timeout_ms: 45_000,
-      },
-    },
-    idleTimeout: {
-      durationMs: 30 * 60_000,
-      maxConsecutive: 0,
-      disconnectAfterMax: false,
-    },
-    sttForceFinalizeTimeoutMs: 15_000,
+function createSession() {
+  const session = createUniversitySupportSession({
+    inputSampleRate: INPUT_SAMPLE_RATE,
+    profile: "longform",
+    ttsProvider: "gemini",
   });
-  session.registerPlugin("stt", new DeepgramSTTPlugin());
-  session.registerPlugin("bridge", new AISDKBridgePlugin());
-  session.registerPlugin("tts", new GeminiTTSPlugin());
   if (process.env["SYRINX_WS_DEBUG"] === "1") {
     session.bus.on("eos.turn_complete", (pkt) => {
       const eos = pkt as unknown as { contextId: string; text: string };
