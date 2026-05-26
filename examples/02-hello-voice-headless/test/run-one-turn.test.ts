@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createAudioFrame } from "@asyncdot/voice";
 import { FakeBridge, FakeSTT, FakeTTS, FakeVAD } from "@asyncdot/voice-test";
 import { describe, expect, it } from "vitest";
 
@@ -25,12 +24,11 @@ describe("runOneTurn (contract, fakes)", () => {
     "returns TurnResult-shaped output without live providers",
     async () => {
       const userLine = "Hi, what's the weather like today?";
-      const f1 = createAudioFrame({
+      const f1 = {
         data: new Int16Array(320),
         sampleRateHz: 16000,
         durationMs: 20,
-        capturedAtMs: 0,
-      });
+      };
       const pcm = new Int16Array(320 * 80);
       pcm.fill(100);
 
@@ -43,31 +41,35 @@ describe("runOneTurn (contract, fakes)", () => {
           inputWavPath: join(root, "unused.wav"),
           sessionDir,
           sessionOverrides: {
-            vad: new FakeVAD({ scriptedSpeechProbabilities: mkWideVadScript() }),
-            stt: new FakeSTT({
-              scriptedEvents: [
-                {
-                  kind: "final",
-                  text: userLine,
-                  confidence: 0.99,
-                  ts: Date.now(),
-                },
-              ],
-            }),
-            tts: new FakeTTS({
-              scriptedAudioBatches: [[{ frame: f1, final: true }]],
-            }),
-            agent: new FakeBridge({
-              scriptedEvents: [
-                { kind: "text", delta: "It is seventy degrees." },
-                { kind: "done" },
-              ],
-            }),
-            tuning: {
-              endpointingMinDelayMs: 1,
-              endpointingMaxDelayMs: 800,
-              aecWarmupMs: 0,
+            plugins: {
+              vad: new FakeVAD(),
+              stt: new FakeSTT(),
+              bridge: new FakeBridge(),
+              tts: new FakeTTS(),
             },
+            pluginConfig: {
+              vad: { scriptedSpeechProbabilities: mkWideVadScript() },
+              stt: {
+                scriptedEvents: [
+                  {
+                    kind: "final",
+                    text: userLine,
+                    confidence: 0.99,
+                    ts: Date.now(),
+                  },
+                ],
+              },
+              bridge: {
+                scriptedEvents: [
+                  { kind: "text", delta: "It is seventy degrees." },
+                  { kind: "done" },
+                ],
+              },
+              tts: {
+                scriptedAudioBatches: [{ frame: f1, final: true }],
+              },
+            },
+            sttForceFinalizeTimeoutMs: 0,
           },
           syntheticMono16kSamples: pcm,
         });

@@ -86,12 +86,12 @@ export class FakeTTS implements VoicePlugin {
     this.config = config as FakeTTSConfig;
 
     // Listen for TTS text
-    bus.on("tts.text", () => {
-      this.emitNextBatch();
+    bus.on("tts.text", (pkt: unknown) => {
+      this.emitNextBatch((pkt as { contextId?: string }).contextId ?? "");
     });
   }
 
-  private emitNextBatch(): void {
+  private emitNextBatch(contextId: string): void {
     if (!this.bus || !this.config) return;
     const batches = this.config.scriptedAudioBatches;
     if (this.batchIndex >= batches.length) return;
@@ -102,7 +102,7 @@ export class FakeTTS implements VoicePlugin {
 
     this.bus.push(Route.Main, {
       kind: "tts.audio",
-      contextId: "",
+      contextId,
       timestampMs: now,
       audio: buf,
     });
@@ -110,7 +110,7 @@ export class FakeTTS implements VoicePlugin {
     if (batch.final) {
       this.bus.push(Route.Main, {
         kind: "tts.end",
-        contextId: "",
+        contextId,
         timestampMs: now,
       });
     }

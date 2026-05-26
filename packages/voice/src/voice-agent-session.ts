@@ -40,12 +40,18 @@ import type {
   TextToSpeechTextPacket,
   TextToSpeechDonePacket,
   TextToSpeechEndPacket,
+  RecordAssistantAudioPacket,
+  RecordUserAudioPacket,
+  SpeechToTextAudioPacket,
   SttResultPacket,
   SttInterimPacket,
+  VadAudioPacket,
   VadSpeechStartedPacket,
   VadSpeechEndedPacket,
+  EndOfSpeechAudioPacket,
   EndOfSpeechPacket,
   InterimEndOfSpeechPacket,
+  UserInputPacket,
   InjectMessagePacket,
   DisconnectRequestedPacket,
   InitializationFailedPacket,
@@ -107,6 +113,8 @@ type EventHandler<T> = (event: T) => void;
 export class VoiceAgentSession {
   readonly bus: PipelineBus;
   readonly debugEvents: ReadableStream<ConversationEvent>;
+  private readonly config: VoiceAgentSessionConfig;
+  private readonly sttForceFinalizeTimeoutMs: number;
   private _state: SessionState = SessionState.Uninitialized;
   private plugins: Map<string, VoicePlugin> = new Map();
   private initSteps: InitStep[] = [];
@@ -116,15 +124,46 @@ export class VoiceAgentSession {
   private eventListeners = new Map<string, Set<EventHandler<unknown>>>();
   private currentTurnId = "";
   private busStartPromise: Promise<void> | null = null;
+  private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingSttContextId = "";
+  private activeTtsContextIds = new Set<string>();
 
   constructor(config: VoiceAgentSessionConfig) {
-    // PipelineBus
-    this.bus = new PipelineBusImpl(config.busConfig);
+    this.config = config;
+    this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
 
     // Debug events
     const [stream, push] = createConversationEventStream();
     this.debugEvents = stream;
     this.debugPush = push;
+
+    // PipelineBus
+    this.bus = new PipelineBusImpl({
+      ...config.busConfig,
+      onPacket: (route, packet) => {
+        this.debugPush({
+          component: "bus",
+          type: "packet",
+          data: {
+            context_id: packet.contextId,
+            route: Route[route] ?? String(route),
+            kind: packet.kind,
+          },
+          timestampMs: packet.timestampMs,
+        });
+      },
+      onBackgroundDrop: (dropped) => {
+        this.debugPush({
+          component: "pipeline",
+          type: "background_dropped",
+          data: {
+            context_id: dropped.contextId,
+            kind: dropped.kind,
+          },
+          timestampMs: Date.now(),
+        });
+      },
+    });
 
     // Idle timeout — starts after bus handlers are wired
     this.idleTimeout = new IdleTimeoutManager(this.bus, config.idleTimeout);
@@ -180,6 +219,7 @@ export class VoiceAgentSession {
 
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
+    this.clearSttForceFinalizeTimer();
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
@@ -251,6 +291,7 @@ export class VoiceAgentSession {
     this.bus.on("user.text_received", this.handleUserText.bind(this));
 
     // STT results
+    this.bus.on("stt.audio", this.handleSttAudio.bind(this));
     this.bus.on("stt.interim", this.handleSttInterim.bind(this));
     this.bus.on("stt.result", this.handleSttResult.bind(this));
 
@@ -278,6 +319,7 @@ export class VoiceAgentSession {
     // Errors
     this.bus.on("stt.error", this.handleComponentError.bind(this));
     this.bus.on("tts.error", this.handleComponentError.bind(this));
+    this.bus.on("vad.error", this.handleComponentError.bind(this));
     this.bus.on("llm.error", this.handleComponentError.bind(this));
     this.bus.on("pipeline.error", this.handleComponentError.bind(this));
 
@@ -309,12 +351,44 @@ export class VoiceAgentSession {
   // =========================================================================
 
   private handleUserAudio(pkt: UserAudioReceivedPacket): void {
+    this.bus.push(
+      Route.Main,
+      {
+        kind: "record.user_audio",
+        contextId: pkt.contextId,
+        timestampMs: pkt.timestampMs,
+        audio: pkt.audio,
+      } as RecordUserAudioPacket,
+      {
+        kind: "vad.audio",
+        contextId: pkt.contextId,
+        timestampMs: pkt.timestampMs,
+        audio: pkt.audio,
+      } as VadAudioPacket,
+      {
+        kind: "stt.audio",
+        contextId: pkt.contextId,
+        timestampMs: pkt.timestampMs,
+        audio: pkt.audio,
+      } as SpeechToTextAudioPacket,
+      {
+        kind: "eos.audio",
+        contextId: pkt.contextId,
+        timestampMs: pkt.timestampMs,
+        audio: pkt.audio,
+      } as EndOfSpeechAudioPacket,
+    );
+
     this.debugPush({
       component: "input",
       type: "audio_received",
       data: { context_id: pkt.contextId, bytes: String(pkt.audio.length) },
       timestampMs: pkt.timestampMs,
     });
+  }
+
+  private handleSttAudio(pkt: SpeechToTextAudioPacket): void {
+    this.scheduleSttForceFinalize(pkt.contextId);
   }
 
   private handleUserText(pkt: UserTextReceivedPacket): void {
@@ -344,6 +418,9 @@ export class VoiceAgentSession {
   }
 
   private handleSttResult(pkt: SttResultPacket): void {
+    if (this.pendingSttContextId === pkt.contextId) {
+      this.clearSttForceFinalizeTimer();
+    }
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -377,6 +454,16 @@ export class VoiceAgentSession {
       },
       timestampMs: pkt.timestampMs,
     });
+
+    const interruptedContextId = this.latestActiveTtsContextId();
+    if (interruptedContextId) {
+      this.bus.push(Route.Critical, {
+        kind: "interrupt.detected",
+        contextId: interruptedContextId,
+        timestampMs: Date.now(),
+        source: "vad",
+      } as InterruptionDetectedPacket);
+    }
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
@@ -416,6 +503,14 @@ export class VoiceAgentSession {
       timestampMs: Date.now(),
       resetCount: false,
     } as StopIdleTimeoutPacket);
+
+    this.bus.push(Route.Main, {
+      kind: "user.input",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      text: pkt.text,
+      language: languageFromTranscripts(pkt.transcripts),
+    } as UserInputPacket);
   }
 
   private handleEosInterim(pkt: InterimEndOfSpeechPacket): void {
@@ -439,6 +534,13 @@ export class VoiceAgentSession {
       data: { context_id: pkt.contextId, text: pkt.text },
       timestampMs: pkt.timestampMs,
     });
+
+    this.bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      text: pkt.text,
+    } as TextToSpeechTextPacket);
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
@@ -459,6 +561,13 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: Date.now(),
     } as StartIdleTimeoutPacket);
+
+    this.bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      text: pkt.text,
+    } as TextToSpeechDonePacket);
   }
 
   private handleLlmToolCall(pkt: LlmToolCallPacket): void {
@@ -502,6 +611,8 @@ export class VoiceAgentSession {
   }
 
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
+    this.activeTtsContextIds.add(pkt.contextId);
+
     // Extend idle timeout by audio duration to prevent timeout during playback
     const audioDurationMs = estimatePcm16Duration(pkt.audio, 24000);
     this.idleTimeout.extend(audioDurationMs);
@@ -515,9 +626,18 @@ export class VoiceAgentSession {
       },
       timestampMs: pkt.timestampMs,
     });
+
+    this.bus.push(Route.Main, {
+      kind: "record.assistant_audio",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      audio: pkt.audio,
+      truncate: false,
+    } as RecordAssistantAudioPacket);
   }
 
-  private handleTtsEnd(_pkt: TextToSpeechEndPacket): void {
+  private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
+    this.activeTtsContextIds.delete(pkt.contextId);
     this.debugPush({
       component: "tts",
       type: "end",
@@ -640,16 +760,27 @@ export class VoiceAgentSession {
         name,
         stage: pluginStage(name),
         run: () => {
-          // Plugins get the bus and their config
-          // Config resolution: plugin reads from this.config.plugins[name]
-          return plugin.initialize(this.bus, {});
+          return plugin.initialize(this.bus, this.config.plugins[name] ?? {});
         },
         cleanup: () => plugin.close(),
       });
     }
 
+    const orderedPluginSteps = steps.sort(
+      (a, b) => stageOrder(a.stage) - stageOrder(b.stage),
+    );
+    this.modeSwitcher.register({
+      textToAudioSteps: orderedPluginSteps,
+      audioToTextCleanups: [...orderedPluginSteps]
+        .reverse()
+        .filter((step) => isAudioStage(step.stage))
+        .map((step) => async () => {
+          await step.cleanup?.();
+        }),
+    });
+
     // Behavior is always last (idle timeout, max session)
-    steps.push({
+    orderedPluginSteps.push({
       name: "idle_timeout",
       stage: InitStage.Behavior,
       run: async () => {
@@ -660,7 +791,7 @@ export class VoiceAgentSession {
       },
     });
 
-    this.initSteps = steps;
+    this.initSteps = orderedPluginSteps;
   }
 
   // =========================================================================
@@ -678,6 +809,54 @@ export class VoiceAgentSession {
       data,
       timestampMs: Date.now(),
     });
+  }
+
+  private scheduleSttForceFinalize(contextId: string): void {
+    if (this._state !== SessionState.Ready) return;
+    if (this.sttForceFinalizeTimeoutMs <= 0) return;
+
+    this.pendingSttContextId = contextId;
+    this.clearSttForceFinalizeTimer(false);
+    this.sttForceFinalizeTimer = setTimeout(() => {
+      this.sttForceFinalizeTimer = null;
+      const plugin = this.findForceFinalizableSttPlugin();
+      plugin?.forceFinalize(contextId);
+    }, this.sttForceFinalizeTimeoutMs);
+  }
+
+  private clearSttForceFinalizeTimer(clearContext = true): void {
+    if (this.sttForceFinalizeTimer) {
+      clearTimeout(this.sttForceFinalizeTimer);
+      this.sttForceFinalizeTimer = null;
+    }
+    if (clearContext) {
+      this.pendingSttContextId = "";
+    }
+  }
+
+  private findForceFinalizableSttPlugin(): ForceFinalizableSttPlugin | null {
+    for (const name of ["stt", "deepgram"]) {
+      const plugin = this.plugins.get(name);
+      if (isForceFinalizableSttPlugin(plugin)) {
+        return plugin;
+      }
+    }
+
+    for (const plugin of this.plugins.values()) {
+      if (isForceFinalizableSttPlugin(plugin)) {
+        return plugin;
+      }
+    }
+
+    return null;
+  }
+
+  private latestActiveTtsContextId(): string {
+    let latest = "";
+    for (const contextId of this.activeTtsContextIds) {
+      latest = contextId;
+    }
+    return latest;
   }
 }
 
@@ -715,6 +894,45 @@ function pluginStage(name: string): InitStage {
   }
 }
 
+function stageOrder(stage: InitStage): number {
+  switch (stage) {
+    case InitStage.Assistant:
+      return 10;
+    case InitStage.Conversation:
+      return 20;
+    case InitStage.Recorder:
+      return 30;
+    case InitStage.Normalizer:
+      return 40;
+    case InitStage.Auth:
+      return 50;
+    case InitStage.STT:
+      return 60;
+    case InitStage.TTS:
+      return 70;
+    case InitStage.VAD:
+      return 80;
+    case InitStage.EOS:
+      return 90;
+    case InitStage.Denoiser:
+      return 100;
+    case InitStage.Behavior:
+      return 110;
+    case InitStage.Telemetry:
+      return 120;
+  }
+}
+
+function isAudioStage(stage: InitStage): boolean {
+  return (
+    stage === InitStage.STT ||
+    stage === InitStage.TTS ||
+    stage === InitStage.VAD ||
+    stage === InitStage.EOS ||
+    stage === InitStage.Denoiser
+  );
+}
+
 function estimatePcm16Duration(
   audio: Uint8Array,
   sampleRate: number,
@@ -722,4 +940,30 @@ function estimatePcm16Duration(
   // Each sample is 2 bytes (16-bit), mono = 1 channel
   const samples = audio.length / 2;
   return (samples / sampleRate) * 1000;
+}
+
+function languageFromTranscripts(
+  transcripts: readonly SttResultPacket[],
+): string {
+  for (const transcript of transcripts) {
+    if (transcript.language) {
+      return transcript.language;
+    }
+  }
+  return "";
+}
+
+interface ForceFinalizableSttPlugin extends VoicePlugin {
+  forceFinalize(contextId?: string): void;
+}
+
+function isForceFinalizableSttPlugin(
+  plugin: VoicePlugin | undefined,
+): plugin is ForceFinalizableSttPlugin {
+  return (
+    typeof plugin === "object" &&
+    plugin !== null &&
+    "forceFinalize" in plugin &&
+    typeof plugin.forceFinalize === "function"
+  );
 }

@@ -43,8 +43,12 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private ws: import("ws").WebSocket | null = null;
   private ready = false;
   private connResolver: (() => void) | null = null;
+  private connRejecter: ((err: Error) => void) | null = null;
   private currentContextId = "";
   private streamStartTime = 0;
+  private closed = false;
+  private reconnecting = false;
+  private disposers: Array<() => void> = [];
 
   // Guard: track last interim for force-finalization on short audio
   private lastInterimTranscript = "";
@@ -62,8 +66,43 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.interimResults = (config["interim_results"] as boolean) ?? true;
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
+    this.closed = false;
 
     // Open session-long WebSocket (Rapida pattern)
+    await this.connect();
+
+    // Listen for audio packets — stream immediately
+    this.disposers.push(
+      bus.on("stt.audio", async (pkt: unknown) => {
+        const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
+        if (audioPkt.contextId) {
+          this.currentContextId = audioPkt.contextId;
+        }
+        await this.sendAudio(audioPkt.audio);
+        if (this.streamStartTime === 0) {
+          this.streamStartTime = Date.now();
+        }
+        // Guard: new audio = new turn, reset final flag
+        this.hasFinalForCurrentTurn = false;
+      }),
+
+      // Turn change handler
+      bus.on("turn.change", (pkt: unknown) => {
+        const tc = pkt as { contextId: string };
+        this.currentContextId = tc.contextId;
+        this.streamStartTime = Date.now();
+        this.hasFinalForCurrentTurn = false;
+      }),
+
+      // STT interrupt handler
+      bus.on("interrupt.stt", () => {
+        this.streamStartTime = Date.now();
+        this.hasFinalForCurrentTurn = false;
+      }),
+    );
+  }
+
+  private async connect(): Promise<void> {
     const { default: WebSocket } = await import("ws");
     const params = new URLSearchParams({
       encoding: "linear16",
@@ -85,6 +124,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.ws.on("open", () => {
       this.ready = true;
       this.connResolver?.();
+      this.connResolver = null;
+      this.connRejecter = null;
     });
 
     this.ws.on("message", (data: import("ws").RawData) => {
@@ -127,6 +168,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     });
 
     this.ws.on("error", (err: Error) => {
+      this.ready = false;
+      this.connRejecter?.(err);
+      this.connResolver = null;
+      this.connRejecter = null;
       const category = categorizeSttError(err);
       this.bus?.push(Route.Critical, {
         kind: "stt.error",
@@ -137,46 +182,37 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         cause: err,
         isRecoverable: isRecoverable(category),
       });
+      if (isRecoverable(category)) {
+        void this.reconnect();
+      }
     });
 
     this.ws.on("close", () => {
       this.ready = false;
-    });
-
-    // Listen for audio packets — stream immediately
-    bus.on("stt.audio", async (pkt: unknown) => {
-      const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
-      await this.sendAudio(audioPkt.audio);
-      if (audioPkt.contextId) {
-        this.currentContextId = audioPkt.contextId;
+      this.connRejecter?.(new Error("Deepgram STT WebSocket closed before ready"));
+      this.connResolver = null;
+      this.connRejecter = null;
+      if (!this.closed && !this.reconnecting) {
+        void this.reconnect();
       }
-      if (this.streamStartTime === 0) {
-        this.streamStartTime = Date.now();
-      }
-      // Guard: new audio = new turn, reset final flag
-      this.hasFinalForCurrentTurn = false;
-    });
-
-    // Turn change handler
-    bus.on("turn.change", (pkt: unknown) => {
-      const tc = pkt as { contextId: string };
-      this.currentContextId = tc.contextId;
-      this.streamStartTime = Date.now();
-      this.hasFinalForCurrentTurn = false;
-    });
-
-    // STT interrupt handler
-    bus.on("interrupt.stt", () => {
-      this.streamStartTime = Date.now();
-      this.hasFinalForCurrentTurn = false;
     });
   }
 
   /** Stream audio to Deepgram immediately. No batching, no CloseStream. */
   async sendAudio(audio: Uint8Array): Promise<void> {
     if (!this.ready) {
-      await new Promise<void>((r) => {
-        this.connResolver = r;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Deepgram STT WebSocket connect timeout"));
+        }, 10_000);
+        this.connResolver = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        this.connRejecter = (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        };
       });
     }
     if (
@@ -202,7 +238,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     if (!transcript || !this.bus) return;
 
     this.hasFinalForCurrentTurn = true;
-    this.pushFinal(transcript, confidence);
+    this.pushFinal(transcript, confidence, ctxId);
 
     // Clear tracking
     this.lastInterimTranscript = "";
@@ -210,8 +246,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   /** Emit final transcript + EOS turn complete. */
-  private pushFinal(transcript: string, confidence: number): void {
-    const ctxId = this.currentContextId;
+  private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
+    const ctxId = contextId;
     this.bus?.push(Route.Main, {
       kind: "stt.result",
       contextId: ctxId,
@@ -241,6 +277,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    for (const dispose of this.disposers.splice(0)) dispose();
     // Guard: force-finalize pending transcription (short audio, no endpointing)
     if (this.lastInterimTranscript && !this.hasFinalForCurrentTurn) {
       this.forceFinalize();
@@ -252,5 +290,20 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
     this.bus = null;
     this.ready = false;
+  }
+
+  private async reconnect(): Promise<void> {
+    if (this.closed || this.reconnecting) return;
+    this.reconnecting = true;
+    try {
+      this.ws?.close();
+    } catch {
+      // best effort
+    }
+    try {
+      await this.connect();
+    } finally {
+      this.reconnecting = false;
+    }
   }
 }

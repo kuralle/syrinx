@@ -2,82 +2,208 @@
 //
 // Syrinx Kernel v2 — Silero VAD Plugin
 //
-// Implements VoicePlugin contract. Receives PipelineBus, pushes VAD speech
-// start/end/activity events into the bus.
+// Runs the Silero ONNX model locally and emits VAD packets through PipelineBus.
+// The model/state handling follows Pipecat's Silero analyzer and RapidAI's
+// session-owned detector pattern: one model instance per session, state reset on
+// lifecycle close, and 16 kHz LINEAR16 mono as the internal audio format.
+
+import { fileURLToPath } from "node:url";
 
 import type { PipelineBus } from "@asyncdot/voice";
-import { Route, type VoicePlugin, type PluginConfig } from "@asyncdot/voice";
+import {
+  ErrorCategory,
+  Route,
+  type PluginConfig,
+  type VadSpeechActivityPacket,
+  type VadSpeechEndedPacket,
+  type VadSpeechStartedPacket,
+  type VoiceErrorPacket,
+  type VoicePlugin,
+  isRecoverable,
+  optionalStringConfig,
+} from "@asyncdot/voice";
+
+type Ort = typeof import("onnxruntime-node");
+type InferenceSession = import("onnxruntime-node").InferenceSession;
+
+const DEFAULT_MODEL_PATH = fileURLToPath(new URL("../models/silero_vad.onnx", import.meta.url));
+const DEFAULT_SAMPLE_RATE = 16000;
+const WINDOW_SAMPLES_16K = 512;
+const CONTEXT_SAMPLES_16K = 64;
 
 export class SileroVADPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
+  private session: InferenceSession | null = null;
+  private ort: Ort | null = null;
+  private state = new Float32Array(2 * 1 * 128);
+  private context = new Float32Array(CONTEXT_SAMPLES_16K);
+  private pendingSamples: number[] = [];
   private speaking = false;
-  private confidenceThreshold: number;
-
-  constructor() {
-    this.confidenceThreshold = 0.5;
-  }
+  private confidenceThreshold = 0.5;
+  private minSilenceDurationMs = 200;
+  private speechPadMs = 80;
+  private sampleRate = DEFAULT_SAMPLE_RATE;
+  private silenceFrames = 0;
+  private lastResetMs = 0;
+  private disposers: Array<() => void> = [];
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
-    this.confidenceThreshold = (config["threshold"] as number) ?? 0.5;
+    this.confidenceThreshold = readNumber(config, "threshold", 0.5);
+    this.minSilenceDurationMs = readNumber(config, "min_silence_duration_ms", 200);
+    this.speechPadMs = readNumber(config, "speech_pad_ms", 80);
+    this.sampleRate = readNumber(config, "sample_rate", DEFAULT_SAMPLE_RATE);
+    if (this.sampleRate !== 16000) {
+      throw new Error(`SileroVADPlugin requires 16 kHz PCM input, got ${String(this.sampleRate)} Hz`);
+    }
+
+    const modelPath = optionalStringConfig(config, "model_path") ?? DEFAULT_MODEL_PATH;
+    this.ort = await import("onnxruntime-node");
+    this.session = await this.ort.InferenceSession.create(modelPath, {
+      executionProviders: ["cpu"],
+      interOpNumThreads: 1,
+      intraOpNumThreads: 1,
+    });
+    this.resetModelState();
+
+    this.disposers.push(
+      bus.on("vad.audio", async (pkt: unknown) => {
+        const audioPkt = pkt as { audio: Uint8Array; contextId: string };
+        await this.processAudio(audioPkt.audio, audioPkt.contextId);
+      }),
+    );
   }
 
-  /**
-   * Process an audio frame and emit VAD events.
-   * Called when "vad.audio" packets arrive on the bus.
-   * In a real implementation, this would run Silero ONNX inference.
-   * This stub uses a mock that alternates speech/silence.
-   */
-  processAudio(audio: Uint8Array, contextId: string): void {
+  async processAudio(audio: Uint8Array, contextId: string): Promise<void> {
+    if (!this.bus || !this.session || !this.ort) return;
+    if (audio.byteLength % 2 !== 0) {
+      this.emitError(contextId, new Error("VAD audio must be 16-bit PCM with even byte length"));
+      return;
+    }
+
+    const samples = new Int16Array(audio.buffer, audio.byteOffset, audio.byteLength / 2);
+    for (let i = 0; i < samples.length; i += 1) {
+      this.pendingSamples.push(samples[i]! / 32768);
+    }
+
+    while (this.pendingSamples.length >= WINDOW_SAMPLES_16K) {
+      const window = new Float32Array(WINDOW_SAMPLES_16K);
+      for (let i = 0; i < WINDOW_SAMPLES_16K; i += 1) {
+        window[i] = this.pendingSamples.shift()!;
+      }
+      const confidence = await this.runModel(window, contextId);
+      this.emitVadState(confidence, contextId);
+    }
+  }
+
+  async close(): Promise<void> {
+    for (const dispose of this.disposers.splice(0)) dispose();
+    this.bus = null;
+    this.session = null;
+    this.ort = null;
+    this.pendingSamples = [];
+    this.resetModelState();
+  }
+
+  private async runModel(window: Float32Array, contextId: string): Promise<number> {
+    if (!this.session || !this.ort) return 0;
+
+    const input = new Float32Array(CONTEXT_SAMPLES_16K + WINDOW_SAMPLES_16K);
+    input.set(this.context, 0);
+    input.set(window, CONTEXT_SAMPLES_16K);
+
+    try {
+      const output = await this.session.run({
+        input: new this.ort.Tensor("float32", input, [1, input.length]),
+        state: new this.ort.Tensor("float32", this.state, [2, 1, 128]),
+        sr: new this.ort.Tensor("int64", BigInt64Array.from([BigInt(this.sampleRate)]), []),
+      });
+
+      const probability = output["output"]?.data?.[0];
+      const nextState = output["stateN"]?.data;
+      if (nextState instanceof Float32Array) {
+        this.state = new Float32Array(nextState);
+      }
+      this.context = input.slice(-CONTEXT_SAMPLES_16K);
+
+      const now = Date.now();
+      if (now - this.lastResetMs >= 5000) {
+        this.resetModelState();
+      }
+
+      return typeof probability === "number" ? probability : 0;
+    } catch (err) {
+      this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
+      return 0;
+    }
+  }
+
+  private emitVadState(confidence: number, contextId: string): void {
     if (!this.bus) return;
 
-    // Stub: mock VAD detection (real impl uses ONNX inference)
-    const energy = this.computeEnergy(audio);
-    const isSpeech = energy > this.confidenceThreshold;
-    const confidence = Math.min(energy / 2, 1.0);
     const now = Date.now();
+    const isSpeech = confidence >= this.confidenceThreshold;
+    const silenceFrameTarget = Math.max(1, Math.ceil(this.minSilenceDurationMs / 32));
 
-    if (isSpeech && !this.speaking) {
-      this.speaking = true;
-      this.bus.push(Route.Main, {
-        kind: "vad.speech_started",
-        contextId,
-        timestampMs: now,
-        confidence,
-      });
-    }
+    if (isSpeech) {
+      this.silenceFrames = 0;
+      if (!this.speaking) {
+        this.speaking = true;
+        const started: VadSpeechStartedPacket = {
+          kind: "vad.speech_started",
+          contextId,
+          timestampMs: now,
+          confidence,
+        };
+        this.bus.push(Route.Main, started);
+      }
 
-    if (!isSpeech && this.speaking) {
-      this.speaking = false;
-      this.bus.push(Route.Main, {
-        kind: "vad.speech_ended",
-        contextId,
-        timestampMs: now,
-      });
-    }
-
-    // Emit speech activity heartbeat while speaking (EOS uses this)
-    if (this.speaking) {
-      this.bus.push(Route.Main, {
+      const activity: VadSpeechActivityPacket = {
         kind: "vad.speech_activity",
         contextId,
         timestampMs: now,
         isAsync: true,
-      });
+      };
+      this.bus.push(Route.Main, activity);
+      return;
     }
+
+    if (!this.speaking) return;
+    this.silenceFrames += 1;
+    if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) return;
+    if (this.silenceFrames < silenceFrameTarget) return;
+
+    this.speaking = false;
+    this.silenceFrames = 0;
+    const ended: VadSpeechEndedPacket = {
+      kind: "vad.speech_ended",
+      contextId,
+      timestampMs: now,
+    };
+    this.bus.push(Route.Main, ended);
   }
 
-  private computeEnergy(audio: Uint8Array): number {
-    // Simple RMS energy as placeholder for real VAD inference
-    const view = new Int16Array(audio.buffer, audio.byteOffset, audio.length / 2);
-    let sum = 0;
-    for (let i = 0; i < view.length; i++) {
-      sum += (view[i]! / 32768) ** 2;
-    }
-    return Math.sqrt(sum / view.length);
+  private resetModelState(): void {
+    this.state = new Float32Array(2 * 1 * 128);
+    this.context = new Float32Array(CONTEXT_SAMPLES_16K);
+    this.lastResetMs = Date.now();
   }
 
-  async close(): Promise<void> {
-    this.bus = null;
+  private emitError(contextId: string, err: Error): void {
+    const packet: VoiceErrorPacket = {
+      kind: "vad.error",
+      contextId,
+      timestampMs: Date.now(),
+      component: "vad",
+      category: ErrorCategory.InvalidInput,
+      cause: err,
+      isRecoverable: isRecoverable(ErrorCategory.InvalidInput),
+    };
+    this.bus?.push(Route.Critical, packet);
   }
+}
+
+function readNumber(config: PluginConfig, key: string, fallback: number): number {
+  const value = config[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }

@@ -1,0 +1,547 @@
+// SPDX-License-Identifier: MIT
+
+import { describe, it, expect, vi } from "vitest";
+import { VoiceAgentSession } from "./voice-agent-session.js";
+import { Route, type PipelineBus, type PluginConfig, type VoicePlugin } from "./index.js";
+import type {
+  EndOfSpeechAudioPacket,
+  RecordAssistantAudioPacket,
+  RecordUserAudioPacket,
+  SpeechToTextAudioPacket,
+  SttResultPacket,
+  EndOfSpeechPacket,
+  LlmDeltaPacket,
+  LlmResponseDonePacket,
+  TextToSpeechDonePacket,
+  TextToSpeechAudioPacket,
+  TextToSpeechTextPacket,
+  InterruptTtsPacket,
+  UserAudioReceivedPacket,
+  UserInputPacket,
+  VadAudioPacket,
+  ModeSwitchCompletedPacket,
+  VadSpeechStartedPacket,
+} from "./packets.js";
+
+class CapturingPlugin implements VoicePlugin {
+  config: PluginConfig | null = null;
+  forceFinalize = vi.fn();
+
+  async initialize(_bus: PipelineBus, config: PluginConfig): Promise<void> {
+    this.config = config;
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
+}
+
+class OrderedClosePlugin implements VoicePlugin {
+  constructor(
+    private readonly name: string,
+    private readonly closeOrder: string[],
+  ) {}
+
+  async initialize(): Promise<void> {
+    // no-op
+  }
+
+  async close(): Promise<void> {
+    this.closeOrder.push(this.name);
+  }
+}
+
+class FailingInitPlugin implements VoicePlugin {
+  async initialize(): Promise<void> {
+    throw new Error("init failed");
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
+}
+
+class InterruptAwareStreamingTtsPlugin implements VoicePlugin {
+  private bus: PipelineBus | null = null;
+  private interval: ReturnType<typeof setInterval> | null = null;
+  private contextId = "";
+  emittedAudioCount = 0;
+  interruptObservedAtMs = 0;
+
+  async initialize(bus: PipelineBus): Promise<void> {
+    this.bus = bus;
+    bus.on("tts.text", (pkt) => {
+      this.startStreaming((pkt as TextToSpeechTextPacket).contextId);
+    });
+    bus.on("interrupt.tts", (pkt) => {
+      this.interruptObservedAtMs = performance.now();
+      this.stopStreaming();
+      this.bus?.push(Route.Main, {
+        kind: "tts.end",
+        contextId: (pkt as InterruptTtsPacket).contextId,
+        timestampMs: Date.now(),
+      });
+    });
+  }
+
+  async close(): Promise<void> {
+    this.stopStreaming();
+    this.bus = null;
+  }
+
+  private startStreaming(contextId: string): void {
+    this.contextId = contextId;
+    if (this.interval) return;
+    this.interval = setInterval(() => {
+      this.emittedAudioCount++;
+      this.bus?.push(Route.Main, {
+        kind: "tts.audio",
+        contextId: this.contextId,
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3, 4]),
+      } satisfies TextToSpeechAudioPacket);
+    }, 5);
+  }
+
+  private stopStreaming(): void {
+    if (!this.interval) return;
+    clearInterval(this.interval);
+    this.interval = null;
+  }
+}
+
+async function closeSession(session: VoiceAgentSession): Promise<void> {
+  if (session.state !== "closed") {
+    await session.close();
+  }
+}
+
+describe("VoiceAgentSession", () => {
+  it("passes configured plugin options to each plugin during initialization", async () => {
+    const plugin = new CapturingPlugin();
+    const session = new VoiceAgentSession({
+      plugins: {
+        stt: {
+          api_key: "test-key",
+          endpointing: 300,
+        },
+      },
+    });
+
+    session.registerPlugin("stt", plugin);
+    await session.start();
+
+    expect(plugin.config).toEqual({
+      api_key: "test-key",
+      endpointing: 300,
+    });
+
+    await closeSession(session);
+  });
+
+  it("force-finalizes STT when audio stops and no final result arrives", async () => {
+    const plugin = new CapturingPlugin();
+    const session = new VoiceAgentSession({
+      plugins: { stt: {} },
+      sttForceFinalizeTimeoutMs: 10,
+    });
+
+    session.registerPlugin("stt", plugin);
+    await session.start();
+
+    const audioPacket: SpeechToTextAudioPacket = {
+      kind: "stt.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    };
+    session.bus.push(Route.Main, audioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(plugin.forceFinalize).toHaveBeenCalledTimes(1);
+    expect(plugin.forceFinalize).toHaveBeenCalledWith("turn-1");
+
+    await closeSession(session);
+  });
+
+  it("cancels pending STT force-finalization when a final result arrives", async () => {
+    const plugin = new CapturingPlugin();
+    const session = new VoiceAgentSession({
+      plugins: { stt: {} },
+      sttForceFinalizeTimeoutMs: 30,
+    });
+
+    session.registerPlugin("stt", plugin);
+    await session.start();
+
+    const audioPacket: SpeechToTextAudioPacket = {
+      kind: "stt.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    };
+    session.bus.push(Route.Main, audioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const finalPacket: SttResultPacket = {
+      kind: "stt.result",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "hello",
+      confidence: 0.99,
+    };
+    session.bus.push(Route.Main, finalPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 45));
+
+    expect(plugin.forceFinalize).not.toHaveBeenCalled();
+
+    await closeSession(session);
+  });
+
+  it("fans user audio out to recorder, VAD, STT, and EOS routes", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    await session.start();
+
+    const recordPackets: RecordUserAudioPacket[] = [];
+    const vadPackets: VadAudioPacket[] = [];
+    const sttPackets: SpeechToTextAudioPacket[] = [];
+    const eosPackets: EndOfSpeechAudioPacket[] = [];
+
+    session.bus.on("record.user_audio", (pkt) => {
+      recordPackets.push(pkt as RecordUserAudioPacket);
+    });
+    session.bus.on("vad.audio", (pkt) => {
+      vadPackets.push(pkt as VadAudioPacket);
+    });
+    session.bus.on("stt.audio", (pkt) => {
+      sttPackets.push(pkt as SpeechToTextAudioPacket);
+    });
+    session.bus.on("eos.audio", (pkt) => {
+      eosPackets.push(pkt as EndOfSpeechAudioPacket);
+    });
+
+    const audio = new Uint8Array([1, 2, 3, 4]);
+    const userAudioPacket: UserAudioReceivedPacket = {
+      kind: "user.audio_received",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio,
+    };
+    session.bus.push(Route.Main, userAudioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recordPackets).toHaveLength(1);
+    expect(vadPackets).toHaveLength(1);
+    expect(sttPackets).toHaveLength(1);
+    expect(eosPackets).toHaveLength(1);
+    expect(recordPackets[0]!.audio).toBe(audio);
+    expect(vadPackets[0]!.audio).toBe(audio);
+    expect(sttPackets[0]!.audio).toBe(audio);
+    expect(eosPackets[0]!.audio).toBe(audio);
+
+    await closeSession(session);
+  });
+
+  it("emits normalized debug events for bus packets", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const reader = session.debugEvents.getReader();
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "user.text_received",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "hello",
+    });
+
+    let first = await reader.read();
+    while (!first.done && first.value?.data.kind !== "user.text_received") {
+      first = await reader.read();
+    }
+    reader.releaseLock();
+
+    expect(first.value).toMatchObject({
+      component: "bus",
+      type: "packet",
+      data: {
+        context_id: "turn-1",
+        route: "Main",
+        kind: "user.text_received",
+      },
+    });
+
+    await closeSession(session);
+  });
+
+  it("finalizes plugins in deterministic reverse stage order", async () => {
+    const closeOrder: string[] = [];
+    const session = new VoiceAgentSession({
+      plugins: {
+        recorder: {},
+        tts: {},
+        vad: {},
+        stt: {},
+      },
+    });
+
+    session.registerPlugin("recorder", new OrderedClosePlugin("recorder", closeOrder));
+    session.registerPlugin("tts", new OrderedClosePlugin("tts", closeOrder));
+    session.registerPlugin("vad", new OrderedClosePlugin("vad", closeOrder));
+    session.registerPlugin("stt", new OrderedClosePlugin("stt", closeOrder));
+
+    await session.start();
+    await session.close();
+
+    expect(closeOrder).toEqual(["vad", "tts", "stt", "recorder"]);
+  });
+
+  it("tears down initialized plugins in reverse order after init failure", async () => {
+    const closeOrder: string[] = [];
+    const errors: Array<{ stage: string; message: string }> = [];
+    const session = new VoiceAgentSession({
+      plugins: {
+        recorder: {},
+        stt: {},
+        tts: {},
+      },
+    });
+
+    session.registerPlugin("recorder", new OrderedClosePlugin("recorder", closeOrder));
+    session.registerPlugin("stt", new OrderedClosePlugin("stt", closeOrder));
+    session.registerPlugin("tts", new FailingInitPlugin());
+    session.on("error", (event) => {
+      errors.push({ stage: event.stage, message: event.message });
+    });
+
+    await expect(session.start()).rejects.toThrow("Initialization failed at tts/tts");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(session.state).toBe("failed");
+    expect(closeOrder).toEqual(["stt", "recorder"]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        stage: "init.tts",
+        message: expect.stringContaining("Initialization failed: tts/tts"),
+      }),
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("switches audio to text immediately and tears down audio plugins in background", async () => {
+    const closeOrder: string[] = [];
+    const session = new VoiceAgentSession({
+      plugins: {
+        stt: {},
+        tts: {},
+        vad: {},
+      },
+    });
+    const completed: ModeSwitchCompletedPacket[] = [];
+
+    session.registerPlugin("stt", new OrderedClosePlugin("stt", closeOrder));
+    session.registerPlugin("tts", new OrderedClosePlugin("tts", closeOrder));
+    session.registerPlugin("vad", new OrderedClosePlugin("vad", closeOrder));
+
+    await session.start();
+    session.bus.on("mode.switch_completed", (pkt) => {
+      completed.push(pkt as ModeSwitchCompletedPacket);
+    });
+
+    await session.switchMode("text");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(completed).toEqual([
+      expect.objectContaining({
+        kind: "mode.switch_completed",
+        mode: "text",
+      }),
+    ]);
+    expect(closeOrder).toEqual(["vad", "tts", "stt"]);
+
+    await closeSession(session);
+  });
+
+  it("routes EOS completions to normalized user input", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const userInputs: UserInputPacket[] = [];
+
+    await session.start();
+    session.bus.on("user.input", (pkt) => {
+      userInputs.push(pkt as UserInputPacket);
+    });
+
+    const eosPacket: EndOfSpeechPacket = {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "hello world",
+      transcripts: [
+        {
+          kind: "stt.result",
+          contextId: "turn-1",
+          timestampMs: Date.now(),
+          text: "hello world",
+          confidence: 0.9,
+          language: "en-US",
+        },
+      ],
+    };
+    session.bus.push(Route.Main, eosPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(userInputs).toEqual([
+      {
+        kind: "user.input",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "hello world",
+        language: "en-US",
+      },
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("routes LLM output to TTS text and done packets", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const ttsText: TextToSpeechTextPacket[] = [];
+    const ttsDone: TextToSpeechDonePacket[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+    session.bus.on("tts.done", (pkt) => {
+      ttsDone.push(pkt as TextToSpeechDonePacket);
+    });
+
+    const deltaPacket: LlmDeltaPacket = {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Hello ",
+    };
+    const donePacket: LlmResponseDonePacket = {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Hello there.",
+    };
+    session.bus.push(Route.Main, deltaPacket);
+    session.bus.push(Route.Main, donePacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(ttsText).toEqual([
+      {
+        kind: "tts.text",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "Hello ",
+      },
+    ]);
+    expect(ttsDone).toEqual([
+      {
+        kind: "tts.done",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "Hello there.",
+      },
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("routes TTS audio to assistant recording", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const recorded: RecordAssistantAudioPacket[] = [];
+
+    await session.start();
+    session.bus.on("record.assistant_audio", (pkt) => {
+      recorded.push(pkt as RecordAssistantAudioPacket);
+    });
+
+    const audio = new Uint8Array([1, 2, 3, 4]);
+    const ttsAudioPacket: TextToSpeechAudioPacket = {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio,
+    };
+    session.bus.push(Route.Main, ttsAudioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recorded).toEqual([
+      {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        audio,
+        truncate: false,
+      },
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("stops assistant audio output within 50ms of VAD barge-in", async () => {
+    const tts = new InterruptAwareStreamingTtsPlugin();
+    const session = new VoiceAgentSession({ plugins: { tts: {} } });
+    const recordedAtMs: number[] = [];
+    const interrupts: InterruptTtsPacket[] = [];
+
+    session.registerPlugin("tts", tts);
+    await session.start();
+    session.bus.on("record.assistant_audio", () => {
+      recordedAtMs.push(performance.now());
+    });
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      text: "stream until interrupted",
+    } satisfies TextToSpeechTextPacket);
+
+    while (recordedAtMs.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const vadDetectedAtMs = performance.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge-in",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const lastAudioAfterVadMs = Math.max(
+      0,
+      ...recordedAtMs.filter((timestampMs) => timestampMs >= vadDetectedAtMs)
+        .map((timestampMs) => timestampMs - vadDetectedAtMs),
+    );
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({
+        kind: "interrupt.tts",
+        contextId: "assistant-turn",
+      }),
+    ]);
+    expect(tts.interruptObservedAtMs - vadDetectedAtMs).toBeLessThan(50);
+    expect(lastAudioAfterVadMs).toBeLessThan(50);
+
+    await closeSession(session);
+  });
+});

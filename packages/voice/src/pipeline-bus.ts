@@ -14,7 +14,7 @@
 //   - Pipeline handler errors emit VoiceErrorPacket on Critical route — bus continues.
 
 import type { VoicePacket, AsyncPacket, VoiceErrorPacket } from "./packets.js";
-import { ErrorCategory, type PipelineErrorPacket } from "./packets.js";
+import { ErrorCategory, type ConversationMetricPacket, type PipelineErrorPacket } from "./packets.js";
 
 // =============================================================================
 // Public Types
@@ -32,7 +32,7 @@ export type PacketHandler<T extends VoicePacket = VoicePacket> = (
 
 export interface PipelineBus {
   /** Push one or more packets into a priority route. */
-  push(route: Route, ...packets: VoicePacket[]): void;
+  push<T extends readonly VoicePacket[]>(route: Route, ...packets: T): void;
 
   /** Register a handler for a specific packet kind. Returns unsubscribe function. */
   on<T extends VoicePacket>(
@@ -45,6 +45,9 @@ export interface PipelineBus {
 
   /** Stop draining. Flushes Critical+Main, discards Background. */
   stop(): void;
+
+  /** Readonly stream of every packet pushed into the bus, before route dispatch. */
+  readonly allPackets: ReadableStream<{ route: Route; packet: VoicePacket }>;
 }
 
 // =============================================================================
@@ -69,6 +72,8 @@ export interface PipelineBusConfig {
   criticalBatchSize?: number;
   /** Called when a Background packet is dropped. For metrics emission. */
   onBackgroundDrop?: (dropped: VoicePacket) => void;
+  /** Called for every packet pushed into the bus. */
+  onPacket?: (route: Route, packet: VoicePacket) => void;
 }
 
 // =============================================================================
@@ -83,17 +88,32 @@ export class PipelineBusImpl implements PipelineBus {
   private running = false;
   private resolver: (() => void) | null = null;
   private drainedCount = 0;
+  private allPacketsController:
+    | ReadableStreamDefaultController<{ route: Route; packet: VoicePacket }>
+    | null = null;
+
+  readonly allPackets: ReadableStream<{ route: Route; packet: VoicePacket }>;
 
   private readonly mainCapacity: number;
   private readonly bgCapacity: number;
   private readonly criticalBatchSize: number;
   private readonly onBgDrop: ((dropped: VoicePacket) => void) | undefined;
+  private readonly onPacket: ((route: Route, packet: VoicePacket) => void) | undefined;
 
   constructor(config?: PipelineBusConfig) {
     this.mainCapacity = config?.mainCapacity ?? 4096;
     this.bgCapacity = config?.bgCapacity ?? 2048;
     this.criticalBatchSize = config?.criticalBatchSize ?? 4;
     this.onBgDrop = config?.onBackgroundDrop;
+    this.onPacket = config?.onPacket;
+    this.allPackets = new ReadableStream<{ route: Route; packet: VoicePacket }>({
+      start: (controller) => {
+        this.allPacketsController = controller;
+      },
+      cancel: () => {
+        this.allPacketsController = null;
+      },
+    });
 
     if (this.mainCapacity < 1) throw new Error("mainCapacity must be >= 1");
     if (this.bgCapacity < 1) throw new Error("bgCapacity must be >= 1");
@@ -104,14 +124,19 @@ export class PipelineBusImpl implements PipelineBus {
   // Public API
   // ---------------------------------------------------------------------------
 
-  push(route: Route, ...packets: VoicePacket[]): void {
+  push<T extends readonly VoicePacket[]>(route: Route, ...packets: T): void {
     for (const p of packets) {
+      this.publishAllPackets(route, p);
       const q = this.queueFor(route);
+      let droppedForMetric: VoicePacket | null = null;
       if (q.length >= this.capacityFor(route)) {
         if (route === Route.Background) {
           const dropped = q.shift();
           if (dropped && this.onBgDrop) {
             this.onBgDrop(dropped);
+          }
+          if (dropped) {
+            droppedForMetric = dropped;
           }
           // continue — push after dropping oldest
         } else if (route === Route.Main) {
@@ -123,6 +148,9 @@ export class PipelineBusImpl implements PipelineBus {
         // Critical is never bounded
       }
       q.push(p);
+      if (droppedForMetric) {
+        this.enqueueBackgroundDropMetric(droppedForMetric);
+      }
     }
     // Wake the drain loop
     this.resolver?.();
@@ -194,6 +222,32 @@ export class PipelineBusImpl implements PipelineBus {
     return this.background;
   }
 
+  private publishAllPackets(route: Route, packet: VoicePacket): void {
+    this.onPacket?.(route, packet);
+    if (!this.allPacketsController) return;
+    try {
+      this.allPacketsController.enqueue({ route, packet });
+    } catch {
+      this.allPacketsController = null;
+    }
+  }
+
+  private enqueueBackgroundDropMetric(dropped: VoicePacket): void {
+    const metric: ConversationMetricPacket = {
+      kind: "metric.conversation",
+      contextId: dropped.contextId,
+      timestampMs: Date.now(),
+      name: "pipeline.bus.background.dropped",
+      value: dropped.kind,
+    };
+
+    this.publishAllPackets(Route.Background, metric);
+    if (this.background.length >= this.bgCapacity) {
+      this.background.shift();
+    }
+    this.background.push(metric);
+  }
+
   private capacityFor(r: Route): number {
     if (r === Route.Critical) return Infinity;
     if (r === Route.Main) return this.mainCapacity;
@@ -238,7 +292,7 @@ export class PipelineBusImpl implements PipelineBus {
     if (!matches || matches.size === 0) return;
 
     // Async packets: fire-and-forget, don't await
-    if ("isAsync" in pkt && (pkt as AsyncPacket).isAsync) {
+    if ("isAsync" in pkt && (pkt as unknown as AsyncPacket).isAsync) {
       for (const h of matches) {
         void (async () => {
           try {

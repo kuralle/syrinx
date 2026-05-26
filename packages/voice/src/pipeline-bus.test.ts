@@ -75,9 +75,13 @@ describe("PipelineBusImpl", () => {
   describe("capacity and overflow", () => {
     it("drops oldest Background on overflow", async () => {
       const dropped: VoicePacket[] = [];
+      const metrics: string[] = [];
       await withBus(
         { bgCapacity: 2, onBackgroundDrop: (d: VoicePacket) => { dropped.push(d); } },
         (bus) => {
+          bus.on("metric.conversation", (pkt: any) => {
+            metrics.push(pkt.name);
+          });
           bus.push(Route.Background, pkt("bg.1", "id-1"));
           bus.push(Route.Background, pkt("bg.2", "id-2"));
           bus.push(Route.Background, pkt("bg.3", "id-3"));
@@ -87,6 +91,7 @@ describe("PipelineBusImpl", () => {
       if (dropped.length > 0) {
         expect(dropped[0]!.contextId).toBe("id-1");
       }
+      expect(metrics).toContain("pipeline.bus.background.dropped");
     });
 
     it("throws on Main overflow", () => {
@@ -143,6 +148,28 @@ describe("PipelineBusImpl", () => {
       });
       expect(fn1).toHaveBeenCalledTimes(1);
       expect(fn2).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("allPackets", () => {
+    it("publishes every pushed packet with its route", async () => {
+      const bus = createBus();
+      const reader = bus.allPackets.getReader();
+      bus.push(Route.Main, pkt("main.event", "main-1"));
+      bus.push(Route.Critical, pkt("critical.event", "critical-1"));
+
+      const first = await reader.read();
+      const second = await reader.read();
+      reader.releaseLock();
+
+      expect(first.value).toMatchObject({
+        route: Route.Main,
+        packet: { kind: "main.event", contextId: "main-1" },
+      });
+      expect(second.value).toMatchObject({
+        route: Route.Critical,
+        packet: { kind: "critical.event", contextId: "critical-1" },
+      });
     });
   });
 
