@@ -4,6 +4,7 @@
 // This intentionally uses v2 plugins/configs directly; no v1 audioIn/audioOut shims.
 
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,5 +116,30 @@ describe("packet-bus multi-turn baseline", () => {
       `${JSON.stringify({ kernelVersion: "v2", turnCount: turns.length, avgE2E, turns }, null, 2)}\n`,
       "utf8",
     );
+  });
+
+  it("keeps checked-in websocket baselines inside their quality gates", () => {
+    const root = join(import.meta.dirname, "..", "..");
+    const longform = JSON.parse(
+      readFileSync(join(root, "test", "performance", "websocket-university-multiturn-baseline.json"), "utf8"),
+    ) as { qualityGate?: { passed?: boolean }; turnCount?: number };
+    const interactive = JSON.parse(
+      readFileSync(join(root, "test", "performance", "websocket-university-interactive-baseline.json"), "utf8"),
+    ) as {
+      qualityGate?: { passed?: boolean };
+      turnCount?: number;
+      inputSampleRateHz?: number;
+      outputSampleRateHz?: number;
+      latencyMs?: { avgSttFinalAfterSpeechEnd?: number; avgTtsTimeToFirstAudio?: number };
+    };
+
+    expect(longform.qualityGate?.passed).toBe(true);
+    expect(longform.turnCount).toBeGreaterThanOrEqual(24);
+    expect(interactive.qualityGate?.passed).toBe(true);
+    expect(interactive.turnCount).toBeGreaterThanOrEqual(3);
+    expect(interactive.inputSampleRateHz).toBe(16000);
+    expect(interactive.outputSampleRateHz).toBe(16000);
+    expect(interactive.latencyMs?.avgSttFinalAfterSpeechEnd).toBeLessThanOrEqual(7000);
+    expect(interactive.latencyMs?.avgTtsTimeToFirstAudio).toBeLessThanOrEqual(1000);
   });
 });

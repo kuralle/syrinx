@@ -1,0 +1,88 @@
+{
+  "scenario": "websocket_university_student_relations_interactive",
+  "generatedAt": "2026-05-26T16:30:51.924Z",
+  "fixtureProvider": "mixed-wav-fixtures",
+  "llmModel": "gemini-2.5-flash",
+  "ttsProvider": "cartesia",
+  "ttsModel": "sonic-2-2025-03-07",
+  "transport": "websocket",
+  "inputSampleRateHz": 16000,
+  "outputSampleRateHz": 16000,
+  "trailingSilenceMs": 1400,
+  "turnCount": 3,
+  "latencyMs": {
+    "avgSttFinalAfterSpeechEnd": 2644,
+    "avgLlmTimeToFirstText": 3380,
+    "avgTtsTimeToFirstAudio": 358,
+    "avgSpeechEndToFirstAssistantAudio": 6382
+  },
+  "turns": [
+    {
+      "id": "interactive-01",
+      "fixtureId": "review-late-add",
+      "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
+      "sttFinal": "Hi. I'm Maya Chen, student ID s 10042. I need to know whether I can still add biology one, o one after the deadline. And what form I should submit.",
+      "agentReply": "Yes, you can still add Biology 101, but a late add is required, and you will need to submit a Late Add Petition form. You will need to route the petition to the course instructor, advising desk, and registrar, and upload an instructor email and department lab-seat confirmation.",
+      "toolCalls": [
+        "studentRelationsLookup"
+      ],
+      "inputAudioMs": 8963,
+      "assistantAudioMs": 12585,
+      "audioBytes": 402726,
+      "latencyMs": {
+        "sttFinalAfterSpeechEnd": 985,
+        "llmTimeToFirstText": 3351,
+        "ttsTimeToFirstAudio": 371,
+        "speechEndToFirstAssistantAudio": 4707,
+        "turnWallClock": 19790
+      }
+    },
+    {
+      "id": "interactive-02",
+      "fixtureId": "02-registration-holds",
+      "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
+      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning. And I do not want the instructor approval to expire while I wait. Wait.",
+      "agentReply": "I can confirm that you do not have any active registration holds that would block your late add petition. You can proceed with uploading the instructor email and department lab-seat confirmation, then route the Late Add Petition to the course instructor, advising desk, and registrar.",
+      "toolCalls": [
+        "studentRelationsLookup"
+      ],
+      "inputAudioMs": 16451,
+      "assistantAudioMs": 12817,
+      "audioBytes": 410154,
+      "latencyMs": {
+        "sttFinalAfterSpeechEnd": 997,
+        "llmTimeToFirstText": 4197,
+        "ttsTimeToFirstAudio": 333,
+        "speechEndToFirstAssistantAudio": 5527,
+        "turnWallClock": 28634
+      }
+    },
+    {
+      "id": "interactive-03",
+      "fixtureId": "10-lab-fee",
+      "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
+      "sttFinal": "Does biology one zero one have a separate lab fee that appears after the late ad is approved? If there is a fee, I need to know whether it posts immediately or out after the registrar processes the petition because that changes how I plan my payment.",
+      "agentReply": "Yes, Biology 101 does have a separate lab fee of $85. This fee will be posted to your account after the registrar processes your Late Add Petition.",
+      "toolCalls": [
+        "studentRelationsLookup"
+      ],
+      "inputAudioMs": 14691,
+      "assistantAudioMs": 8870,
+      "audioBytes": 283838,
+      "latencyMs": {
+        "sttFinalAfterSpeechEnd": 5949,
+        "llmTimeToFirstText": 2593,
+        "ttsTimeToFirstAudio": 371,
+        "speechEndToFirstAssistantAudio": 8913,
+        "turnWallClock": 28449
+      }
+    }
+  ],
+  "artifacts": {
+    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-26T16-29-34-858Z"
+  },
+  "qualityGate": {
+    "passed": true,
+    "failures": []
+  }
+}
