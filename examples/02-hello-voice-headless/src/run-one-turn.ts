@@ -3,16 +3,15 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { config as loadDotenv } from "dotenv";
-import { WaveFile } from "wavefile";
 import {
   Route,
   VoiceAgentSession,
   type PluginConfig,
-  type RecordAssistantAudioPacket,
   type RecordUserAudioPacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
@@ -23,6 +22,9 @@ import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
+
+const require = createRequire(import.meta.url);
+const { WaveFile } = require("wavefile") as typeof import("wavefile");
 
 export const DEFAULT_MODEL = "gemini-2.5-flash";
 
@@ -59,10 +61,14 @@ export interface ExtendedRunOneTurnOptions extends RunOneTurnOptions {
   readonly sessionOverrides?: HeadlessSessionOptions;
   /** Skips WAV read; must be mono 16 kHz PCM decoded samples. */
   readonly syntheticMono16kSamples?: Readonly<Int16Array>;
+  readonly realtimePacing?: boolean;
 }
 
 export interface PerTurnMetrics {
   readonly turnId: string;
+  readonly inputAudioMs: number;
+  readonly speechEndToFinalTranscriptMs: number;
+  readonly speechEndToFirstAudioMs: number;
   readonly endpointingMs: number;
   readonly llmTTFTMs: number;
   readonly ttsTTFBMs: number;
@@ -183,6 +189,10 @@ function eventLine(kind: string, data: Record<string, unknown>): string {
   return `${JSON.stringify({ tsMs: Date.now(), kind, ...data })}\n`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
 function resolveInputPath(path: string): string {
   const resolved = resolve(path);
   try {
@@ -269,6 +279,7 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
   const eventLines: string[] = [];
   const timeline = {
     feedStartMs: 0,
+    speechEndMs: 0,
     finalTranscriptMs: 0,
     firstLlmDeltaMs: 0,
     firstTtsAudioMs: 0,
@@ -281,11 +292,9 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
   const offRecordUser = session.bus.on<RecordUserAudioPacket>("record.user_audio", (pkt) => {
     inputChunks.push(pkt.audio);
   });
-  const offRecordAssistant = session.bus.on<RecordAssistantAudioPacket>("record.assistant_audio", (pkt) => {
-    outputChunks.push(pkt.audio);
-  });
   const offTtsAudio = session.bus.on<TextToSpeechAudioPacket>("tts.audio", (pkt) => {
     if (timeline.firstTtsAudioMs === 0) timeline.firstTtsAudioMs = pkt.timestampMs;
+    outputChunks.push(pkt.audio);
   });
 
   const ttsEnd = new Promise<void>((resolveEnd, reject) => {
@@ -349,7 +358,9 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
     });
     callOptionalFrameProcessor(kernel.plugins["vad"], contextId);
     offset += SAMPLES_PER_FRAME;
+    if (opts.realtimePacing === true) await sleep(20);
   }
+  timeline.speechEndMs = Date.now();
 
   for (let pad = 0; pad < 40; pad += 1) {
     const frame = new Int16Array(SAMPLES_PER_FRAME);
@@ -360,17 +371,26 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
       audio: pcmToBytes(frame),
     });
     callOptionalFrameProcessor(kernel.plugins["vad"], contextId);
+    if (opts.realtimePacing === true) await sleep(20);
   }
 
   await callOptionalScriptedStt(kernel.plugins["stt"], contextId);
   await ttsEnd;
 
   offRecordUser();
-  offRecordAssistant();
   offTtsAudio();
 
   const metrics: PerTurnMetrics = {
     turnId: contextId,
+    inputAudioMs: Math.round((pcm.length / 16000) * 1000),
+    speechEndToFinalTranscriptMs:
+      timeline.speechEndMs > 0 && timeline.finalTranscriptMs > 0
+        ? Math.max(0, timeline.finalTranscriptMs - timeline.speechEndMs)
+        : 0,
+    speechEndToFirstAudioMs:
+      timeline.speechEndMs > 0 && timeline.firstTtsAudioMs > 0
+        ? Math.max(0, timeline.firstTtsAudioMs - timeline.speechEndMs)
+        : 0,
     endpointingMs:
       timeline.feedStartMs > 0 && timeline.finalTranscriptMs > 0
         ? Math.max(0, timeline.finalTranscriptMs - timeline.feedStartMs)

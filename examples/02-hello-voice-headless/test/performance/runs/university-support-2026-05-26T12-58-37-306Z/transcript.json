@@ -1,0 +1,18 @@
+{
+  "finalTranscript": "Hi. I'm Maya Chen, student ID s 10042. I need to know whether I can still add biology one, o one after the deadline. And what form I should submit.",
+  "agentReply": "Maya, you can submit a Late Add Petition through the Student Relations portal. You will need to route it to your course instructor, academic advisor, and the registrar for approval.",
+  "metrics": {
+    "turnId": "11be6aea-f318-446e-845d-a44d2dd430e1",
+    "inputAudioMs": 8963,
+    "speechEndToFinalTranscriptMs": 979,
+    "speechEndToFirstAudioMs": 4160,
+    "endpointingMs": 10361,
+    "llmTTFTMs": 2765,
+    "ttsTTFBMs": 416,
+    "e2eLatencyMs": 13542,
+    "agentTokens": 30,
+    "playedMs": 8127,
+    "truncated": false,
+    "toolCalls": 1
+  }
+}

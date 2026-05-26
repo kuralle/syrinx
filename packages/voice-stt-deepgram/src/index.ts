@@ -54,6 +54,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private lastInterimTranscript = "";
   private lastInterimConfidence = 0;
   private hasFinalForCurrentTurn = false;
+  private finalTranscriptParts: string[] = [];
+  private finalConfidence = 0;
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -82,8 +84,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         if (this.streamStartTime === 0) {
           this.streamStartTime = Date.now();
         }
-        // Guard: new audio = new turn, reset final flag
-        this.hasFinalForCurrentTurn = false;
       }),
 
       // Turn change handler
@@ -91,13 +91,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         const tc = pkt as { contextId: string };
         this.currentContextId = tc.contextId;
         this.streamStartTime = Date.now();
-        this.hasFinalForCurrentTurn = false;
+        this.resetTurnTranscriptState();
       }),
 
       // STT interrupt handler
       bus.on("interrupt.stt", () => {
         this.streamStartTime = Date.now();
-        this.hasFinalForCurrentTurn = false;
+        this.resetTurnTranscriptState();
       }),
     );
   }
@@ -157,8 +157,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         }
 
         if (msg.is_final) {
-          this.hasFinalForCurrentTurn = true;
-          this.pushFinal(transcript, confidence);
+          this.appendFinalSegment(transcript, confidence);
+          if (msg.speech_final === true) {
+            this.pushFinal(this.combinedFinalTranscript(), this.finalConfidence);
+            this.resetPendingTranscript();
+          }
         } else {
           this.pushInterim(transcript);
         }
@@ -230,8 +233,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
    */
   forceFinalize(contextId?: string): void {
     const ctxId = contextId ?? this.currentContextId;
-    const transcript = this.lastInterimTranscript;
-    const confidence = this.lastInterimConfidence;
+    const transcript = this.combinedFinalTranscript() || this.lastInterimTranscript;
+    const confidence = this.finalConfidence || this.lastInterimConfidence;
 
     // Don't force-finalize if we already got a final for this turn
     if (this.hasFinalForCurrentTurn) return;
@@ -240,13 +243,12 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.hasFinalForCurrentTurn = true;
     this.pushFinal(transcript, confidence, ctxId);
 
-    // Clear tracking
-    this.lastInterimTranscript = "";
-    this.lastInterimConfidence = 0;
+    this.resetPendingTranscript();
   }
 
   /** Emit final transcript + EOS turn complete. */
   private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
+    this.hasFinalForCurrentTurn = true;
     const ctxId = contextId;
     this.bus?.push(Route.Main, {
       kind: "stt.result",
@@ -274,6 +276,31 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       timestampMs: Date.now(),
       text: transcript,
     });
+  }
+
+  private appendFinalSegment(transcript: string, confidence: number): void {
+    if (transcript.length === 0) return;
+    const last = this.finalTranscriptParts.at(-1);
+    if (last !== transcript) {
+      this.finalTranscriptParts.push(transcript);
+    }
+    this.finalConfidence = Math.max(this.finalConfidence, confidence);
+  }
+
+  private combinedFinalTranscript(): string {
+    return this.finalTranscriptParts.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  private resetPendingTranscript(): void {
+    this.finalTranscriptParts = [];
+    this.finalConfidence = 0;
+    this.lastInterimTranscript = "";
+    this.lastInterimConfidence = 0;
+  }
+
+  private resetTurnTranscriptState(): void {
+    this.hasFinalForCurrentTurn = false;
+    this.resetPendingTranscript();
   }
 
   async close(): Promise<void> {
