@@ -38,6 +38,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private smartFormat: boolean = true;
   private interimResults: boolean = true;
   private confidenceThreshold: number = 0;
+  private finalizeOnSpeechFinal: boolean = true;
 
   // Session-long WebSocket
   private ws: import("ws").WebSocket | null = null;
@@ -68,6 +69,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.interimResults = (config["interim_results"] as boolean) ?? true;
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
+    this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
     this.closed = false;
 
     // Open session-long WebSocket (Rapida pattern)
@@ -158,7 +160,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
         if (msg.is_final) {
           this.appendFinalSegment(transcript, confidence);
-          if (msg.speech_final === true) {
+          if (this.finalizeOnSpeechFinal && msg.speech_final === true) {
             this.pushFinal(this.combinedFinalTranscript(), this.finalConfidence);
             this.resetPendingTranscript();
           }
