@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
   Route,
   type TextToSpeechAudioPacket,
+  type TextToSpeechEndPacket,
   type UserAudioReceivedPacket,
   type UserTextReceivedPacket,
   type VoiceAgentSession,
@@ -147,13 +148,19 @@ function wireSessionEvents(
   disposers: Array<() => void>,
 ): void {
   session.on("user_input_partial", (event) => {
-    sendJson(socket, { type: "stt_chunk", transcript: event.text });
+    sendJson(socket, { type: "stt_chunk", turnId: event.turnId, transcript: event.text });
   });
   session.on("user_input_final", (event) => {
-    sendJson(socket, { type: "stt_output", transcript: event.text, confidence: event.confidence });
+    sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence });
   });
   session.on("agent_text_delta", (event) => {
-    sendJson(socket, { type: "agent_chunk", text: event.delta });
+    sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta });
+  });
+  session.on("agent_tool_call", (event) => {
+    sendJson(socket, { type: "agent_tool_call", turnId: event.turnId, id: event.id, name: event.name, args: event.args });
+  });
+  session.on("agent_tool_result", (event) => {
+    sendJson(socket, { type: "agent_tool_result", turnId: event.turnId, id: event.id, result: event.result });
   });
   session.on("agent_finished", (event) => {
     sendJson(socket, { type: "agent_end", turnId: event.turnId });
@@ -173,6 +180,10 @@ function wireSessionEvents(
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(Buffer.from(audio));
       }
+    }),
+    session.bus.on("tts.end", (pkt) => {
+      const end = pkt as TextToSpeechEndPacket;
+      sendJson(socket, { type: "tts_end", turnId: end.contextId });
     }),
   );
 }
@@ -200,6 +211,9 @@ function handleClientMessage(
   if (message.type === "ping") return currentContextId;
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
+    if (nextContextId !== currentContextId) {
+      pushTurnChange(session, nextContextId, currentContextId, "websocket_text_turn");
+    }
     session.bus.push(Route.Main, {
       kind: "user.text_received",
       contextId: nextContextId,
@@ -210,6 +224,9 @@ function handleClientMessage(
   }
   if (message.type === "audio") {
     const nextContextId = message.contextId ?? currentContextId;
+    if (nextContextId !== currentContextId) {
+      pushTurnChange(session, nextContextId, currentContextId, "websocket_audio_turn");
+    }
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
@@ -219,6 +236,21 @@ function handleClientMessage(
     return nextContextId;
   }
   throw new Error("Unsupported client message type");
+}
+
+function pushTurnChange(
+  session: VoiceAgentSession,
+  contextId: string,
+  previousContextId: string,
+  reason: string,
+): void {
+  session.bus.push(Route.Main, {
+    kind: "turn.change",
+    contextId,
+    previousContextId,
+    reason,
+    timestampMs: Date.now(),
+  });
 }
 
 function rawDataToBytes(data: RawData): Uint8Array {

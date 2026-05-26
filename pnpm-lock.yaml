@@ -32,6 +32,9 @@ importers:
       '@asyncdot/voice-recorder':
         specifier: workspace:*
         version: link:../../packages/voice-recorder
+      '@asyncdot/voice-server-websocket':
+        specifier: workspace:*
+        version: link:../../packages/voice-server-websocket
       '@asyncdot/voice-stt-deepgram':
         specifier: workspace:*
         version: link:../../packages/voice-stt-deepgram
@@ -41,6 +44,9 @@ importers:
       '@asyncdot/voice-tts-cartesia':
         specifier: workspace:*
         version: link:../../packages/voice-tts-cartesia
+      '@asyncdot/voice-tts-gemini':
+        specifier: workspace:*
+        version: link:../../packages/voice-tts-gemini
       '@asyncdot/voice-vad-silero':
         specifier: workspace:*
         version: link:../../packages/voice-vad-silero

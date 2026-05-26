@@ -55,6 +55,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private apiKey: string = "";
   private model: string = DEFAULT_MODEL;
   private voiceName: string = DEFAULT_VOICE;
+  private timeoutMs = 45_000;
   private abortController: AbortController | null = null;
   private textByContextId = new Map<string, string>();
   private retryConfig: RetryConfig = readRetryConfig({});
@@ -65,6 +66,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
     this.apiKey = requireStringConfig(config, "api_key");
     this.model = optionalStringConfig(config, "model") ?? DEFAULT_MODEL;
     this.voiceName = optionalStringConfig(config, "voice_name") ?? DEFAULT_VOICE;
+    this.timeoutMs = readPositiveInteger(config["timeout_ms"], 45_000);
     this.retryConfig = readRetryConfig(config);
 
     // Accumulate streaming text deltas; Gemini TTS returns chunked audio for
@@ -107,6 +109,9 @@ export class GeminiTTSPlugin implements VoicePlugin {
             timestampMs: Date.now(),
           });
         }
+        if (!signal.aborted && audioChunks === 0) {
+          throw new Error("Gemini TTS returned no audio chunks");
+        }
         return;
       } catch (err) {
         if (signal.aborted) return;
@@ -144,52 +149,44 @@ export class GeminiTTSPlugin implements VoicePlugin {
 
     const client = new GoogleGenAI({ apiKey: this.apiKey });
 
-    const contents = [
-      {
-        role: "user" as const,
-        parts: [{ text }],
-      },
-    ];
-
-    const responseStream = await client.models.generateContentStream({
-      model: this.model,
-      contents,
-      config: {
-        responseModalities: ["AUDIO"],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: this.voiceName,
+    const response = await withTimeout(
+      client.models.generateContent({
+        model: this.model,
+        contents: [{ parts: [{ text: `Read this aloud in a natural student-support phone voice: ${text}` }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: this.voiceName,
+              },
             },
           },
+          abortSignal: signal,
         },
-        abortSignal: signal,
-      },
-    });
+      }),
+      this.timeoutMs,
+      signal,
+    );
 
     let audioChunks = 0;
+    const candidate = response.candidates?.[0];
+    if (!candidate?.content?.parts) return audioChunks;
 
-    for await (const response of responseStream) {
+    for (const part of candidate.content.parts) {
       if (signal.aborted) return audioChunks;
 
-      const candidate = response.candidates?.[0];
-      if (!candidate?.content?.parts) continue;
+      if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/")) {
+        const audioBytes = Buffer.from(part.inlineData.data, "base64");
+        const audioUint8 = new Uint8Array(audioBytes);
 
-      for (const part of candidate.content.parts) {
-        if (signal.aborted) return audioChunks;
-
-        if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/")) {
-          const audioBytes = Buffer.from(part.inlineData.data, "base64");
-          const audioUint8 = new Uint8Array(audioBytes);
-
-          this.bus?.push(Route.Main, {
-            kind: "tts.audio",
-            contextId,
-            timestampMs: Date.now(),
-            audio: audioUint8,
-          });
-          audioChunks++;
-        }
+        this.bus?.push(Route.Main, {
+          kind: "tts.audio",
+          contextId,
+          timestampMs: Date.now(),
+          audio: audioUint8,
+        });
+        audioChunks++;
       }
     }
 
@@ -208,4 +205,41 @@ export class GeminiTTSPlugin implements VoicePlugin {
     this.textByContextId.clear();
     this.bus = null;
   }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, signal: AbortSignal): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("Gemini TTS aborted"));
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      reject(new Error(`Gemini TTS request timeout after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      reject(new Error("Gemini TTS aborted"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+function readPositiveInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : fallback;
 }

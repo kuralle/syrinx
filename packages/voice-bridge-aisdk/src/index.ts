@@ -8,7 +8,7 @@
 
 import type { PipelineBus } from "@asyncdot/voice";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { streamText, stepCountIs, type TextStreamPart, type ToolSet } from "ai";
+import { streamText, stepCountIs, type ModelMessage, type TextStreamPart, type ToolChoice, type ToolSet } from "ai";
 import {
   Route,
   type VoicePlugin,
@@ -29,10 +29,13 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private model: string = "gemini-2.5-flash";
   private systemPrompt: string = "You are a helpful voice assistant.";
   private tools: AISDKBridgeTools | undefined;
+  private toolChoice: ToolChoice<ToolSet> | undefined;
   private temperature: number = 0.4;
   private maxOutputTokens: number = 256;
   private maxSteps: number = 3;
   private timeoutMs: number = 30_000;
+  private maxHistoryTurns: number = 12;
+  private history: ModelMessage[] = [];
   private abortController: AbortController | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
@@ -43,10 +46,12 @@ export class AISDKBridgePlugin implements VoicePlugin {
     this.model = (config["model"] as string) ?? "gemini-2.5-flash";
     this.systemPrompt = (config["system_prompt"] as string) ?? "You are a helpful voice assistant.";
     this.tools = readToolsConfig(config["tools"]);
+    this.toolChoice = readToolChoiceConfig(config["tool_choice"]);
     this.temperature = readNumberConfig(config["temperature"], 0.4);
     this.maxOutputTokens = readPositiveIntegerConfig(config["max_output_tokens"], 256);
     this.maxSteps = readPositiveIntegerConfig(config["max_steps"], this.tools === undefined ? 1 : 3);
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
+    this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
 
     // Listen for EOS turn completions
@@ -75,7 +80,7 @@ export class AISDKBridgePlugin implements VoicePlugin {
 
     for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
       try {
-        for await (const part of this.streamResponse(userText, signal)) {
+        for await (const part of withStreamIdleTimeout(this.streamResponse(userText, signal), this.timeoutMs, signal)) {
           if (signal.aborted) return;
           if (part.type === "text-delta") {
             reply += part.text;
@@ -122,6 +127,7 @@ export class AISDKBridgePlugin implements VoicePlugin {
           timestampMs: Date.now(),
           text: reply,
         });
+        this.rememberTurn(userText, reply);
         return;
       } catch (err) {
         if (signal.aborted) return;
@@ -157,8 +163,9 @@ export class AISDKBridgePlugin implements VoicePlugin {
     const result = streamText({
       model: google(this.model),
       system: this.systemPrompt,
-      prompt: userText,
+      messages: [...this.history, { role: "user", content: userText }],
       tools: this.tools,
+      toolChoice: this.toolChoice,
       temperature: this.temperature,
       maxOutputTokens: this.maxOutputTokens,
       maxRetries: 0,
@@ -177,6 +184,14 @@ export class AISDKBridgePlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.bus = null;
   }
+
+  private rememberTurn(userText: string, assistantText: string): void {
+    this.history.push({ role: "user", content: userText }, { role: "assistant", content: assistantText });
+    const maxMessages = this.maxHistoryTurns * 2;
+    if (this.history.length > maxMessages) {
+      this.history = this.history.slice(this.history.length - maxMessages);
+    }
+  }
 }
 
 function readToolsConfig(value: unknown): AISDKBridgeTools | undefined {
@@ -185,6 +200,11 @@ function readToolsConfig(value: unknown): AISDKBridgeTools | undefined {
     throw new Error("Plugin config key tools must be an AI SDK ToolSet object");
   }
   return value as AISDKBridgeTools;
+}
+
+function readToolChoiceConfig(value: unknown): ToolChoice<ToolSet> | undefined {
+  if (value === undefined) return undefined;
+  return value as ToolChoice<ToolSet>;
 }
 
 function readNumberConfig(value: unknown, fallback: number): number {
@@ -204,4 +224,51 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function stringifyToolOutput(output: unknown): string {
   return typeof output === "string" ? output : JSON.stringify(output);
+}
+
+async function* withStreamIdleTimeout<T>(
+  stream: AsyncGenerator<T>,
+  timeoutMs: number,
+  signal: AbortSignal,
+): AsyncGenerator<T> {
+  for (;;) {
+    const next = await nextWithTimeout(stream, timeoutMs, signal);
+    if (next.done === true) return;
+    yield next.value;
+  }
+}
+
+async function nextWithTimeout<T>(
+  stream: AsyncGenerator<T>,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<IteratorResult<T>> {
+  return await new Promise<IteratorResult<T>>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("AI SDK stream aborted"));
+      return;
+    }
+    const timeout = setTimeout(() => {
+      void stream.return(undefined);
+      reject(new Error(`AI SDK stream idle timeout after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      void stream.return(undefined);
+      reject(new Error("AI SDK stream aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    stream.next().then(
+      (next) => {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        resolve(next);
+      },
+      (err: unknown) => {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
 }

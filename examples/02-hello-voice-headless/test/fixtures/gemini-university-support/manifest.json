@@ -1,0 +1,177 @@
+{
+  "generatedAt": "2026-05-26T14:39:21.261Z",
+  "provider": "gemini-tts",
+  "model": "gemini-2.5-flash-preview-tts",
+  "voiceName": "Kore",
+  "sampleRateHz": 24000,
+  "fixtures": [
+    {
+      "id": "01-late-add",
+      "text": "Hi, I'm Maya Chen, student ID S one zero zero four two. I missed the normal add deadline because the Biology one oh one lab seat opened after my wait list cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the instructor before I file anything.",
+      "path": "test/fixtures/gemini-university-support/01-late-add.wav",
+      "durationMs": 20251,
+      "bytes": 972090
+    },
+    {
+      "id": "02-registration-holds",
+      "text": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
+      "path": "test/fixtures/gemini-university-support/02-registration-holds.wav",
+      "durationMs": 16451,
+      "bytes": 789690
+    },
+    {
+      "id": "03-financial-aid",
+      "text": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled credits, Biology would put me at twelve, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
+      "path": "test/fixtures/gemini-university-support/03-financial-aid.wav",
+      "durationMs": 16171,
+      "bytes": 776250
+    },
+    {
+      "id": "04-advisor-approval",
+      "text": "My academic advisor is Dr. Priya Raman, but she is at a conference this week. If the petition needs advisor approval, can Student Relations route it to a backup advisor, or do I need to wait for her to respond directly?",
+      "path": "test/fixtures/gemini-university-support/04-advisor-approval.wav",
+      "durationMs": 13611,
+      "bytes": 653370
+    },
+    {
+      "id": "05-instructor-email",
+      "text": "The instructor told me over email that I can join if the department confirms the lab seat. Should I upload that email with the petition, and should the department approval be attached separately or can it be added after I submit the case?",
+      "path": "test/fixtures/gemini-university-support/05-instructor-email.wav",
+      "durationMs": 13491,
+      "bytes": 647610
+    },
+    {
+      "id": "06-international-status",
+      "text": "One more concern is my international student status. I am on an F one visa, and dropping below full time was only temporary while I waited for this lab. Do I need to notify the international office before the late add is approved, or only if the petition is denied?",
+      "path": "test/fixtures/gemini-university-support/06-international-status.wav",
+      "durationMs": 15931,
+      "bytes": 764730
+    },
+    {
+      "id": "07-housing",
+      "text": "I also live in university housing, and their renewal form asks whether I am full time for the spring term. If the late add is pending, what should I tell housing so they do not mark my renewal as incomplete?",
+      "path": "test/fixtures/gemini-university-support/07-housing.wav",
+      "durationMs": 11291,
+      "bytes": 542010
+    },
+    {
+      "id": "08-accessibility",
+      "text": "I have an accessibility accommodation for lab scheduling because I cannot attend sections that start before nine in the morning. The open lab section is at eight thirty. Is that something Student Relations can include in the case, or should I contact the accessibility office first?",
+      "path": "test/fixtures/gemini-university-support/08-accessibility.wav",
+      "durationMs": 15011,
+      "bytes": 720570
+    },
+    {
+      "id": "09-athletics",
+      "text": "I am also on the varsity tennis roster, and the athletics academic coordinator asked for confirmation that the late add will not conflict with travel letters. Can your office add the coordinator as a watcher on the case, or do I need to forward updates manually?",
+      "path": "test/fixtures/gemini-university-support/09-athletics.wav",
+      "durationMs": 14771,
+      "bytes": 709050
+    },
+    {
+      "id": "10-lab-fee",
+      "text": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
+      "path": "test/fixtures/gemini-university-support/10-lab-fee.wav",
+      "durationMs": 14691,
+      "bytes": 705210
+    },
+    {
+      "id": "11-case-open",
+      "text": "Please open a Student Relations case for me now with the late add request, the possible financial aid impact, the visa status note, and the accommodation concern. I want the case summary to be clear enough that the registrar does not have to ask me the same questions again.",
+      "path": "test/fixtures/gemini-university-support/11-case-open.wav",
+      "durationMs": 15491,
+      "bytes": 743610
+    },
+    {
+      "id": "12-next-steps",
+      "text": "After the case is opened, can you give me the next steps in order? I need to know exactly who I should contact first today, what documents I should upload, and what deadline I should watch so this does not roll into next week.",
+      "path": "test/fixtures/gemini-university-support/12-next-steps.wav",
+      "durationMs": 11891,
+      "bytes": 570810
+    },
+    {
+      "id": "13-clarify-deadline",
+      "text": "You mentioned a deadline earlier. Can you clarify whether that is the deadline for me to submit the petition, the deadline for the instructor to approve it, or the deadline for the registrar to finish processing it?",
+      "path": "test/fixtures/gemini-university-support/13-clarify-deadline.wav",
+      "durationMs": 12851,
+      "bytes": 616890
+    },
+    {
+      "id": "14-appointment",
+      "text": "If this gets complicated, I would like an appointment with Student Relations tomorrow afternoon. I am free after two thirty, and I would prefer a video appointment because I will be at my lab orientation.",
+      "path": "test/fixtures/gemini-university-support/14-appointment.wav",
+      "durationMs": 11131,
+      "bytes": 534330
+    },
+    {
+      "id": "15-summary",
+      "text": "Before we finish, please summarize what you found, what case number I should reference, and what I should do today versus what I can wait on. I want to write it down so I do not miss anything.",
+      "path": "test/fixtures/gemini-university-support/15-summary.wav",
+      "durationMs": 10331,
+      "bytes": 495930
+    },
+    {
+      "id": "16-goodbye",
+      "text": "That answers my questions. Please make sure the case notes include that I am trying to reach full time status for financial aid and visa compliance, not just adding the class for convenience.",
+      "path": "test/fixtures/gemini-university-support/16-goodbye.wav",
+      "durationMs": 11171,
+      "bytes": 536250
+    },
+    {
+      "id": "17-parent-consent",
+      "text": "I forgot one detail. My parent is an authorized payer on my account, but I do not want them to receive the case notes about visa status. Can you tell me whether billing delegates can see Student Relations notes, or only the charges that result from the lab fee?",
+      "path": "test/fixtures/gemini-university-support/17-parent-consent.wav",
+      "durationMs": 15411,
+      "bytes": 739770
+    },
+    {
+      "id": "18-department-seat",
+      "text": "The department coordinator just emailed me while we are talking and said the lab seat is reserved until tomorrow at noon. Should I reply to them first, or is it better to upload the email and let Student Relations contact the department through the case?",
+      "path": "test/fixtures/gemini-university-support/18-department-seat.wav",
+      "durationMs": 13371,
+      "bytes": 641850
+    },
+    {
+      "id": "19-class-attendance",
+      "text": "I already attended the first lecture and one lab as a guest because the instructor allowed it. Does that help the petition, and should I include the dates I attended so the registrar knows I have not missed the required safety orientation?",
+      "path": "test/fixtures/gemini-university-support/19-class-attendance.wav",
+      "durationMs": 13011,
+      "bytes": 624570
+    },
+    {
+      "id": "20-refund-risk",
+      "text": "If the petition is denied, I may need to add a different three credit course instead. Can you tell me whether there is a refund or tuition adjustment risk if I wait until after the registrar decision to choose a backup class?",
+      "path": "test/fixtures/gemini-university-support/20-refund-risk.wav",
+      "durationMs": 12331,
+      "bytes": 591930
+    },
+    {
+      "id": "21-appeal-path",
+      "text": "If the registrar says no, is there an appeal path through Student Relations, or would that go through my college dean? I am asking because the wait list timing was outside my control, and I want to know what evidence matters most.",
+      "path": "test/fixtures/gemini-university-support/21-appeal-path.wav",
+      "durationMs": 13731,
+      "bytes": 659130
+    },
+    {
+      "id": "22-notification-preference",
+      "text": "Please set my notification preference to email first and text second if that is available. I am in lab most afternoons, so a phone call may go to voicemail, but I can reply to email quickly during breaks.",
+      "path": "test/fixtures/gemini-university-support/22-notification-preference.wav",
+      "durationMs": 11691,
+      "bytes": 561210
+    },
+    {
+      "id": "23-readback",
+      "text": "Can you read back the case summary before we close it? I want to make sure it includes the late add petition, the lab seat reservation, financial aid full time status, international office notification, and the accessibility scheduling issue.",
+      "path": "test/fixtures/gemini-university-support/23-readback.wav",
+      "durationMs": 14291,
+      "bytes": 686010
+    },
+    {
+      "id": "24-final-confirmation",
+      "text": "Okay, final confirmation. I will upload the instructor email and department seat confirmation today, notify international student services, and watch for the video appointment tomorrow at two forty five. Please tell me if that is the right plan.",
+      "path": "test/fixtures/gemini-university-support/24-final-confirmation.wav",
+      "durationMs": 14651,
+      "bytes": 703290
+    }
+  ]
+}
