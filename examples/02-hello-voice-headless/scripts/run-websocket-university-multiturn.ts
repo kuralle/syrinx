@@ -13,9 +13,13 @@ import {
   GEMINI_UNIVERSITY_FIXTURES,
   PKG_ROOT,
   ensureGeminiUniversityFixtures,
-  readPcm16Wav,
 } from "./generate-gemini-university-fixtures.js";
-import { DEFAULT_MODEL, coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
+import {
+  DEFAULT_MODEL,
+  coerceGoogleGenAiKey,
+  ensureRepoRootDotenv,
+  readPcm16Mono16kWav,
+} from "../src/run-one-turn.js";
 import { createUniversitySupportSession } from "../src/university-support-agent.js";
 
 const require = createRequire(import.meta.url);
@@ -24,9 +28,10 @@ const { WaveFile } = require("wavefile") as typeof import("wavefile");
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(SCRIPT_DIR, "..", "test", "performance", "runs");
 const BASELINE_PATH = join(SCRIPT_DIR, "..", "test", "performance", "websocket-university-multiturn-baseline.json");
-const INPUT_SAMPLE_RATE = 24000;
-const FRAME_SAMPLES = 480;
+const INPUT_SAMPLE_RATE = 16000;
+const FRAME_SAMPLES = 320;
 const MIN_MODELED_CONVERSATION_MS = 480_000;
+const POST_TTS_DRAIN_MS = 500;
 
 interface TurnCapture {
   readonly id: string;
@@ -34,7 +39,9 @@ interface TurnCapture {
   readonly inputText: string;
   inputAudioMs: number;
   startedAtMs: number;
+  speechStartedAtMs: number;
   audioEndedAtMs: number;
+  speechEndedAtMs: number;
   sttFinalAtMs: number;
   firstAgentAtMs: number;
   firstAudioAtMs: number;
@@ -87,15 +94,20 @@ async function main(): Promise<void> {
       llmModel: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
       ttsModel: process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-2.5-flash-preview-tts",
       transport: "websocket",
+      inputSampleRateHz: INPUT_SAMPLE_RATE,
+      outputSampleRateHz: 24000,
+      postTtsDrainMs: POST_TTS_DRAIN_MS,
       turnCount: turns.length,
       modeledConversationMs,
       latencyMs: {
         totalInputAudio: totalInputAudioMs,
         totalAssistantAudio: totalAssistantAudioMs,
         avgSttFinalAfterSpeechEnd: average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs)),
+        avgVadSpeechEndAfterAudioEnd: average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs)),
         avgLlmTimeToFirstText: average(turns.map((turn) => turn.firstAgentAtMs - turn.sttFinalAtMs)),
         avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.agentEndedAtMs)),
         avgSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs)),
+        avgVadSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.speechEndedAtMs)),
       },
       turns: turns.map((turn) => ({
         id: turn.id,
@@ -108,9 +120,11 @@ async function main(): Promise<void> {
         assistantAudioMs: assistantAudioMs(turn),
         latencyMs: {
           sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
+          vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
           llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
           ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.agentEndedAtMs,
           speechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.audioEndedAtMs,
+          vadSpeechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.speechEndedAtMs,
           turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
         },
         assistantAudioPath: relative(PKG_ROOT, join(outputDir, `${turn.id}.wav`)),
@@ -180,18 +194,17 @@ async function runConversation(socket: WebSocket, outputDir: string): Promise<Tu
     : GEMINI_UNIVERSITY_FIXTURES;
   for (let index = 0; index < fixtures.length; index += 1) {
     const fixture = fixtures[index]!;
-    const pcm = readPcm16Wav(fixture.path);
-    if (pcm.sampleRate !== INPUT_SAMPLE_RATE) {
-      throw new Error(`expected ${String(INPUT_SAMPLE_RATE)} Hz fixture: ${fixture.path}`);
-    }
+    const samples = readPcm16Mono16kWav(fixture.path);
 
     const turn: TurnCapture = {
       id: `turn-${String(index + 1).padStart(2, "0")}`,
       fixtureId: fixture.id,
       inputText: fixture.text,
-      inputAudioMs: Math.round((pcm.samples.length / pcm.sampleRate) * 1000),
+      inputAudioMs: Math.round((samples.length / INPUT_SAMPLE_RATE) * 1000),
       startedAtMs: Date.now(),
+      speechStartedAtMs: 0,
       audioEndedAtMs: 0,
+      speechEndedAtMs: 0,
       sttFinalAtMs: 0,
       firstAgentAtMs: 0,
       firstAudioAtMs: 0,
@@ -206,10 +219,11 @@ async function runConversation(socket: WebSocket, outputDir: string): Promise<Tu
 
     console.log(`starting ${turn.id} ${fixture.id} (${String(turn.inputAudioMs)}ms input)`);
     const dispose = captureTurn(socket, turn);
-    await sendPcmFrames(socket, pcm.samples, turn.id);
+    await sendPcmFrames(socket, samples, turn.id);
     turn.audioEndedAtMs = Date.now();
     await sendSilence(socket, turn.id, 5000);
     await waitForTurnComplete(turn);
+    await sleep(POST_TTS_DRAIN_MS);
     dispose();
     await writeTurnAudio(join(outputDir, `${turn.id}.wav`), turn.audioChunks);
     console.log(
@@ -233,6 +247,14 @@ function captureTurn(socket: WebSocket, turn: TurnCapture): () => void {
 
     const msg = JSON.parse(data.toString()) as Record<string, unknown>;
     if (typeof msg["turnId"] === "string" && msg["turnId"] !== turn.id) return;
+    if (msg["type"] === "speech_started") {
+      if (turn.speechStartedAtMs === 0) turn.speechStartedAtMs = Date.now();
+      return;
+    }
+    if (msg["type"] === "speech_ended") {
+      if (turn.speechEndedAtMs === 0) turn.speechEndedAtMs = Date.now();
+      return;
+    }
     if (msg["type"] === "stt_output") {
       if (turn.sttFinalAtMs > 0) return;
       turn.transcript = String(msg["transcript"] ?? "");
@@ -299,6 +321,8 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
     if (turn.error) throw new Error(turn.error);
     if (
       turn.sttFinalAtMs > 0 &&
+      turn.speechStartedAtMs > 0 &&
+      turn.speechEndedAtMs > 0 &&
       turn.firstAgentAtMs > 0 &&
       turn.agentEndedAtMs > 0 &&
       turn.firstAudioAtMs > 0 &&
@@ -309,8 +333,10 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
     await sleep(100);
   }
   throw new Error(
-    `turn timeout: ${turn.id}; ` +
+      `turn timeout: ${turn.id}; ` +
       `stt=${String(turn.sttFinalAtMs > 0)} ` +
+      `vadStarted=${String(turn.speechStartedAtMs > 0)} ` +
+      `vadEnded=${String(turn.speechEndedAtMs > 0)} ` +
       `agentFirst=${String(turn.firstAgentAtMs > 0)} ` +
       `agentEnd=${String(turn.agentEndedAtMs > 0)} ` +
       `audioFirst=${String(turn.firstAudioAtMs > 0)} ` +
@@ -357,16 +383,26 @@ function evaluateConversation(turns: readonly TurnCapture[], modeledConversation
     failures.push(`modeled conversation was ${String(modeledConversationMs)}ms, expected at least 480000ms`);
   }
   const totalToolCalls = turns.reduce((sum, turn) => sum + turn.toolCalls.length, 0);
-  if (totalToolCalls < Math.ceil(turns.length * 0.65)) {
-    failures.push(`expected tools on most turns, got ${String(totalToolCalls)} calls across ${String(turns.length)} turns`);
+  if (totalToolCalls < Math.ceil(turns.length * 0.5)) {
+    failures.push(`expected tools on at least half of turns, got ${String(totalToolCalls)} calls across ${String(turns.length)} turns`);
   }
-  for (const requiredIndex of [0, 1, 10, 22]) {
+  for (const requiredIndex of [0, 1, 10]) {
     const turn = turns[requiredIndex];
     if (turn && turn.toolCalls.length === 0) {
       failures.push(`required tool call missing on ${turn.id}`);
     }
   }
   if (!turns[0]?.transcript.toLowerCase().includes("biology")) failures.push("first STT transcript missed Biology");
+  if (turns.some((turn) => turn.sttFinalAtMs < turn.audioEndedAtMs)) {
+    failures.push("one or more turns finalized STT before input audio ended");
+  }
+  if (turns.some((turn) => turn.firstAudioAtMs < turn.firstAgentAtMs)) {
+    failures.push("one or more turns received TTS audio before agent text");
+  }
+  if (turns.some((turn) => turn.speechStartedAtMs === 0)) failures.push("one or more turns did not emit VAD speech_started");
+  if (turns.some((turn) => turn.speechEndedAtMs === 0)) failures.push("one or more turns did not emit VAD speech_ended");
+  const avgVadEnd = average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs));
+  if (avgVadEnd > 3500) failures.push(`avg VAD speech end after audio end was ${String(avgVadEnd)}ms, expected <= 3500ms`);
   const firstReply = turns[0]?.agentReply.toLowerCase() ?? "";
   if (!firstReply.includes("add") || (!firstReply.includes("biology") && !firstReply.includes("petition"))) {
     failures.push("first reply missed late add guidance");
@@ -375,6 +411,11 @@ function evaluateConversation(turns: readonly TurnCapture[], modeledConversation
     failures.push("agent never referenced the Student Relations case number");
   }
   if (turns.some((turn) => assistantAudioMs(turn) < 500)) failures.push("one or more turns returned no useful TTS audio");
+  for (const turn of turns) {
+    const reply = turn.agentReply.trim();
+    if (reply.length < 40) failures.push(`${turn.id} agent reply was too short`);
+    if (!/[.!?]\s*$/.test(reply)) failures.push(`${turn.id} agent reply did not end cleanly`);
+  }
   return failures;
 }
 

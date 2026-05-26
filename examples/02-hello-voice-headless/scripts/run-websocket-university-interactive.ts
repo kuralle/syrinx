@@ -19,6 +19,7 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 320;
 const TRAILING_SILENCE_MS = 1400;
+const POST_TTS_DRAIN_MS = 500;
 
 const INTERACTIVE_FIXTURES = [
   {
@@ -49,7 +50,9 @@ interface InteractiveTurnCapture {
   readonly requiredTerms: readonly string[];
   inputAudioMs: number;
   startedAtMs: number;
+  speechStartedAtMs: number;
   audioEndedAtMs: number;
+  speechEndedAtMs: number;
   sttFinalAtMs: number;
   firstAgentAtMs: number;
   firstAudioAtMs: number;
@@ -102,12 +105,15 @@ async function main(): Promise<void> {
       inputSampleRateHz: INPUT_SAMPLE_RATE,
       outputSampleRateHz: OUTPUT_SAMPLE_RATE,
       trailingSilenceMs: TRAILING_SILENCE_MS,
+      postTtsDrainMs: POST_TTS_DRAIN_MS,
       turnCount: turns.length,
       latencyMs: {
         avgSttFinalAfterSpeechEnd: average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs)),
+        avgVadSpeechEndAfterAudioEnd: average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs)),
         avgLlmTimeToFirstText: average(turns.map((turn) => turn.firstAgentAtMs - turn.sttFinalAtMs)),
         avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.firstAgentAtMs)),
         avgSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs)),
+        avgVadSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.speechEndedAtMs)),
       },
       turns: turns.map((turn) => ({
         id: turn.id,
@@ -121,9 +127,11 @@ async function main(): Promise<void> {
         audioBytes: turn.audioBytes,
         latencyMs: {
           sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
+          vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
           llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
           ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.firstAgentAtMs,
           speechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.audioEndedAtMs,
+          vadSpeechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.speechEndedAtMs,
           turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
         },
       })),
@@ -172,7 +180,9 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       requiredTerms: fixture.requiredTerms,
       inputAudioMs: Math.round((samples.length / INPUT_SAMPLE_RATE) * 1000),
       startedAtMs: Date.now(),
+      speechStartedAtMs: 0,
       audioEndedAtMs: 0,
+      speechEndedAtMs: 0,
       sttFinalAtMs: 0,
       firstAgentAtMs: 0,
       firstAudioAtMs: 0,
@@ -191,6 +201,7 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
     turn.audioEndedAtMs = Date.now();
     await sendSilence(socket, turn.id, TRAILING_SILENCE_MS);
     await waitForTurnComplete(turn);
+    await sleep(POST_TTS_DRAIN_MS);
     dispose();
     turns.push(turn);
     console.log(
@@ -214,6 +225,14 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
 
     const msg = JSON.parse(data.toString()) as Record<string, unknown>;
     if (typeof msg["turnId"] === "string" && msg["turnId"] !== turn.id) return;
+    if (msg["type"] === "speech_started") {
+      if (turn.speechStartedAtMs === 0) turn.speechStartedAtMs = Date.now();
+      return;
+    }
+    if (msg["type"] === "speech_ended") {
+      if (turn.speechEndedAtMs === 0) turn.speechEndedAtMs = Date.now();
+      return;
+    }
     if (msg["type"] === "stt_output") {
       if (turn.sttFinalAtMs > 0) return;
       turn.transcript = String(msg["transcript"] ?? "");
@@ -279,6 +298,8 @@ async function waitForTurnComplete(turn: InteractiveTurnCapture): Promise<void> 
     if (turn.error) throw new Error(turn.error);
     if (
       turn.sttFinalAtMs > 0 &&
+      turn.speechStartedAtMs > 0 &&
+      turn.speechEndedAtMs > 0 &&
       turn.firstAgentAtMs > 0 &&
       turn.agentEndedAtMs > 0 &&
       turn.firstAudioAtMs > 0 &&
@@ -289,8 +310,10 @@ async function waitForTurnComplete(turn: InteractiveTurnCapture): Promise<void> 
     await sleep(100);
   }
   throw new Error(
-    `turn timeout: ${turn.id}; ` +
+      `turn timeout: ${turn.id}; ` +
       `stt=${String(turn.sttFinalAtMs > 0)} ` +
+      `vadStarted=${String(turn.speechStartedAtMs > 0)} ` +
+      `vadEnded=${String(turn.speechEndedAtMs > 0)} ` +
       `agentFirst=${String(turn.firstAgentAtMs > 0)} ` +
       `agentEnd=${String(turn.agentEndedAtMs > 0)} ` +
       `audioFirst=${String(turn.firstAudioAtMs > 0)} ` +
@@ -327,17 +350,23 @@ function evaluateConversation(turns: readonly InteractiveTurnCapture[]): string[
   const failures: string[] = [];
   if (turns.length === 0) failures.push("no turns completed");
   const avgStt = average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs));
+  const avgVadEnd = average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs));
   const avgE2e = average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs));
   if (avgStt > 7000) failures.push(`avg STT final after speech end was ${String(avgStt)}ms, expected <= 7000ms`);
+  if (avgVadEnd > 2500) failures.push(`avg VAD speech end after audio end was ${String(avgVadEnd)}ms, expected <= 2500ms`);
   if (avgE2e > 20_000) failures.push(`avg speech end to first assistant audio was ${String(avgE2e)}ms, expected <= 20000ms`);
 
   for (const turn of turns) {
     const transcript = turn.transcript.toLowerCase();
     const reply = turn.agentReply.toLowerCase();
+    if (turn.speechStartedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_started`);
+    if (turn.speechEndedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_ended`);
     for (const term of turn.requiredTerms) {
       if (!transcript.includes(term)) failures.push(`${turn.id} STT transcript missed required term ${term}`);
     }
     if (turn.audioBytes < 16_000) failures.push(`${turn.id} returned too little TTS audio`);
+    if (turn.sttFinalAtMs < turn.audioEndedAtMs) failures.push(`${turn.id} STT finalized before input audio ended`);
+    if (turn.firstAudioAtMs < turn.firstAgentAtMs) failures.push(`${turn.id} received TTS audio before agent text`);
     if (!/[.!?]\s*$/.test(turn.agentReply.trim())) failures.push(`${turn.id} agent reply did not end cleanly`);
     if (reply.length < 30) failures.push(`${turn.id} agent reply was too short`);
   }

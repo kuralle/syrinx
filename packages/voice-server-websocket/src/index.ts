@@ -5,6 +5,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
   Route,
+  type InterruptTtsPacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type UserAudioReceivedPacket,
@@ -147,6 +148,12 @@ function wireSessionEvents(
   socket: WebSocket,
   disposers: Array<() => void>,
 ): void {
+  session.on("user_started_speaking", (event) => {
+    sendJson(socket, { type: "speech_started", turnId: event.turnId });
+  });
+  session.on("user_stopped_speaking", (event) => {
+    sendJson(socket, { type: "speech_ended", turnId: event.turnId });
+  });
   session.on("user_input_partial", (event) => {
     sendJson(socket, { type: "stt_chunk", turnId: event.turnId, transcript: event.text });
   });
@@ -175,6 +182,11 @@ function wireSessionEvents(
   });
 
   disposers.push(
+    session.bus.on("interrupt.tts", (pkt) => {
+      const interrupt = pkt as InterruptTtsPacket;
+      sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" });
+      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" });
+    }),
     session.bus.on("tts.audio", (pkt) => {
       const audio = (pkt as TextToSpeechAudioPacket).audio;
       if (socket.readyState === WebSocket.OPEN) {

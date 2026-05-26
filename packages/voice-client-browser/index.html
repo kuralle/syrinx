@@ -450,6 +450,7 @@
       let processorNode = null;
       let outputContext = null;
       let playbackAt = 0;
+      const outputSources = new Set();
       let recording = false;
       let activeTurn = null;
       let pcmQueue = new Int16Array(0);
@@ -605,7 +606,17 @@
         }
         const turnId = message.turnId || activeTurn?.id || "unknown-turn";
         const turn = ensureTurn(turnId);
-        if (message.type === "stt_chunk") {
+        if (message.type === "speech_started") {
+          turn.state.textContent = "listening";
+        } else if (message.type === "speech_ended") {
+          turn.state.textContent = "finalizing";
+        } else if (message.type === "audio_clear") {
+          flushOutputAudio();
+          turn.state.textContent = "interrupted";
+          addEvent(`cleared assistant audio for ${turnId}`);
+        } else if (message.type === "agent_interrupted") {
+          turn.state.textContent = "interrupted";
+        } else if (message.type === "stt_chunk") {
           turn.user.textContent = message.transcript || "";
           turn.state.textContent = "transcribing";
         } else if (message.type === "stt_output") {
@@ -636,6 +647,7 @@
       async function startRecording() {
         if (recording || !socket || socket.readyState !== WebSocket.OPEN) return;
         await ensureOutputContext();
+        flushOutputAudio();
         const targetRate = readSampleRate(inputRate.value, 16000);
         activeTurn = ensureTurn(`review-${Date.now().toString(36)}`);
         pcmQueue = new Int16Array(0);
@@ -749,9 +761,25 @@
         const source = outputContext.createBufferSource();
         source.buffer = buffer;
         source.connect(outputContext.destination);
+        source.addEventListener("ended", () => {
+          outputSources.delete(source);
+        });
+        outputSources.add(source);
         playbackAt = Math.max(playbackAt, outputContext.currentTime + 0.02);
         source.start(playbackAt);
         playbackAt += buffer.duration;
+      }
+
+      function flushOutputAudio() {
+        for (const source of outputSources) {
+          try {
+            source.stop();
+          } catch {
+            // Already stopped.
+          }
+        }
+        outputSources.clear();
+        if (outputContext) playbackAt = outputContext.currentTime;
       }
 
       function floatToPcm16(samples) {

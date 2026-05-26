@@ -11,7 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@asyncdot/voice": "workspace:*"
+    "@asyncdot/voice": "workspace:*",
+    "@huggingface/transformers": "^4.2.0",
+    "onnxruntime-node": "^1.26.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

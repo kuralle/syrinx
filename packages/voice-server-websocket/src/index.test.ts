@@ -105,4 +105,83 @@ describe("createVoiceWebSocketServer", () => {
     client.close();
     await server.close();
   });
+
+  it("forwards VAD-driven assistant interruption as audio clear events", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const clearMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "audio_clear") resolve(message);
+      });
+    });
+
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    });
+
+    await expect(clearMessage).resolves.toEqual({
+      type: "audio_clear",
+      turnId: "assistant-turn",
+      reason: "barge_in",
+    });
+
+    client.close();
+    await server.close();
+  });
+
+  it("forwards VAD speech boundary events to websocket clients", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const messages: any[] = [];
+    const speechMessages = new Promise<any[]>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "speech_started" || message.type === "speech_ended") {
+          messages.push(message);
+        }
+        if (messages.length === 2) resolve(messages);
+      });
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+      confidence: 0.91,
+    });
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+    });
+
+    await expect(speechMessages).resolves.toEqual([
+      { type: "speech_started", turnId: "turn-2" },
+      { type: "speech_ended", turnId: "turn-2" },
+    ]);
+
+    client.close();
+    await server.close();
+  });
 });

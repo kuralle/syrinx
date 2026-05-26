@@ -22,6 +22,7 @@
     "@asyncdot/voice-bridge-aisdk": "workspace:*",
     "@asyncdot/voice-server-websocket": "workspace:*",
     "@asyncdot/voice-stt-deepgram": "workspace:*",
+    "@asyncdot/voice-turn-pipecat": "workspace:*",
     "@asyncdot/voice-tts-cartesia": "workspace:*",
     "@asyncdot/voice-tts-gemini": "workspace:*",
     "@asyncdot/voice-vad-silero": "workspace:*",
