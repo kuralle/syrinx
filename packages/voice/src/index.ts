@@ -66,6 +66,8 @@ export {
 
 // Pipeline packets — behavior
 export {
+  type RecordAssistantAudioPacket,
+  type RecordUserAudioPacket,
   type StartIdleTimeoutPacket,
   type StopIdleTimeoutPacket,
   type InjectMessagePacket,
@@ -96,6 +98,9 @@ export { type VoicePlugin, type PluginConfig, requireStringConfig, optionalStrin
 
 // Error handler
 export { categorizeSttError, categorizeTtsError, categorizeLlmError, isRecoverable, isFatalError } from "./error-handler.js";
+
+// Retry helpers
+export { DEFAULT_RETRY_CONFIG, readRetryConfig, retryDelayMs, waitForRetryDelay, type RetryConfig } from "./retry.js";
 
 // Idle timeout
 export { IdleTimeoutManager, type IdleTimeoutConfig, DEFAULT_IDLE_TIMEOUT_CONFIG } from "./idle-timeout.js";

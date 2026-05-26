@@ -33,12 +33,13 @@ export interface ModeSwitchHandlers {
 // =============================================================================
 
 export class ModeSwitcher {
-  private currentMode: "text" | "audio" = "text";
+  private currentMode: "text" | "audio";
   private readonly bus: PipelineBus;
   private handlers: ModeSwitchHandlers | null = null;
 
-  constructor(bus: PipelineBus) {
+  constructor(bus: PipelineBus, initialMode: "text" | "audio" = "audio") {
     this.bus = bus;
+    this.currentMode = initialMode;
   }
 
   /** Register the init/teardown steps. Call once during session setup. */

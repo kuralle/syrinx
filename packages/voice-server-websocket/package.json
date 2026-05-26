@@ -1,5 +1,5 @@
 {
-  "name": "@asyncdot/voice-recorder",
+  "name": "@asyncdot/voice-server-websocket",
   "version": "2.0.0",
   "private": false,
   "type": "module",
@@ -11,10 +11,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@asyncdot/voice": "workspace:*"
+    "@asyncdot/voice": "workspace:*",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   }

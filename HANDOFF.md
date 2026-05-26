@@ -14,15 +14,18 @@ A complete v2 kernel for the Syrinx voice SDK, per `rfcs/rfc-syrinx-kernel-v2.md
 
 | Package | Status | Purpose |
 |---|---|---|
-| `@asyncdot/voice` v2.0.0 | ✅ Complete, 12 tests passing | Core kernel: PipelineBus, VoiceAgentSession, init-chain, error-handler, idle-timeout, mode-switcher, conversation-event |
-| `@asyncdot/voice-stt-deepgram` | ✅ With guards | Deepgram STT (session-long connection, endpointing=300ms, force-finalize on short audio) |
-| `@asyncdot/voice-tts-cartesia` | ✅ Plugin ready, blocked on credits | Cartesia TTS (WebSocket 402 — no streaming credits on temp key) |
-| `@asyncdot/voice-tts-gemini` | ✅ Working, default model 3.1 | Gemini TTS via `generateContentStream`, responseModalities: AUDIO, 4151ms TTFB |
-| `@asyncdot/voice-stt-google` | ✅ Plugin ready | Google Cloud Speech-to-Text v2 REST API |
-| `@asyncdot/voice-vad-silero` | ✅ Stub (energy-based) | VAD plugin, needs ONNX inference |
-| `@asyncdot/voice-bridge-aisdk` | ✅ Stub | AI SDK bridge, mock LLM responses |
+| `@asyncdot/voice` v2.0.0 | ✅ Complete, 28 tests passing | Core kernel: PipelineBus, VoiceAgentSession, init-chain, error-handler, retry helpers, idle-timeout, mode-switcher, conversation-event |
+| `@asyncdot/voice-stt-deepgram` | ✅ With guards | Deepgram STT (session-long connection, endpointing=300ms, reconnect, force-finalize on short audio) |
+| `@asyncdot/voice-tts-cartesia` | ✅ Live smoke working | Cartesia streaming WebSocket TTS with retry/reconnect |
+| `@asyncdot/voice-tts-gemini` | ✅ Working | Gemini TTS with typed errors and retry |
+| `@asyncdot/voice-stt-google` | ✅ Plugin ready | Google Cloud Speech-to-Text v2 WebSocket with typed errors and reconnect tests |
+| `@asyncdot/voice-vad-silero` | ✅ ONNX inference | Silero VAD via `onnxruntime-node`, Pipecat-derived model/state handling |
+| `@asyncdot/voice-turn-pipecat` | ✅ Complete | Pipecat-style EOS turn detector: STT/VAD fusion, deferred finalize, max timeout |
+| `@asyncdot/voice-bridge-aisdk` | ✅ Live Gemini bridge | Gemini LLM streaming REST bridge with retry and interrupt abort |
 | `@asyncdot/voice-test` | ✅ Complete | FakeSTT, FakeTTS, FakeVAD, FakeBridge for kernel testing |
-| `@asyncdot/voice-client-browser` | ✅ Static HTML | Browser studio: mic → WebSocket → speaker, latency dashboard |
+| `@asyncdot/voice-recorder` | ✅ Complete | v2 bus recorder plugin: packet JSONL + user/assistant PCM flush on close |
+| `@asyncdot/voice-client-browser` | ✅ Static HTML + typed client | Browser studio: mic → WebSocket → speaker, latency dashboard |
+| `@asyncdot/voice-server-websocket` | ✅ Complete | Browser WebSocket transport bridge into v2 `VoiceAgentSession` |
 
 ### API Keys (`.env` at project root)
 
@@ -30,16 +33,16 @@ A complete v2 kernel for the Syrinx voice SDK, per `rfcs/rfc-syrinx-kernel-v2.md
 |---|---|---|
 | `DEEPGRAM_API_KEY` | ✅ Working | Streaming credits active, 24kHz/48kHz supported |
 | `GEMINI_API_KEY` | ✅ Working | Free tier — higher TTFT than paid. Works for both LLM and TTS |
-| `CARTESIA_API_KEY` | 🔴 REST only | 200 on `/voices`, 402 on WebSocket — no streaming credits |
+| `CARTESIA_API_KEY` | ✅ Working | WebSocket streaming smoke passes |
 | `OPENAI_API_KEY` | Untested | Available but not used yet |
 
 ### Full Cascade Verified
 
 ```
-WAV file → Deepgram STT → Gemini LLM → Gemini TTS → PCM Audio
+WAV file → Deepgram STT → Gemini LLM → Cartesia TTS → PCM Audio
    4/4 files processed, zero drops, zero truncation
    Deepgram endpointing: 300ms (was 5000ms prior to fix)
-   Best E2E: 11,790ms (gap due to free-tier keys + chunked TTS)
+   Best recent E2E: ~4.2s (gap due to free-tier Gemini TTFT + provider/network latency)
 ```
 
 ---
@@ -99,27 +102,26 @@ Source: https://voiceaiandvoiceagents.com
 |---|---|---|---|
 | STT TTFT | 150ms | ~100ms | ✅ On target |
 | STT endpointing | ~300ms | 300ms (configured) | ✅ Fixed from 5000ms |
-| LLM TTFT | 380ms (Gemini Flash) | ~1.5s | Free-tier Gemini key |
-| TTS TTFB | 150-190ms (Cartesia/Deepgram) | 4.2s (Gemini TTS) | Gemini TTS is chunked, not streaming |
-| E2E voice→voice | 800ms | ~12s | Paid keys + streaming TTS would close |
+| LLM TTFT | 380ms (Gemini Flash) | ~1.1-2.2s | Free-tier Gemini key |
+| TTS TTFB | 150-190ms (Cartesia/Deepgram) | ~520-630ms | Cartesia WebSocket is working; still above target |
+| E2E voice→voice | 800ms | ~4.2-8.4s | Paid keys + lower provider latency still needed |
 
-**To hit 800ms:** need paid Gemini key (~380ms TTFT) + streaming TTS (Cartesia with credits, ~190ms TTFB) + 300ms endpointing. Estimated E2E: ~870ms.
+**To hit 800ms:** need paid Gemini key (~380ms TTFT), lower TTS TTFB, and 300ms endpointing. Estimated E2E remains close only with paid/low-latency providers.
 
 ---
 
 ## What's Missing (Next Session)
 
 ### Critical
-- [ ] **Streaming TTS**: Cartesia key with streaming credits, OR Gemini TTS with progressive audio chunks (currently single chunk)
-- [ ] **Paid Gemini key**: Reduces LLM TTFT from ~1.5s to ~380ms
-- [ ] **VAD ONNX inference**: Replace energy-based stub with actual Silero ONNX model
-- [ ] **Pipecat EOS integration**: Wire `@asyncdot/voice-turn-pipecat` into init chain with dual-timeout (250ms/2000ms)
+- [ ] **Paid Gemini key**: Reduces LLM TTFT from ~1.5s to ~380ms.
 
 ### Important
-- [ ] **WebSocket server**: Bridge between `voice-client-browser` and kernel pipeline (reference: voice-sandwich-demo Hono pattern)
-- [ ] **STT force-finalize kernel guard**: Wire `sttForceFinalizeTimeoutMs` field into `VoiceAgentSession` – currently only in plugin
-- [ ] **Integration test**: `runOneTurn` with new kernel + bus, verify interrupt latency < 50ms
-- [ ] **Backlog tests**: init-chain reverse teardown, error handler categorization, idle timeout escalation, mode switcher
+- [x] **Pipecat EOS integration**: `@asyncdot/voice-turn-pipecat` implements STT/VAD fusion with 250ms finalize delay and 2000ms max timeout defaults.
+- [x] **WebSocket server**: `@asyncdot/voice-server-websocket` bridges browser traffic into the v2 kernel.
+- [x] **STT force-finalize kernel guard**: `sttForceFinalizeTimeoutMs` is retained and covered by tests.
+- [x] **Integration test**: `runOneTurn` uses the v2 kernel + bus with live API smoke.
+- [x] **Interrupt latency test**: deterministic VAD barge-in test verifies assistant audio stops within 50ms.
+- [x] **Backlog tests**: init-chain reverse teardown, idle timeout/mode switch paths, background drop metrics, recorder flush, WebSocket bridge, and Google STT reconnect are covered.
 
 ### Backlog
 - [ ] `PluginConfigValidationError` in init-chain
@@ -140,26 +142,26 @@ pnpm --filter @asyncdot/voice test
 
 ### Run full cascade benchmark
 ```bash
-cd /Users/mithushancj/Documents/asyncient-openscoped/voice-media-transport/syrinx
+cd /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx
 npx tsx scripts/run-full-cascade.ts
 ```
 
 ### Run kernel benchmark (needs Deepgram credits)
 ```bash
-cd /Users/mithushancj/Documents/asyncient-openscoped/voice-media-transport/syrinx
+cd /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx
 npx tsx scripts/run-kernel-benchmark.ts
 ```
 
 ### Open browser studio
 ```bash
-cd /Users/mithushancj/Documents/asyncient-openscoped/voice-media-transport/syrinx
+cd /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx
 open packages/voice-client-browser/index.html
-# Needs WebSocket server at ws://localhost:9000/ws
+# Pair with @asyncdot/voice-server-websocket at ws://localhost:9000/ws
 ```
 
 ### TypeScript check
 ```bash
-cd /Users/mithushancj/Documents/asyncient-openscoped/voice-media-transport/syrinx
+cd /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx
 npx tsc --noEmit -p packages/voice/tsconfig.json
 ```
 
