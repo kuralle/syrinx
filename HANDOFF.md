@@ -1,85 +1,93 @@
-# Syrinx Voice Engine — Session Handoff
+# Syrinx Voice Engine - Session Handoff
 
 **Date:** 2026-05-26
 **Working dir:** `/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx`
-**Current focus:** v2 websocket-first speech engine reliability, with production-grade STT/LLM/TTS cascade evidence.
-
----
+**Current focus:** v2 websocket-first speech engine reliability, Pipecat Smart Turn endpointing, and live cascade developer smokes.
 
 ## Current State
 
 The v2 kernel is the active path. Do not preserve v1 compatibility unless explicitly requested.
 
-Two websocket paths are now available:
+The production websocket cascade now runs:
 
-- `reliability-longform`: generated WAV fixtures, conservative finalization, long multi-turn smoke.
-- `interactive-review`: browser push-to-talk, 16kHz PCM over websocket, normal Deepgram speech-final finalize, Cartesia TTS by default when the key is present.
-
-The main cascade now has a long-form websocket smoke:
-
+```text
+16 kHz websocket PCM user audio
+  -> Silero VAD
+  -> Pipecat Smart Turn v3 local ONNX endpoint classifier
+  -> Deepgram STT with provider Finalize control
+  -> AI SDK Gemini agent + tools
+  -> Cartesia TTS for interactive review or Gemini TTS for fixture longform
+  -> websocket PCM / WAV artifacts
 ```
-Gemini user TTS fixtures -> browser-style WebSocket audio frames
-  -> Deepgram STT -> AI SDK Gemini agent + tools -> Gemini TTS -> PCM/WAV artifacts
+
+Key implementation points:
+
+- `@asyncdot/voice-turn-pipecat` now bundles Pipecat `smart-turn-v3.2-cpu.onnx` and runs local Whisper-feature ONNX inference with `onnxruntime-node`.
+- Smart Turn emits `stt.finalize` only after it approves a boundary; Deepgram now sends the provider `Finalize` control frame and falls back to cached interim text if the provider does not answer.
+- Websocket clients receive VAD `speech_started` / `speech_ended`, `audio_clear`, and `agent_interrupted`; the browser review console flushes queued output audio on interruption.
+- The websocket smokes now assert no negative timing, all VAD boundaries are observed, and longform replies are not visibly truncated.
+
+## Live Baselines
+
+### Interactive Review
+
+Command:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
 ```
 
-The completed baseline is:
-
-| Item | Value |
-|---|---:|
-| Scenario | `websocket_university_student_relations_multiturn` |
-| Turns | 24 |
-| Modeled conversation | 643,768ms (~10.7 min) |
-| User fixture audio | 333,024ms |
-| Assistant TTS audio | 310,744ms |
-| Avg STT final after speech end | 20,393ms |
-| Avg LLM first text after STT final | 3,412ms |
-| Avg Gemini TTS first audio after agent end | 9,115ms |
-| Avg speech end to first assistant audio | 32,919ms |
-| Tool calls | 17 across 24 turns |
-
-Baseline artifacts:
-
-- `examples/02-hello-voice-headless/test/fixtures/gemini-university-support/`
-- `examples/02-hello-voice-headless/test/performance/websocket-university-multiturn-baseline.json`
-- `examples/02-hello-voice-headless/test/performance/runs/websocket-university-2026-05-26T14-13-46-417Z/`
-
-Important interpretation: this smoke is a reliability baseline, not an interactive latency baseline. It uses 24kHz Gemini-generated user WAVs, Deepgram endpointing at 5000ms, `finalize_on_speech_final: false`, 5s trailing silence, and a 15s force-finalize timer so internal pauses do not cut user turns. That proves websocket audio completeness across long turns, but it intentionally pushes endpoint latency high.
-
-The interactive websocket baseline is:
+Latest successful baseline:
 
 | Item | Value |
 |---|---:|
 | Scenario | `websocket_university_student_relations_interactive` |
 | Turns | 3 |
-| Input/output PCM | 16kHz mono s16le |
+| Input/output PCM | 16 kHz mono s16le |
 | TTS provider | Cartesia streaming websocket |
-| Trailing silence sent by client | 1,400ms |
-| Avg STT final after speech end | 2,644ms |
-| Avg LLM first text after STT final | 3,380ms |
-| Avg TTS first audio after first agent text | 358ms |
-| Avg speech end to first assistant audio | 6,382ms |
+| Trailing silence | 1,400 ms |
+| Post-TTS drain | 500 ms |
+| Avg STT final after speech end | 1,776 ms |
+| Avg VAD speech end after audio end | 627 ms |
+| Avg LLM first text after STT final | 3,705 ms |
+| Avg Cartesia first audio after first agent text | 377 ms |
+| Avg speech end to first assistant audio | 5,858 ms |
+| Quality gate | Passed |
 
-Interactive artifacts:
+Artifacts:
 
-- `examples/02-hello-voice-headless/scripts/run-websocket-university-interactive.ts`
 - `examples/02-hello-voice-headless/test/performance/websocket-university-interactive-baseline.json`
 
-Interpretation: the websocket audio path, STT transcript, agent stream, and TTS output all work with browser-style 16kHz frames and normal Deepgram speech-final finalize. LLM TTFT remains the dominant provider bottleneck. Turn 3 still showed a 5.9s STT final delay, so endpointing/VAD fusion remains a production hardening target.
+### Longform Websocket
 
----
+Command:
 
-## Recent Package Changes
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
+```
 
-| Package | Change |
-|---|---|
-| `@asyncdot/voice-server-websocket` | Emits `turnId` on STT/agent events, emits tool call/result and `tts_end`, and pushes `turn.change` when text/audio `contextId` changes. |
-| `@asyncdot/voice-stt-deepgram` | Adds `finalize_on_speech_final` config. Default remains `true`; long-form smoke can disable it and rely on force-finalize. |
-| `@asyncdot/voice-bridge-aisdk` | Keeps bounded conversation history, supports `tool_choice`, and wraps streaming with an idle timeout. |
-| `@asyncdot/voice-tts-gemini` | Uses documented non-streaming Gemini TTS `generateContent`, adds timeout, retries, and zero-audio failure. |
-| `@asyncdot/voice-client-browser` | Review console for push-to-talk websocket testing, turn-scoped JSON audio frames, PCM16 playback, transcript/tool/agent timeline, and client-side latency markers. |
-| `@asyncdot-example/02-hello-voice-headless` | Adds Gemini fixture generation and websocket university multi-turn smoke scripts. Uses `ai@^6.0.0`. |
+Latest successful completed run:
 
----
+| Item | Value |
+|---|---:|
+| Scenario | `websocket_university_student_relations_multiturn` |
+| Turns | 24 |
+| Modeled conversation | 702,408 ms (~11.7 min) |
+| User fixture audio | 333,024 ms |
+| Assistant TTS audio | 369,384 ms |
+| Avg STT final after speech end | 2,307 ms |
+| Avg VAD speech end after audio end | 1,776 ms |
+| Avg LLM first text after STT final | 3,901 ms |
+| Avg Gemini TTS first audio after agent end | 9,833 ms |
+| Avg speech end to first assistant audio | 16,041 ms |
+| Quality gate | Passed after re-evaluation with critical-turn tool gate |
+
+Artifacts:
+
+- `examples/02-hello-voice-headless/test/performance/websocket-university-multiturn-baseline.json`
+- `examples/02-hello-voice-headless/test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/`
+
+Interpretation: endpointing is now bounded by Smart Turn + Deepgram provider finalize instead of the old 15-20 s generic guard. The remaining longform bottleneck is Gemini LLM/free-tier latency and Gemini's non-streaming TTS generation.
 
 ## Commands
 
@@ -116,34 +124,21 @@ pnpm -r test
 git diff --check
 ```
 
----
-
 ## Known Gaps
 
 Critical next hardening:
 
-- Add a response-completeness gate for the smoke. The current gate proves transport continuity and minimum tool coverage, but it does not fail short/truncated agent text.
-- Replace conservative fixture endpointing with Pipecat-style STT/VAD turn fusion for production; keep the long-form conservative mode as a regression test for pause safety.
-- Add provider-level streaming TTS for the interactive path. Gemini TTS is currently chunked/non-streaming; Cartesia should be preferred for live review when its key is present.
-- Add browser/telephony resampling tests. The fixture smoke runs 24kHz PCM; browser mic capture should be normalized to a declared STT sample rate before crossing the websocket.
-- Add client/server barge-in semantics: user speech start should interrupt current assistant output and flush queued audio immediately.
-
-Provider/business constraints still matter:
-
-- Paid Gemini key is still needed to reduce LLM TTFT from free-tier multi-second behavior toward the ~380ms target.
-- Cartesia streaming remains the practical path for low TTS TTFB; Gemini TTS is useful for fixtures and fallback but not sufficient for sub-second voice response.
-
----
+- Cartesia or another true streaming TTS path should be the default for interactive production review. Gemini TTS is still chunked and creates 7-20 s longform TTS outliers.
+- Gemini LLM TTFT is still multi-second on the current key. A paid/low-latency Gemini setup is still needed to approach the sub-second target.
+- Add explicit websocket audio frame metadata or a binary frame envelope if browser playback metrics need turn-perfect attribution without a post-`tts_end` drain window.
+- Tighten semantic quality gates beyond punctuation/length: verify required facts per scenario, not only transport continuity and tool coverage.
+- Add browser mic resampling tests. The production websocket contract is 16 kHz PCM; Safari/browser capture cannot be trusted to honor a requested `AudioContext` sample rate.
 
 ## Notes For Next Session
 
-- Do not delete `test-cartesia-output.pcm` unless the user explicitly asks; it is an unrelated untracked local artifact.
-- The long-form websocket baseline was completed live. The final quality gate was adjusted afterward to match the intended "tools on most/critical turns" behavior, then the completed run baseline was re-evaluated.
-- The review studio live smoke passed on 2026-05-26 using a 16kHz WAV sent over JSON websocket audio frames: Deepgram produced a final transcript, Gemini/AI SDK produced agent text, Cartesia returned 353,686 bytes of PCM, and `tts_end` arrived with no websocket errors.
-- The interactive baseline smoke passed on 2026-05-26 with 3 turns, normal Deepgram speech-final finalize, Cartesia TTS, 16kHz websocket PCM, and quality gate `passed: true`.
-- Research takeaways to keep applying:
-  - Voice-to-voice latency must be measured from user speech end to assistant audio start, not only provider inference time.
-  - Production websocket agents need explicit sample-rate contracts and boundary resampling; browser Safari cannot be trusted to honor an `AudioContext` sample-rate request.
-  - Endpointing should err slightly long over cutting users off, and should adapt after questions or thinking moments.
-  - Barge-in should flush queued assistant audio as soon as user speech starts, not after the old reply finishes.
-- If optimizing latency next, keep two profiles: `reliability-longform` for pause safety and `interactive-review` for live talk latency. Mixing both goals into one endpointing config hides regressions.
+- Do not delete `test-cartesia-output.pcm` unless explicitly asked; it is an unrelated untracked local artifact.
+- The new `stt.finalize` packet is a command from turn detection to STT; Deepgram responds by sending its provider `Finalize` message and then publishing `stt.result`.
+- Smart Turn should not be replaced with raw VAD silence finalization. A short VAD-ended timer caused premature transcript cuts on realistic utterances.
+- Keep separate profiles:
+  - `interactive-review`: 16 kHz websocket PCM, Smart Turn, Deepgram provider finalize, Cartesia TTS.
+  - `longform`: Gemini-generated user fixtures, 16 kHz websocket ingress, Smart Turn, Deepgram provider finalize, Gemini TTS artifacts.

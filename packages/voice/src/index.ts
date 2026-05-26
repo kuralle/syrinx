@@ -30,6 +30,7 @@ export {
   type SpeechToTextAudioPacket,
   type SttInterimPacket,
   type SttResultPacket,
+  type FinalizeSttPacket,
   type SttErrorPacket,
   type EndOfSpeechAudioPacket,
   type EndOfSpeechPacket,

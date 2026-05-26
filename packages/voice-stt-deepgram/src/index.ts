@@ -8,7 +8,7 @@
 //   - No CloseStream — let Deepgram's built-in endpointing handle turn boundaries
 //   - endpointing=5000ms (matching Rapida's default)
 //   - Interim transcripts for real-time display
-//   - Final transcripts trigger eos.turn_complete
+//   - Final transcripts can trigger eos.turn_complete, or Pipecat EOS can own finalization
 //
 // Guards (Syrinx additions beyond Rapida):
 //   - Tracks last interim transcript for force-finalization
@@ -39,6 +39,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private interimResults: boolean = true;
   private confidenceThreshold: number = 0;
   private finalizeOnSpeechFinal: boolean = true;
+  private emitEosOnFinal: boolean = true;
+  private providerFinalizeFallbackMs: number = 1200;
 
   // Session-long WebSocket
   private ws: import("ws").WebSocket | null = null;
@@ -54,9 +56,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   // Guard: track last interim for force-finalization on short audio
   private lastInterimTranscript = "";
   private lastInterimConfidence = 0;
-  private hasFinalForCurrentTurn = false;
   private finalTranscriptParts: string[] = [];
   private finalConfidence = 0;
+  private finalizeRequestedContextIds = new Set<string>();
+  private ignoreNextProviderFinalContextIds = new Set<string>();
+  private providerFinalizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -70,6 +74,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
+    this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
+    this.providerFinalizeFallbackMs = (config["provider_finalize_fallback_ms"] as number) ?? 1200;
     this.closed = false;
 
     // Open session-long WebSocket (Rapida pattern)
@@ -100,6 +106,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       bus.on("interrupt.stt", () => {
         this.streamStartTime = Date.now();
         this.resetTurnTranscriptState();
+      }),
+      bus.on("stt.finalize", (pkt: unknown) => {
+        const request = pkt as { contextId: string };
+        this.forceFinalize(request.contextId);
       }),
     );
   }
@@ -159,8 +169,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         }
 
         if (msg.is_final) {
+          if (this.ignoreNextProviderFinalContextIds.delete(this.currentContextId)) {
+            this.resetPendingTranscript();
+            return;
+          }
           this.appendFinalSegment(transcript, confidence);
-          if (this.finalizeOnSpeechFinal && msg.speech_final === true) {
+          const finalizeRequested = this.finalizeRequestedContextIds.has(this.currentContextId);
+          if (this.finalizeOnSpeechFinal && (msg.speech_final === true || finalizeRequested)) {
             this.pushFinal(this.combinedFinalTranscript(), this.finalConfidence);
             this.resetPendingTranscript();
           }
@@ -235,23 +250,43 @@ export class DeepgramSTTPlugin implements VoicePlugin {
    */
   forceFinalize(contextId?: string): void {
     const ctxId = contextId ?? this.currentContextId;
+    if (!ctxId || !this.bus) return;
+    this.requestProviderFinalize(ctxId);
+  }
+
+  private pushCachedFinal(contextId?: string): void {
+    const ctxId = contextId ?? this.currentContextId;
     const transcript = this.combinedFinalTranscript() || this.lastInterimTranscript;
     const confidence = this.finalConfidence || this.lastInterimConfidence;
 
-    // Don't force-finalize if we already got a final for this turn
-    if (this.hasFinalForCurrentTurn) return;
     if (!transcript || !this.bus) return;
 
-    this.hasFinalForCurrentTurn = true;
+    this.ignoreNextProviderFinalContextIds.add(ctxId);
     this.pushFinal(transcript, confidence, ctxId);
 
     this.resetPendingTranscript();
   }
 
+  private requestProviderFinalize(contextId: string): void {
+    this.finalizeRequestedContextIds.add(contextId);
+    if (this.ws?.readyState === (this.ws as import("ws").WebSocket).OPEN) {
+      this.ws.send(JSON.stringify({ type: "Finalize" }));
+    }
+
+    this.clearProviderFinalizeTimer(contextId);
+    if (this.providerFinalizeFallbackMs <= 0) return;
+    const timer = setTimeout(() => {
+      this.providerFinalizeTimers.delete(contextId);
+      this.pushCachedFinal(contextId);
+    }, this.providerFinalizeFallbackMs);
+    this.providerFinalizeTimers.set(contextId, timer);
+  }
+
   /** Emit final transcript + EOS turn complete. */
   private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
-    this.hasFinalForCurrentTurn = true;
     const ctxId = contextId;
+    this.finalizeRequestedContextIds.delete(ctxId);
+    this.clearProviderFinalizeTimer(ctxId);
     this.bus?.push(Route.Main, {
       kind: "stt.result",
       contextId: ctxId,
@@ -261,13 +296,15 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       language: this.language,
     });
 
-    this.bus?.push(Route.Main, {
-      kind: "eos.turn_complete",
-      contextId: ctxId,
-      timestampMs: Date.now(),
-      text: transcript,
-      transcripts: [],
-    });
+    if (this.emitEosOnFinal) {
+      this.bus?.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: ctxId,
+        timestampMs: Date.now(),
+        text: transcript,
+        transcripts: [],
+      });
+    }
   }
 
   /** Emit interim transcript for real-time display. */
@@ -301,7 +338,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   private resetTurnTranscriptState(): void {
-    this.hasFinalForCurrentTurn = false;
     this.resetPendingTranscript();
   }
 
@@ -309,9 +345,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.closed = true;
     for (const dispose of this.disposers.splice(0)) dispose();
     // Guard: force-finalize pending transcription (short audio, no endpointing)
-    if (this.lastInterimTranscript && !this.hasFinalForCurrentTurn) {
-      this.forceFinalize();
+    if (this.lastInterimTranscript) {
+      this.pushCachedFinal();
     }
+    for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
+    this.providerFinalizeTimers.clear();
+    this.finalizeRequestedContextIds.clear();
+    this.ignoreNextProviderFinalContextIds.clear();
 
     if (this.ws) {
       this.ws.close();
@@ -319,6 +359,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
     this.bus = null;
     this.ready = false;
+  }
+
+  private clearProviderFinalizeTimer(contextId: string): void {
+    const timer = this.providerFinalizeTimers.get(contextId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.providerFinalizeTimers.delete(contextId);
   }
 
   private async reconnect(): Promise<void> {

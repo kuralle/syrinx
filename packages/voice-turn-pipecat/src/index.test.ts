@@ -7,7 +7,23 @@ import {
   type EndOfSpeechPacket,
   type InterimEndOfSpeechPacket,
 } from "@asyncdot/voice";
-import { PipecatEOSPlugin } from "./index.js";
+import { PipecatEOSPlugin, type SmartTurnPredictor } from "./index.js";
+
+class PredictableSmartTurn implements SmartTurnPredictor {
+  constructor(private readonly predictions: number[] = [1]) {}
+
+  async initialize(): Promise<void> {
+    // no-op
+  }
+
+  async predict(): Promise<number> {
+    return this.predictions.shift() ?? 1;
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
+}
 
 function startBus(bus: PipelineBusImpl): Promise<void> {
   return bus.start();
@@ -17,7 +33,7 @@ describe("PipecatEOSPlugin", () => {
   it("emits interim EOS packets from interim transcripts", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new PipecatEOSPlugin();
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn());
     const interims: InterimEndOfSpeechPacket[] = [];
     bus.on("eos.interim", (pkt) => {
       interims.push(pkt as InterimEndOfSpeechPacket);
@@ -48,7 +64,7 @@ describe("PipecatEOSPlugin", () => {
   it("finalizes after VAD stop and final STT result", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new PipecatEOSPlugin();
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
     const completions: EndOfSpeechPacket[] = [];
     bus.on("eos.turn_complete", (pkt) => {
       completions.push(pkt as EndOfSpeechPacket);
@@ -98,7 +114,7 @@ describe("PipecatEOSPlugin", () => {
   it("finalizes on max timeout even if VAD stop never arrives", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new PipecatEOSPlugin();
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn());
     const completions: EndOfSpeechPacket[] = [];
     bus.on("eos.turn_complete", (pkt) => {
       completions.push(pkt as EndOfSpeechPacket);
@@ -121,6 +137,123 @@ describe("PipecatEOSPlugin", () => {
         text: "timeout final",
       }),
     ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not complete a turn for an incomplete smart-turn pause", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.1, 0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 100 });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+      text: "I need to know",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(completions).toEqual([]);
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+      text: "whether the petition is approved",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        contextId: "turn-3",
+        text: "I need to know whether the petition is approved",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("falls back after sustained silence when smart turn predicts an incomplete pause", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.1]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 100, incomplete_fallback_ms: 10 });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-4",
+      timestampMs: Date.now(),
+      text: "finished despite low confidence",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-4",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        contextId: "turn-4",
+        text: "finished despite low confidence",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("requests STT finalization only after smart turn approves the boundary", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const requests: string[] = [];
+    bus.on("stt.finalize", (pkt) => {
+      requests.push(pkt.contextId);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, stt_finalize_grace_ms: 0 });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-5",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(requests).toEqual(["turn-5"]);
 
     await plugin.close();
     bus.stop();

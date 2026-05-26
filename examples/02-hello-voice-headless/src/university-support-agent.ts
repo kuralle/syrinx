@@ -6,8 +6,10 @@ import { z } from "zod";
 import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@asyncdot/voice";
 import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
+import { PipecatEOSPlugin } from "@asyncdot/voice-turn-pipecat";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { GeminiTTSPlugin } from "@asyncdot/voice-tts-gemini";
+import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
 
@@ -101,6 +103,8 @@ export function createUniversitySupportSession(options: UniversitySupportSession
 
   const plugins: Record<string, VoicePlugin> = {
     stt: new DeepgramSTTPlugin(),
+    vad: new SileroVADPlugin(),
+    eos: new PipecatEOSPlugin(),
     bridge: new AISDKBridgePlugin(),
     tts: ttsProvider === "cartesia" ? new CartesiaTTSPlugin() : new GeminiTTSPlugin(),
   };
@@ -119,11 +123,25 @@ function createPluginConfig(
     stt: {
       api_key: requireEnv("DEEPGRAM_API_KEY"),
       sample_rate: options.inputSampleRate,
-      endpointing: interactive ? 700 : 5000,
+      endpointing: interactive ? 700 : 1200,
       model: process.env["SYRINX_DEEPGRAM_MODEL"]?.trim() || "nova-2",
       language: "en-US",
       smart_format: true,
-      finalize_on_speech_final: interactive,
+      finalize_on_speech_final: true,
+      emit_eos_on_final: false,
+      provider_finalize_fallback_ms: 1500,
+    },
+    vad: {
+      sample_rate: options.inputSampleRate,
+      threshold: interactive ? 0.5 : 0.45,
+      min_silence_duration_ms: interactive ? 650 : 1400,
+      speech_pad_ms: interactive ? 180 : 400,
+    },
+    eos: {
+      finalize_delay_ms: interactive ? 250 : 500,
+      max_delay_ms: interactive ? 4500 : 15_000,
+      incomplete_fallback_ms: interactive ? 2200 : 1200,
+      stt_finalize_grace_ms: 1200,
     },
     bridge: {
       api_key: requireEnv("GOOGLE_GENERATIVE_AI_API_KEY"),
@@ -131,7 +149,7 @@ function createPluginConfig(
       system_prompt: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
       tools: studentRelationsTools,
       temperature: 0.2,
-      max_output_tokens: interactive ? 260 : 420,
+      max_output_tokens: interactive ? 260 : 640,
       max_steps: 3,
       max_history_turns: 20,
       timeout_ms: interactive ? 30_000 : 60_000,
@@ -156,7 +174,9 @@ function geminiTtsConfig(interactive: boolean): PluginConfig {
     api_key: requireEnv("GOOGLE_GENERATIVE_AI_API_KEY"),
     model: process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-2.5-flash-preview-tts",
     voice_name: process.env["SYRINX_GEMINI_TTS_VOICE"]?.trim() || "Kore",
-    retry_max_attempts: 2,
+    retry_max_attempts: interactive ? 2 : 4,
+    retry_base_delay_ms: 500,
+    retry_max_delay_ms: 4000,
     timeout_ms: interactive ? 30_000 : 45_000,
   };
 }

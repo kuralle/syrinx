@@ -166,6 +166,11 @@ export interface SttResultPacket extends VoicePacket {
   readonly language?: string;
 }
 
+/** Requests that a streaming STT plugin publish its accumulated final transcript. */
+export interface FinalizeSttPacket extends VoicePacket {
+  readonly kind: "stt.finalize";
+}
+
 export interface SttErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly kind: "stt.error";
   readonly component: "stt";
@@ -383,6 +388,7 @@ export type InputPacket =
   | SpeechToTextAudioPacket
   | SttInterimPacket
   | SttResultPacket
+  | FinalizeSttPacket
   | SttErrorPacket
   | EndOfSpeechAudioPacket
   | EndOfSpeechPacket

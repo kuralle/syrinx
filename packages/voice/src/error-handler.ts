@@ -48,7 +48,9 @@ export function categorizeSttError(err: unknown): ErrorCategory {
     msg.includes("network") ||
     msg.includes("timeout") ||
     msg.includes("econnrefused") ||
-    msg.includes("socket hang up")
+    msg.includes("socket hang up") ||
+    msg.includes("internal error has occurred") ||
+    (code !== null && code >= 500 && code <= 599)
   ) {
     return ErrorCategory.NetworkTimeout;
   }
@@ -79,6 +81,9 @@ export function categorizeLlmError(err: unknown): ErrorCategory {
   }
   if (msg.includes("content filter") || msg.includes("safety") || msg.includes("blocked")) {
     return ErrorCategory.InvalidInput;
+  }
+  if (msg.includes("malformed_function_call")) {
+    return ErrorCategory.NetworkTimeout;
   }
 
   return categorizeSttError(err); // Base logic for HTTP errors
