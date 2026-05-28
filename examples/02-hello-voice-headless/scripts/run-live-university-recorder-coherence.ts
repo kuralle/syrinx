@@ -32,12 +32,15 @@ const INPUT_SAMPLE_RATE_HZ = 16000;
 const FRAME_SAMPLES = 320;
 const TURN_COUNT = 3;
 const POST_TTS_DRAIN_MS = 500;
+const POST_USER_SILENCE_MS = 5000;
 
 interface TurnCapture {
   readonly id: string;
   readonly fixtureId: string;
   readonly inputText: string;
   readonly inputAudioMs: number;
+  userRecorderOffsetBytes: number;
+  userRecorderByteLength: number;
   audioEndedAtMs: number;
   speechEndedAtMs: number;
   sttFinalAtMs: number;
@@ -49,12 +52,22 @@ interface TurnCapture {
   spokenReply: string;
   toolCalls: string[];
   assistantAudioBytes: number;
+  assistantAudioChunks: Uint8Array[];
   error: string;
 }
 
 interface WhisperResult {
   readonly text: string;
   readonly jsonPath: string;
+}
+
+interface TurnRecordingArtifact {
+  readonly turnId: string;
+  readonly fixtureId: string;
+  readonly userAudioWavPath: string;
+  readonly assistantAudioWavPath: string;
+  readonly userDurationMs: number;
+  readonly assistantDurationMs: number;
 }
 
 async function main(): Promise<void> {
@@ -100,6 +113,13 @@ async function main(): Promise<void> {
   const recorderAssistantWav = join(runDir, "recorder-assistant.wav");
   await writePcmFileAsWav(recorderUserPcm, recorderUserWav, INPUT_SAMPLE_RATE_HZ);
   await writePcmFileAsWav(recorderAssistantPcm, recorderAssistantWav, assistantSampleRateHz);
+  const turnRecordings = await writeTurnRecordings({
+    turns,
+    runDir,
+    recorderUserPcmPath: recorderUserPcm,
+    userSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+    assistantSampleRateHz,
+  });
 
   const [whisperUser, whisperAssistant] = await Promise.all([
     transcribeWithLocalWhisper(recorderUserWav, whisperDir, "recorder-user"),
@@ -146,6 +166,7 @@ async function main(): Promise<void> {
       eventsJsonlPath: relative(PKG_ROOT, recorderEventsPath),
       userAudioWavPath: relative(PKG_ROOT, recorderUserWav),
       assistantAudioWavPath: relative(PKG_ROOT, recorderAssistantWav),
+      turnRecordings,
       manifest: recorderManifest,
     },
     artifacts: {
@@ -158,6 +179,7 @@ async function main(): Promise<void> {
       id: turn.id,
       fixtureId: turn.fixtureId,
       inputAudioMs: turn.inputAudioMs,
+      userRecordingMs: Math.round((turn.userRecorderByteLength / 2 / INPUT_SAMPLE_RATE_HZ) * 1000),
       assistantAudioMs: Math.round((turn.assistantAudioBytes / 2 / assistantSampleRateHz) * 1000),
       toolCalls: turn.toolCalls,
       spokenTtsWords: turn.spokenReply.trim() ? turn.spokenReply.trim().split(/\s+/).length : 0,
@@ -183,6 +205,7 @@ async function main(): Promise<void> {
 
 async function runThreeTurns(session: ReturnType<typeof createUniversitySupportSession>): Promise<TurnCapture[]> {
   const turns: TurnCapture[] = [];
+  let userRecorderOffsetBytes = 0;
   for (let index = 0; index < TURN_COUNT; index += 1) {
     const fixture = GEMINI_UNIVERSITY_FIXTURES[index]!;
     const samples = readPcm16Mono16kWav(fixture.path);
@@ -191,6 +214,8 @@ async function runThreeTurns(session: ReturnType<typeof createUniversitySupportS
       fixtureId: fixture.id,
       inputText: fixture.text,
       inputAudioMs: Math.round((samples.length / INPUT_SAMPLE_RATE_HZ) * 1000),
+      userRecorderOffsetBytes,
+      userRecorderByteLength: 0,
       audioEndedAtMs: 0,
       speechEndedAtMs: 0,
       sttFinalAtMs: 0,
@@ -202,6 +227,7 @@ async function runThreeTurns(session: ReturnType<typeof createUniversitySupportS
       spokenReply: "",
       toolCalls: [],
       assistantAudioBytes: 0,
+      assistantAudioChunks: [],
       error: "",
     };
     const dispose = captureTurn(session, turn);
@@ -213,14 +239,15 @@ async function runThreeTurns(session: ReturnType<typeof createUniversitySupportS
       reason: "live_recorder_coherence_smoke",
       timestampMs: Date.now(),
     });
-    await sendPcmFrames(session, samples, turn.id);
+    turn.userRecorderByteLength += await sendPcmFrames(session, samples, turn.id);
     turn.audioEndedAtMs = Date.now();
-    await sendSilence(session, turn.id, 5000);
+    turn.userRecorderByteLength += await sendSilence(session, turn.id, POST_USER_SILENCE_MS);
     await waitForTurnComplete(turn);
     await sleep(POST_TTS_DRAIN_MS);
     dispose();
     console.log(`completed ${turn.id}: ${turn.sttTranscript.slice(0, 90)}`);
     turns.push(turn);
+    userRecorderOffsetBytes += turn.userRecorderByteLength;
   }
   return turns;
 }
@@ -240,6 +267,7 @@ function captureTurn(session: ReturnType<typeof createUniversitySupportSession>,
     if (pkt.contextId !== turn.id) return;
     if (turn.firstAudioAtMs === 0) turn.firstAudioAtMs = pkt.timestampMs;
     turn.assistantAudioBytes += pkt.audio.byteLength;
+    turn.assistantAudioChunks.push(Uint8Array.from(pkt.audio));
   });
   const offTtsEnd = session.bus.on<TextToSpeechEndPacket>("tts.end", (pkt) => {
     if (pkt.contextId === turn.id) turn.ttsEndedAtMs = pkt.timestampMs;
@@ -278,25 +306,32 @@ async function sendPcmFrames(
   session: ReturnType<typeof createUniversitySupportSession>,
   samples: Int16Array,
   contextId: string,
-): Promise<void> {
+): Promise<number> {
+  let byteLength = 0;
   for (let offset = 0; offset < samples.length; offset += FRAME_SAMPLES) {
     const frame = new Int16Array(FRAME_SAMPLES);
     frame.set(samples.subarray(offset, Math.min(samples.length, offset + FRAME_SAMPLES)));
     sendAudioFrame(session, frame, contextId);
+    byteLength += frame.byteLength;
     await sleep(20);
   }
+  return byteLength;
 }
 
 async function sendSilence(
   session: ReturnType<typeof createUniversitySupportSession>,
   contextId: string,
   durationMs: number,
-): Promise<void> {
+): Promise<number> {
   const frames = Math.ceil(durationMs / 20);
+  let byteLength = 0;
   for (let i = 0; i < frames; i += 1) {
-    sendAudioFrame(session, new Int16Array(FRAME_SAMPLES), contextId);
+    const frame = new Int16Array(FRAME_SAMPLES);
+    sendAudioFrame(session, frame, contextId);
+    byteLength += frame.byteLength;
     await sleep(20);
   }
+  return byteLength;
 }
 
 function sendAudioFrame(
@@ -366,14 +401,68 @@ function evaluateQuality(
   if (recorderManifest.audio.user.byteLength <= 0 || recorderManifest.audio.user.chunks <= 0) {
     failures.push("recorder user audio is empty");
   }
+  const expectedUserBytes = turns.reduce((sum, turn) => sum + turn.userRecorderByteLength, 0);
+  if (recorderManifest.audio.user.byteLength !== expectedUserBytes) {
+    failures.push(
+      `recorder user audio bytes ${recorderManifest.audio.user.byteLength} did not match turn slices ${expectedUserBytes}`,
+    );
+  }
+  const expectedAssistantBytes = turns.reduce((sum, turn) => sum + turn.assistantAudioBytes, 0);
   if (recorderManifest.audio.assistant.byteLength <= 0 || recorderManifest.audio.assistant.chunks <= 0) {
     failures.push("recorder assistant audio is empty");
+  }
+  if (recorderManifest.audio.assistant.truncations === 0 && recorderManifest.audio.assistant.byteLength < expectedAssistantBytes) {
+    failures.push(
+      `recorder assistant audio bytes ${recorderManifest.audio.assistant.byteLength} shorter than turn audio ${expectedAssistantBytes}`,
+    );
   }
   if (recorderManifest.audio.assistant.truncations !== 0) {
     failures.push(`expected no assistant truncations, got ${recorderManifest.audio.assistant.truncations}`);
   }
+  for (const turn of turns) {
+    if (turn.userRecorderByteLength <= 0) failures.push(`${turn.id} recorder user slice is empty`);
+    if (turn.assistantAudioChunks.length <= 0) failures.push(`${turn.id} recorder assistant slice is empty`);
+  }
   if (recorderManifest.events.packets <= 0) failures.push("recorder events file is empty");
   return failures;
+}
+
+async function writeTurnRecordings(options: {
+  turns: readonly TurnCapture[];
+  runDir: string;
+  recorderUserPcmPath: string;
+  userSampleRateHz: number;
+  assistantSampleRateHz: number;
+}): Promise<TurnRecordingArtifact[]> {
+  const turnDir = join(options.runDir, "turn-recordings");
+  await mkdir(turnDir, { recursive: true });
+  const userPcm = readFileSync(options.recorderUserPcmPath);
+  const artifacts: TurnRecordingArtifact[] = [];
+  for (const turn of options.turns) {
+    const userSlice = userPcm.subarray(
+      turn.userRecorderOffsetBytes,
+      turn.userRecorderOffsetBytes + turn.userRecorderByteLength,
+    );
+    if (userSlice.byteLength !== turn.userRecorderByteLength) {
+      throw new Error(
+        `${turn.id} recorder user slice expected ${turn.userRecorderByteLength} bytes, got ${userSlice.byteLength}`,
+      );
+    }
+    const assistantSlice = Buffer.concat(turn.assistantAudioChunks.map((chunk) => Buffer.from(chunk)));
+    const userWavPath = join(turnDir, `${turn.id}-${turn.fixtureId}-user.wav`);
+    const assistantWavPath = join(turnDir, `${turn.id}-${turn.fixtureId}-assistant.wav`);
+    await writePcmBufferAsWav(userSlice, userWavPath, options.userSampleRateHz);
+    await writePcmBufferAsWav(assistantSlice, assistantWavPath, options.assistantSampleRateHz);
+    artifacts.push({
+      turnId: turn.id,
+      fixtureId: turn.fixtureId,
+      userAudioWavPath: relative(PKG_ROOT, userWavPath),
+      assistantAudioWavPath: relative(PKG_ROOT, assistantWavPath),
+      userDurationMs: Math.round((userSlice.byteLength / 2 / options.userSampleRateHz) * 1000),
+      assistantDurationMs: Math.round((assistantSlice.byteLength / 2 / options.assistantSampleRateHz) * 1000),
+    });
+  }
+  return artifacts;
 }
 
 async function transcribeWithLocalWhisper(wavPath: string, outputDir: string, id: string): Promise<WhisperResult> {
@@ -415,6 +504,10 @@ async function transcribeWithLocalWhisper(wavPath: string, outputDir: string, id
 
 async function writePcmFileAsWav(inputPath: string, outputPath: string, sampleRateHz: number): Promise<void> {
   const pcm = readFileSync(inputPath);
+  await writePcmBufferAsWav(pcm, outputPath, sampleRateHz);
+}
+
+async function writePcmBufferAsWav(pcm: Uint8Array, outputPath: string, sampleRateHz: number): Promise<void> {
   const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
   const wav = new WaveFile();
   wav.fromScratch(1, sampleRateHz, "16", samples);

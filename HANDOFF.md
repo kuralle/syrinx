@@ -128,19 +128,20 @@ Latest successful completed run:
 | Turns | 3 |
 | STT / LLM / TTS | Deepgram / Gemini / Cartesia |
 | Local audit STT | Whisper `tiny.en` |
-| Avg STT final after audio end | 888 ms |
-| Avg VAD speech end after audio end | 589 ms |
-| Avg LLM first text after STT final | 4,143 ms |
-| Avg first audio after agent text | 473 ms |
-| Avg speech end to first assistant audio | 5,504 ms |
+| Avg STT final after audio end | 907 ms |
+| Avg VAD speech end after audio end | 585 ms |
+| Avg LLM first text after STT final | 3,699 ms |
+| Avg first audio after agent text | 423 ms |
+| Avg speech end to first assistant audio | 5,029 ms |
 | Recorder user audio | 67,900 ms / 2,172,800 bytes |
-| Recorder assistant audio | 93,325 ms / 2,986,384 bytes |
+| Recorder assistant audio | 88,001 ms / 2,816,026 bytes |
 | Quality gate | Passed |
 
 Artifacts:
 
-- `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-28T15-01-01-954Z/baseline.json`
-- `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-28T15-01-01-954Z/recorder/three-turn-live/manifest.json`
+- `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-28T18-12-45-039Z/baseline.json`
+- `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-28T18-12-45-039Z/recorder/three-turn-live/manifest.json`
+- `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-28T18-12-45-039Z/turn-recordings/`
 
 ## Commands
 
@@ -176,7 +177,9 @@ Run the live three-turn recorder coherence smoke:
 pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:live-recorder-coherence
 ```
 
-Latest live recorder result: `live-university-recorder-2026-05-28T15-01-01-954Z` passed all three university turns with Deepgram `nova-3` STT, Gemini agent, Cartesia TTS, recorder WAV export, and local Whisper coherence. The run preserved provider STT text, recorded raw agent replies separately from spoken TTS text, captured non-empty user/assistant audio with zero truncations, and produced average latencies: STT final after audio end 888 ms, VAD speech end after audio end 589 ms, first agent text after STT 4,143 ms, first audio after agent text 473 ms, speech-end to first assistant audio 5,504 ms. Deepgram metrics show `stt_provider_finalize_requested` after Smart Turn and `stt_provider_final_buffer_released` only after provider `speechFinal:true` or `fromFinalize:true`.
+Latest live recorder result: `live-university-recorder-2026-05-28T18-12-45-039Z` passed all three university turns with Deepgram `nova-3` STT, Gemini agent, Cartesia TTS, recorder WAV export, per-turn WAV export, and local Whisper coherence. The run preserved provider STT text, recorded raw agent replies separately from spoken TTS text, captured non-empty user/assistant audio with zero truncations, and produced average latencies: STT final after audio end 907 ms, VAD speech end after audio end 585 ms, first agent text after STT 3,699 ms, first audio after agent text 423 ms, speech-end to first assistant audio 5,029 ms. Deepgram metrics show `stt_provider_finalize_requested` after Smart Turn and `stt_provider_final_buffer_released` only after provider `speechFinal:true` or `fromFinalize:true`.
+
+The live recorder smoke exports both continuous and per-turn listenable WAVs. `recorder-user.wav` and `recorder-assistant.wav` are stacked session tracks. New runs also write `turn-recordings/<turn-id>-<fixture-id>-user.wav` and `turn-recordings/<turn-id>-<fixture-id>-assistant.wav`, and list those paths under `recorder.turnRecordings` in `baseline.json`. The user-side per-turn WAVs are sliced from the recorder PCM by actual recorder offsets, including the post-user silence sent for endpointing; assistant per-turn WAVs are built from turn-scoped `tts.audio` chunks and are checked against recorder byte counts when no truncation occurs.
 
 Run the emulated Twilio phone-to-agent websocket smoke:
 
