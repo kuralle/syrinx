@@ -161,7 +161,7 @@ Public routing probe:
 pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
-The probe checks the HTTP setup endpoints and opens Twilio, Telnyx, and SmartPBX-shaped websocket sessions with one valid PCMU media frame. It asserts no websocket extension negotiation, so public deployments preserve the no-compression transport invariant.
+The probe checks the HTTP setup endpoints, Twilio/Telnyx callback endpoints, and opens Twilio, Telnyx, and SmartPBX-shaped websocket sessions with one valid PCMU media frame. It asserts no websocket extension negotiation, so public deployments preserve the no-compression transport invariant.
 
 Twilio remains provider-specific at the adapter boundary:
 
