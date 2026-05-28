@@ -82,6 +82,10 @@ interface PendingClientMessage {
   readonly byteLength: number;
 }
 
+interface AudioSequenceState {
+  lastSequence: number | null;
+}
+
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
@@ -192,6 +196,7 @@ async function handleConnection(args: {
   let managed: ManagedSession | null = null;
   let currentContextId = contextId();
   const contextSampleRates = new Map<string, number>();
+  const inputSequence: AudioSequenceState = { lastSequence: null };
   const disposers: Array<() => void> = [];
   const pendingMessages: PendingClientMessage[] = [];
   let pendingMessageBytes = 0;
@@ -251,6 +256,7 @@ async function handleConnection(args: {
       contextId,
       inputSampleRateHz,
       contextSampleRates,
+      inputSequence,
     );
   };
 
@@ -481,6 +487,7 @@ function handleClientMessage(
   contextId: () => string,
   inputSampleRateHz: number,
   contextSampleRates: Map<string, number>,
+  inputSequence: AudioSequenceState,
 ): string {
   if (isBinary) {
     const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz);
@@ -489,6 +496,7 @@ function handleClientMessage(
       pushTurnChange(session, nextContextId, currentContextId, "websocket_binary_audio_turn");
     }
     rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
+    rememberInputSequence(session, inputSequence, nextContextId, binaryAudio.sequence);
     const audio = normalizePcm16(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
@@ -522,6 +530,7 @@ function handleClientMessage(
     }
     const sourceSampleRateHz = positiveInteger(message.sampleRateHz) ?? inputSampleRateHz;
     rememberContextSampleRate(contextSampleRates, nextContextId, sourceSampleRateHz);
+    rememberInputSequence(session, inputSequence, nextContextId, optionalSequence(message.sequence));
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
@@ -531,6 +540,29 @@ function handleClientMessage(
     return nextContextId;
   }
   throw new Error("Unsupported client message type");
+}
+
+function rememberInputSequence(
+  session: VoiceAgentSession,
+  state: AudioSequenceState,
+  contextId: string,
+  sequence: number | undefined,
+): void {
+  if (sequence === undefined) return;
+  const previous = state.lastSequence;
+  if (previous !== null && sequence <= previous) {
+    throw new Error(`Websocket audio sequence must increase monotonically: ${String(previous)} -> ${String(sequence)}`);
+  }
+  if (previous !== null && sequence > previous + 1) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name: "websocket.audio_sequence_gap",
+      value: JSON.stringify({ expected: previous + 1, actual: sequence, missed: sequence - previous - 1 }),
+    });
+  }
+  state.lastSequence = sequence;
 }
 
 function rememberContextSampleRate(
@@ -586,7 +618,7 @@ function cloneRawData(data: RawData): RawData {
 function decodeBinaryAudioMessage(
   data: Uint8Array,
   defaultSampleRateHz: number,
-): { readonly contextId?: string; readonly sampleRateHz: number; readonly audio: Uint8Array } {
+): { readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number; readonly audio: Uint8Array } {
   if (!hasSyrinxAudioEnvelope(data)) {
     return { sampleRateHz: defaultSampleRateHz, audio: data };
   }
@@ -596,6 +628,7 @@ function decodeBinaryAudioMessage(
   return {
     contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
     sampleRateHz: positiveInteger(header.sampleRateHz) ?? defaultSampleRateHz,
+    sequence: header.sequence,
     audio,
   };
 }
@@ -644,6 +677,13 @@ function positiveInteger(value: unknown): number | null {
 function nonNegativeInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
   return value;
+}
+
+function optionalSequence(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const sequence = nonNegativeInteger(value);
+  if (sequence === null) throw new Error("Websocket audio sequence must be a non-negative integer");
+  return sequence;
 }
 
 function sessionIdFromRequest(request: IncomingMessage): string | null {

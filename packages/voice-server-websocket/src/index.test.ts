@@ -3,7 +3,13 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { Route, VoiceAgentSession, type UserAudioReceivedPacket, type UserTextReceivedPacket } from "@asyncdot/voice";
+import {
+  Route,
+  VoiceAgentSession,
+  type ConversationMetricPacket,
+  type UserAudioReceivedPacket,
+  type UserTextReceivedPacket,
+} from "@asyncdot/voice";
 import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
@@ -655,6 +661,111 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("records JSON audio sequence gaps without dropping monotonic frames", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const audio = Buffer.from(new Int16Array([0, 1000]).buffer).toString("base64");
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-sequence-gap",
+      sampleRateHz: 16000,
+      sequence: 1,
+      audio,
+    }));
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-sequence-gap",
+      sampleRateHz: 16000,
+      sequence: 4,
+      audio,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received).toHaveLength(2);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "turn-sequence-gap",
+      name: "websocket.audio_sequence_gap",
+      value: JSON.stringify({ expected: 2, actual: 4, missed: 2 }),
+    }));
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects duplicate JSON audio sequence numbers before forwarding the duplicate frame", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+    const audio = Buffer.from(new Int16Array([0, 1000]).buffer).toString("base64");
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-sequence-duplicate",
+      sampleRateHz: 16000,
+      sequence: 2,
+      audio,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-sequence-duplicate",
+      sampleRateHz: 16000,
+      sequence: 2,
+      audio,
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sequence must increase monotonically: 2 -> 2",
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
   it("rejects malformed odd-byte PCM16 websocket audio without forwarding it", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
@@ -859,6 +970,64 @@ describe("createVoiceWebSocketServer", () => {
       component: "transport",
       category: "invalid_input",
       message: "Websocket audio sampleRateHz changed within context turn-envelope-rate: 48000 -> 44100",
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects regressing binary audio envelope sequence numbers", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+    const audio = new Uint8Array(new Int16Array([0, 1000]).buffer);
+
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-envelope-sequence",
+      sampleRateHz: 16000,
+      encoding: "pcm_s16le",
+      channels: 1,
+      byteLength: audio.byteLength,
+      sequence: 5,
+    }, audio));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-envelope-sequence",
+      sampleRateHz: 16000,
+      encoding: "pcm_s16le",
+      channels: 1,
+      byteLength: audio.byteLength,
+      sequence: 4,
+    }, audio));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sequence must increase monotonically: 5 -> 4",
     });
     expect(received).toHaveLength(1);
 
