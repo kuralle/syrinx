@@ -11,6 +11,7 @@ The latest hardening change makes the websocket layer enforce that contract:
 - `ready` now advertises input/output sample rates, encoding, and channel count.
 - Browser and telephony websocket servers attach their input handlers immediately on connection and buffer bounded early frames until the session is ready, so audio sent immediately after WebSocket `open` and carrier `start`/first `media` frames are not lost during session initialization.
 - JSON and enveloped binary audio frames can include `sampleRateHz`; the server normalizes PCM16 into the configured engine rate.
+- Browser websocket input now rejects a `sampleRateHz` change inside the same `contextId`, matching production STT stream expectations that one logical audio stream has a stable source format. New contexts can still use a different declared source rate.
 - Odd-byte PCM16 payloads are rejected before they reach STT/VAD.
 - Each binary TTS frame is preceded by `tts_chunk` metadata with turn id, sequence, sample rate, byte length, and duration.
 - Browser and smoke clients send input sample-rate metadata and use `tts_chunk` for turn attribution.

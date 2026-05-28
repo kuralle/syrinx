@@ -191,6 +191,7 @@ async function handleConnection(args: {
   } = args;
   let managed: ManagedSession | null = null;
   let currentContextId = contextId();
+  const contextSampleRates = new Map<string, number>();
   const disposers: Array<() => void> = [];
   const pendingMessages: PendingClientMessage[] = [];
   let pendingMessageBytes = 0;
@@ -249,6 +250,7 @@ async function handleConnection(args: {
       currentContextId,
       contextId,
       inputSampleRateHz,
+      contextSampleRates,
     );
   };
 
@@ -478,6 +480,7 @@ function handleClientMessage(
   currentContextId: string,
   contextId: () => string,
   inputSampleRateHz: number,
+  contextSampleRates: Map<string, number>,
 ): string {
   if (isBinary) {
     const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz);
@@ -485,6 +488,7 @@ function handleClientMessage(
     if (nextContextId !== currentContextId) {
       pushTurnChange(session, nextContextId, currentContextId, "websocket_binary_audio_turn");
     }
+    rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
     const audio = normalizePcm16(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
@@ -517,6 +521,7 @@ function handleClientMessage(
       pushTurnChange(session, nextContextId, currentContextId, "websocket_audio_turn");
     }
     const sourceSampleRateHz = positiveInteger(message.sampleRateHz) ?? inputSampleRateHz;
+    rememberContextSampleRate(contextSampleRates, nextContextId, sourceSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
@@ -526,6 +531,18 @@ function handleClientMessage(
     return nextContextId;
   }
   throw new Error("Unsupported client message type");
+}
+
+function rememberContextSampleRate(
+  contextSampleRates: Map<string, number>,
+  contextId: string,
+  sampleRateHz: number,
+): void {
+  const existing = contextSampleRates.get(contextId);
+  if (existing !== undefined && existing !== sampleRateHz) {
+    throw new Error(`Websocket audio sampleRateHz changed within context ${contextId}: ${existing} -> ${sampleRateHz}`);
+  }
+  contextSampleRates.set(contextId, sampleRateHz);
 }
 
 function pushTurnChange(

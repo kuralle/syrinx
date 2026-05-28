@@ -566,6 +566,95 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("rejects JSON audio that changes sample rate inside the same websocket context", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-fixed-rate",
+      sampleRateHz: 48000,
+      audio: Buffer.from(new Int16Array([0, 3000, 6000, 9000, 12000, 15000]).buffer).toString("base64"),
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-fixed-rate",
+      sampleRateHz: 44100,
+      audio: Buffer.from(new Int16Array([0, 1000, 2000, 3000]).buffer).toString("base64"),
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sampleRateHz changed within context turn-fixed-rate: 48000 -> 44100",
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
+  it("allows different JSON audio sample rates on different websocket contexts", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-48k",
+      sampleRateHz: 48000,
+      audio: Buffer.from(new Int16Array([0, 3000, 6000, 9000, 12000, 15000]).buffer).toString("base64"),
+    }));
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-44k",
+      sampleRateHz: 44100,
+      audio: Buffer.from(new Int16Array([0, 2000, 4000, 6000]).buffer).toString("base64"),
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received.map((packet) => packet.contextId)).toEqual(["turn-48k", "turn-44k"]);
+
+    client.close();
+    await server.close();
+  });
+
   it("rejects malformed odd-byte PCM16 websocket audio without forwarding it", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
@@ -717,6 +806,61 @@ describe("createVoiceWebSocketServer", () => {
       }),
     ]);
     expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([0, 9000]).buffer));
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects binary audio envelopes that change sample rate inside the same websocket context", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-envelope-rate",
+      sampleRateHz: 48000,
+      encoding: "pcm_s16le",
+      channels: 1,
+      byteLength: 12,
+    }, new Uint8Array(new Int16Array([0, 3000, 6000, 9000, 12000, 15000]).buffer)));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-envelope-rate",
+      sampleRateHz: 44100,
+      encoding: "pcm_s16le",
+      channels: 1,
+      byteLength: 8,
+    }, new Uint8Array(new Int16Array([0, 1000, 2000, 3000]).buffer)));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sampleRateHz changed within context turn-envelope-rate: 48000 -> 44100",
+    });
+    expect(received).toHaveLength(1);
 
     client.close();
     await server.close();
