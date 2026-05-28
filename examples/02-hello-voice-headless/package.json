@@ -13,6 +13,7 @@
     "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
     "review:telephony": "tsx scripts/serve-telephony-review.ts",
     "probe:telephony-public": "tsx scripts/probe-public-telephony-websockets.ts",
+    "smoke:telnyx-carrier-call": "tsx scripts/run-telnyx-carrier-call-smoke.ts",
     "smoke:twilio-carrier-call": "tsx scripts/run-twilio-carrier-call-smoke.ts",
     "smoke:browser-runtime": "tsx scripts/run-browser-runtime-capture-smoke.ts",
     "smoke:live-recorder-coherence": "tsx scripts/run-live-university-recorder-coherence.ts",
