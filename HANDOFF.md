@@ -260,6 +260,19 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public h
 
 The same probe can target local review servers for command verification. Latest local verification against `http://127.0.0.1:4182` passed `/healthz`, `/telephony/config.json`, `/twilio/twiml`, Twilio/Telnyx/SmartPBX provider-shaped websocket sessions, and asserted no websocket compression was negotiated. This is still a routing/upgrade preflight, not a substitute for real carrier/sandbox media timing.
 
+Run a real outbound Twilio carrier call once Twilio credentials and phone numbers are available:
+
+```bash
+TWILIO_ACCOUNT_SID=AC... \
+TWILIO_AUTH_TOKEN=... \
+TWILIO_FROM_NUMBER=+15551234567 \
+TWILIO_TO_NUMBER=+15557654321 \
+SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-carrier-call
+```
+
+This harness uses Twilio's REST API to create an outbound call to `/twilio/twiml`, polls until terminal call status, writes `test/performance/runs/twilio-carrier-call-*/baseline.json`, and fails unless Twilio returns final status `completed` with non-zero duration. It does not replace recorder/server inspection for websocket media timing; use it with the review server logs and recorder artifacts.
+
 Run local verification:
 
 ```bash

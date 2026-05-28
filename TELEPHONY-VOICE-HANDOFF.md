@@ -52,6 +52,30 @@ Expected Twilio media contract:
 - Interruption: adapter locally clears pending playout and sends Twilio `clear`.
 - Playback evidence: adapter sends Twilio `mark` only after paced playout drains.
 
+To place a real outbound Twilio carrier call through the same TwiML endpoint:
+
+```bash
+TWILIO_ACCOUNT_SID=AC... \
+TWILIO_AUTH_TOKEN=... \
+TWILIO_FROM_NUMBER=+15551234567 \
+TWILIO_TO_NUMBER=+15557654321 \
+SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-carrier-call
+```
+
+Optional controls:
+
+```bash
+SYRINX_TWILIO_RING_TIMEOUT_SECONDS=20
+SYRINX_TWILIO_TIME_LIMIT_SECONDS=120
+SYRINX_TWILIO_POLL_TIMEOUT_MS=180000
+SYRINX_TWILIO_COMPLETE_ON_POLL_TIMEOUT=true
+SYRINX_TWILIO_TWIML_URL=https://your-public-tls-host.example/twilio/twiml
+SYRINX_TWILIO_STATUS_CALLBACK_URL=https://your-public-tls-host.example/twilio/status
+```
+
+The script calls Twilio's REST API, points the call at `/twilio/twiml`, polls the Call resource until a terminal status, writes `test/performance/runs/twilio-carrier-call-*/baseline.json`, and fails unless Twilio reports final status `completed` with non-zero duration. If polling times out, it completes the call by default to avoid leaving a paid call running. This proves Twilio carrier call setup reached a connected leg; the review server logs and recorder artifacts still need to be inspected to prove media websocket timing, transcript, TTS, marks, and interruption behavior.
+
 ## Telnyx
 
 Fetch:
