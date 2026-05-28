@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type ConversationMetricPacket, type VoiceAgentSession } from "@asyncdot/voice";
@@ -16,6 +18,9 @@ import {
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
 import { createUniversitySupportSession, type UniversitySupportTtsProvider } from "../src/university-support-agent.js";
+
+const require = createRequire(import.meta.url);
+const { WaveFile } = require("wavefile") as typeof import("wavefile");
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(SCRIPT_DIR, "..");
@@ -148,6 +153,31 @@ function handleHttpRequest(args: {
 
   if (url.pathname === "/telephony/config.json") {
     sendJson(response, 200, carrierConfig(publicHttp, publicWs));
+    return;
+  }
+
+  if (url.pathname === "/telephony/artifacts.json") {
+    void listRecorderArtifacts(args.recordingDir)
+      .then((artifacts) => {
+        sendJson(response, 200, {
+          recordingDir: relative(PKG_ROOT, args.recordingDir),
+          artifacts,
+        });
+      })
+      .catch((err: unknown) => {
+        console.error(`artifact listing failed: ${err instanceof Error ? err.message : String(err)}`);
+        sendJson(response, 500, { error: "artifact_listing_failed" });
+      });
+    return;
+  }
+
+  if (url.pathname.startsWith("/telephony/artifacts/")) {
+    const artifactPath = decodeURIComponent(url.pathname.slice("/telephony/artifacts/".length));
+    void sendRecorderArtifact(response, args.recordingDir, artifactPath)
+      .catch((err: unknown) => {
+        console.error(`artifact read failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (!response.headersSent) sendJson(response, 404, { error: "artifact_not_found" });
+      });
     return;
   }
 
@@ -330,6 +360,129 @@ function sendJson(response: ServerResponse, statusCode: number, value: unknown):
     "cache-control": "no-store",
   });
   response.end(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function listRecorderArtifacts(recordingDir: string): Promise<Array<{ path: string; url: string; source?: string }>> {
+  const files = await walkFiles(recordingDir);
+  const artifacts: Array<{ path: string; url: string; source?: string }> = files.map((filePath) => {
+    const rel = relative(recordingDir, filePath);
+    return {
+      path: rel,
+      url: `/telephony/artifacts/${encodeURIComponent(rel).replaceAll("%2F", "/")}`,
+    };
+  });
+  for (const filePath of files) {
+    const rel = relative(recordingDir, filePath);
+    if (rel.endsWith("user_audio.pcm")) {
+      const wavRel = rel.replace(/user_audio\.pcm$/, "user_audio.wav");
+      artifacts.push({
+        path: wavRel,
+        url: `/telephony/artifacts/${encodeURIComponent(wavRel).replaceAll("%2F", "/")}`,
+        source: rel,
+      });
+    }
+    if (rel.endsWith("assistant_audio.pcm")) {
+      const wavRel = rel.replace(/assistant_audio\.pcm$/, "assistant_audio.wav");
+      artifacts.push({
+        path: wavRel,
+        url: `/telephony/artifacts/${encodeURIComponent(wavRel).replaceAll("%2F", "/")}`,
+        source: rel,
+      });
+    }
+  }
+  return artifacts.sort((a, b) => String(a.path).localeCompare(String(b.path)));
+}
+
+async function walkFiles(root: string): Promise<string[]> {
+  const output: string[] = [];
+  async function visit(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw err;
+    }
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else if (entry.isFile()) {
+        output.push(fullPath);
+      }
+    }
+  }
+  await visit(root);
+  return output.sort();
+}
+
+async function sendRecorderArtifact(response: ServerResponse, recordingDir: string, artifactPath: string): Promise<void> {
+  if (artifactPath.endsWith("user_audio.wav")) {
+    await sendPcmAsWav(response, recordingDir, artifactPath.replace(/user_audio\.wav$/, "user_audio.pcm"), INPUT_SAMPLE_RATE_HZ);
+    return;
+  }
+  if (artifactPath.endsWith("assistant_audio.wav")) {
+    await sendPcmAsWav(response, recordingDir, artifactPath.replace(/assistant_audio\.wav$/, "assistant_audio.pcm"), ASSISTANT_SAMPLE_RATE_HZ);
+    return;
+  }
+  const safePath = resolve(recordingDir, artifactPath);
+  const root = `${resolve(recordingDir)}/`;
+  if (!safePath.startsWith(root)) {
+    sendJson(response, 400, { error: "invalid_artifact_path" });
+    return;
+  }
+  const info = await stat(safePath);
+  if (!info.isFile()) {
+    sendJson(response, 404, { error: "artifact_not_found" });
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": artifactContentType(safePath),
+    "content-length": String(info.size),
+    "content-disposition": `attachment; filename="${basename(safePath).replaceAll('"', "")}"`,
+    "cache-control": "no-store",
+  });
+  await new Promise<void>((resolveDone, reject) => {
+    const stream = createReadStream(safePath);
+    stream.once("error", reject);
+    response.once("error", reject);
+    response.once("finish", resolveDone);
+    stream.pipe(response);
+  });
+}
+
+async function sendPcmAsWav(
+  response: ServerResponse,
+  recordingDir: string,
+  pcmArtifactPath: string,
+  sampleRateHz: number,
+): Promise<void> {
+  const safePath = resolve(recordingDir, pcmArtifactPath);
+  const root = `${resolve(recordingDir)}/`;
+  if (!safePath.startsWith(root)) {
+    sendJson(response, 400, { error: "invalid_artifact_path" });
+    return;
+  }
+  const pcm = await readFile(safePath);
+  const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
+  const wav = new WaveFile();
+  wav.fromScratch(1, sampleRateHz, "16", samples);
+  const output = Buffer.from(wav.toBuffer());
+  response.writeHead(200, {
+    "content-type": "audio/wav",
+    "content-length": String(output.byteLength),
+    "content-disposition": `attachment; filename="${basename(pcmArtifactPath).replace(/\.pcm$/, ".wav")}"`,
+    "cache-control": "no-store",
+  });
+  response.end(output);
+}
+
+function artifactContentType(path: string): string {
+  if (path.endsWith(".json")) return "application/json; charset=utf-8";
+  if (path.endsWith(".jsonl")) return "application/x-ndjson; charset=utf-8";
+  if (path.endsWith(".wav")) return "audio/wav";
+  if (path.endsWith(".pcm")) return "application/octet-stream";
+  return "application/octet-stream";
 }
 
 function sendXml(response: ServerResponse, value: string): void {

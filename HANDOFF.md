@@ -235,6 +235,25 @@ Latest bursty live-provider adapter results, using the same live providers and f
 
 This smoke is local/emulated at the carrier websocket boundary but uses live STT/LLM/TTS providers. It proves provider audio, transcript, agent, TTS, carrier playout, marks where applicable, recorder flush, decoded carrier inbound/outbound WAV export, and non-empty local Whisper transcripts for both voice-in and voice-out across each adapter. It does not replace a real carrier/sandbox call.
 
+### Synthetic Carrier-To-Bot Fly Spike
+
+Because no live Twilio/Telnyx/SmartPBX carrier accounts were available, the current production-replication path uses two public hosts:
+
+- `review:telephony` as the bot server.
+- `review:synthetic-carrier` as the carrier host that calls the bot over provider-shaped websockets.
+
+Latest Fly spike, `2026-05-28`, ran two disposable one-machine apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping and destroyed after artifact download:
+
+| Provider | Network | Inbound frames | Outbound frames | Completion evidence | Quality gate |
+|---|---|---:|---:|---|---|
+| Twilio | jittery | 1,263 | 645 | `outboundEndMarks: 1` | Passed |
+| Telnyx | jittery | 1,263 | 455 | `outboundEndMarks: 1` | Passed |
+| SmartPBX | jittery | 1,263 | 508 | `outboundQuietDrains: 1` | Passed |
+
+Bot recorder artifacts were downloaded before teardown to `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-bot-artifacts-2026-05-28T19-28Z/`. Each provider session has `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and listenable `user_audio.wav` / `assistant_audio.wav`. The WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz.
+
+Use `TELEPHONY-VOICE-HANDOFF.md` for the exact local and Fly commands. The synthetic carrier path does not prove carrier account signaling, but it does prove public TLS websocket routing, carrier-shaped audio packet delivery, live Deepgram/Gemini/Cartesia processing, bot recorder output, and provider-shaped assistant audio return across the network.
+
 Start the human review studio:
 
 ```bash

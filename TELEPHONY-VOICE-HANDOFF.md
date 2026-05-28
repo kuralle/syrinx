@@ -222,6 +222,119 @@ Latest public-TLS spike, `2026-05-28`, used app `syrinx-telephony-spike-mcj-2026
 
 The spike exposed two deployment-only issues that are now fixed: multiple provider websocket adapters mounted on one HTTP server must use explicit `upgrade` routing instead of independent `server + path` listeners, and the container must install a single ONNX runtime version with HuggingFace's undeclared `onnxruntime-common` dependency made explicit in `pnpm-workspace.yaml`.
 
+## Synthetic Carrier-To-Bot Spike
+
+When real Twilio, Telnyx, or SmartPBX carrier accounts are unavailable, run two hosts:
+
+- Bot host: `review:telephony`, serving the real university-support agent and recorder.
+- Carrier host: `review:synthetic-carrier`, acting as the public carrier. It fetches the bot's `/telephony/config.json`, opens the provider-shaped websocket, sends the university fixture as PCMU/8 kHz phone media with optional jitter, captures assistant media back from the bot, and writes carrier-boundary WAV evidence.
+
+Local run:
+
+```bash
+SYRINX_TELEPHONY_REVIEW_HOST=127.0.0.1 \
+SYRINX_TELEPHONY_REVIEW_PORT=4185 \
+SYRINX_TELEPHONY_PUBLIC_BASE_URL=http://127.0.0.1:4185 \
+SYRINX_REVIEW_TTS=cartesia \
+pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony
+
+SYRINX_SYNTHETIC_CARRIER_HOST=127.0.0.1 \
+SYRINX_SYNTHETIC_CARRIER_PORT=4191 \
+pnpm --filter @asyncdot-example/02-hello-voice-headless review:synthetic-carrier
+```
+
+Then run each provider shape:
+
+```bash
+curl -sS -X POST http://127.0.0.1:4191/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"twilio","botBaseUrl":"http://127.0.0.1:4185","networkProfile":"jittery"}'
+
+curl -sS -X POST http://127.0.0.1:4191/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"telnyx","botBaseUrl":"http://127.0.0.1:4185","networkProfile":"jittery"}'
+
+curl -sS -X POST http://127.0.0.1:4191/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"smartpbx","botBaseUrl":"http://127.0.0.1:4185","networkProfile":"jittery"}'
+```
+
+Recorder artifacts are available from the bot:
+
+```bash
+curl http://127.0.0.1:4185/telephony/artifacts.json
+curl -o user.wav http://127.0.0.1:4185/telephony/artifacts/<session>/user_audio.wav
+curl -o assistant.wav http://127.0.0.1:4185/telephony/artifacts/<session>/assistant_audio.wav
+curl -o events.jsonl http://127.0.0.1:4185/telephony/artifacts/<session>/events.jsonl
+```
+
+The artifact index includes `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and generated `user_audio.wav` / `assistant_audio.wav` for listening or Whisper transcription. The WAV endpoints are test-server conveniences over recorder PCM; do not expose this artifact API in production.
+
+Disposable Fly two-host run:
+
+```bash
+fly config validate -c fly.bot-telephony-spike.toml
+fly config validate -c fly.synthetic-carrier-spike.toml
+
+fly apps create syrinx-bot-spike-mcj-20260529
+fly apps create syrinx-carrier-spike-mcj-20260529
+
+set -a; source .env; set +a
+fly secrets set -c fly.bot-telephony-spike.toml \
+  DEEPGRAM_API_KEY="$DEEPGRAM_API_KEY" \
+  GOOGLE_GENERATIVE_AI_API_KEY="$GOOGLE_GENERATIVE_AI_API_KEY" \
+  CARTESIA_API_KEY="$CARTESIA_API_KEY" \
+  CARTESIA_VOICE_ID="$CARTESIA_VOICE_ID"
+
+fly deploy -c fly.bot-telephony-spike.toml --ha=false
+fly deploy -c fly.synthetic-carrier-spike.toml --ha=false
+```
+
+Run the synthetic carrier calls:
+
+```bash
+curl -sS --max-time 240 -X POST https://syrinx-carrier-spike-mcj-20260529.fly.dev/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"twilio","networkProfile":"jittery"}'
+
+curl -sS --max-time 240 -X POST https://syrinx-carrier-spike-mcj-20260529.fly.dev/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"telnyx","networkProfile":"jittery"}'
+
+curl -sS --max-time 240 -X POST https://syrinx-carrier-spike-mcj-20260529.fly.dev/calls/university \
+  -H 'content-type: application/json' \
+  --data '{"provider":"smartpbx","networkProfile":"jittery"}'
+```
+
+Download bot artifacts before teardown:
+
+```bash
+OUT=examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-bot-artifacts-$(date -u +%Y-%m-%dT%H-%MZ)
+mkdir -p "$OUT"
+curl -sS https://syrinx-bot-spike-mcj-20260529.fly.dev/telephony/artifacts.json -o "$OUT/artifacts.json"
+jq -r '.artifacts[] | [.path,.url] | @tsv' "$OUT/artifacts.json" | while IFS=$'\t' read -r path url; do
+  mkdir -p "$OUT/$(dirname "$path")"
+  curl -sS "https://syrinx-bot-spike-mcj-20260529.fly.dev${url}" -o "$OUT/$path"
+done
+```
+
+Always destroy both spike apps after downloading artifacts:
+
+```bash
+fly apps destroy syrinx-carrier-spike-mcj-20260529 --yes
+fly apps destroy syrinx-bot-spike-mcj-20260529 --yes
+```
+
+Latest synthetic carrier spike, `2026-05-28`, used two one-machine Fly apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping. Results:
+
+| Provider | Network | Inbound frames | Outbound frames | Completion evidence | Quality gate |
+|---|---|---:|---:|---|---|
+| Twilio | jittery | 1,263 | 645 | `outboundEndMarks: 1` | Passed |
+| Telnyx | jittery | 1,263 | 455 | `outboundEndMarks: 1` | Passed |
+| SmartPBX | jittery | 1,263 | 508 | `outboundQuietDrains: 1` | Passed |
+
+Downloaded bot recorder artifacts are under `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-bot-artifacts-2026-05-28T19-28Z/`. Each provider session contains `events.jsonl`, `manifest.json`, `user_audio.wav`, and `assistant_audio.wav`; all WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz. Both Fly apps were destroyed after the run.
+
 ## Live-Provider Adapter Smoke
 
 Before involving a carrier account, run the local adapter smoke with the live providers:
