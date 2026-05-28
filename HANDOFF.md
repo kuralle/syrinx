@@ -273,6 +273,19 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-carrier-cal
 
 This harness uses Twilio's REST API to create an outbound call to `/twilio/twiml`, polls until terminal call status, writes `test/performance/runs/twilio-carrier-call-*/baseline.json`, and fails unless Twilio returns final status `completed` with non-zero duration. It does not replace recorder/server inspection for websocket media timing; use it with the review server logs and recorder artifacts.
 
+Run a real outbound Telnyx carrier call once Telnyx credentials and phone numbers are available:
+
+```bash
+TELNYX_API_KEY=... \
+TELNYX_CONNECTION_ID=... \
+TELNYX_FROM_NUMBER=+15551234567 \
+TELNYX_TO_NUMBER=+15557654321 \
+SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-carrier-call
+```
+
+This harness uses Telnyx `POST /v2/calls` with provider-native bidirectional RTP streaming fields pointed at `/telnyx`, waits for the configured dwell window, sends the Telnyx hangup command by default, and writes `test/performance/runs/telnyx-carrier-call-*/baseline.json`. It proves Telnyx accepted the real call-control command and streaming contract; use it with review-server logs and recorder artifacts for media timing proof.
+
 Run local verification:
 
 ```bash

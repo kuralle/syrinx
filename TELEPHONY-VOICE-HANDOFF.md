@@ -97,6 +97,31 @@ Use the `telnyx.callFields` object when creating or streaming a Telnyx call:
 
 Set `SYRINX_TELNYX_BIDIRECTIONAL_CODEC=L16` only when the Telnyx call stream is also configured for L16.
 
+To place a real outbound Telnyx carrier call with bidirectional RTP media streaming enabled at dial time:
+
+```bash
+TELNYX_API_KEY=... \
+TELNYX_CONNECTION_ID=... \
+TELNYX_FROM_NUMBER=+15551234567 \
+TELNYX_TO_NUMBER=+15557654321 \
+SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-carrier-call
+```
+
+Optional controls:
+
+```bash
+SYRINX_TELNYX_BIDIRECTIONAL_CODEC=PCMU
+SYRINX_TELNYX_RING_TIMEOUT_SECONDS=20
+SYRINX_TELNYX_TIME_LIMIT_SECONDS=120
+SYRINX_TELNYX_DWELL_MS=45000
+SYRINX_TELNYX_HANGUP_AFTER_DWELL=true
+SYRINX_TELNYX_STREAM_URL=wss://your-public-tls-host.example/telnyx
+SYRINX_TELNYX_WEBHOOK_URL=https://your-public-tls-host.example/telnyx/webhook
+```
+
+The script calls Telnyx `POST /v2/calls` with `stream_url`, `stream_track: both_tracks`, `stream_bidirectional_mode: rtp`, `stream_bidirectional_codec`, `stream_establish_before_call_originate: true`, and `send_silence_when_idle: true`. It writes `test/performance/runs/telnyx-carrier-call-*/baseline.json` and sends a Telnyx hangup command after the dwell window by default. This proves Telnyx accepted a real carrier call command with the intended streaming contract; the review server logs and recorder artifacts still need to prove media websocket timing, transcript, TTS, marks, and interruption behavior.
+
 ## SmartPBX
 
 Configure the SmartPBX AI Provider websocket URL as:
