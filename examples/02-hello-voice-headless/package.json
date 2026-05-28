@@ -12,6 +12,7 @@
     "lint": "eslint src test scripts --ext .ts",
     "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
     "review:telephony": "tsx scripts/serve-telephony-review.ts",
+    "probe:telephony-public": "tsx scripts/probe-public-telephony-websockets.ts",
     "smoke:browser-runtime": "tsx scripts/run-browser-runtime-capture-smoke.ts",
     "smoke:live-recorder-coherence": "tsx scripts/run-live-university-recorder-coherence.ts",
     "smoke:telephony-university-live": "tsx scripts/run-telephony-university-live-smoke.ts",

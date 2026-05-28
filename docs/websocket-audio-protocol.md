@@ -155,6 +155,14 @@ Default path: `/twilio`
 
 Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /twilio/twiml` with bidirectional `<Connect><Stream>` TwiML for this path. Set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...` so generated carrier URLs use `wss://`.
 
+Public routing probe:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
+```
+
+The probe checks the HTTP setup endpoints and opens Twilio, Telnyx, and SmartPBX-shaped websocket sessions with one valid PCMU media frame. It asserts no websocket extension negotiation, so public deployments preserve the no-compression transport invariant.
+
 Twilio remains provider-specific at the adapter boundary:
 
 - Accept JSON text frames only.
