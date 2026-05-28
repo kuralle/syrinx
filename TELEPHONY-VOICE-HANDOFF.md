@@ -25,6 +25,7 @@ The server exposes:
 - `GET /telephony/config.json`
 - `GET /twilio/twiml`
 - `POST /twilio/status`
+- `POST /telnyx/webhook`
 - `WS /twilio`
 - `WS /telnyx`
 - `WS /media-stream`
@@ -91,7 +92,9 @@ Use the `telnyx.callFields` object when creating or streaming a Telnyx call:
   "stream_url": "wss://your-public-tls-host.example/telnyx",
   "stream_track": "both_tracks",
   "stream_bidirectional_mode": "rtp",
-  "stream_bidirectional_codec": "PCMU"
+  "stream_bidirectional_codec": "PCMU",
+  "webhook_url": "https://your-public-tls-host.example/telnyx/webhook",
+  "webhook_url_method": "POST"
 }
 ```
 

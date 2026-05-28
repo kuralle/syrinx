@@ -158,8 +158,28 @@ function handleHttpRequest(args: {
   }
 
   if (url.pathname === "/twilio/status") {
-    console.log(`twilio status ${request.method ?? "GET"} ${url.search}`);
-    sendJson(response, 200, { ok: true });
+    void readRequestBody(request)
+      .then((body) => {
+        console.log(`twilio status ${request.method ?? "GET"} ${url.search} ${body}`);
+        sendJson(response, 200, { ok: true });
+      })
+      .catch((err: unknown) => {
+        console.error(`twilio status read failed: ${err instanceof Error ? err.message : String(err)}`);
+        sendJson(response, 400, { error: "invalid_status_body" });
+      });
+    return;
+  }
+
+  if (url.pathname === "/telnyx/webhook") {
+    void readRequestBody(request)
+      .then((body) => {
+        console.log(`telnyx webhook ${request.method ?? "GET"} ${url.search} ${body}`);
+        sendJson(response, 200, { ok: true });
+      })
+      .catch((err: unknown) => {
+        console.error(`telnyx webhook read failed: ${err instanceof Error ? err.message : String(err)}`);
+        sendJson(response, 400, { error: "invalid_webhook_body" });
+      });
     return;
   }
 
@@ -187,11 +207,14 @@ function carrierConfig(publicHttp: string, publicWs: string): Record<string, unk
     },
     telnyx: {
       websocketUrl: `${publicWs}/telnyx`,
+      webhookUrl: `${publicHttp}/telnyx/webhook`,
       callFields: {
         stream_url: `${publicWs}/telnyx`,
         stream_track: "both_tracks",
         stream_bidirectional_mode: "rtp",
         stream_bidirectional_codec: readTelnyxCodec(),
+        webhook_url: `${publicHttp}/telnyx/webhook`,
+        webhook_url_method: "POST",
       },
     },
     smartpbx: {
@@ -315,6 +338,18 @@ function sendXml(response: ServerResponse, value: string): void {
     "cache-control": "no-store",
   });
   response.end(`${value}\n`);
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > 256 * 1024) throw new Error("request body exceeded 256 KiB");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function xmlEscape(value: string): string {

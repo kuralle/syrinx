@@ -250,7 +250,7 @@ SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
 pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony
 ```
 
-The server exposes one live university-support engine behind `WS /twilio`, `WS /telnyx`, and `WS /media-stream`, plus `GET /twilio/twiml` and `GET /telephony/config.json` for carrier setup. Local preflight on `127.0.0.1:4181` passed for `/healthz`, `/telephony/config.json`, and `/twilio/twiml`. Live-provider telephony adapter smokes now pass for Twilio, Telnyx, and SmartPBX websocket shapes, but real carrier execution still requires a public TLS endpoint and a carrier/sandbox call. Human carrier test details are documented separately in `TELEPHONY-VOICE-HANDOFF.md`.
+The server exposes one live university-support engine behind `WS /twilio`, `WS /telnyx`, and `WS /media-stream`, plus `GET /twilio/twiml`, `POST /twilio/status`, `POST /telnyx/webhook`, and `GET /telephony/config.json` for carrier setup. Local preflight on `127.0.0.1:4181` passed for `/healthz`, `/telephony/config.json`, and `/twilio/twiml`. Live-provider telephony adapter smokes now pass for Twilio, Telnyx, and SmartPBX websocket shapes, but real carrier execution still requires a public TLS endpoint and a carrier/sandbox call. Human carrier test details are documented separately in `TELEPHONY-VOICE-HANDOFF.md`.
 
 Run the public TLS websocket probe before wiring a carrier dashboard:
 
