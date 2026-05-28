@@ -82,6 +82,7 @@ interface TelnyxConnectionState {
   readonly outboundSampleRateHz: number;
   started: boolean;
   stopped: boolean;
+  lastInboundMediaChunk: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
   pendingEndMarkName: string;
@@ -194,6 +195,7 @@ async function handleTelnyxConnection(args: {
     outboundSampleRateHz: args.bidirectionalCodec === "L16" ? 16000 : 8000,
     started: false,
     stopped: false,
+    lastInboundMediaChunk: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
     pendingEndMarkName: "",
@@ -463,6 +465,7 @@ function handleTelnyxMessage(args: {
     if (!state.started || !state.contextId) throw new Error("Telnyx media event received before a valid start event");
     const payload = message.media?.payload;
     if (!payload) throw new Error("Telnyx media event is missing media.payload");
+    rememberTelnyxMediaChunk(session, state, message.media?.chunk);
     const encoded = decodeStrictBase64(payload, "media.payload");
     const pcm = decodeInboundPayload(encoded, state.inboundCodec);
     const resampled = resamplePcm16(pcm, state.inboundSampleRateHz, inputSampleRateHz);
@@ -499,6 +502,29 @@ function handleTelnyxMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Telnyx Media Streaming event: ${String(event)}`);
+}
+
+function rememberTelnyxMediaChunk(
+  session: VoiceAgentSession,
+  state: TelnyxConnectionState,
+  chunkValue: string | undefined,
+): void {
+  const chunk = optionalPositiveIntegerString(chunkValue, "Telnyx media.chunk");
+  if (chunk === undefined) return;
+  const previous = state.lastInboundMediaChunk;
+  if (previous !== null && chunk <= previous) {
+    throw new Error(`Telnyx media.chunk must increase monotonically: ${String(previous)} -> ${String(chunk)}`);
+  }
+  if (previous !== null && chunk > previous + 1) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.media_chunk_gap",
+      value: JSON.stringify({ expected: previous + 1, actual: chunk, missed: chunk - previous - 1 }),
+    });
+  }
+  state.lastInboundMediaChunk = chunk;
 }
 
 function validateTelnyxStart(start: TelnyxStartPayload): { readonly codec: TelnyxCodec; readonly sampleRateHz: number } {
@@ -596,6 +622,14 @@ function positiveInteger(value: unknown): number | null {
 function nonNegativeInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
   return value;
+}
+
+function optionalPositiveIntegerString(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a positive integer string`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer string`);
+  return parsed;
 }
 
 function rawDataToText(data: RawData): string {
