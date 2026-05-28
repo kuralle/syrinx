@@ -181,7 +181,7 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public h
 pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
-The probe validates `/healthz`, `/telephony/config.json`, `/twilio/twiml`, opens Twilio/Telnyx/SmartPBX-shaped websocket sessions, sends one valid PCMU media frame plus the provider's terminal event, and fails if websocket compression is negotiated. Passing this probe proves public routing and websocket upgrade shape, not a real carrier call.
+The probe validates `/healthz`, `/telephony/config.json`, `/twilio/twiml`, `POST /twilio/status`, `POST /telnyx/webhook`, opens Twilio/Telnyx/SmartPBX-shaped websocket sessions, sends one valid PCMU media frame plus the provider's terminal event, and fails if websocket compression is negotiated. Passing this probe proves public routing, callback routing, and websocket upgrade shape, not a real carrier call.
 
 ## Disposable Fly Public-TLS Spike
 

@@ -258,7 +258,7 @@ Run the public TLS websocket probe before wiring a carrier dashboard:
 pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
-The same probe can target local review servers for command verification. Latest local verification against `http://127.0.0.1:4182` passed `/healthz`, `/telephony/config.json`, `/twilio/twiml`, Twilio/Telnyx/SmartPBX provider-shaped websocket sessions, and asserted no websocket compression was negotiated. This is still a routing/upgrade preflight, not a substitute for real carrier/sandbox media timing.
+The same probe can target local review servers for command verification. Latest local verification against `http://127.0.0.1:4184` passed `/healthz`, `/telephony/config.json`, `/twilio/twiml`, `POST /twilio/status`, `POST /telnyx/webhook`, Twilio/Telnyx/SmartPBX provider-shaped websocket sessions, and asserted no websocket compression was negotiated. This is still a routing/upgrade preflight, not a substitute for real carrier/sandbox media timing.
 
 Run a real outbound Twilio carrier call once Twilio credentials and phone numbers are available:
 

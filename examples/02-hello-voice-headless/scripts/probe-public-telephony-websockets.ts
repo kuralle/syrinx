@@ -22,8 +22,24 @@ async function main(): Promise<void> {
   const health = await fetchJson(`${httpBaseUrl}/healthz`);
   const config = await fetchJson(`${httpBaseUrl}/telephony/config.json`);
   const twiml = await fetchText(`${httpBaseUrl}/twilio/twiml`);
+  const [twilioStatus, telnyxWebhook] = await Promise.all([
+    postForm(`${httpBaseUrl}/twilio/status`, new URLSearchParams({
+      CallSid: "CA-public-probe",
+      CallStatus: "initiated",
+    })),
+    postJson(`${httpBaseUrl}/telnyx/webhook`, {
+      data: {
+        event_type: "call.initiated",
+        payload: {
+          call_control_id: "telnyx-public-probe-call",
+        },
+      },
+    }),
+  ]);
   assertHealth(health);
   assertCarrierConfig(config, wsBaseUrl);
+  assertOkResponse(twilioStatus, "/twilio/status");
+  assertOkResponse(telnyxWebhook, "/telnyx/webhook");
   if (!twiml.includes("<Connect>") || !twiml.includes("<Stream")) {
     throw new Error("/twilio/twiml did not return bidirectional Connect Stream TwiML");
   }
@@ -49,6 +65,10 @@ async function main(): Promise<void> {
     twiml: {
       ok: true,
       hasConnectStream: true,
+    },
+    callbacks: {
+      twilioStatus,
+      telnyxWebhook,
     },
     websocketProbes: results,
     qualityGate: {
@@ -183,6 +203,26 @@ async function fetchText(url: string): Promise<string> {
   return response.text();
 }
 
+async function postForm(url: string, body: URLSearchParams): Promise<unknown> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!response.ok) throw new Error(`${url} returned HTTP ${String(response.status)}`);
+  return response.json();
+}
+
+async function postJson(url: string, body: unknown): Promise<unknown> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`${url} returned HTTP ${String(response.status)}`);
+  return response.json();
+}
+
 function assertHealth(value: unknown): void {
   if (!isRecord(value) || value["ok"] !== true) {
     throw new Error("/healthz did not return ok:true");
@@ -194,6 +234,13 @@ function assertCarrierConfig(value: unknown, wsBaseUrl: string): void {
   assertNestedUrl(value, ["twilio", "websocketUrl"], `${wsBaseUrl}/twilio`);
   assertNestedUrl(value, ["telnyx", "websocketUrl"], `${wsBaseUrl}/telnyx`);
   assertNestedUrl(value, ["smartpbx", "websocketUrl"], `${wsBaseUrl}/media-stream`);
+  assertNestedUrl(value, ["telnyx", "webhookUrl"], `${wsBaseUrl.replace(/^wss:/, "https:").replace(/^ws:/, "http:")}/telnyx/webhook`);
+}
+
+function assertOkResponse(value: unknown, label: string): void {
+  if (!isRecord(value) || value["ok"] !== true) {
+    throw new Error(`${label} did not return ok:true`);
+  }
 }
 
 function assertNestedUrl(value: Record<string, unknown>, path: readonly string[], expected: string): void {
