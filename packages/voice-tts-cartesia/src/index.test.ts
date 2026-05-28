@@ -191,6 +191,63 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("drops late Cartesia audio and done frames for cancelled contexts", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.cancel === true) {
+          socket.send(JSON.stringify({
+            context_id: msg.context_id,
+            data: Buffer.from([9, 8, 7, 6]).toString("base64"),
+          }));
+          socket.send(JSON.stringify({
+            context_id: msg.context_id,
+            done: true,
+          }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const ends: TextToSpeechEndPacket[] = [];
+
+    bus.on("tts.audio", (pkt) => {
+      audio.push(pkt as TextToSpeechAudioPacket);
+    });
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-cancelled",
+      timestampMs: Date.now(),
+      text: "This generation will be cancelled.",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "turn-cancelled",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(audio).toEqual([]);
+    expect(ends).toEqual([]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits a typed TTS error and closes the context when Cartesia returns an error frame", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {

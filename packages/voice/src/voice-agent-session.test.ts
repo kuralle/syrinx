@@ -720,4 +720,83 @@ describe("VoiceAgentSession", () => {
 
     await closeSession(session);
   });
+
+  it("does not reopen TTS from late LLM or TTS packets after barge-in", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const ttsText: TextToSpeechTextPacket[] = [];
+    const ttsDone: TextToSpeechDonePacket[] = [];
+    const recorded: RecordAssistantAudioPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+    session.bus.on("tts.done", (pkt) => {
+      ttsDone.push(pkt as TextToSpeechDonePacket);
+    });
+    session.bus.on("record.assistant_audio", (pkt) => {
+      recorded.push(pkt as RecordAssistantAudioPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string };
+      metrics.push(metric.name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge-in",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      text: " This late text must not be spoken.",
+    } satisfies LlmDeltaPacket);
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      text: "This late done must not flush TTS.",
+    } satisfies LlmResponseDonePacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([5, 6, 7, 8]),
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(ttsText).toEqual([]);
+    expect(ttsDone).toEqual([]);
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        contextId: "assistant-turn",
+        truncate: false,
+        audio: new Uint8Array([1, 2, 3, 4]),
+      }),
+      expect.objectContaining({
+        contextId: "assistant-turn",
+        truncate: true,
+        audio: new Uint8Array(0),
+      }),
+    ]);
+    expect(metrics).toContain("llm.delta_ignored_after_interrupt");
+    expect(metrics).toContain("llm.done_ignored_after_interrupt");
+    expect(metrics).toContain("tts.audio_ignored_after_interrupt");
+
+    await closeSession(session);
+  });
 });

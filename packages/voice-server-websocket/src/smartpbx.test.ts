@@ -621,6 +621,24 @@ describe("createSmartPbxMediaStreamServer", () => {
       expect.objectContaining({ name: "smartpbx.interrupt_no_playback_clear" }),
     ]);
 
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "smartpbx-call-test",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(320)),
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "smartpbx-call-test",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(sent.filter((message) => message.event === "media")).toHaveLength(1);
+    expect(metrics).toEqual([
+      expect.objectContaining({ name: "smartpbx.interrupt_no_playback_clear" }),
+    ]);
+
     client.close();
     await server.close();
   });

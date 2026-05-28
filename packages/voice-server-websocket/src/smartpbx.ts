@@ -325,11 +325,13 @@ function wireSmartPbxSessionEvents(args: {
     state.opusEncodeRemainder = new Int16Array(0);
     recordDiscardedPlayout(discardedMs, "send_buffer");
   });
+  const interruptedContextIds = new Set<string>();
 
   disposers.push(
     () => playout.close(),
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
+      interruptedContextIds.add(interrupt.contextId);
       playout.clear();
       state.opusEncodeRemainder = new Int16Array(0);
       session.bus.push(Route.Background, {
@@ -342,6 +344,7 @@ function wireSmartPbxSessionEvents(args: {
     }),
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
+      if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
       const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, outputSampleRateHz, state, outboundFrameDurationMs)
         .map((frame) => ({
@@ -361,6 +364,7 @@ function wireSmartPbxSessionEvents(args: {
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
+      if (interruptedContextIds.has(end.contextId)) return;
       if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
       const frames: PacedPlayoutFrame[] = encodePendingOpusFrame(state, outboundFrameDurationMs)
         .map((frame) => ({

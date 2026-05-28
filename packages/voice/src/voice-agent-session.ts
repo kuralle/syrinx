@@ -137,6 +137,7 @@ export class VoiceAgentSession {
   private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSttContextId = "";
   private activeTtsContextIds = new Set<string>();
+  private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
 
   constructor(config: VoiceAgentSessionConfig) {
@@ -238,6 +239,7 @@ export class VoiceAgentSession {
     this.idleTimeout.dispose();
     this.clearSttForceFinalizeTimer();
     this.ttsTextBuffers.clear();
+    this.interruptedGenerationContextIds.clear();
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
@@ -541,6 +543,17 @@ export class VoiceAgentSession {
   }
 
   private handleLlmDelta(pkt: LlmDeltaPacket): void {
+    if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        name: "llm.delta_ignored_after_interrupt",
+        value: String(pkt.text.length),
+      });
+      return;
+    }
+
     this.emit("agent_text_delta", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -557,6 +570,18 @@ export class VoiceAgentSession {
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
+    if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
+      this.ttsTextBuffers.delete(pkt.contextId);
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        name: "llm.done_ignored_after_interrupt",
+        value: "1",
+      });
+      return;
+    }
+
     const spokenText = this.flushTtsText(pkt.contextId);
     this.emit("agent_finished", {
       tsMs: pkt.timestampMs,
@@ -667,6 +692,17 @@ export class VoiceAgentSession {
   }
 
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
+    if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        name: "tts.audio_ignored_after_interrupt",
+        value: String(pkt.audio.byteLength),
+      });
+      return;
+    }
+
     this.activeTtsContextIds.add(pkt.contextId);
 
     // Extend idle timeout by audio duration to prevent timeout during playback
@@ -703,7 +739,9 @@ export class VoiceAgentSession {
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
+    this.interruptedGenerationContextIds.add(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
+    this.activeTtsContextIds.delete(pkt.contextId);
     this.debugPush({
       component: "turn",
       type: "interrupt_detected",
