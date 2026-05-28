@@ -12,6 +12,8 @@
     "lint": "eslint src test scripts --ext .ts",
     "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
     "review:telephony": "tsx scripts/serve-telephony-review.ts",
+    "review:synthetic-carrier": "tsx scripts/serve-synthetic-carrier.ts",
+    "telephony:spike": "tsx scripts/start-telephony-spike.ts",
     "probe:telephony-public": "tsx scripts/probe-public-telephony-websockets.ts",
     "smoke:telnyx-carrier-call": "tsx scripts/run-telnyx-carrier-call-smoke.ts",
     "smoke:twilio-carrier-call": "tsx scripts/run-twilio-carrier-call-smoke.ts",

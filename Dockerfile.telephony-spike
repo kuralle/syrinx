@@ -13,7 +13,9 @@ RUN pnpm install --frozen-lockfile
 ENV NODE_ENV=production
 ENV SYRINX_TELEPHONY_REVIEW_HOST=0.0.0.0
 ENV SYRINX_TELEPHONY_REVIEW_PORT=4180
+ENV SYRINX_SYNTHETIC_CARRIER_HOST=0.0.0.0
+ENV SYRINX_SYNTHETIC_CARRIER_PORT=4180
 
 EXPOSE 4180
 
-CMD ["pnpm", "--filter", "@asyncdot-example/02-hello-voice-headless", "review:telephony"]
+CMD ["pnpm", "--filter", "@asyncdot-example/02-hello-voice-headless", "telephony:spike"]

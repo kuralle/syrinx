@@ -185,13 +185,24 @@ export interface PcmWav {
 
 export async function ensureGeminiUniversityFixtures(): Promise<void> {
   ensureRepoRootDotenv();
-  coerceGoogleGenAiKey();
-  const apiKey = process.env["GOOGLE_GENERATIVE_AI_API_KEY"]?.trim();
-  if (!apiKey) throw new Error("GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY is required");
+  const missingFixtures = GEMINI_UNIVERSITY_FIXTURES.filter((fixture) => !existsSync(fixture.path));
+  let apiKey = "";
+  if (missingFixtures.length > 0) {
+    coerceGoogleGenAiKey();
+    apiKey = process.env["GOOGLE_GENERATIVE_AI_API_KEY"]?.trim() ?? "";
+    if (!apiKey) {
+      throw new Error(
+        `GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY is required to synthesize missing fixtures: ${
+          missingFixtures.map((fixture) => fixture.id).join(", ")
+        }`,
+      );
+    }
+  }
 
   await mkdir(GEMINI_UNIVERSITY_FIXTURE_DIR, { recursive: true });
+  const existingManifest = readExistingFixtureManifest();
   const manifest = {
-    generatedAt: new Date().toISOString(),
+    generatedAt: existingManifest?.generatedAt ?? new Date().toISOString(),
     provider: "gemini-tts",
     model: geminiTtsModel(),
     voiceName: geminiTtsVoiceName(),
@@ -219,6 +230,16 @@ export async function ensureGeminiUniversityFixtures(): Promise<void> {
   }
 
   await writeFile(GEMINI_UNIVERSITY_MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function readExistingFixtureManifest(): { generatedAt?: string } | null {
+  if (!existsSync(GEMINI_UNIVERSITY_MANIFEST_PATH)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(GEMINI_UNIVERSITY_MANIFEST_PATH, "utf8")) as { generatedAt?: unknown };
+    return typeof parsed.generatedAt === "string" ? { generatedAt: parsed.generatedAt } : null;
+  } catch {
+    return null;
+  }
 }
 
 export function readPcm16Wav(path: string): PcmWav {
