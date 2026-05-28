@@ -108,6 +108,98 @@ describe("createTelnyxMediaStreamServer", () => {
     await server.close();
   });
 
+  it("records Telnyx media chunk gaps without dropping monotonic media", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "1", timestamp: "20", payload },
+    }));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "4", timestamp: "80", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received).toHaveLength(2);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "telnyx-call-control-test",
+      name: "telnyx.media_chunk_gap",
+      value: JSON.stringify({ expected: 2, actual: 4, missed: 2 }),
+    }));
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects duplicate Telnyx media chunks before forwarding duplicate audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "error");
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "2", timestamp: "40", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "2", timestamp: "40", payload },
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "error",
+      payload: {
+        title: "syrinx_transport_error",
+        detail: "Telnyx media.chunk must increase monotonically: 2 -> 2",
+      },
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
   it("buffers Telnyx start and media sent before session startup completes", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];

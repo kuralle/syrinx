@@ -170,6 +170,7 @@ Twilio remains provider-specific at the adapter boundary:
 - Accept JSON text frames only.
 - Validate `start.mediaFormat` as PCMU, 8 kHz, mono.
 - Decode inbound `media.payload` from strict base64 PCMU to PCM16.
+- Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `twilio.media_chunk_gap` metrics with expected, actual, and missed frame counts.
 - Resample inbound audio from 8 kHz to the engine input sample rate.
 - Resample assistant PCM16 to 8 kHz, encode PCMU, and send paced 20 ms Twilio `media` frames.
 - Send Twilio `mark` after paced outbound audio batches drain and record carrier mark acknowledgements.
@@ -196,6 +197,7 @@ Telnyx remains provider-specific at the adapter boundary:
 - Accept JSON text frames only.
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
+- Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `telnyx.media_chunk_gap` metrics with expected, actual, and missed frame counts.
 - Resample inbound audio into the engine input sample rate.
 - Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default or `L16`), then resample and encode assistant PCM16 accordingly for paced outbound `media` frames.
 - Send Telnyx `mark` after paced outbound audio batches drain and record carrier mark acknowledgements.
@@ -236,6 +238,8 @@ SmartPBX remains provider-specific at the adapter boundary:
 - Treat `hangup`, `stop`, abrupt websocket disconnect, queued-output overflow, and outbound send-buffer refusal as terminal discard boundaries: late inbound `media` is ignored, locally queued playout is cleared, recorder output is truncated, and no queued or newly generated outbound `media` is emitted after teardown. Discarded playout duration is exposed as `smartpbx.stop_playout_cleared_ms`, `smartpbx.disconnect_playout_cleared_ms`, `smartpbx.overflow_playout_cleared_ms`, or `smartpbx.send_buffer_playout_cleared_ms`.
 
 The supplied SmartPBX AI Provider protocol document does not define outbound playback `mark` or `clear` events. The adapter therefore does not issue an undocumented clear command on interruption; the engine and recorder still observe the interruption and the local adapter drops unsent frames.
+
+The supplied SmartPBX contract used by this adapter also does not define inbound media chunk sequence fields. SmartPBX continuity evidence is therefore currently based on local emulator timing (`maxInboundMediaGap`), decoded byte/duration accounting, recorder artifacts, and terminal playout drain metrics rather than invented provider sequence validation.
 
 SmartPBX adapter defaults:
 

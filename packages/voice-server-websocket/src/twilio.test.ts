@@ -126,6 +126,101 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("records Twilio media chunk gaps without dropping monotonic media", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "twilio-gap-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify(twilioStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "1", timestamp: "20", payload },
+    }));
+    client.send(JSON.stringify({
+      event: "media",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "4", timestamp: "80", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received).toHaveLength(2);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "twilio-gap-test",
+      name: "twilio.media_chunk_gap",
+      value: JSON.stringify({ expected: 2, actual: 4, missed: 2 }),
+    }));
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects duplicate Twilio media chunks before forwarding duplicate audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "twilio-duplicate-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify(twilioStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "2", timestamp: "40", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(JSON.stringify({
+      event: "media",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "2", timestamp: "40", payload },
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "syrinx_error",
+      error: {
+        component: "transport",
+        category: "invalid_input",
+        message: "Twilio media.chunk must increase monotonically: 2 -> 2",
+      },
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
   it("buffers Twilio start and media sent before session startup completes", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];

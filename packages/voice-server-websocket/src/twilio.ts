@@ -68,6 +68,7 @@ interface TwilioConnectionState {
   contextId: string;
   started: boolean;
   stopped: boolean;
+  lastInboundMediaChunk: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
   pendingEndMarkName: string;
@@ -196,6 +197,7 @@ async function handleTwilioConnection(args: {
     contextId: "",
     started: false,
     stopped: false,
+    lastInboundMediaChunk: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
     pendingEndMarkName: "",
@@ -493,6 +495,7 @@ function handleTwilioMessage(args: {
     }
     const payload = message.media?.payload;
     if (!payload) throw new Error("Twilio media event is missing media.payload");
+    rememberTwilioMediaChunk(session, state, message.media?.chunk);
     const ulaw = decodeStrictBase64(payload, "media.payload");
     const pcm8k = decodeMuLawToPcm16(ulaw);
     const pcm16k = resamplePcm16(pcm8k, twilioSampleRateHz, inputSampleRateHz);
@@ -529,6 +532,29 @@ function handleTwilioMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
+}
+
+function rememberTwilioMediaChunk(
+  session: VoiceAgentSession,
+  state: TwilioConnectionState,
+  chunkValue: string | undefined,
+): void {
+  const chunk = optionalPositiveIntegerString(chunkValue, "Twilio media.chunk");
+  if (chunk === undefined) return;
+  const previous = state.lastInboundMediaChunk;
+  if (previous !== null && chunk <= previous) {
+    throw new Error(`Twilio media.chunk must increase monotonically: ${String(previous)} -> ${String(chunk)}`);
+  }
+  if (previous !== null && chunk > previous + 1) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "twilio.media_chunk_gap",
+      value: JSON.stringify({ expected: previous + 1, actual: chunk, missed: chunk - previous - 1 }),
+    });
+  }
+  state.lastInboundMediaChunk = chunk;
 }
 
 function validateTwilioStart(start: TwilioStartPayload, expectedSampleRateHz: number): void {
@@ -660,6 +686,14 @@ function positiveInteger(value: unknown): number | null {
 function nonNegativeInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
   return value;
+}
+
+function optionalPositiveIntegerString(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a positive integer string`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer string`);
+  return parsed;
 }
 
 function rawDataToText(data: RawData): string {
