@@ -5,13 +5,24 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import {
   Route,
+  SYRINX_AUDIO_ENVELOPE_NAME,
+  decodeSyrinxAudioEnvelope,
+  encodeSyrinxAudioEnvelope,
+  hasSyrinxAudioEnvelope,
   type InterruptTtsPacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type UserAudioReceivedPacket,
   type UserTextReceivedPacket,
   type VoiceAgentSession,
+  type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
+import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
+
+export * from "./twilio.js";
+export * from "./telnyx.js";
+export * from "./smartpbx.js";
 
 export interface VoiceWebSocketServerOptions {
   readonly server?: HttpServer;
@@ -19,7 +30,20 @@ export interface VoiceWebSocketServerOptions {
   readonly host?: string;
   readonly path?: string;
   readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
+  readonly sessionId?: (request: IncomingMessage) => string;
   readonly contextId?: () => string;
+  readonly inputSampleRateHz?: number;
+  readonly outputSampleRateHz?: number;
+  readonly heartbeatIntervalMs?: number;
+  readonly maxBufferedAmountBytes?: number;
+  readonly maxInboundMessageBytes?: number;
+  readonly resumeWindowMs?: number;
+  /**
+   * Assistant audio binary frames are wrapped in the Syrinx binary audio
+   * envelope by default. Set false only for raw-PCM websocket clients.
+   * Inbound binary frames may use the envelope regardless.
+   */
+  readonly binaryAudioEnvelope?: boolean;
 }
 
 export interface VoiceWebSocketServer {
@@ -31,28 +55,71 @@ export interface VoiceWebSocketServer {
 
 type ClientMessage =
   | { readonly type: "text"; readonly text: string; readonly contextId?: string }
-  | { readonly type: "audio"; readonly audio: string; readonly contextId?: string }
+  | {
+      readonly type: "audio";
+      readonly audio: string;
+      readonly contextId?: string;
+      readonly sampleRateHz?: number;
+      readonly sequence?: number;
+    }
   | { readonly type: "ping" };
+
+interface ManagedSession {
+  readonly id: string;
+  readonly session: VoiceAgentSession;
+  closeTimer: ReturnType<typeof setTimeout> | null;
+  connectionCount: number;
+}
+
+interface ManagedSessionLease {
+  readonly managed: ManagedSession;
+  readonly resumed: boolean;
+}
+
+interface PendingClientMessage {
+  readonly data: RawData;
+  readonly isBinary: boolean;
+  readonly byteLength: number;
+}
+
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_RESUME_WINDOW_MS = 15_000;
 
 export async function createVoiceWebSocketServer(
   options: VoiceWebSocketServerOptions,
 ): Promise<VoiceWebSocketServer> {
   const ownsHttpServer = !options.server;
   const httpServer = options.server ?? createServer();
-  const wsServer = new WebSocketServer({
-    server: httpServer,
-    path: options.path ?? "/ws",
-  });
-  const sessions = new Set<VoiceAgentSession>();
+  const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws");
+  const wsServer = routedWebSocket.wsServer;
+  const sessions = new Map<string, ManagedSession>();
+  const sessionId = options.sessionId ?? defaultSessionId;
   const contextId = options.contextId ?? defaultContextId;
+  const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
+  const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
+  const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
+  const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
+  const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
+  const binaryAudioEnvelope = options.binaryAudioEnvelope ?? true;
 
   wsServer.on("connection", (socket, request) => {
     void handleConnection({
       socket,
       request,
       createSession: options.createSession,
+      sessionId,
       contextId,
       sessions,
+      inputSampleRateHz,
+      outputSampleRateHz,
+      heartbeatIntervalMs,
+      maxBufferedAmountBytes,
+      maxInboundMessageBytes,
+      resumeWindowMs,
+      binaryAudioEnvelope,
     });
   });
 
@@ -74,12 +141,15 @@ export async function createVoiceWebSocketServer(
       for (const client of wsServer.clients) {
         client.terminate();
       }
-      for (const session of sessions) {
-        await session.close().catch(() => undefined);
+      for (const managed of sessions.values()) {
+        if (managed.closeTimer) clearTimeout(managed.closeTimer);
+        await managed.session.close().catch(() => undefined);
       }
+      sessions.clear();
       await new Promise<void>((resolveClose) => {
         wsServer.close(() => resolveClose());
       });
+      routedWebSocket.detach();
       if (ownsHttpServer || typeof options.port === "number") {
         await new Promise<void>((resolveClose) => {
           httpServer.close(() => resolveClose());
@@ -93,109 +163,305 @@ async function handleConnection(args: {
   readonly socket: WebSocket;
   readonly request: IncomingMessage;
   readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
+  readonly sessionId: (request: IncomingMessage) => string;
   readonly contextId: () => string;
-  readonly sessions: Set<VoiceAgentSession>;
+  readonly sessions: Map<string, ManagedSession>;
+  readonly inputSampleRateHz: number;
+  readonly outputSampleRateHz: number;
+  readonly heartbeatIntervalMs: number;
+  readonly maxBufferedAmountBytes: number;
+  readonly maxInboundMessageBytes: number;
+  readonly resumeWindowMs: number;
+  readonly binaryAudioEnvelope: boolean;
 }): Promise<void> {
-  const { socket, request, createSession, contextId, sessions } = args;
-  let session: VoiceAgentSession | null = null;
+  const {
+    socket,
+    request,
+    createSession,
+    sessionId,
+    contextId,
+    sessions,
+    inputSampleRateHz,
+    outputSampleRateHz,
+    heartbeatIntervalMs,
+    maxBufferedAmountBytes,
+    maxInboundMessageBytes,
+    resumeWindowMs,
+    binaryAudioEnvelope,
+  } = args;
+  let managed: ManagedSession | null = null;
   let currentContextId = contextId();
   const disposers: Array<() => void> = [];
+  const pendingMessages: PendingClientMessage[] = [];
+  let pendingMessageBytes = 0;
+  let ready = false;
+  let socketClosed = false;
 
-  try {
-    session = await createSession(request);
-    sessions.add(session);
-    wireSessionEvents(session, socket, disposers);
-    await session.start();
-    sendJson(socket, { type: "ready", sessionId: currentContextId });
-  } catch (err) {
-    sendJson(socket, {
-      type: "error",
-      component: "session",
-      category: "initialization",
-      message: err instanceof Error ? err.message : String(err),
-    });
-    socket.close(1011, "session initialization failed");
-    return;
-  }
-
-  socket.on("message", (data, isBinary) => {
-    if (!session) return;
+  const handleIncomingMessage = (data: RawData, isBinary: boolean): void => {
     try {
-      currentContextId = handleClientMessage(session, data, isBinary, currentContextId, contextId);
+      const byteLength = rawDataByteLength(data);
+      if (byteLength > maxInboundMessageBytes) {
+        sendJson(socket, {
+          type: "error",
+          component: "transport",
+          category: "invalid_input",
+          message: `Websocket message exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)})`,
+        }, maxBufferedAmountBytes);
+        socket.close(1009, "websocket message too large");
+        return;
+      }
+      if (!ready) {
+        pendingMessageBytes += byteLength;
+        if (pendingMessageBytes > maxInboundMessageBytes) {
+          sendJson(socket, {
+            type: "error",
+            component: "transport",
+            category: "invalid_input",
+            message: `Pending websocket input exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)}) before session ready`,
+          }, maxBufferedAmountBytes);
+          socket.close(1009, "websocket pending input too large");
+          return;
+        }
+        pendingMessages.push({
+          data: cloneRawData(data),
+          isBinary,
+          byteLength,
+        });
+        return;
+      }
+      processClientMessage(data, isBinary);
     } catch (err) {
       sendJson(socket, {
         type: "error",
         component: "transport",
         category: "invalid_input",
         message: err instanceof Error ? err.message : String(err),
-      });
+      }, maxBufferedAmountBytes);
     }
-  });
+  };
+
+  const processClientMessage = (data: RawData, isBinary: boolean): void => {
+    if (!managed) return;
+    currentContextId = handleClientMessage(
+      managed.session,
+      data,
+      isBinary,
+      currentContextId,
+      contextId,
+      inputSampleRateHz,
+    );
+  };
+
+  socket.on("message", handleIncomingMessage);
 
   socket.on("close", () => {
+    socketClosed = true;
     for (const dispose of disposers.splice(0)) {
       dispose();
     }
-    if (session) {
-      sessions.delete(session);
-      void session.close().catch(() => undefined);
+    if (managed) {
+      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
+      scheduleManagedSessionClose(managed, sessions, resumeWindowMs);
     }
   });
+
+  try {
+    const lease = await getOrCreateManagedSession({
+      request,
+      createSession,
+      sessionId,
+      sessions,
+    });
+    managed = lease.managed;
+    managed.connectionCount += 1;
+    if (socketClosed) {
+      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
+      scheduleManagedSessionClose(managed, sessions, resumeWindowMs);
+      return;
+    }
+    startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers);
+    wireSessionEvents(managed.session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, maxBufferedAmountBytes);
+    sendJson(socket, {
+      type: "ready",
+      sessionId: managed.id,
+      turnId: currentContextId,
+      resumed: lease.resumed,
+      resumeWindowMs,
+      audio: {
+        inputSampleRateHz,
+        outputSampleRateHz,
+        encoding: "pcm_s16le",
+        channels: 1,
+        binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
+        maxInboundMessageBytes,
+      },
+    }, maxBufferedAmountBytes);
+    ready = true;
+    for (const pending of pendingMessages.splice(0)) {
+      pendingMessageBytes -= pending.byteLength;
+      try {
+        processClientMessage(pending.data, pending.isBinary);
+      } catch (err) {
+        sendJson(socket, {
+          type: "error",
+          component: "transport",
+          category: "invalid_input",
+          message: err instanceof Error ? err.message : String(err),
+        }, maxBufferedAmountBytes);
+      }
+    }
+    pendingMessageBytes = 0;
+  } catch (err) {
+    sendJson(socket, {
+      type: "error",
+      component: "session",
+      category: "initialization",
+      message: err instanceof Error ? err.message : String(err),
+    }, maxBufferedAmountBytes);
+    socket.close(1011, "session initialization failed");
+    return;
+  }
+}
+
+async function getOrCreateManagedSession(args: {
+  readonly request: IncomingMessage;
+  readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
+  readonly sessionId: (request: IncomingMessage) => string;
+  readonly sessions: Map<string, ManagedSession>;
+}): Promise<ManagedSessionLease> {
+  const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(args.request) ?? args.sessionId(args.request));
+  const existing = args.sessions.get(requestedSessionId);
+  if (existing) {
+    const resumed = existing.connectionCount > 0 || existing.closeTimer !== null;
+    if (existing.closeTimer) {
+      clearTimeout(existing.closeTimer);
+      existing.closeTimer = null;
+    }
+    return { managed: existing, resumed };
+  }
+
+  const session = await args.createSession(args.request);
+  await session.start();
+  const managed: ManagedSession = {
+    id: requestedSessionId,
+    session,
+    closeTimer: null,
+    connectionCount: 0,
+  };
+  args.sessions.set(requestedSessionId, managed);
+  return { managed, resumed: false };
+}
+
+function scheduleManagedSessionClose(
+  managed: ManagedSession,
+  sessions: Map<string, ManagedSession>,
+  resumeWindowMs: number,
+): void {
+  if (managed.connectionCount > 0 || managed.closeTimer) return;
+  if (resumeWindowMs <= 0) {
+    sessions.delete(managed.id);
+    void managed.session.close().catch(() => undefined);
+    return;
+  }
+  managed.closeTimer = setTimeout(() => {
+    managed.closeTimer = null;
+    if (managed.connectionCount > 0) return;
+    sessions.delete(managed.id);
+    void managed.session.close().catch(() => undefined);
+  }, resumeWindowMs);
 }
 
 function wireSessionEvents(
   session: VoiceAgentSession,
   socket: WebSocket,
   disposers: Array<() => void>,
+  outputSampleRateHz: number,
+  binaryAudioEnvelope: boolean,
+  maxBufferedAmountBytes: number,
 ): void {
-  session.on("user_started_speaking", (event) => {
-    sendJson(socket, { type: "speech_started", turnId: event.turnId });
+  const ttsSequences = new Map<string, number>();
+
+  const onSession = <K extends keyof VoiceAgentSessionEvents>(
+    event: K,
+    handler: VoiceAgentSessionEvents[K],
+  ): void => {
+    session.on(event, handler);
+    disposers.push(() => session.off(event, handler));
+  };
+
+  onSession("user_started_speaking", (event) => {
+    sendJson(socket, { type: "speech_started", turnId: event.turnId }, maxBufferedAmountBytes);
   });
-  session.on("user_stopped_speaking", (event) => {
-    sendJson(socket, { type: "speech_ended", turnId: event.turnId });
+  onSession("user_stopped_speaking", (event) => {
+    sendJson(socket, { type: "speech_ended", turnId: event.turnId }, maxBufferedAmountBytes);
   });
-  session.on("user_input_partial", (event) => {
-    sendJson(socket, { type: "stt_chunk", turnId: event.turnId, transcript: event.text });
+  onSession("user_input_partial", (event) => {
+    sendJson(socket, { type: "stt_chunk", turnId: event.turnId, transcript: event.text }, maxBufferedAmountBytes);
   });
-  session.on("user_input_final", (event) => {
-    sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence });
+  onSession("user_input_final", (event) => {
+    sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence }, maxBufferedAmountBytes);
   });
-  session.on("agent_text_delta", (event) => {
-    sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta });
+  onSession("agent_text_delta", (event) => {
+    sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta }, maxBufferedAmountBytes);
   });
-  session.on("agent_tool_call", (event) => {
-    sendJson(socket, { type: "agent_tool_call", turnId: event.turnId, id: event.id, name: event.name, args: event.args });
+  onSession("agent_tool_call", (event) => {
+    sendJson(socket, { type: "agent_tool_call", turnId: event.turnId, id: event.id, name: event.name, args: event.args }, maxBufferedAmountBytes);
   });
-  session.on("agent_tool_result", (event) => {
-    sendJson(socket, { type: "agent_tool_result", turnId: event.turnId, id: event.id, result: event.result });
+  onSession("agent_tool_result", (event) => {
+    sendJson(socket, { type: "agent_tool_result", turnId: event.turnId, id: event.id, result: event.result }, maxBufferedAmountBytes);
   });
-  session.on("agent_finished", (event) => {
-    sendJson(socket, { type: "agent_end", turnId: event.turnId });
+  onSession("agent_finished", (event) => {
+    sendJson(socket, { type: "agent_end", turnId: event.turnId }, maxBufferedAmountBytes);
   });
-  session.on("error", (event) => {
+  onSession("error", (event) => {
     sendJson(socket, {
       type: "error",
       component: event.stage,
       category: event.category,
       message: event.message,
-    });
+    }, maxBufferedAmountBytes);
   });
 
   disposers.push(
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
-      sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" });
-      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" });
+      sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
+      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
     }),
     session.bus.on("tts.audio", (pkt) => {
-      const audio = (pkt as TextToSpeechAudioPacket).audio;
+      const audioPacket = pkt as TextToSpeechAudioPacket;
+      const audio = audioPacket.audio;
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(Buffer.from(audio));
+        const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
+        ttsSequences.set(audioPacket.contextId, sequence);
+        sendJson(socket, {
+          type: "tts_chunk",
+          turnId: audioPacket.contextId,
+          sequence,
+          sampleRateHz: outputSampleRateHz,
+          encoding: "pcm_s16le",
+          channels: 1,
+          byteLength: audio.byteLength,
+          durationMs: pcm16DurationMs(audio, outputSampleRateHz),
+        }, maxBufferedAmountBytes);
+        sendSocketData(socket, binaryAudioEnvelope
+          ? Buffer.from(encodeSyrinxAudioEnvelope({
+              type: "audio",
+              contextId: audioPacket.contextId,
+              sequence,
+              sampleRateHz: outputSampleRateHz,
+              encoding: "pcm_s16le",
+              channels: 1,
+              byteLength: audio.byteLength,
+              durationMs: pcm16DurationMs(audio, outputSampleRateHz),
+            }, audio))
+          : Buffer.from(audio), maxBufferedAmountBytes);
       }
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
-      sendJson(socket, { type: "tts_end", turnId: end.contextId });
+      ttsSequences.delete(end.contextId);
+      sendJson(socket, { type: "tts_end", turnId: end.contextId }, maxBufferedAmountBytes);
     }),
   );
 }
@@ -206,16 +472,22 @@ function handleClientMessage(
   isBinary: boolean,
   currentContextId: string,
   contextId: () => string,
+  inputSampleRateHz: number,
 ): string {
   if (isBinary) {
-    const audio = rawDataToBytes(data);
+    const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz);
+    const nextContextId = binaryAudio.contextId ?? currentContextId;
+    if (nextContextId !== currentContextId) {
+      pushTurnChange(session, nextContextId, currentContextId, "websocket_binary_audio_turn");
+    }
+    const audio = normalizePcm16(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
-      contextId: currentContextId,
+      contextId: nextContextId,
       timestampMs: Date.now(),
       audio,
     } satisfies UserAudioReceivedPacket);
-    return currentContextId;
+    return nextContextId;
   }
 
   const text = rawDataToText(data);
@@ -239,11 +511,12 @@ function handleClientMessage(
     if (nextContextId !== currentContextId) {
       pushTurnChange(session, nextContextId, currentContextId, "websocket_audio_turn");
     }
+    const sourceSampleRateHz = positiveInteger(message.sampleRateHz) ?? inputSampleRateHz;
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
       timestampMs: Date.now(),
-      audio: Uint8Array.from(Buffer.from(message.audio, "base64")),
+      audio: normalizePcm16(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz),
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
@@ -272,6 +545,102 @@ function rawDataToBytes(data: RawData): Uint8Array {
   throw new Error("Unsupported binary message payload");
 }
 
+function rawDataByteLength(data: RawData): number {
+  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
+  if (Buffer.isBuffer(data)) return data.byteLength;
+  if (data instanceof ArrayBuffer) return data.byteLength;
+  if (Array.isArray(data)) return data.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  return 0;
+}
+
+function cloneRawData(data: RawData): RawData {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return Buffer.from(data);
+  if (data instanceof ArrayBuffer) return data.slice(0);
+  if (Array.isArray(data)) return data.map((chunk) => Buffer.from(chunk));
+  throw new Error("Unsupported websocket message payload");
+}
+
+function decodeBinaryAudioMessage(
+  data: Uint8Array,
+  defaultSampleRateHz: number,
+): { readonly contextId?: string; readonly sampleRateHz: number; readonly audio: Uint8Array } {
+  if (!hasSyrinxAudioEnvelope(data)) {
+    return { sampleRateHz: defaultSampleRateHz, audio: data };
+  }
+
+  const { header, audio } = decodeSyrinxAudioEnvelope(data);
+
+  return {
+    contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
+    sampleRateHz: positiveInteger(header.sampleRateHz) ?? defaultSampleRateHz,
+    audio,
+  };
+}
+
+function normalizePcm16(audio: Uint8Array, sourceSampleRateHz: number, targetSampleRateHz: number): Uint8Array {
+  if (audio.byteLength % 2 !== 0) {
+    throw new Error("PCM16 audio payload must contain an even number of bytes");
+  }
+  if (sourceSampleRateHz === targetSampleRateHz) return audio;
+
+  const input = pcm16BytesToSamples(audio);
+  const outputSampleCount = Math.max(1, Math.round((input.length * targetSampleRateHz) / sourceSampleRateHz));
+  const output = new Int16Array(outputSampleCount);
+  const ratio = sourceSampleRateHz / targetSampleRateHz;
+
+  for (let i = 0; i < output.length; i += 1) {
+    const sourceIndex = i * ratio;
+    const lo = Math.floor(sourceIndex);
+    const hi = Math.min(input.length - 1, lo + 1);
+    const frac = sourceIndex - lo;
+    output[i] = Math.round(input[lo]! * (1 - frac) + input[hi]! * frac);
+  }
+
+  return new Uint8Array(output.buffer, output.byteOffset, output.byteLength);
+}
+
+function pcm16BytesToSamples(audio: Uint8Array): Int16Array {
+  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
+  const samples = new Int16Array(audio.byteLength / 2);
+  for (let i = 0; i < samples.length; i += 1) {
+    samples[i] = view.getInt16(i * 2, true);
+  }
+  return samples;
+}
+
+function pcm16DurationMs(audio: Uint8Array, sampleRateHz: number): number {
+  if (sampleRateHz <= 0) return 0;
+  return Math.round((audio.byteLength / 2 / sampleRateHz) * 1000);
+}
+
+function positiveInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
+  return value;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+function sessionIdFromRequest(request: IncomingMessage): string | null {
+  const url = request.url;
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, "http://localhost");
+    return parsed.searchParams.get("sessionId") ?? parsed.searchParams.get("session_id");
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeSessionId(value: string): string {
+  const trimmed = value.trim();
+  if (/^[A-Za-z0-9_.:-]{1,128}$/.test(trimmed)) return trimmed;
+  return defaultSessionId();
+}
+
 function rawDataToText(data: RawData): string {
   if (typeof data === "string") return data;
   if (Buffer.isBuffer(data)) return data.toString("utf8");
@@ -280,11 +649,63 @@ function rawDataToText(data: RawData): string {
   throw new Error("Unsupported text message payload");
 }
 
-function sendJson(socket: WebSocket, value: unknown): void {
+function decodeStrictBase64(value: string, fieldName: string): Uint8Array {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${fieldName} must be a non-empty base64 string`);
+  }
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
+    throw new Error(`${fieldName} must be valid base64`);
+  }
+  return Uint8Array.from(Buffer.from(value, "base64"));
+}
+
+function sendJson(socket: WebSocket, value: unknown, maxBufferedAmountBytes: number): void {
+  sendSocketData(socket, JSON.stringify(value), maxBufferedAmountBytes);
+}
+
+function sendSocketData(socket: WebSocket, data: string | Buffer, maxBufferedAmountBytes: number): void {
   if (socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(value));
+  if (socket.bufferedAmount + outboundMessageByteLength(data) > maxBufferedAmountBytes) {
+    closeWebSocketWithFallback(socket, 1013, "websocket send buffer exceeded");
+    return;
+  }
+  socket.send(data);
+}
+
+function outboundMessageByteLength(data: string | Buffer): number {
+  return typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
+}
+
+function startWebSocketHeartbeat(
+  socket: WebSocket,
+  heartbeatIntervalMs: number,
+  disposers: Array<() => void>,
+): void {
+  if (heartbeatIntervalMs <= 0) return;
+  let alive = true;
+  const onPong = () => {
+    alive = true;
+  };
+  socket.on("pong", onPong);
+  const interval = setInterval(() => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (!alive) {
+      socket.terminate();
+      return;
+    }
+    alive = false;
+    socket.ping();
+  }, heartbeatIntervalMs);
+  disposers.push(() => {
+    clearInterval(interval);
+    socket.off("pong", onPong);
+  });
 }
 
 function defaultContextId(): string {
   return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function defaultSessionId(): string {
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }

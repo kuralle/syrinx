@@ -106,6 +106,15 @@ export interface VoiceAgentSessionEvents {
 
 type EventHandler<T> = (event: T) => void;
 
+interface TtsTextBuffer {
+  pending: string;
+  emitted: string;
+}
+
+interface SentenceSegment {
+  segment: string;
+}
+
 // =============================================================================
 // Session Implementation
 // =============================================================================
@@ -124,9 +133,11 @@ export class VoiceAgentSession {
   private eventListeners = new Map<string, Set<EventHandler<unknown>>>();
   private currentTurnId = "";
   private busStartPromise: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
   private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSttContextId = "";
   private activeTtsContextIds = new Set<string>();
+  private ttsTextBuffers = new Map<string, TtsTextBuffer>();
 
   constructor(config: VoiceAgentSessionConfig) {
     this.config = config;
@@ -215,11 +226,18 @@ export class VoiceAgentSession {
   /** Shut down the session. Runs finalize chain in reverse order. */
   async close(): Promise<void> {
     if (this._state === SessionState.Closed) return;
+    if (this.closePromise) return await this.closePromise;
+    this.closePromise = this.closeOnce();
+    return await this.closePromise;
+  }
+
+  private async closeOnce(): Promise<void> {
     this._state = SessionState.Finalizing;
 
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
     this.clearSttForceFinalizeTimer();
+    this.ttsTextBuffers.clear();
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
@@ -535,15 +553,11 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    this.bus.push(Route.Main, {
-      kind: "tts.text",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      text: pkt.text,
-    } as TextToSpeechTextPacket);
+    this.bufferTtsText(pkt.contextId, pkt.text);
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
+    const spokenText = this.flushTtsText(pkt.contextId);
     this.emit("agent_finished", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -566,8 +580,50 @@ export class VoiceAgentSession {
       kind: "tts.done",
       contextId: pkt.contextId,
       timestampMs: Date.now(),
-      text: pkt.text,
+      text: spokenText,
     } as TextToSpeechDonePacket);
+  }
+
+  private bufferTtsText(contextId: string, text: string): void {
+    const buffer = this.ttsTextBuffers.get(contextId) ?? { pending: "", emitted: "" };
+    buffer.pending += text;
+    const complete = takeCompleteVoiceText(buffer.pending);
+    if (complete.text) {
+      this.bus.push(Route.Main, {
+        kind: "tts.text",
+        contextId,
+        timestampMs: Date.now(),
+        text: complete.text,
+      } as TextToSpeechTextPacket);
+      buffer.emitted = appendVoiceText(buffer.emitted, complete.text);
+    }
+    buffer.pending = complete.remaining;
+    this.ttsTextBuffers.set(contextId, buffer);
+  }
+
+  private flushTtsText(contextId: string): string {
+    const buffer = this.ttsTextBuffers.get(contextId);
+    if (!buffer) return "";
+    const tail = buffer.pending.trim();
+    if (tail) {
+      this.bus.push(Route.Main, {
+        kind: "tts.text",
+        contextId,
+        timestampMs: Date.now(),
+        text: tail,
+      } as TextToSpeechTextPacket);
+      buffer.emitted = appendVoiceText(buffer.emitted, tail);
+      buffer.pending = "";
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs: Date.now(),
+        name: isCompleteVoiceText(tail) ? "tts.final_text_flushed" : "tts.final_tail_flushed",
+        value: tail,
+      });
+    }
+    this.ttsTextBuffers.delete(contextId);
+    return buffer.emitted.trim();
   }
 
   private handleLlmToolCall(pkt: LlmToolCallPacket): void {
@@ -647,6 +703,7 @@ export class VoiceAgentSession {
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
+    this.ttsTextBuffers.delete(pkt.contextId);
     this.debugPush({
       component: "turn",
       type: "interrupt_detected",
@@ -664,6 +721,14 @@ export class VoiceAgentSession {
       timestampMs: Date.now(),
       resetCount: true,
     } as StopIdleTimeoutPacket);
+
+    this.bus.push(Route.Critical, {
+      kind: "record.assistant_audio",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      audio: new Uint8Array(0),
+      truncate: true,
+    } as RecordAssistantAudioPacket);
 
     // Interrupt TTS
     const interruptTts: InterruptTtsPacket = {
@@ -951,6 +1016,91 @@ function languageFromTranscripts(
     }
   }
   return "";
+}
+
+function takeCompleteVoiceText(text: string): { text: string; remaining: string } {
+  const segments = segmentSentences(text);
+  let emitted = "";
+  let remaining = "";
+  for (const segment of segments) {
+    if (remaining) {
+      remaining += segment;
+      continue;
+    }
+    if (isCompleteVoiceText(segment)) {
+      emitted += segment;
+    } else {
+      remaining = segment;
+    }
+  }
+  return { text: emitted.trimEnd(), remaining };
+}
+
+function isCompleteVoiceText(text: string): boolean {
+  const trimmed = text.trim();
+  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+    const char = trimmed[index]!;
+    if (isClosingPunctuation(char)) continue;
+    return isTerminalPunctuation(char);
+  }
+  return false;
+}
+
+function isClosingPunctuation(char: string): boolean {
+  return char === ")" || char === "]" || char === "}" || char === "\"" || char === "'" || char === "”" || char === "’";
+}
+
+function isTerminalPunctuation(char: string): boolean {
+  return char === "." ||
+    char === "!" ||
+    char === "?" ||
+    char === "。" ||
+    char === "！" ||
+    char === "？" ||
+    char === "؟" ||
+    char === "।" ||
+    char === "॥";
+}
+
+function segmentSentences(text: string): string[] {
+  const segmenter = createSentenceSegmenter();
+  if (segmenter) {
+    return Array.from(segmenter.segment(text), (part) => part.segment);
+  }
+
+  const segments: string[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (!isTerminalPunctuation(text[index]!)) continue;
+    let end = index + 1;
+    while (end < text.length && isClosingPunctuation(text[end]!)) end += 1;
+    if (end < text.length && !/\s/.test(text[end]!)) continue;
+    segments.push(text.slice(start, end));
+    start = end;
+  }
+  if (start < text.length) segments.push(text.slice(start));
+  return segments;
+}
+
+function appendVoiceText(existing: string, next: string): string {
+  const normalizedNext = next.trim();
+  if (!existing) return normalizedNext;
+  if (!normalizedNext) return existing;
+  if (/\s$/.test(existing) || /^\s/.test(next)) return `${existing}${normalizedNext}`;
+  return `${existing} ${normalizedNext}`;
+}
+
+function createSentenceSegmenter(): { segment(text: string): Iterable<SentenceSegment> } | null {
+  const Segmenter = (Intl as unknown as { Segmenter?: new (
+    locale?: string | string[],
+    options?: { granularity: "sentence" },
+  ) => { segment(text: string): Iterable<SentenceSegment> } }).Segmenter;
+  if (!Segmenter) return null;
+  try {
+    return new Segmenter(undefined, { granularity: "sentence" });
+  } catch {
+    return null;
+  }
 }
 
 interface ForceFinalizableSttPlugin extends VoicePlugin {

@@ -122,7 +122,11 @@ describe("packet-bus multi-turn baseline", () => {
     const root = join(import.meta.dirname, "..", "..");
     const longform = JSON.parse(
       readFileSync(join(root, "test", "performance", "websocket-university-multiturn-baseline.json"), "utf8"),
-    ) as { qualityGate?: { passed?: boolean }; turnCount?: number };
+    ) as {
+      qualityGate?: { passed?: boolean };
+      turnCount?: number;
+      turns?: Array<{ latencyMs?: { vadSpeechEndAfterAudioEnd?: number } }>;
+    };
     const interactive = JSON.parse(
       readFileSync(join(root, "test", "performance", "websocket-university-interactive-baseline.json"), "utf8"),
     ) as {
@@ -131,6 +135,7 @@ describe("packet-bus multi-turn baseline", () => {
       inputSampleRateHz?: number;
       outputSampleRateHz?: number;
       latencyMs?: { avgSttFinalAfterSpeechEnd?: number; avgTtsTimeToFirstAudio?: number };
+      turns?: Array<{ latencyMs?: { vadSpeechEndAfterAudioEnd?: number } }>;
     };
 
     expect(longform.qualityGate?.passed).toBe(true);
@@ -141,5 +146,8 @@ describe("packet-bus multi-turn baseline", () => {
     expect(interactive.outputSampleRateHz).toBe(16000);
     expect(interactive.latencyMs?.avgSttFinalAfterSpeechEnd).toBeLessThanOrEqual(7000);
     expect(interactive.latencyMs?.avgTtsTimeToFirstAudio).toBeLessThanOrEqual(1000);
+    for (const turn of [...(longform.turns ?? []), ...(interactive.turns ?? [])]) {
+      expect(turn.latencyMs?.vadSpeechEndAfterAudioEnd).toBeGreaterThanOrEqual(0);
+    }
   });
 });

@@ -66,8 +66,12 @@ describe("PipecatEOSPlugin", () => {
     const started = startBus(bus);
     const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
     const completions: EndOfSpeechPacket[] = [];
+    const finalizeRequests: string[] = [];
     bus.on("eos.turn_complete", (pkt) => {
       completions.push(pkt as EndOfSpeechPacket);
+    });
+    bus.on("stt.finalize", (pkt) => {
+      finalizeRequests.push(pkt.contextId);
     });
 
     await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 50 });
@@ -105,6 +109,7 @@ describe("PipecatEOSPlugin", () => {
         ],
       }),
     ]);
+    expect(finalizeRequests).toEqual(["turn-1"]);
 
     await plugin.close();
     bus.stop();
@@ -245,7 +250,7 @@ describe("PipecatEOSPlugin", () => {
       requests.push(pkt.contextId);
     });
 
-    await plugin.initialize(bus, { finalize_delay_ms: 5, stt_finalize_grace_ms: 0 });
+    await plugin.initialize(bus, { finalize_delay_ms: 5 });
     bus.push(Route.Main, {
       kind: "vad.speech_ended",
       contextId: "turn-5",

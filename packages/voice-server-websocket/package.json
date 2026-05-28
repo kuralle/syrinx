@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@asyncdot/voice": "workspace:*",
+    "@evan/opus": "1.0.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

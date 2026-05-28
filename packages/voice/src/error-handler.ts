@@ -38,6 +38,9 @@ export function categorizeSttError(err: unknown): ErrorCategory {
   if (code === 400 || code === 422 || msg.includes("invalid") || msg.includes("bad request")) {
     return ErrorCategory.InvalidInput;
   }
+  if (msg.includes("data-000")) {
+    return ErrorCategory.InvalidInput;
+  }
   if (code === 402 || msg.includes("payment required") || msg.includes("insufficient")) {
     return ErrorCategory.ResourceExhausted;
   }
@@ -46,9 +49,11 @@ export function categorizeSttError(err: unknown): ErrorCategory {
     msg.includes("etimedout") ||
     msg.includes("enotfound") ||
     msg.includes("network") ||
+    msg.includes("net-000") ||
     msg.includes("timeout") ||
     msg.includes("econnrefused") ||
     msg.includes("socket hang up") ||
+    msg.includes("code=1011") ||
     msg.includes("internal error has occurred") ||
     (code !== null && code >= 500 && code <= 599)
   ) {

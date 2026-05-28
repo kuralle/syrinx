@@ -6,6 +6,10 @@
   "license": "MIT",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",
     "@asyncdot/voice": "workspace:*",

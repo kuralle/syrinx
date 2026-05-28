@@ -1,0 +1,24 @@
+app = "syrinx-telephony-spike-mcj-20260528"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile.telephony-spike"
+
+[env]
+  NODE_ENV = "production"
+  SYRINX_REVIEW_TTS = "cartesia"
+  SYRINX_TELEPHONY_REVIEW_HOST = "0.0.0.0"
+  SYRINX_TELEPHONY_REVIEW_PORT = "4180"
+  SYRINX_TELEPHONY_PUBLIC_BASE_URL = "https://syrinx-telephony-spike-mcj-20260528.fly.dev"
+
+[http_service]
+  internal_port = 4180
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024

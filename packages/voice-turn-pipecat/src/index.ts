@@ -43,7 +43,6 @@ interface TurnState {
   analysisSequence: number;
   finalizeTimer: ReturnType<typeof setTimeout> | null;
   maxTimer: ReturnType<typeof setTimeout> | null;
-  sttFinalizeTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface SmartTurnPredictor {
@@ -105,7 +104,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private finalizeDelayMs = 250;
   private maxDelayMs = 2000;
   private incompleteFallbackMs = 2000;
-  private sttFinalizeGraceMs = 1000;
   private probabilityThreshold = 0.5;
 
   constructor(private readonly predictor: SmartTurnPredictor = new LocalSmartTurnV3Predictor()) {}
@@ -115,7 +113,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
     this.finalizeDelayMs = readNonNegativeNumber(config["finalize_delay_ms"], 250);
     this.maxDelayMs = readNonNegativeNumber(config["max_delay_ms"], 2000);
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
-    this.sttFinalizeGraceMs = readNonNegativeNumber(config["stt_finalize_grace_ms"], 1000);
     this.probabilityThreshold = readProbability(config["probability_threshold"], 0.5);
     await this.predictor.initialize(config);
 
@@ -178,7 +175,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
     appendFinalPacket(state, pkt);
 
     if (state.smartTurnComplete) {
-      clearSttFinalizeTimer(state);
       this.scheduleFinalize(state, this.finalizeDelayMs);
       return;
     }
@@ -214,11 +210,11 @@ export class PipecatEOSPlugin implements VoicePlugin {
       return;
     }
 
+    this.requestSttFinalize(state.contextId);
     if (state.finalPackets.length > 0) {
       this.scheduleFinalize(state, this.finalizeDelayMs);
       return;
     }
-    this.scheduleSttFinalizeRequest(state);
   }
 
   private stateFor(contextId: string): TurnState {
@@ -236,7 +232,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
       analysisSequence: 0,
       finalizeTimer: null,
       maxTimer: null,
-      sttFinalizeTimer: null,
     };
     this.turns.set(contextId, state);
     return state;
@@ -261,14 +256,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
       }
       this.requestSttFinalize(state.contextId);
     }, this.incompleteFallbackMs);
-  }
-
-  private scheduleSttFinalizeRequest(state: TurnState): void {
-    if (state.finalized || state.sttFinalizeTimer) return;
-    state.sttFinalizeTimer = setTimeout(() => {
-      state.sttFinalizeTimer = null;
-      this.requestSttFinalize(state.contextId);
-    }, this.sttFinalizeGraceMs);
   }
 
   private scheduleMaxFinalize(state: TurnState): void {
@@ -313,14 +300,8 @@ function appendFinalPacket(state: TurnState, packet: SttResultPacket): void {
 function clearTurnTimers(state: TurnState): void {
   if (state.finalizeTimer) clearTimeout(state.finalizeTimer);
   if (state.maxTimer) clearTimeout(state.maxTimer);
-  clearSttFinalizeTimer(state);
   state.finalizeTimer = null;
   state.maxTimer = null;
-}
-
-function clearSttFinalizeTimer(state: TurnState): void {
-  if (state.sttFinalizeTimer) clearTimeout(state.sttFinalizeTimer);
-  state.sttFinalizeTimer = null;
 }
 
 function readNonNegativeNumber(value: unknown, fallback: number): number {

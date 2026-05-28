@@ -10,7 +10,8 @@
     "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@asyncdot/voice": "workspace:*"

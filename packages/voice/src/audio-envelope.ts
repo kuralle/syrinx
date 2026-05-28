@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MIT
+
+export const SYRINX_AUDIO_ENVELOPE_NAME = "syrinx.audio.v1" as const;
+export const SYRINX_AUDIO_ENVELOPE_MAGIC = new Uint8Array([83, 89, 82, 88, 65, 49, 10]);
+
+export interface SyrinxAudioEnvelopeHeader {
+  readonly type: "audio";
+  readonly contextId?: string;
+  readonly sampleRateHz?: number;
+  readonly sequence?: number;
+  readonly encoding?: "pcm_s16le";
+  readonly channels?: 1;
+  readonly byteLength?: number;
+  readonly durationMs?: number;
+}
+
+export interface SyrinxAudioEnvelope {
+  readonly header: SyrinxAudioEnvelopeHeader;
+  readonly audio: Uint8Array;
+}
+
+export function encodeSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: Uint8Array): Uint8Array {
+  const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+  const output = new Uint8Array(SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength + 4 + headerBytes.byteLength + audio.byteLength);
+  output.set(SYRINX_AUDIO_ENVELOPE_MAGIC, 0);
+  new DataView(output.buffer, output.byteOffset, output.byteLength)
+    .setUint32(SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength, headerBytes.byteLength, true);
+  output.set(headerBytes, SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength + 4);
+  output.set(audio, SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength + 4 + headerBytes.byteLength);
+  return output;
+}
+
+export function decodeSyrinxAudioEnvelope(data: Uint8Array): SyrinxAudioEnvelope {
+  if (!hasSyrinxAudioEnvelope(data)) {
+    throw new Error("Syrinx binary audio envelope magic is missing");
+  }
+
+  const headerLengthOffset = SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength;
+  if (data.byteLength < headerLengthOffset + 4) {
+    throw new Error("Syrinx binary audio envelope is truncated");
+  }
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const headerLength = view.getUint32(headerLengthOffset, true);
+  const headerStart = headerLengthOffset + 4;
+  const headerEnd = headerStart + headerLength;
+  if (headerLength <= 0 || headerEnd > data.byteLength) {
+    throw new Error("Syrinx binary audio envelope has an invalid header length");
+  }
+
+  const parsed = JSON.parse(new TextDecoder().decode(data.subarray(headerStart, headerEnd))) as unknown;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Syrinx binary audio envelope header must be an object");
+  }
+  const header = parsed as SyrinxAudioEnvelopeHeader;
+  if (header.type !== "audio") {
+    throw new Error("Syrinx binary audio envelope type must be audio");
+  }
+  if (!isPositiveInteger(header.sampleRateHz)) {
+    throw new Error("Syrinx binary audio envelope sampleRateHz must be a positive integer");
+  }
+  if (header.encoding && header.encoding !== "pcm_s16le") {
+    throw new Error(`Unsupported Syrinx binary audio encoding: ${header.encoding}`);
+  }
+  if (header.channels && header.channels !== 1) {
+    throw new Error(`Unsupported Syrinx binary audio channel count: ${String(header.channels)}`);
+  }
+  if (header.sequence !== undefined && !isNonNegativeInteger(header.sequence)) {
+    throw new Error("Syrinx binary audio envelope sequence must be a non-negative integer");
+  }
+  if (header.durationMs !== undefined && !isNonNegativeInteger(header.durationMs)) {
+    throw new Error("Syrinx binary audio envelope durationMs must be a non-negative integer");
+  }
+  if (header.byteLength !== undefined && !isNonNegativeInteger(header.byteLength)) {
+    throw new Error("Syrinx binary audio envelope byteLength must be a non-negative integer");
+  }
+
+  const audio = data.subarray(headerEnd);
+  if (header.byteLength !== undefined && header.byteLength !== audio.byteLength) {
+    throw new Error("Syrinx binary audio envelope byteLength does not match payload");
+  }
+
+  return { header, audio };
+}
+
+export function hasSyrinxAudioEnvelope(data: Uint8Array): boolean {
+  if (data.byteLength < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength) return false;
+  for (let i = 0; i < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength; i += 1) {
+    if (data[i] !== SYRINX_AUDIO_ENVELOPE_MAGIC[i]) return false;
+  }
+  return true;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}

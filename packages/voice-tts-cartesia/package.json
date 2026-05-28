@@ -1,1 +1,22 @@
-{"name":"@asyncdot/voice-tts-cartesia","version":"2.0.0","private":false,"type":"module","license":"MIT","main":"./src/index.ts","types":"./src/index.ts","dependencies":{"@asyncdot/voice":"workspace:*","ws":"^8.18.0"},"devDependencies":{"@types/ws":"^8.5.0","typescript":"^5.7.0","vitest":"^2.1.0"}}
+{
+  "name": "@asyncdot/voice-tts-cartesia",
+  "version": "2.0.0",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@asyncdot/voice": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "scenario": "websocket_university_student_relations_multiturn",
-  "generatedAt": "2026-05-26T18:00:38.236Z",
+  "generatedAt": "2026-05-27T10:15:49.588Z",
   "fixtureProvider": "gemini-tts",
   "llmModel": "gemini-2.5-flash",
   "ttsModel": "gemini-2.5-flash-preview-tts",
@@ -9,532 +9,581 @@
   "outputSampleRateHz": 24000,
   "postTtsDrainMs": 500,
   "turnCount": 24,
-  "modeledConversationMs": 702408,
+  "modeledConversationMs": 730728,
   "latencyMs": {
     "totalInputAudio": 333024,
-    "totalAssistantAudio": 369384,
-    "avgSttFinalAfterSpeechEnd": 2307,
-    "avgVadSpeechEndAfterAudioEnd": 1776,
-    "avgLlmTimeToFirstText": 3901,
-    "avgTtsTimeToFirstAudio": 9833,
-    "avgSpeechEndToFirstAssistantAudio": 16041,
-    "avgVadSpeechEndToFirstAssistantAudio": 14265
+    "totalAssistantAudio": 397704,
+    "avgSttFinalAfterSpeechEnd": 2180,
+    "avgVadSpeechEndAfterAudioEnd": 1747,
+    "avgLlmTimeToFirstText": 3629,
+    "avgTtsTimeToFirstAudio": 10450,
+    "avgSpeechEndToFirstAssistantAudio": 16258,
+    "avgVadSpeechEndToFirstAssistantAudio": 14511
   },
   "turns": [
     {
       "id": "turn-01",
       "fixtureId": "01-late-add",
       "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I missed the normal add deadline because the Biology one oh one lab seat opened after my wait list cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the instructor before I file anything.",
-      "sttFinal": "Hi. I'm Maya Chen, student ID s 10042. I missed the normal ad deadline because the biology one zero one lab seat opened after my wait list cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the instructor before I file anything.",
-      "agentReply": "Yes, you can still add the Biology 101 lecture and lab together through a late add petition. You should submit the Late Add Petition form and contact the instructor for their approval before filing anything.",
+      "sttFinal": "Hi. I'm Maya Chen. Student ID s 10042. I missed the normal ad deadline because the biology one zero one lab seat opened my waitlist cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the before I file anything.",
+      "agentReply": "Yes, you can still add the Biology 101 lecture and lab by submitting a Late Add Petition through the Student Relations portal. You should contact International Student Services and Financial Aid today, and also notify your instructor and academic advisor before filing the petition.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 20251,
-      "assistantAudioMs": 12051,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 17731,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 2824,
-        "vadSpeechEndAfterAudioEnd": 1855,
-        "llmTimeToFirstText": 6020,
-        "ttsTimeToFirstAudio": 8217,
-        "speechEndToFirstAssistantAudio": 17061,
-        "vadSpeechEndToFirstAssistantAudio": 15206,
-        "turnWallClock": 40057
+        "sttFinalAfterSpeechEnd": 1690,
+        "vadSpeechEndAfterAudioEnd": 1639,
+        "llmTimeToFirstText": 4395,
+        "ttsTimeToFirstAudio": 11288,
+        "speechEndToFirstAssistantAudio": 17374,
+        "vadSpeechEndToFirstAssistantAudio": 15735,
+        "turnWallClock": 38612
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-01.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-01.wav"
     },
     {
       "id": "turn-02",
       "fixtureId": "02-registration-holds",
       "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning. And I do not want the instructor approval to expire while I wait. Wait.",
-      "agentReply": "I have checked your student record, and you do not have any active registration holds that would block your late add petition. You can proceed with submitting your Late Add Petition form and contacting your instructor for approval.",
+      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning. And I do not want the instructor approval to expire while I wait.",
+      "agentReply": "I can confirm that you do not have any active registration holds that would block your late add petition. Your student record shows good academic standing, and your balance payment was processed.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16451,
-      "assistantAudioMs": 12131,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 9931,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1553,
-        "vadSpeechEndAfterAudioEnd": 2299,
-        "llmTimeToFirstText": 3974,
-        "ttsTimeToFirstAudio": 8804,
-        "speechEndToFirstAssistantAudio": 14331,
-        "vadSpeechEndToFirstAssistantAudio": 12032,
-        "turnWallClock": 32285
+        "sttFinalAfterSpeechEnd": 1799,
+        "vadSpeechEndAfterAudioEnd": 1746,
+        "llmTimeToFirstText": 3263,
+        "ttsTimeToFirstAudio": 6733,
+        "speechEndToFirstAssistantAudio": 11795,
+        "vadSpeechEndToFirstAssistantAudio": 10049,
+        "turnWallClock": 29126
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-02.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-02.wav"
     },
     {
       "id": "turn-03",
       "fixtureId": "03-financial-aid",
       "inputText": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled credits, Biology would put me at twelve, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
-      "sttFinal": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled credit Biology would put me at 12, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
-      "agentReply": "Yes, adding the Biology 101 course will change your financial aid status to full-time, which is required for your scholarship review. You should notify Financial Aid today, as your full-time status review is scheduled for Friday at 5 PM.",
+      "sttFinal": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled Biology would put me at 12, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
+      "agentReply": "Yes, adding Biology 101 will change your financial aid status to full-time, which is required for your scholarship review. You should notify Financial Aid today, as their full-time status review is scheduled for Friday at 5 PM.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16171,
-      "assistantAudioMs": 14131,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 13051,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4548,
-        "vadSpeechEndAfterAudioEnd": 1787,
-        "llmTimeToFirstText": 3640,
-        "ttsTimeToFirstAudio": 8625,
-        "speechEndToFirstAssistantAudio": 16813,
-        "vadSpeechEndToFirstAssistantAudio": 15026,
-        "turnWallClock": 34237
+        "sttFinalAfterSpeechEnd": 3262,
+        "vadSpeechEndAfterAudioEnd": 1711,
+        "llmTimeToFirstText": 3323,
+        "ttsTimeToFirstAudio": 8298,
+        "speechEndToFirstAssistantAudio": 14883,
+        "vadSpeechEndToFirstAssistantAudio": 13172,
+        "turnWallClock": 31860
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-03.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-03.wav"
     },
     {
       "id": "turn-04",
       "fixtureId": "04-advisor-approval",
       "inputText": "My academic advisor is Dr. Priya Raman, but she is at a conference this week. If the petition needs advisor approval, can Student Relations route it to a backup advisor, or do I need to wait for her to respond directly?",
-      "sttFinal": "My academic advisor is doctor Priya Raman, but she is at a conference this week. If the petition needs adviser approval, can student relations route it to a backup adviser, or do I need to wait for her to respond directly?",
-      "agentReply": "Your petition does require advisor approval, and since Dr. Raman is unavailable, Student Relations can route it to the advising desk as a backup. You do not need to wait for her direct response.",
+      "sttFinal": "My academic adviser is Doctor. Priya Raman. But she is at a conference this week. If the petition needs adviser approval, can student relations route it to a backup adviser or do I need to wait for her to respond",
+      "agentReply": "Student Relations can route your petition to the advising desk for approval if your academic advisor, Dr. Priya Raman, is unavailable. You do not need to wait for her to respond to proceed with your late add petition.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 13611,
-      "assistantAudioMs": 11051,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 12851,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1616,
-        "vadSpeechEndAfterAudioEnd": 2229,
-        "llmTimeToFirstText": 4452,
-        "ttsTimeToFirstAudio": 7965,
-        "speechEndToFirstAssistantAudio": 14033,
-        "vadSpeechEndToFirstAssistantAudio": 11804,
-        "turnWallClock": 28542
+        "sttFinalAfterSpeechEnd": 3305,
+        "vadSpeechEndAfterAudioEnd": 1740,
+        "llmTimeToFirstText": 3357,
+        "ttsTimeToFirstAudio": 8052,
+        "speechEndToFirstAssistantAudio": 14714,
+        "vadSpeechEndToFirstAssistantAudio": 12974,
+        "turnWallClock": 29090
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-04.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-04.wav"
     },
     {
       "id": "turn-05",
       "fixtureId": "05-instructor-email",
       "inputText": "The instructor told me over email that I can join if the department confirms the lab seat. Should I upload that email with the petition, and should the department approval be attached separately or can it be added after I submit the case?",
-      "sttFinal": "The instructor told me over email that I can join if the department confirms the lab seat. Should I upload that email with the petition? And should the department approval be attached separately? Separately? Or can it be added after I submit the case?",
-      "agentReply": "Yes, you should upload the instructor's email with your petition, and the department's lab-seat confirmation should also be attached. Both documents can be added to your case after you submit the petition.",
-      "toolCalls": [
-        "studentRelationsLookup"
-      ],
+      "sttFinal": "The instructor told me over email that I can join if the department confirms the lab seat. Should I upload that email with the petition? And should the department approval be attached separately, or can it be added after I submit the case?",
+      "agentReply": "Yes, you should upload the instructor's email with your petition as supporting documentation. The department approval for the lab seat should be attached separately to your petition once you receive it, or you can add it after you submit the case.",
+      "toolCalls": [],
       "inputAudioMs": 13491,
-      "assistantAudioMs": 11211,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 12651,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1473,
-        "vadSpeechEndAfterAudioEnd": 1696,
-        "llmTimeToFirstText": 3389,
-        "ttsTimeToFirstAudio": 7375,
-        "speechEndToFirstAssistantAudio": 12237,
-        "vadSpeechEndToFirstAssistantAudio": 10541,
-        "turnWallClock": 26474
+        "sttFinalAfterSpeechEnd": 1763,
+        "vadSpeechEndAfterAudioEnd": 1702,
+        "llmTimeToFirstText": 2125,
+        "ttsTimeToFirstAudio": 8138,
+        "speechEndToFirstAssistantAudio": 12026,
+        "vadSpeechEndToFirstAssistantAudio": 10324,
+        "turnWallClock": 26332
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-05.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-05.wav"
     },
     {
       "id": "turn-06",
       "fixtureId": "06-international-status",
       "inputText": "One more concern is my international student status. I am on an F one visa, and dropping below full time was only temporary while I waited for this lab. Do I need to notify the international office before the late add is approved, or only if the petition is denied?",
       "sttFinal": "One more concern is my international student status. I am on an f one visa and dropping below full time was only temporary while I waited for this lab. Do I need to notify the international office before the late ad is approved? Or only if the petition is denied?",
-      "agentReply": "You need to notify International Student Services while your petition is pending, not only if it is denied. You should contact them today to ensure your F1 visa status is maintained.",
+      "agentReply": "You must notify International Student Services today while your petition is pending, as dropping below full-time status can impact your F-1 visa. They can provide guidance and ensure your record is updated appropriately.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 15931,
-      "assistantAudioMs": 12091,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 14051,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1441,
-        "vadSpeechEndAfterAudioEnd": 1674,
-        "llmTimeToFirstText": 3655,
-        "ttsTimeToFirstAudio": 8334,
-        "speechEndToFirstAssistantAudio": 13430,
-        "vadSpeechEndToFirstAssistantAudio": 11756,
-        "turnWallClock": 30364
+        "sttFinalAfterSpeechEnd": 1729,
+        "vadSpeechEndAfterAudioEnd": 1679,
+        "llmTimeToFirstText": 3566,
+        "ttsTimeToFirstAudio": 8509,
+        "speechEndToFirstAssistantAudio": 13804,
+        "vadSpeechEndToFirstAssistantAudio": 12125,
+        "turnWallClock": 30585
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-06.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-06.wav"
     },
     {
       "id": "turn-07",
       "fixtureId": "07-housing",
       "inputText": "I also live in university housing, and their renewal form asks whether I am full time for the spring term. If the late add is pending, what should I tell housing so they do not mark my renewal as incomplete?",
-      "sttFinal": "I also live in university housing, and their renewal form asks whether I am full time for the spring term. If the late ad is pending, what should I tell housing so they do not mark my renewal as incomplete?",
-      "agentReply": "You should indicate on your housing renewal form that your full-time status is pending due to the late add petition. You can use your late-add case number, SR-2027-004812, on the renewal form to reflect this.",
+      "sttFinal": "I also live in university housing and their renewal form asks whether I am full time for the spring term. If the late add is pending, what should I tell housing so they do not mark my renewal as incomplete?",
+      "agentReply": "You should inform University Housing that your late add petition for full-time status is pending and provide them with your case number, SR-2027-004812. This will allow them to note your renewal form accordingly without marking it as incomplete.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 11291,
-      "assistantAudioMs": 15131,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 16371,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4552,
-        "vadSpeechEndAfterAudioEnd": 1781,
-        "llmTimeToFirstText": 4199,
-        "ttsTimeToFirstAudio": 8992,
-        "speechEndToFirstAssistantAudio": 17743,
-        "vadSpeechEndToFirstAssistantAudio": 15962,
-        "turnWallClock": 29600
+        "sttFinalAfterSpeechEnd": 3391,
+        "vadSpeechEndAfterAudioEnd": 1832,
+        "llmTimeToFirstText": 3842,
+        "ttsTimeToFirstAudio": 9869,
+        "speechEndToFirstAssistantAudio": 17102,
+        "vadSpeechEndToFirstAssistantAudio": 15270,
+        "turnWallClock": 28944
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-07.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-07.wav"
     },
     {
       "id": "turn-08",
       "fixtureId": "08-accessibility",
       "inputText": "I have an accessibility accommodation for lab scheduling because I cannot attend sections that start before nine in the morning. The open lab section is at eight thirty. Is that something Student Relations can include in the case, or should I contact the accessibility office first?",
-      "sttFinal": "I have an accessibility accommodation for lab scheduling because I cannot attend sections that start before nine in the morning. The open lab section is at 08:30. Is that something student relations can include in the case, or should I contact the accessibility office first?",
-      "agentReply": "Student Relations can include your accessibility accommodation in the case, but the Accessibility Office should review your lab-time accommodation before the registrar processes it. You should contact the Accessibility Office first to ensure your accommodation is properly documented and approved.",
+      "sttFinal": "I have an accessibility accommodation for lab scheduling, because I cannot attend sections that start before nine in the morning. The open lab section is at 08:30. Is that something student relations can include in the case or should I contact the accessibility office first?",
+      "agentReply": "You should contact the Accessibility Office first to discuss your lab scheduling accommodation for the 8:30 AM section. They will review your request and can then include it in your case for the late add petition.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 15011,
-      "assistantAudioMs": 15851,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 11811,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1530,
-        "vadSpeechEndAfterAudioEnd": 1782,
-        "llmTimeToFirstText": 5137,
-        "ttsTimeToFirstAudio": 9841,
-        "speechEndToFirstAssistantAudio": 16508,
-        "vadSpeechEndToFirstAssistantAudio": 14726,
-        "turnWallClock": 32246
+        "sttFinalAfterSpeechEnd": 1871,
+        "vadSpeechEndAfterAudioEnd": 1815,
+        "llmTimeToFirstText": 3199,
+        "ttsTimeToFirstAudio": 8451,
+        "speechEndToFirstAssistantAudio": 13521,
+        "vadSpeechEndToFirstAssistantAudio": 11706,
+        "turnWallClock": 29264
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-08.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-08.wav"
     },
     {
       "id": "turn-09",
       "fixtureId": "09-athletics",
       "inputText": "I am also on the varsity tennis roster, and the athletics academic coordinator asked for confirmation that the late add will not conflict with travel letters. Can your office add the coordinator as a watcher on the case, or do I need to forward updates manually?",
-      "sttFinal": "I am also on the varsity tennis roster, and the athletics academic coordinator asked for confirmation that the late ad will not conflict with travel letters. Can your office add the coordinator as a watcher on the case, or do I need to forward updates manually?",
-      "agentReply": "I cannot add the coordinator as a watcher on the case, as that functionality is not available. You will need to forward updates to the athletics academic coordinator manually to ensure they are informed about the late add and its potential impact on travel letters.",
-      "toolCalls": [],
+      "sttFinal": "I am also on the varsity tennis roster and the athletics academic coordinator asked for confirmation that the late ad will not conflict with travel letters. Can your office add the coordinator as a watcher on the case? Or do I need to forward updates manually?",
+      "agentReply": "Yes, your athletics academic coordinator can be added as a watcher to your case. Student Relations will add them to ensure they receive updates on your late add petition.",
+      "toolCalls": [
+        "studentRelationsLookup"
+      ],
       "inputAudioMs": 14771,
-      "assistantAudioMs": 14291,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 9891,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4393,
-        "vadSpeechEndAfterAudioEnd": 1612,
-        "llmTimeToFirstText": 2546,
-        "ttsTimeToFirstAudio": 8950,
-        "speechEndToFirstAssistantAudio": 15889,
-        "vadSpeechEndToFirstAssistantAudio": 14277,
-        "turnWallClock": 31560
+        "sttFinalAfterSpeechEnd": 1772,
+        "vadSpeechEndAfterAudioEnd": 1712,
+        "llmTimeToFirstText": 3124,
+        "ttsTimeToFirstAudio": 6700,
+        "speechEndToFirstAssistantAudio": 11596,
+        "vadSpeechEndToFirstAssistantAudio": 9884,
+        "turnWallClock": 27132
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-09.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-09.wav"
     },
     {
       "id": "turn-10",
       "fixtureId": "10-lab-fee",
       "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
-      "sttFinal": "Does biology one zero one have a separate lab fee that appears after the late ad is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition. Because that changes how I plan my payment.",
-      "agentReply": "Yes, Biology 101 does have an $85 lab fee that will appear after the late add is approved. This fee will post to your account after the registrar processes your petition.",
+      "sttFinal": "Does BIOLLOGY one hundred and one have a separate lab fee that appears after the late ad is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition. Because that changes how I plan my payment.",
+      "agentReply": "Yes, Biology 101 has an $85 lab fee that will be posted to your account after the registrar processes your late add petition. This means the fee will not appear immediately but rather after the official approval and registration.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 14691,
-      "assistantAudioMs": 11011,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 15811,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1363,
-        "vadSpeechEndAfterAudioEnd": 1450,
-        "llmTimeToFirstText": 3703,
-        "ttsTimeToFirstAudio": 7477,
-        "speechEndToFirstAssistantAudio": 12543,
-        "vadSpeechEndToFirstAssistantAudio": 11093,
-        "turnWallClock": 28268
+        "sttFinalAfterSpeechEnd": 1665,
+        "vadSpeechEndAfterAudioEnd": 1601,
+        "llmTimeToFirstText": 3500,
+        "ttsTimeToFirstAudio": 9216,
+        "speechEndToFirstAssistantAudio": 14381,
+        "vadSpeechEndToFirstAssistantAudio": 12780,
+        "turnWallClock": 29905
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-10.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-10.wav"
     },
     {
       "id": "turn-11",
       "fixtureId": "11-case-open",
       "inputText": "Please open a Student Relations case for me now with the late add request, the possible financial aid impact, the visa status note, and the accommodation concern. I want the case summary to be clear enough that the registrar does not have to ask me the same questions again.",
-      "sttFinal": "Please open a student relations case for me now with the late ad request, the possible financial aid impact, the visa status note, and the accommodation concern. I want the case summary to be clear enough that the registrar does not have to ask me the same questions again.",
-      "agentReply": "I have opened a student relations case for your late add request, and the case ID is SR-2027-004812. You will need to upload the instructor's email and the department's lab-seat confirmation, and then the petition will be routed to the instructor, advising desk, and registrar.",
+      "sttFinal": "Please open a student relations case for me now with the late add request, possible financial aid impact, the visa status note, and the accommodation concern. I want the case summary to be clear enough that the registrar does not have to ask me the same questions again.",
+      "agentReply": "I have opened a student relations case for your late add request for Biology 101, case number SR-2027-004812. The summary includes details about your financial aid, visa status, and accommodation concerns to ensure the registrar has all necessary information.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 15491,
-      "assistantAudioMs": 18371,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 19251,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1712,
-        "vadSpeechEndAfterAudioEnd": 1889,
-        "llmTimeToFirstText": 5778,
-        "ttsTimeToFirstAudio": 11978,
-        "speechEndToFirstAssistantAudio": 19468,
-        "vadSpeechEndToFirstAssistantAudio": 17579,
-        "turnWallClock": 36351
+        "sttFinalAfterSpeechEnd": 1920,
+        "vadSpeechEndAfterAudioEnd": 1868,
+        "llmTimeToFirstText": 5937,
+        "ttsTimeToFirstAudio": 11338,
+        "speechEndToFirstAssistantAudio": 19195,
+        "vadSpeechEndToFirstAssistantAudio": 17327,
+        "turnWallClock": 35541
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-11.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-11.wav"
     },
     {
       "id": "turn-12",
       "fixtureId": "12-next-steps",
       "inputText": "After the case is opened, can you give me the next steps in order? I need to know exactly who I should contact first today, what documents I should upload, and what deadline I should watch so this does not roll into next week.",
       "sttFinal": "After the case is opened, can you give me the next steps in order? I need to know exactly who I should contact first today, what documents I should upload, and what deadline I should watch so this does not roll into next week.",
-      "agentReply": "I can provide you with the next steps in order for your late add petition. First, you should contact the Accessibility Office, International Student Services, and Financial Aid today, and then upload the instructor's email and the department's lab-seat confirmation to your case.",
+      "agentReply": "Your case, SR-2027-004812, is now open, and here are your next steps in order. First, contact International Student Services, Financial Aid, and the Accessibility Office today to discuss your situation and accommodation. Then, upload your instructor's email to the petition, and ensure the department approval for the lab seat is attached before Friday's 5 PM financial aid review deadline.",
       "toolCalls": [],
       "inputAudioMs": 11891,
-      "assistantAudioMs": 15931,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 28331,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4476,
-        "vadSpeechEndAfterAudioEnd": 1712,
-        "llmTimeToFirstText": 3148,
-        "ttsTimeToFirstAudio": 9416,
-        "speechEndToFirstAssistantAudio": 17040,
-        "vadSpeechEndToFirstAssistantAudio": 15328,
-        "turnWallClock": 29560
+        "sttFinalAfterSpeechEnd": 3353,
+        "vadSpeechEndAfterAudioEnd": 1776,
+        "llmTimeToFirstText": 3572,
+        "ttsTimeToFirstAudio": 14851,
+        "speechEndToFirstAssistantAudio": 21776,
+        "vadSpeechEndToFirstAssistantAudio": 20000,
+        "turnWallClock": 34498
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-12.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-12.wav"
     },
     {
       "id": "turn-13",
       "fixtureId": "13-clarify-deadline",
       "inputText": "You mentioned a deadline earlier. Can you clarify whether that is the deadline for me to submit the petition, the deadline for the instructor to approve it, or the deadline for the registrar to finish processing it?",
-      "sttFinal": "You mentioned a deadline earlier. Can you clarify whether that is the deadline for me to submit the petition the deadline for the instructor to approve it, or the deadline for the registrar to finish processing it.",
-      "agentReply": "The deadline I mentioned earlier refers to the financial aid full-time status review for your scholarship, which is scheduled for Friday afternoon. This is the deadline by which your full-time status needs to be reflected for their review, not a deadline for submitting or processing your petition.",
+      "sttFinal": "You mentioned a deadline earlier. Can you clarify whether that is the deadline for me to submit the petition? The deadline for the instructor to approve it, or the deadline for the registrar to finish processing it.",
+      "agentReply": "The deadline I mentioned is for the Financial Aid office's review of your full-time status, which is scheduled for Friday at 5 PM. This is not a deadline for you to submit the petition, nor for the instructor to approve it, nor for the registrar to finish processing it.",
       "toolCalls": [],
       "inputAudioMs": 12851,
-      "assistantAudioMs": 16891,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 15851,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1554,
-        "vadSpeechEndAfterAudioEnd": 1973,
-        "llmTimeToFirstText": 3218,
-        "ttsTimeToFirstAudio": 10566,
-        "speechEndToFirstAssistantAudio": 15338,
-        "vadSpeechEndToFirstAssistantAudio": 13365,
-        "turnWallClock": 28839
+        "sttFinalAfterSpeechEnd": 1854,
+        "vadSpeechEndAfterAudioEnd": 1795,
+        "llmTimeToFirstText": 2880,
+        "ttsTimeToFirstAudio": 9251,
+        "speechEndToFirstAssistantAudio": 13985,
+        "vadSpeechEndToFirstAssistantAudio": 12190,
+        "turnWallClock": 27786
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-13.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-13.wav"
     },
     {
       "id": "turn-14",
       "fixtureId": "14-appointment",
       "inputText": "If this gets complicated, I would like an appointment with Student Relations tomorrow afternoon. I am free after two thirty, and I would prefer a video appointment because I will be at my lab orientation.",
-      "sttFinal": "If this gets complicated, I would like an appointment with student relations tomorrow afternoon. I'm free after 02:30, and I would prefer a video appointment. Because I will be at my lab orientation.",
-      "agentReply": "I have scheduled a video appointment for you tomorrow at 2:45 PM to discuss any complications with your late add petition. You will receive a calendar invitation with the video conference link shortly.",
+      "sttFinal": "If this gets complicated, I would like an appointment with student relations tomorrow afternoon. I'm free after 02:30 and I would prefer a video appointment. Because I will be at my lab orientation.",
+      "agentReply": "I have scheduled a video appointment for you with Student Relations tomorrow at 2:45 PM to discuss your late add petition. You will receive a calendar invitation with the video conference link shortly.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 11131,
-      "assistantAudioMs": 11011,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 11731,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1326,
-        "vadSpeechEndAfterAudioEnd": 1604,
-        "llmTimeToFirstText": 5170,
-        "ttsTimeToFirstAudio": 7409,
-        "speechEndToFirstAssistantAudio": 13905,
-        "vadSpeechEndToFirstAssistantAudio": 12301,
-        "turnWallClock": 25550
+        "sttFinalAfterSpeechEnd": 2857,
+        "vadSpeechEndAfterAudioEnd": 1606,
+        "llmTimeToFirstText": 3763,
+        "ttsTimeToFirstAudio": 8515,
+        "speechEndToFirstAssistantAudio": 15135,
+        "vadSpeechEndToFirstAssistantAudio": 13529,
+        "turnWallClock": 26814
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-14.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-14.wav"
     },
     {
       "id": "turn-15",
       "fixtureId": "15-summary",
       "inputText": "Before we finish, please summarize what you found, what case number I should reference, and what I should do today versus what I can wait on. I want to write it down so I do not miss anything.",
       "sttFinal": "Before we finish, please summarize what you found, what case number I should reference, and what I should do today versus what I can wait on. I want to write it down so I do not miss anything.",
-      "agentReply": "Here is a summary of what we discussed: you can proceed with a late add for Biology 101, and there are no registration holds blocking it. Your case number is SR-2027-004812, and a video appointment has been scheduled for you tomorrow at 2:45 PM.\n\nToday, you should contact the Accessibility Office, International Student Services, and Financial Aid, and also upload the instructor's email and the department's lab-seat confirmation to your case. You can wait to plan payment for the lab fee until it posts after registrar processing, and you will need to manually forward updates to your athletics academic coordinator.",
+      "agentReply": "You can proceed with your late add petition for Biology 101, case number SR-2027-004812, as you have no registration holds and adding the course will secure your full-time financial aid status. Today, you should contact International Student Services, Financial Aid, and the Accessibility Office, and upload your instructor's email to the petition. You can wait to attach the department's lab seat approval once you receive it, and your video appointment with Student Relations is scheduled for tomorrow at 2:45 PM.",
       "toolCalls": [],
       "inputAudioMs": 10331,
-      "assistantAudioMs": 39451,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 32891,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1527,
-        "vadSpeechEndAfterAudioEnd": 1708,
-        "llmTimeToFirstText": 4357,
-        "ttsTimeToFirstAudio": 16690,
-        "speechEndToFirstAssistantAudio": 22574,
-        "vadSpeechEndToFirstAssistantAudio": 20866,
-        "turnWallClock": 33399
+        "sttFinalAfterSpeechEnd": 1792,
+        "vadSpeechEndAfterAudioEnd": 1724,
+        "llmTimeToFirstText": 3951,
+        "ttsTimeToFirstAudio": 18701,
+        "speechEndToFirstAssistantAudio": 24444,
+        "vadSpeechEndToFirstAssistantAudio": 22720,
+        "turnWallClock": 35283
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-15.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-15.wav"
     },
     {
       "id": "turn-16",
       "fixtureId": "16-goodbye",
       "inputText": "That answers my questions. Please make sure the case notes include that I am trying to reach full time status for financial aid and visa compliance, not just adding the class for convenience.",
       "sttFinal": "That answers my questions. Please make sure the case notes include that I am trying to reach full time status for financial aid and visa compliance. Not just adding the class for convenience.",
-      "agentReply": "I have updated the case notes for SR-2027-004812 to reflect that your late add request is specifically for financial aid and F1 visa compliance. This ensures the registrar understands the critical reasons behind your petition.",
+      "agentReply": "I have updated the case notes for SR-2027-004812 to reflect that your primary motivation for the late add is to achieve full-time status for financial aid and F-1 visa compliance. This ensures the registrar understands the critical nature of your request.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 11171,
-      "assistantAudioMs": 15931,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 17691,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1484,
-        "vadSpeechEndAfterAudioEnd": 1768,
-        "llmTimeToFirstText": 4070,
-        "ttsTimeToFirstAudio": 9552,
-        "speechEndToFirstAssistantAudio": 15106,
-        "vadSpeechEndToFirstAssistantAudio": 13338,
-        "turnWallClock": 26871
+        "sttFinalAfterSpeechEnd": 1793,
+        "vadSpeechEndAfterAudioEnd": 1713,
+        "llmTimeToFirstText": 4880,
+        "ttsTimeToFirstAudio": 12260,
+        "speechEndToFirstAssistantAudio": 18933,
+        "vadSpeechEndToFirstAssistantAudio": 17220,
+        "turnWallClock": 30664
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-16.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-16.wav"
     },
     {
       "id": "turn-17",
       "fixtureId": "17-parent-consent",
       "inputText": "I forgot one detail. My parent is an authorized payer on my account, but I do not want them to receive the case notes about visa status. Can you tell me whether billing delegates can see Student Relations notes, or only the charges that result from the lab fee?",
-      "sttFinal": "I forgot one detail. My parent is an authorized payer on my account. Account, but I do not want them to receive the case notes about visa status. Can you tell me whether billing delegates can see student relations notes? Or only the charges that result from the lab fee?",
-      "agentReply": "I cannot tell you whether billing delegates can see student relations notes, as that information is not available in my system. Authorized payers typically only see charges and payment information, not detailed case notes.",
-      "toolCalls": [],
+      "sttFinal": "I forgot one detail. My parent is an authorized payer on my account. But I do not want them to receive the case notes about visa status. Can you tell me whether billing delegates can see student relations notes? Or only the charges that result from the lab fee?",
+      "agentReply": "Billing delegates, such as your parent, can only see financial charges on your account and do not have access to student relations case notes, including details about your visa status. Your privacy regarding case notes is maintained separately from billing information.",
+      "toolCalls": [
+        "studentRelationsLookup"
+      ],
       "inputAudioMs": 15411,
-      "assistantAudioMs": 13491,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 15931,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1517,
-        "vadSpeechEndAfterAudioEnd": 1733,
-        "llmTimeToFirstText": 2451,
-        "ttsTimeToFirstAudio": 8106,
-        "speechEndToFirstAssistantAudio": 12074,
-        "vadSpeechEndToFirstAssistantAudio": 10341,
-        "turnWallClock": 28224
+        "sttFinalAfterSpeechEnd": 1865,
+        "vadSpeechEndAfterAudioEnd": 1744,
+        "llmTimeToFirstText": 4405,
+        "ttsTimeToFirstAudio": 9884,
+        "speechEndToFirstAssistantAudio": 16154,
+        "vadSpeechEndToFirstAssistantAudio": 14410,
+        "turnWallClock": 32433
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-17.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-17.wav"
     },
     {
       "id": "turn-18",
       "fixtureId": "18-department-seat",
       "inputText": "The department coordinator just emailed me while we are talking and said the lab seat is reserved until tomorrow at noon. Should I reply to them first, or is it better to upload the email and let Student Relations contact the department through the case?",
       "sttFinal": "The department coordinator just emailed me while we are talking and said the lab seat is reserved until tomorrow at noon. Should I reply to them first, or is it better to upload the email and let student relations contact the department through the case?",
-      "agentReply": "You should reply to the department coordinator first to acknowledge the lab seat reservation and confirm your intent to proceed. It is also important to upload that email to your student relations case, so all parties have the most current information.",
+      "agentReply": "You should reply to the department coordinator first to confirm your acceptance of the reserved lab seat before tomorrow at noon. After confirming, please upload that email to your student relations case, and Student Relations can then follow up with the department as needed.",
       "toolCalls": [],
       "inputAudioMs": 13371,
-      "assistantAudioMs": 14011,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 14371,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1607,
-        "vadSpeechEndAfterAudioEnd": 1741,
-        "llmTimeToFirstText": 3309,
-        "ttsTimeToFirstAudio": 8922,
-        "speechEndToFirstAssistantAudio": 13838,
-        "vadSpeechEndToFirstAssistantAudio": 12097,
-        "turnWallClock": 27924
+        "sttFinalAfterSpeechEnd": 1928,
+        "vadSpeechEndAfterAudioEnd": 1792,
+        "llmTimeToFirstText": 4106,
+        "ttsTimeToFirstAudio": 9792,
+        "speechEndToFirstAssistantAudio": 15826,
+        "vadSpeechEndToFirstAssistantAudio": 14034,
+        "turnWallClock": 29899
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-18.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-18.wav"
     },
     {
       "id": "turn-19",
       "fixtureId": "19-class-attendance",
       "inputText": "I already attended the first lecture and one lab as a guest because the instructor allowed it. Does that help the petition, and should I include the dates I attended so the registrar knows I have not missed the required safety orientation?",
-      "sttFinal": "I already attended the first lecture and one lab as a guest, because the instructor allowed it. Does that help the petition? And should I include the dates I attended so the registrar knows I have not missed the required safety orientation?",
-      "agentReply": "Yes, attending the first lecture and lab as a guest does help your petition by demonstrating your commitment to the course. You should include the dates you attended in your case notes so the registrar is aware you have completed the required safety orientation.",
-      "toolCalls": [
-        "studentRelationsLookup"
-      ],
+      "sttFinal": "I already attended the first lecture and one lab as a guest. Because the instructor allowed it. Does that help the petition? And should I include the dates I attended so the registrar knows I have not missed the required safety orientation?",
+      "agentReply": "Yes, attending the first lecture and lab as a guest can help your petition by demonstrating your engagement and awareness of the course material. Please include the dates you attended in your petition so the registrar is aware you have not missed the required safety orientation.",
+      "toolCalls": [],
       "inputAudioMs": 13011,
-      "assistantAudioMs": 14811,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 16051,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1611,
-        "vadSpeechEndAfterAudioEnd": 1757,
-        "llmTimeToFirstText": 4174,
-        "ttsTimeToFirstAudio": 8912,
-        "speechEndToFirstAssistantAudio": 14697,
-        "vadSpeechEndToFirstAssistantAudio": 12940,
-        "turnWallClock": 28349
+        "sttFinalAfterSpeechEnd": 2108,
+        "vadSpeechEndAfterAudioEnd": 2040,
+        "llmTimeToFirstText": 2847,
+        "ttsTimeToFirstAudio": 9329,
+        "speechEndToFirstAssistantAudio": 14284,
+        "vadSpeechEndToFirstAssistantAudio": 12244,
+        "turnWallClock": 27920
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-19.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-19.wav"
     },
     {
       "id": "turn-20",
       "fixtureId": "20-refund-risk",
       "inputText": "If the petition is denied, I may need to add a different three credit course instead. Can you tell me whether there is a refund or tuition adjustment risk if I wait until after the registrar decision to choose a backup class?",
       "sttFinal": "If the petition is denied, I may need to add a different three credit course instead. Can you tell me whether there is a refund or tuition adjustment risk if I wait until after the registrar decision to choose a backup class?",
-      "agentReply": "I cannot tell you whether there is a refund or tuition adjustment risk if you wait until after the registrar's decision to choose a backup class. You should contact the Registrar's Office directly to inquire about their policies on tuition adjustments and refunds for course changes after a petition denial.",
+      "agentReply": "I cannot provide specific information about refund or tuition adjustment risks for adding a different course after a petition decision. You should contact the Bursar's Office or Financial Aid directly to understand their policies regarding tuition adjustments and refunds in such a scenario.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 12331,
-      "assistantAudioMs": 15851,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 16771,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1493,
-        "vadSpeechEndAfterAudioEnd": 1707,
-        "llmTimeToFirstText": 5310,
-        "ttsTimeToFirstAudio": 9930,
-        "speechEndToFirstAssistantAudio": 16733,
-        "vadSpeechEndToFirstAssistantAudio": 15026,
-        "turnWallClock": 29672
+        "sttFinalAfterSpeechEnd": 1767,
+        "vadSpeechEndAfterAudioEnd": 1716,
+        "llmTimeToFirstText": 5066,
+        "ttsTimeToFirstAudio": 11261,
+        "speechEndToFirstAssistantAudio": 18094,
+        "vadSpeechEndToFirstAssistantAudio": 16378,
+        "turnWallClock": 31018
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-20.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-20.wav"
     },
     {
       "id": "turn-21",
       "fixtureId": "21-appeal-path",
       "inputText": "If the registrar says no, is there an appeal path through Student Relations, or would that go through my college dean? I am asking because the wait list timing was outside my control, and I want to know what evidence matters most.",
-      "sttFinal": "If the registrar says no, is there an appeal path? Through student relations or would that go through my college dean? I am asking because the wait list timing was outside my control. And I wanna know what evidence matters most.",
-      "agentReply": "I cannot tell you whether there is an appeal path through Student Relations or your college dean if your petition is denied. You should contact the Registrar's Office or your college dean's office directly to inquire about the appeal process and what evidence would be most relevant.",
+      "sttFinal": "If the registrar says no, is there an appeal path through student relations or would that go through my college dean? I am asking because the waitlist timing was outside my control. And I want to know what evidence matters most.",
+      "agentReply": "If your late add petition is denied, the appeal path typically goes through your college dean's office, not directly through Student Relations. The most important evidence for an appeal would be documentation supporting the circumstances beyond your control, such as the waitlist timing, and any communication from the department or instructor.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 13731,
-      "assistantAudioMs": 15691,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 19091,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1432,
-        "vadSpeechEndAfterAudioEnd": 1736,
-        "llmTimeToFirstText": 5671,
-        "ttsTimeToFirstAudio": 9685,
-        "speechEndToFirstAssistantAudio": 16788,
-        "vadSpeechEndToFirstAssistantAudio": 15052,
-        "turnWallClock": 31182
+        "sttFinalAfterSpeechEnd": 1994,
+        "vadSpeechEndAfterAudioEnd": 1857,
+        "llmTimeToFirstText": 4579,
+        "ttsTimeToFirstAudio": 12584,
+        "speechEndToFirstAssistantAudio": 19157,
+        "vadSpeechEndToFirstAssistantAudio": 17300,
+        "turnWallClock": 33668
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-21.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-21.wav"
     },
     {
       "id": "turn-22",
       "fixtureId": "22-notification-preference",
       "inputText": "Please set my notification preference to email first and text second if that is available. I am in lab most afternoons, so a phone call may go to voicemail, but I can reply to email quickly during breaks.",
-      "sttFinal": "Please set my notification preference to email first and text second if that is available. I'm in lab most afternoons, so a phone call may go to voice mail, but I can reply to email quickly during breaks.",
-      "agentReply": "I cannot set your notification preferences to email first and text second, as that functionality is not available in my system. You will need to manage your notification preferences through your student portal.",
+      "sttFinal": "Please set my notification preference to email first and text second. If that is available. I'm in lab most afternoons, so a phone call may go to voice mail. But I can reply to email quickly during breaks.",
+      "agentReply": "I cannot set your notification preferences for email and text directly through this system. However, I can make a note in your case file, SR-2027-004812, to prioritize email communication and use text as a secondary option.",
       "toolCalls": [],
       "inputAudioMs": 11691,
-      "assistantAudioMs": 12691,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 17251,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4411,
-        "vadSpeechEndAfterAudioEnd": 1665,
-        "llmTimeToFirstText": 1783,
-        "ttsTimeToFirstAudio": 7750,
-        "speechEndToFirstAssistantAudio": 13944,
-        "vadSpeechEndToFirstAssistantAudio": 12279,
-        "turnWallClock": 26180
+        "sttFinalAfterSpeechEnd": 1749,
+        "vadSpeechEndAfterAudioEnd": 1670,
+        "llmTimeToFirstText": 1960,
+        "ttsTimeToFirstAudio": 11906,
+        "speechEndToFirstAssistantAudio": 15615,
+        "vadSpeechEndToFirstAssistantAudio": 13945,
+        "turnWallClock": 27915
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-22.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-22.wav"
     },
     {
       "id": "turn-23",
       "fixtureId": "23-readback",
       "inputText": "Can you read back the case summary before we close it? I want to make sure it includes the late add petition, the lab seat reservation, financial aid full time status, international office notification, and the accessibility scheduling issue.",
-      "sttFinal": "Can you read back the case summary before we close it? I wanna make sure it includes the late the lab seat reservation, financial aid full time status, international office notification, and the accessibility scheduling issue.",
-      "agentReply": "Yes, I can read back the case summary for you. The case notes for SR-2027-004812 include your late add request for Biology 101, the lab seat reservation, your need for full-time status for financial aid and F1 visa compliance, and your accessibility accommodation for lab scheduling.",
+      "sttFinal": "Can you read back the case summary before we close it? I wanna make sure it includes the late ad petition, the lab seat reservation, financial aid full time status, international office and the accessibility scheduling issue.",
+      "agentReply": "The case summary for SR-2027-004812 includes your late add petition for Biology 101, the lab seat reservation, your need for full-time status for financial aid, the notification to the International Student Services office, and your accessibility scheduling concern. This comprehensive summary ensures all relevant details are captured.",
       "toolCalls": [],
       "inputAudioMs": 14291,
-      "assistantAudioMs": 21571,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 23411,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 4424,
-        "vadSpeechEndAfterAudioEnd": 1668,
-        "llmTimeToFirstText": 1804,
-        "ttsTimeToFirstAudio": 20106,
-        "speechEndToFirstAssistantAudio": 26334,
-        "vadSpeechEndToFirstAssistantAudio": 24666,
-        "turnWallClock": 41308
+        "sttFinalAfterSpeechEnd": 1767,
+        "vadSpeechEndAfterAudioEnd": 1689,
+        "llmTimeToFirstText": 2277,
+        "ttsTimeToFirstAudio": 15652,
+        "speechEndToFirstAssistantAudio": 19696,
+        "vadSpeechEndToFirstAssistantAudio": 18007,
+        "turnWallClock": 35714
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-23.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-23.wav"
     },
     {
       "id": "turn-24",
       "fixtureId": "24-final-confirmation",
       "inputText": "Okay, final confirmation. I will upload the instructor email and department seat confirmation today, notify international student services, and watch for the video appointment tomorrow at two forty five. Please tell me if that is the right plan.",
-      "sttFinal": "Okay. Final confirmation. I will upload the instructor email and department seat confirmation today, notify international student services, and watch for the video appointment tomorrow at 02:45. Please tell me if that is the right plan.",
-      "agentReply": "Yes, that is the correct plan for your late add petition. You should upload the instructor's email and department seat confirmation today, notify International Student Services, and attend your video appointment tomorrow at 2:45 PM.",
+      "sttFinal": "Okay. Final confirmation. I will upload the instructor email and department seat confirmation today. Notify International Student Services, and watch for the video appointment tomorrow at 02:45. Please tell me if that is the right plan.",
+      "agentReply": "Yes, that is the correct plan for your late add petition. You should upload both the instructor's email and the department seat confirmation today, notify International Student Services today, and be ready for your video appointment tomorrow at 2:45 PM.",
       "toolCalls": [],
       "inputAudioMs": 14651,
-      "assistantAudioMs": 14731,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 14931,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1498,
-        "vadSpeechEndAfterAudioEnd": 1797,
-        "llmTimeToFirstText": 2673,
-        "ttsTimeToFirstAudio": 12383,
-        "speechEndToFirstAssistantAudio": 16554,
-        "vadSpeechEndToFirstAssistantAudio": 14757,
-        "turnWallClock": 31924
+        "sttFinalAfterSpeechEnd": 3318,
+        "vadSpeechEndAfterAudioEnd": 1765,
+        "llmTimeToFirstText": 3170,
+        "ttsTimeToFirstAudio": 10225,
+        "speechEndToFirstAssistantAudio": 16713,
+        "vadSpeechEndToFirstAssistantAudio": 14948,
+        "turnWallClock": 32205
       },
-      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio/turn-24.wav"
+      "assistantAudioPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio/turn-24.wav"
     }
   ],
   "artifacts": {
-    "runDir": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z",
-    "assistantAudioDir": "test/performance/runs/websocket-university-2026-05-26T17-48-03-882Z/assistant-audio"
+    "runDir": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z",
+    "assistantAudioDir": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/assistant-audio",
+    "manifestPath": "test/performance/runs/websocket-university-2026-05-27T10-03-12-076Z/manifest.json"
   },
   "qualityGate": {
     "passed": true,
