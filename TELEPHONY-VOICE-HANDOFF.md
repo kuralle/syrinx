@@ -122,6 +122,15 @@ curl http://127.0.0.1:4181/twilio/twiml
 
 Local `ws://` output is not sufficient for real carriers; use public `https://` so the generated websocket URLs are `wss://`.
 
+You can also run the provider-shaped public probe against either a local server or a public TLS host:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public http://127.0.0.1:4181
+pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
+```
+
+The probe validates `/healthz`, `/telephony/config.json`, `/twilio/twiml`, opens Twilio/Telnyx/SmartPBX-shaped websocket sessions, sends one valid PCMU media frame plus the provider's terminal event, and fails if websocket compression is negotiated. Passing this probe proves public routing and websocket upgrade shape, not a real carrier call.
+
 ## Disposable Fly Public-TLS Spike
 
 Use Fly only as a disposable public websocket spike, not as production hosting. The checked-in spike config is `fly.telephony-spike.toml` and is intentionally constrained to one auto-stopping machine:
@@ -139,6 +148,14 @@ fly config validate -c fly.telephony-spike.toml
 ```
 
 Then create the app, set secrets from `.env`, deploy with `--ha=false`, run the public checks, and destroy the app/machine immediately after the spike. Do not create Fly Postgres for this review server.
+
+After deployment, run:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-fly-app.fly.dev
+```
+
+Destroy the Fly app/machine after this probe and any carrier sandbox call you intentionally run.
 
 Latest public-TLS spike, `2026-05-28`, used app `syrinx-telephony-spike-mcj-20260528` in `sin` on one `shared-cpu-1x:1024MB` machine. Results:
 

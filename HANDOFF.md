@@ -252,6 +252,14 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony
 
 The server exposes one live university-support engine behind `WS /twilio`, `WS /telnyx`, and `WS /media-stream`, plus `GET /twilio/twiml` and `GET /telephony/config.json` for carrier setup. Local preflight on `127.0.0.1:4181` passed for `/healthz`, `/telephony/config.json`, and `/twilio/twiml`. Live-provider telephony adapter smokes now pass for Twilio, Telnyx, and SmartPBX websocket shapes, but real carrier execution still requires a public TLS endpoint and a carrier/sandbox call. Human carrier test details are documented separately in `TELEPHONY-VOICE-HANDOFF.md`.
 
+Run the public TLS websocket probe before wiring a carrier dashboard:
+
+```bash
+pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
+```
+
+The same probe can target local review servers for command verification. Latest local verification against `http://127.0.0.1:4182` passed `/healthz`, `/telephony/config.json`, `/twilio/twiml`, Twilio/Telnyx/SmartPBX provider-shaped websocket sessions, and asserted no websocket compression was negotiated. This is still a routing/upgrade preflight, not a substitute for real carrier/sandbox media timing.
+
 Run local verification:
 
 ```bash
