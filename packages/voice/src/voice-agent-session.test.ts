@@ -51,6 +51,19 @@ class OrderedClosePlugin implements VoicePlugin {
   }
 }
 
+class SlowClosePlugin implements VoicePlugin {
+  closeCount = 0;
+
+  async initialize(): Promise<void> {
+    // no-op
+  }
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 class FailingInitPlugin implements VoicePlugin {
   async initialize(): Promise<void> {
     throw new Error("init failed");
@@ -299,6 +312,18 @@ describe("VoiceAgentSession", () => {
     expect(closeOrder).toEqual(["vad", "tts", "stt", "recorder"]);
   });
 
+  it("shares one in-flight close across concurrent callers", async () => {
+    const plugin = new SlowClosePlugin();
+    const session = new VoiceAgentSession({ plugins: { recorder: {} } });
+
+    session.registerPlugin("recorder", plugin);
+    await session.start();
+    await Promise.all([session.close(), session.close(), session.close()]);
+
+    expect(plugin.closeCount).toBe(1);
+    expect(session.state).toBe("closed");
+  });
+
   it("tears down initialized plugins in reverse order after init failure", async () => {
     const closeOrder: string[] = [];
     const errors: Array<{ stage: string; message: string }> = [];
@@ -408,7 +433,7 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
-  it("routes LLM output to TTS text and done packets", async () => {
+  it("routes sentence-complete LLM output to TTS text and done packets", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const ttsText: TextToSpeechTextPacket[] = [];
     const ttsDone: TextToSpeechDonePacket[] = [];
@@ -427,13 +452,20 @@ describe("VoiceAgentSession", () => {
       timestampMs: Date.now(),
       text: "Hello ",
     };
+    const deltaPacket2: LlmDeltaPacket = {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "there. How can I help",
+    };
     const donePacket: LlmResponseDonePacket = {
       kind: "llm.done",
       contextId: "turn-1",
       timestampMs: Date.now(),
-      text: "Hello there.",
+      text: "Hello there. How can I help",
     };
     session.bus.push(Route.Main, deltaPacket);
+    session.bus.push(Route.Main, deltaPacket2);
     session.bus.push(Route.Main, donePacket);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -443,7 +475,13 @@ describe("VoiceAgentSession", () => {
         kind: "tts.text",
         contextId: "turn-1",
         timestampMs: expect.any(Number),
-        text: "Hello ",
+        text: "Hello there.",
+      },
+      {
+        kind: "tts.text",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "How can I help",
       },
     ]);
     expect(ttsDone).toEqual([
@@ -451,7 +489,103 @@ describe("VoiceAgentSession", () => {
         kind: "tts.done",
         contextId: "turn-1",
         timestampMs: expect.any(Number),
-        text: "Hello there.",
+        text: "Hello there. How can I help",
+      },
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("flushes final LLM tails to TTS when the provider completes", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const ttsText: TextToSpeechTextPacket[] = [];
+    const ttsDone: TextToSpeechDonePacket[] = [];
+    const flushed: string[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+    session.bus.on("tts.done", (pkt) => {
+      ttsDone.push(pkt as TextToSpeechDonePacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string; value: string };
+      if (metric.name === "tts.final_tail_flushed") flushed.push(metric.value);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "You should contact your instructor and upload their email",
+    } satisfies LlmDeltaPacket);
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "You should contact your instructor and upload their email",
+    } satisfies LlmResponseDonePacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(ttsText).toEqual([
+      {
+        kind: "tts.text",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "You should contact your instructor and upload their email",
+      },
+    ]);
+    expect(ttsDone).toEqual([
+      {
+        kind: "tts.done",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "You should contact your instructor and upload their email",
+      },
+    ]);
+    expect(flushed).toEqual(["You should contact your instructor and upload their email"]);
+
+    await closeSession(session);
+  });
+
+  it("streams non-English terminal punctuation as complete TTS text", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const ttsText: TextToSpeechTextPacket[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "手続きできます。次の文はまだ",
+    } satisfies LlmDeltaPacket);
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "手続きできます。次の文はまだ",
+    } satisfies LlmResponseDonePacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(ttsText).toEqual([
+      {
+        kind: "tts.text",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "手続きできます。",
+      },
+      {
+        kind: "tts.text",
+        contextId: "turn-1",
+        timestampMs: expect.any(Number),
+        text: "次の文はまだ",
       },
     ]);
 
@@ -541,6 +675,48 @@ describe("VoiceAgentSession", () => {
     ]);
     expect(tts.interruptObservedAtMs - vadDetectedAtMs).toBeLessThan(50);
     expect(lastAudioAfterVadMs).toBeLessThan(50);
+
+    await closeSession(session);
+  });
+
+  it("tells the recorder to truncate queued assistant audio on barge-in", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const recorded: RecordAssistantAudioPacket[] = [];
+
+    await session.start();
+    session.bus.on("record.assistant_audio", (pkt) => {
+      recorded.push(pkt as RecordAssistantAudioPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge-in",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        kind: "record.assistant_audio",
+        contextId: "assistant-turn",
+        truncate: false,
+      }),
+      expect.objectContaining({
+        kind: "record.assistant_audio",
+        contextId: "assistant-turn",
+        truncate: true,
+        audio: new Uint8Array(0),
+      }),
+    ]);
 
     await closeSession(session);
   });

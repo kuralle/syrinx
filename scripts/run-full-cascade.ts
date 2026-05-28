@@ -170,9 +170,9 @@ async function* streamGemini(prompt: string): AsyncGenerator<{ text: string; don
 
 function synthesizeCartesia(text: string): Promise<{ audioBytes: number; chunks: number; ttfbMs: number; totalMs: number }> {
   return new Promise((resolve, reject) => {
-    const url = `wss://api.cartesia.ai/tts/websocket?api_key=${CARTESIA_KEY}&cartesia_version=2024-06-10`;
+    const url = "wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10";
     const start = Date.now();
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(url, { headers: { "X-API-Key": CARTESIA_KEY } });
     let chunks = 0;
     let audioBytes = 0;
     let ttfbMs = 0;

@@ -1,6 +1,6 @@
 {
   "scenario": "websocket_university_student_relations_interactive",
-  "generatedAt": "2026-05-26T17:33:42.205Z",
+  "generatedAt": "2026-05-27T15:52:20.657Z",
   "fixtureProvider": "mixed-wav-fixtures",
   "llmModel": "gemini-2.5-flash",
   "ttsProvider": "cartesia",
@@ -12,83 +12,90 @@
   "postTtsDrainMs": 500,
   "turnCount": 3,
   "latencyMs": {
-    "avgSttFinalAfterSpeechEnd": 1776,
-    "avgVadSpeechEndAfterAudioEnd": 627,
-    "avgLlmTimeToFirstText": 3705,
-    "avgTtsTimeToFirstAudio": 377,
-    "avgSpeechEndToFirstAssistantAudio": 5858,
-    "avgVadSpeechEndToFirstAssistantAudio": 5231
+    "avgSttFinalAfterSpeechEnd": 1363,
+    "avgVadSpeechEndAfterAudioEnd": 665,
+    "avgLlmTimeToFirstText": 3123,
+    "avgTtsTimeToFirstAudio": 373,
+    "avgSpeechEndToFirstAssistantAudio": 4859,
+    "avgVadSpeechEndToFirstAssistantAudio": 4194
   },
   "turns": [
     {
       "id": "interactive-01",
       "fixtureId": "review-late-add",
       "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
-      "sttFinal": "Hi. I'm Maya Chen, student ID s 10042. I need to know whether I can still add biology one, o one after the deadline. And what form I should submit.",
-      "agentReply": "Yes, you can still add Biology 101, but a late add is required since the deadline has passed. You will need to submit a Late Add Petition, and it requires approvals from the course instructor, your academic advisor, or the advising desk, and the registrar.",
+      "sttFinal": "Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline, and what form I should submit.",
+      "agentReply": "Yes, you can still add Biology 101 after the deadline by submitting a Late Add Petition. You will need to upload an instructor email and department lab-seat confirmation, then route the petition to the instructor, advising desk, and registrar.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 8963,
-      "assistantAudioMs": 12492,
-      "audioBytes": 399752,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 12307,
+      "audioBytes": 393810,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1074,
-        "vadSpeechEndAfterAudioEnd": 740,
-        "llmTimeToFirstText": 4172,
-        "ttsTimeToFirstAudio": 389,
-        "speechEndToFirstAssistantAudio": 5635,
-        "vadSpeechEndToFirstAssistantAudio": 4895,
-        "turnWallClock": 20772
+        "sttFinalAfterSpeechEnd": 1085,
+        "vadSpeechEndAfterAudioEnd": 741,
+        "llmTimeToFirstText": 3571,
+        "ttsTimeToFirstAudio": 385,
+        "speechEndToFirstAssistantAudio": 5041,
+        "vadSpeechEndToFirstAssistantAudio": 4300,
+        "turnWallClock": 20184
       }
     },
     {
       "id": "interactive-02",
       "fixtureId": "02-registration-holds",
       "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning. And I do not want the instructor approval to expire while I wait.",
-      "agentReply": "I can confirm that you do not have any active registration holds that would block your late add petition. You can proceed with the petition by uploading the instructor email and department lab-seat confirmation, then routing it to the instructor, advising desk, and registrar.",
+      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
+      "agentReply": "I checked your record, and you do not have any active registration holds that would block your late add petition. Your student portal warning might be related to another matter, but it will not prevent this petition from going through.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16451,
-      "assistantAudioMs": 12678,
-      "audioBytes": 405696,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 9845,
+      "audioBytes": 315048,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1035,
-        "vadSpeechEndAfterAudioEnd": 683,
-        "llmTimeToFirstText": 3793,
-        "ttsTimeToFirstAudio": 356,
-        "speechEndToFirstAssistantAudio": 5184,
-        "vadSpeechEndToFirstAssistantAudio": 4501,
-        "turnWallClock": 28281
+        "sttFinalAfterSpeechEnd": 913,
+        "vadSpeechEndAfterAudioEnd": 720,
+        "llmTimeToFirstText": 2797,
+        "ttsTimeToFirstAudio": 352,
+        "speechEndToFirstAssistantAudio": 4062,
+        "vadSpeechEndToFirstAssistantAudio": 3342,
+        "turnWallClock": 26210
       }
     },
     {
       "id": "interactive-03",
       "fixtureId": "10-lab-fee",
       "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
-      "sttFinal": "Does biology one zero one have a separate lab fee that appears after the late ad is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition because that changes how I plan my payment.",
-      "agentReply": "Yes, Biology 101 does have a separate lab fee of $85. This fee will be posted to your account after the registrar processes and approves your Late Add Petition.",
+      "sttFinal": "Does BIOLOGY one hundred one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition because that changes how I plan my payment.",
+      "agentReply": "Yes, Biology 101 has an $85 lab fee. This fee will be posted to your account after the registrar processes your Late Add Petition.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 14691,
-      "assistantAudioMs": 8266,
-      "audioBytes": 264520,
+      "vadSpeechStartedCount": 1,
+      "vadSpeechEndedCount": 1,
+      "assistantAudioMs": 7523,
+      "audioBytes": 240742,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 3219,
-        "vadSpeechEndAfterAudioEnd": 459,
-        "llmTimeToFirstText": 3149,
-        "ttsTimeToFirstAudio": 387,
-        "speechEndToFirstAssistantAudio": 6755,
-        "vadSpeechEndToFirstAssistantAudio": 6296,
-        "turnWallClock": 26053
+        "sttFinalAfterSpeechEnd": 2090,
+        "vadSpeechEndAfterAudioEnd": 533,
+        "llmTimeToFirstText": 3000,
+        "ttsTimeToFirstAudio": 383,
+        "speechEndToFirstAssistantAudio": 5473,
+        "vadSpeechEndToFirstAssistantAudio": 4940,
+        "turnWallClock": 24858
       }
     }
   ],
   "artifacts": {
-    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-26T17-32-25-084Z"
+    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-27T15-51-07-393Z",
+    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-05-27T15-51-07-393Z/manifest.json"
   },
   "qualityGate": {
     "passed": true,

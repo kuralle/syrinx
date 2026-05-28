@@ -3,3 +3,5 @@ dist/
 .env
 *.log
 .DS_Store
+test-cartesia-output.pcm
+examples/02-hello-voice-headless/test/performance/runs/

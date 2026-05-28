@@ -1,7 +1,37 @@
 // SPDX-License-Identifier: MIT
 
+export {
+  decodeBrowserAssistantAudio,
+  encodeBrowserAudioEnvelopeFrame,
+  encodeBrowserAudioFrame,
+  float32ToPcm16,
+  pcm16FrameSampleCount,
+  resampleFloat32Linear,
+  type EncodeBrowserAudioOptions,
+  type ResampleFloat32Options,
+  type SyrinxAudioJsonFrame,
+} from "./audio.js";
+
+import {
+  decodeBrowserAssistantAudio,
+  encodeBrowserAudioEnvelopeFrame,
+  encodeBrowserAudioFrame,
+  type BrowserAssistantAudio,
+  type EncodeBrowserAudioOptions,
+} from "./audio.js";
+
 export type SyrinxStudioMessage =
-  | { readonly type: "ready"; readonly sessionId?: string }
+  | {
+      readonly type: "ready";
+      readonly sessionId?: string;
+      readonly audio?: {
+        readonly inputSampleRateHz: number;
+        readonly outputSampleRateHz: number;
+        readonly encoding: "pcm_s16le";
+        readonly channels: 1;
+        readonly binaryEnvelope?: "syrinx.audio.v1";
+      };
+    }
   | { readonly type: "speech_started"; readonly turnId?: string }
   | { readonly type: "speech_ended"; readonly turnId?: string }
   | { readonly type: "stt_chunk"; readonly turnId?: string; readonly transcript: string }
@@ -13,7 +43,16 @@ export type SyrinxStudioMessage =
   | { readonly type: "agent_interrupted"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "audio_clear"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "tts_end"; readonly turnId?: string }
-  | { readonly type: "tts_chunk"; readonly audio: string }
+  | {
+      readonly type: "tts_chunk";
+      readonly turnId?: string;
+      readonly sequence: number;
+      readonly sampleRateHz: number;
+      readonly encoding: "pcm_s16le";
+      readonly channels: 1;
+      readonly byteLength: number;
+      readonly durationMs: number;
+    }
   | {
       readonly type: "metrics";
       readonly sttMs?: number;
@@ -28,7 +67,7 @@ export type SyrinxBrowserClientEvent =
   | { readonly type: "close"; readonly code: number; readonly reason: string }
   | { readonly type: "error"; readonly error: Event }
   | { readonly type: "message"; readonly message: SyrinxStudioMessage }
-  | { readonly type: "audio"; readonly data: Blob | ArrayBuffer };
+  | { readonly type: "audio"; readonly data: ArrayBuffer; readonly metadata?: BrowserAssistantAudio["metadata"] };
 
 export type SyrinxBrowserClientHandler = (event: SyrinxBrowserClientEvent) => void;
 
@@ -40,6 +79,7 @@ export interface SyrinxBrowserClientOptions {
 export class SyrinxBrowserClient {
   private socket: WebSocket | null = null;
   private readonly handlers = new Set<SyrinxBrowserClientHandler>();
+  private audioSequence = 0;
 
   constructor(private readonly options: SyrinxBrowserClientOptions) {}
 
@@ -94,6 +134,11 @@ export class SyrinxBrowserClient {
     this.sendJson({ type: "audio", audio, contextId });
   }
 
+  sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
+    const sequence = options.sequence ?? (this.audioSequence += 1);
+    this.requireOpenSocket().send(encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }));
+  }
+
   sendText(text: string): void {
     this.sendJson({ type: "text", text });
   }
@@ -108,8 +153,16 @@ export class SyrinxBrowserClient {
       this.emit({ type: "message", message });
       return;
     }
-    if (data instanceof Blob || data instanceof ArrayBuffer) {
-      this.emit({ type: "audio", data });
+    if (data instanceof Blob) {
+      void data.arrayBuffer().then((buffer) => {
+        const audio = decodeBrowserAssistantAudio(buffer);
+        this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+      });
+      return;
+    }
+    if (data instanceof ArrayBuffer) {
+      const audio = decodeBrowserAssistantAudio(data);
+      this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
     }
   }
 

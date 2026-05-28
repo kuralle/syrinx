@@ -124,7 +124,8 @@ async function streamingTurn(transcript: string): Promise<{
   // --- Connect to Cartesia upfront ---
   const cartesiaStart = Date.now();
   const cartesiaWs = new WebSocket(
-    `wss://api.cartesia.ai/tts/websocket?api_key=${CARTESIA_KEY}&cartesia_version=2024-06-10`,
+    "wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10",
+    { headers: { "X-API-Key": CARTESIA_KEY } },
   );
 
   await new Promise<void>((resolve, reject) => {

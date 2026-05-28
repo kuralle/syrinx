@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+**/.turbo
+**/dist
+**/coverage
+examples/02-hello-voice-headless/test/performance/runs
+test-cartesia-output.pcm
+*.log

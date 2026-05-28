@@ -8,7 +8,15 @@
 
 import type { PipelineBus } from "@asyncdot/voice";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { streamText, stepCountIs, type ModelMessage, type TextStreamPart, type ToolChoice, type ToolSet } from "ai";
+import {
+  streamText,
+  stepCountIs,
+  type FinishReason,
+  type ModelMessage,
+  type TextStreamPart,
+  type ToolChoice,
+  type ToolSet,
+} from "ai";
 import {
   Route,
   type VoicePlugin,
@@ -22,6 +30,11 @@ import {
 } from "@asyncdot/voice";
 
 export type AISDKBridgeTools = ToolSet;
+export type AISDKStreamFactory = (request: {
+  userText: string;
+  signal: AbortSignal;
+  messages: ModelMessage[];
+}) => AsyncGenerator<TextStreamPart<ToolSet>>;
 
 export class AISDKBridgePlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -39,6 +52,8 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private abortController: AbortController | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
+
+  constructor(private readonly streamFactory?: AISDKStreamFactory) {}
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -80,6 +95,8 @@ export class AISDKBridgePlugin implements VoicePlugin {
 
     for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
       try {
+        let finishReason: FinishReason | null = null;
+        let rawFinishReason: string | undefined;
         for await (const part of withStreamIdleTimeout(this.streamResponse(userText, signal), this.timeoutMs, signal)) {
           if (signal.aborted) return;
           if (part.type === "text-delta") {
@@ -114,12 +131,19 @@ export class AISDKBridgePlugin implements VoicePlugin {
             throw part.error instanceof Error ? part.error : new Error(`Tool ${part.toolName} failed`);
           } else if (part.type === "error") {
             throw part.error instanceof Error ? part.error : new Error(String(part.error));
-          } else if (part.type === "finish-step" && part.finishReason === "error") {
-            throw new Error(`AI SDK provider step failed: ${part.rawFinishReason ?? "unknown finish reason"}`);
-          } else if (part.type === "finish" && part.finishReason === "error") {
-            throw new Error(`AI SDK provider failed: ${part.rawFinishReason ?? "unknown finish reason"}`);
+          } else if (part.type === "finish-step") {
+            this.recordFinishReason(contextId, "llm.finish_step_reason", part.finishReason, part.rawFinishReason);
+            if (part.finishReason === "error" || part.finishReason === "content-filter") {
+              throw new Error(`AI SDK provider step failed: ${formatFinishReason(part.finishReason, part.rawFinishReason)}`);
+            }
+          } else if (part.type === "finish") {
+            finishReason = part.finishReason;
+            rawFinishReason = part.rawFinishReason;
+            this.recordFinishReason(contextId, "llm.finish_reason", part.finishReason, part.rawFinishReason);
           }
         }
+
+        validateFinalFinishReason(finishReason, rawFinishReason);
 
         this.bus.push(Route.Main, {
           kind: "llm.done",
@@ -159,11 +183,17 @@ export class AISDKBridgePlugin implements VoicePlugin {
   }
 
   private async *streamResponse(userText: string, signal: AbortSignal): AsyncGenerator<TextStreamPart<ToolSet>> {
+    const messages: ModelMessage[] = [...this.history, { role: "user", content: userText }];
+    if (this.streamFactory) {
+      yield* this.streamFactory({ userText, signal, messages });
+      return;
+    }
+
     const google = createGoogleGenerativeAI({ apiKey: this.apiKey });
     const result = streamText({
       model: google(this.model),
       system: this.systemPrompt,
-      messages: [...this.history, { role: "user", content: userText }],
+      messages,
       tools: this.tools,
       toolChoice: this.toolChoice,
       temperature: this.temperature,
@@ -179,6 +209,21 @@ export class AISDKBridgePlugin implements VoicePlugin {
     }
   }
 
+  private recordFinishReason(
+    contextId: string,
+    name: string,
+    finishReason: FinishReason,
+    rawFinishReason: string | undefined,
+  ): void {
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name,
+      value: rawFinishReason ? `${finishReason}:${rawFinishReason}` : finishReason,
+    });
+  }
+
   async close(): Promise<void> {
     this.abortController?.abort();
     for (const dispose of this.disposers.splice(0)) dispose();
@@ -192,6 +237,22 @@ export class AISDKBridgePlugin implements VoicePlugin {
       this.history = this.history.slice(this.history.length - maxMessages);
     }
   }
+}
+
+function validateFinalFinishReason(finishReason: FinishReason | null, rawFinishReason: string | undefined): void {
+  if (finishReason === null) {
+    throw new Error("AI SDK stream ended without a provider finish reason");
+  }
+  if (finishReason === "length") {
+    throw new Error(`AI SDK provider reached token limit before completing: ${formatFinishReason(finishReason, rawFinishReason)}`);
+  }
+  if (finishReason !== "stop") {
+    throw new Error(`AI SDK provider did not complete normally: ${formatFinishReason(finishReason, rawFinishReason)}`);
+  }
+}
+
+function formatFinishReason(finishReason: FinishReason, rawFinishReason: string | undefined): string {
+  return rawFinishReason ? `${finishReason} (${rawFinishReason})` : finishReason;
 }
 
 function readToolsConfig(value: unknown): AISDKBridgeTools | undefined {

@@ -6,11 +6,13 @@ import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 
+import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@asyncdot/voice";
 import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
 
 import { GEMINI_UNIVERSITY_FIXTURES, PKG_ROOT } from "./generate-gemini-university-fixtures.js";
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
 import { createUniversitySupportSession } from "../src/university-support-agent.js";
+import { pcm16DurationMs, writeSmokeArtifactManifest, type SmokeArtifactManifest } from "./smoke-artifact-manifest.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(SCRIPT_DIR, "..", "test", "performance", "runs");
@@ -51,8 +53,10 @@ interface InteractiveTurnCapture {
   inputAudioMs: number;
   startedAtMs: number;
   speechStartedAtMs: number;
+  speechStartedCount: number;
   audioEndedAtMs: number;
   speechEndedAtMs: number;
+  speechEndedCount: number;
   sttFinalAtMs: number;
   firstAgentAtMs: number;
   firstAudioAtMs: number;
@@ -94,6 +98,7 @@ async function main(): Promise<void> {
     socket.close();
 
     const failures = evaluateConversation(turns);
+    const manifestPath = join(runDir, "manifest.json");
     const baseline = {
       scenario: "websocket_university_student_relations_interactive",
       generatedAt: new Date().toISOString(),
@@ -123,6 +128,8 @@ async function main(): Promise<void> {
         agentReply: turn.agentReply,
         toolCalls: turn.toolCalls,
         inputAudioMs: turn.inputAudioMs,
+        vadSpeechStartedCount: turn.speechStartedCount,
+        vadSpeechEndedCount: turn.speechEndedCount,
         assistantAudioMs: Math.round((turn.audioBytes / 2 / OUTPUT_SAMPLE_RATE) * 1000),
         audioBytes: turn.audioBytes,
         latencyMs: {
@@ -137,19 +144,101 @@ async function main(): Promise<void> {
       })),
       artifacts: {
         runDir: relative(PKG_ROOT, runDir),
+        manifestPath: relative(PKG_ROOT, manifestPath),
       },
       qualityGate: {
         passed: failures.length === 0,
         failures,
       },
     };
+    const manifest = buildSmokeManifest({
+      generatedAt: baseline.generatedAt,
+      runDir,
+      manifestPath,
+      failures,
+      turns,
+    });
 
     await writeFile(BASELINE_PATH, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+    await writeSmokeArtifactManifest(manifestPath, manifest);
     console.log(JSON.stringify(baseline, null, 2));
     if (failures.length > 0) throw new Error(`interactive websocket smoke failed: ${failures.join("; ")}`);
   } finally {
     await server.close();
   }
+}
+
+function buildSmokeManifest(args: {
+  readonly generatedAt: string;
+  readonly runDir: string;
+  readonly manifestPath: string;
+  readonly failures: readonly string[];
+  readonly turns: readonly InteractiveTurnCapture[];
+}): SmokeArtifactManifest {
+  const turnArtifacts = args.turns.map((turn) => {
+    const inputByteLength = Math.round((turn.inputAudioMs / 1000) * INPUT_SAMPLE_RATE * 2);
+    return {
+      id: turn.id,
+      fixtureId: turn.fixtureId,
+      inputAudio: {
+        sampleRateHz: INPUT_SAMPLE_RATE,
+        encoding: "pcm_s16le" as const,
+        channels: 1 as const,
+        byteLength: inputByteLength,
+        durationMs: turn.inputAudioMs,
+      },
+      assistantAudio: {
+        sampleRateHz: OUTPUT_SAMPLE_RATE,
+        encoding: "pcm_s16le" as const,
+        channels: 1 as const,
+        byteLength: turn.audioBytes,
+        durationMs: pcm16DurationMs(turn.audioBytes, OUTPUT_SAMPLE_RATE),
+      },
+      latencyMs: {
+        sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
+        vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
+        llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
+        ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.firstAgentAtMs,
+        speechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.audioEndedAtMs,
+        vadSpeechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.speechEndedAtMs,
+        turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
+      },
+      vad: {
+        speechStartedCount: turn.speechStartedCount,
+        speechEndedCount: turn.speechEndedCount,
+      },
+    };
+  });
+  const inputByteLength = turnArtifacts.reduce((sum, turn) => sum + turn.inputAudio.byteLength, 0);
+  const outputByteLength = turnArtifacts.reduce((sum, turn) => sum + turn.assistantAudio.byteLength, 0);
+  return {
+    schemaVersion: 2,
+    scenario: "websocket_university_student_relations_interactive",
+    generatedAt: args.generatedAt,
+    transport: "websocket",
+    fixtureProvider: "mixed-wav-fixtures",
+    run: {
+      runDir: relative(PKG_ROOT, args.runDir),
+      baselinePath: relative(PKG_ROOT, BASELINE_PATH),
+    },
+    audio: {
+      inputSampleRateHz: INPUT_SAMPLE_RATE,
+      outputSampleRateHz: OUTPUT_SAMPLE_RATE,
+      inputByteLength,
+      outputByteLength,
+      inputWireByteLength: inputByteLength,
+      outputWireByteLength: outputByteLength,
+      inputDecodedPcmByteLength: inputByteLength,
+      outputDecodedPcmByteLength: outputByteLength,
+      inputDurationMs: pcm16DurationMs(inputByteLength, INPUT_SAMPLE_RATE),
+      outputDurationMs: pcm16DurationMs(outputByteLength, OUTPUT_SAMPLE_RATE),
+    },
+    turns: turnArtifacts,
+    qualityGate: {
+      passed: args.failures.length === 0,
+      failures: args.failures,
+    },
+  };
 }
 
 async function openSocket(url: string): Promise<WebSocket> {
@@ -181,8 +270,10 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       inputAudioMs: Math.round((samples.length / INPUT_SAMPLE_RATE) * 1000),
       startedAtMs: Date.now(),
       speechStartedAtMs: 0,
+      speechStartedCount: 0,
       audioEndedAtMs: 0,
       speechEndedAtMs: 0,
+      speechEndedCount: 0,
       sttFinalAtMs: 0,
       firstAgentAtMs: 0,
       firstAudioAtMs: 0,
@@ -216,8 +307,11 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
 }
 
 function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => void {
+  let nextBinaryBelongsToTurn = false;
   const onMessage = (data: RawData, isBinary: boolean): void => {
     if (isBinary) {
+      if (!nextBinaryBelongsToTurn) return;
+      nextBinaryBelongsToTurn = false;
       if (turn.firstAudioAtMs === 0) turn.firstAudioAtMs = Date.now();
       turn.audioBytes += rawBytes(data).byteLength;
       return;
@@ -226,11 +320,13 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
     const msg = JSON.parse(data.toString()) as Record<string, unknown>;
     if (typeof msg["turnId"] === "string" && msg["turnId"] !== turn.id) return;
     if (msg["type"] === "speech_started") {
+      turn.speechStartedCount += 1;
       if (turn.speechStartedAtMs === 0) turn.speechStartedAtMs = Date.now();
       return;
     }
     if (msg["type"] === "speech_ended") {
-      if (turn.speechEndedAtMs === 0) turn.speechEndedAtMs = Date.now();
+      turn.speechEndedCount += 1;
+      turn.speechEndedAtMs = Date.now();
       return;
     }
     if (msg["type"] === "stt_output") {
@@ -250,6 +346,10 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
     }
     if (msg["type"] === "agent_end" && msg["turnId"] === turn.id) {
       if (turn.agentEndedAtMs === 0) turn.agentEndedAtMs = Date.now();
+      return;
+    }
+    if (msg["type"] === "tts_chunk") {
+      nextBinaryBelongsToTurn = true;
       return;
     }
     if (msg["type"] === "tts_end" && msg["turnId"] === turn.id) {
@@ -288,6 +388,7 @@ function sendAudioFrame(socket: WebSocket, frame: Int16Array, contextId: string)
   socket.send(JSON.stringify({
     type: "audio",
     contextId,
+    sampleRateHz: INPUT_SAMPLE_RATE,
     audio: Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength).toString("base64"),
   }));
 }
@@ -361,6 +462,7 @@ function evaluateConversation(turns: readonly InteractiveTurnCapture[]): string[
     const reply = turn.agentReply.toLowerCase();
     if (turn.speechStartedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_started`);
     if (turn.speechEndedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_ended`);
+    if (turn.speechEndedAtMs < turn.speechStartedAtMs) failures.push(`${turn.id} latest VAD speech_ended preceded first speech_started`);
     for (const term of turn.requiredTerms) {
       if (!transcript.includes(term)) failures.push(`${turn.id} STT transcript missed required term ${term}`);
     }
@@ -379,10 +481,13 @@ function average(values: readonly number[]): number {
 }
 
 function rawBytes(data: RawData): Uint8Array {
-  if (Buffer.isBuffer(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (Array.isArray(data)) return Uint8Array.from(Buffer.concat(data));
-  throw new Error("Unsupported binary websocket payload");
+  let bytes: Uint8Array;
+  if (Buffer.isBuffer(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+  else if (Array.isArray(data)) bytes = Uint8Array.from(Buffer.concat(data));
+  else throw new Error("Unsupported binary websocket payload");
+  if (hasSyrinxAudioEnvelope(bytes)) return decodeSyrinxAudioEnvelope(bytes).audio;
+  return bytes;
 }
 
 function requireEnv(name: string): void {

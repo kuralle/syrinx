@@ -374,7 +374,7 @@
             <label for="micSelect">Microphone</label>
             <select id="micSelect"><option value="">Default input</option></select>
           </div>
-          <button id="talkBtn" disabled>Hold To Talk</button>
+          <button id="talkBtn" disabled>Start Listening</button>
           <div class="meter"><canvas id="meter"></canvas></div>
         </section>
 
@@ -411,13 +411,13 @@
         <header class="topbar">
           <div>
             <h2>Live Student Relations Agent</h2>
-            <p>Push-to-talk sends turn-scoped PCM16 frames over the websocket transport.</p>
+            <p>Always-on listening streams PCM16 frames; VAD and endpointing decide turn boundaries.</p>
           </div>
           <button id="resumeAudioBtn" class="secondary">Enable Audio</button>
         </header>
         <div class="content">
           <section id="timeline" class="timeline">
-            <div class="empty">Connect, hold to talk, then release to finalize the turn.</div>
+            <div class="empty">Connect, start listening, then speak naturally.</div>
           </section>
           <aside id="events" class="sidefeed"></aside>
         </div>
@@ -442,6 +442,8 @@
 
       const defaultWsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
       wsUrl.value = location.host ? `${defaultWsProtocol}//${location.host}/ws` : "ws://127.0.0.1:4173/ws";
+      const requestedWsUrl = new URLSearchParams(location.search).get("ws");
+      if (requestedWsUrl) wsUrl.value = requestedWsUrl;
 
       let socket = null;
       let mediaStream = null;
@@ -451,11 +453,31 @@
       let outputContext = null;
       let playbackAt = 0;
       const outputSources = new Set();
+      const pendingAudioChunks = [];
       let recording = false;
       let activeTurn = null;
+      let audioSequence = 0;
       let pcmQueue = new Int16Array(0);
+      let preSpeechQueue = new Int16Array(0);
       let meterPeak = 0;
       const turns = new Map();
+      const startRmsThreshold = 0.012;
+      const preSpeechMs = 400;
+      window.__syrinxReviewState = {
+        sentFrames: 0,
+        sentEnvelopeFrames: 0,
+        sentBytes: 0,
+        contextIds: [],
+        startedTurns: 0,
+        audioContextSampleRateHz: 0,
+        targetSampleRateHz: 0,
+        receivedAssistantAudioFrames: 0,
+        receivedAssistantEnvelopeFrames: 0,
+        receivedAssistantBytes: 0,
+        assistantSampleRateHz: 0,
+        audioClearEvents: 0,
+        audioPlaybackErrors: 0,
+      };
 
       function setStatus(kind, text) {
         status.className = `status ${kind}`;
@@ -531,31 +553,25 @@
 
       clearBtn.addEventListener("click", () => {
         turns.clear();
-        timeline.innerHTML = '<div class="empty">Connect, hold to talk, then release to finalize the turn.</div>';
+        timeline.innerHTML = '<div class="empty">Connect, start listening, then speak naturally.</div>';
         events.innerHTML = "";
       });
 
-      talkBtn.addEventListener("pointerdown", async (event) => {
-        event.preventDefault();
+      talkBtn.addEventListener("click", async () => {
+        if (recording) {
+          await stopRecording();
+          return;
+        }
         await startRecording();
       });
-      talkBtn.addEventListener("pointerup", async (event) => {
-        event.preventDefault();
-        await stopRecording();
-      });
-      talkBtn.addEventListener("pointerleave", async () => {
-        if (recording) await stopRecording();
-      });
       talkBtn.addEventListener("keydown", async (event) => {
-        if ((event.code === "Space" || event.code === "Enter") && !recording) {
-          event.preventDefault();
-          await startRecording();
-        }
-      });
-      talkBtn.addEventListener("keyup", async (event) => {
         if (event.code === "Space" || event.code === "Enter") {
           event.preventDefault();
-          await stopRecording();
+          if (recording) {
+            await stopRecording();
+            return;
+          }
+          await startRecording();
         }
       });
 
@@ -598,6 +614,8 @@
       function handleJson(message) {
         if (message.type === "ready") {
           addEvent(`session ready ${message.sessionId || ""}`.trim());
+          if (message.audio?.inputSampleRateHz) inputRate.value = String(message.audio.inputSampleRateHz);
+          if (message.audio?.outputSampleRateHz) outputRate.value = String(message.audio.outputSampleRateHz);
           return;
         }
         if (message.type === "error") {
@@ -607,10 +625,18 @@
         const turnId = message.turnId || activeTurn?.id || "unknown-turn";
         const turn = ensureTurn(turnId);
         if (message.type === "speech_started") {
+          turn.audioEndedAt = 0;
           turn.state.textContent = "listening";
         } else if (message.type === "speech_ended") {
+          if (activeTurn?.id === turn.id) {
+            drainPcmQueue(turn.id);
+            activeTurn = null;
+          }
+          if (!turn.audioEndedAt) turn.audioEndedAt = Date.now();
           turn.state.textContent = "finalizing";
+          updateLatency(turn);
         } else if (message.type === "audio_clear") {
+          window.__syrinxReviewState.audioClearEvents += 1;
           flushOutputAudio();
           turn.state.textContent = "interrupted";
           addEvent(`cleared assistant audio for ${turnId}`);
@@ -638,9 +664,12 @@
           updateLatency(turn);
         } else if (message.type === "agent_end") {
           turn.state.textContent = "tts";
+        } else if (message.type === "tts_chunk") {
+          pendingAudioChunks.push(message);
         } else if (message.type === "tts_end") {
           turn.state.textContent = "done";
           updateLatency(turn);
+          if (recording && activeTurn?.id === turn.id) activeTurn = null;
         }
       }
 
@@ -649,8 +678,9 @@
         await ensureOutputContext();
         flushOutputAudio();
         const targetRate = readSampleRate(inputRate.value, 16000);
-        activeTurn = ensureTurn(`review-${Date.now().toString(36)}`);
+        activeTurn = null;
         pcmQueue = new Int16Array(0);
+        preSpeechQueue = new Int16Array(0);
         mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             deviceId: micSelect.value ? { exact: micSelect.value } : undefined,
@@ -661,20 +691,34 @@
           },
         });
         audioContext = new AudioContext();
+        window.__syrinxReviewState.audioContextSampleRateHz = audioContext.sampleRate;
+        window.__syrinxReviewState.targetSampleRateHz = targetRate;
         sourceNode = audioContext.createMediaStreamSource(mediaStream);
         processorNode = audioContext.createScriptProcessor(2048, 1, 1);
         processorNode.onaudioprocess = (audioEvent) => {
           const input = audioEvent.inputBuffer.getChannelData(0);
-          meterPeak = Math.max(meterPeak * 0.82, rms(input));
+          const inputRms = rms(input);
+          meterPeak = Math.max(meterPeak * 0.82, inputRms);
           const resampled = resampleFloat32(input, audioContext.sampleRate, targetRate);
-          queuePcm(floatToPcm16(resampled), targetRate, activeTurn.id);
+          const pcm = floatToPcm16(resampled);
+          if (!activeTurn) {
+            appendPreSpeech(pcm, targetRate);
+            if (inputRms < startRmsThreshold) return;
+            flushOutputAudio();
+            activeTurn = createCaptureTurn();
+            activeTurn.state.textContent = "listening";
+            queuePcm(preSpeechQueue, targetRate, activeTurn.id);
+            preSpeechQueue = new Int16Array(0);
+            return;
+          }
+          queuePcm(pcm, targetRate, activeTurn.id);
         };
         sourceNode.connect(processorNode);
         processorNode.connect(audioContext.destination);
         recording = true;
         talkBtn.classList.add("recording");
-        talkBtn.textContent = "Release To Send";
-        activeTurn.state.textContent = "listening";
+        talkBtn.textContent = "Stop Listening";
+        addEvent("microphone listening");
       }
 
       async function stopRecording() {
@@ -688,6 +732,7 @@
         sourceNode = null;
         mediaStream = null;
         audioContext = null;
+        preSpeechQueue = new Int16Array(0);
         if (activeTurn) {
           drainPcmQueue(activeTurn.id);
           activeTurn.audioEndedAt = Date.now();
@@ -696,7 +741,20 @@
           updateLatency(activeTurn);
         }
         talkBtn.classList.remove("recording");
-        talkBtn.textContent = "Hold To Talk";
+        talkBtn.textContent = "Start Listening";
+      }
+
+      function createCaptureTurn() {
+        window.__syrinxReviewState.startedTurns += 1;
+        return ensureTurn(`review-${Date.now().toString(36)}`);
+      }
+
+      function appendPreSpeech(samples, sampleRate) {
+        const next = new Int16Array(preSpeechQueue.length + samples.length);
+        next.set(preSpeechQueue);
+        next.set(samples, preSpeechQueue.length);
+        const maxSamples = Math.round(sampleRate * preSpeechMs / 1000);
+        preSpeechQueue = next.length > maxSamples ? next.slice(next.length - maxSamples) : next;
       }
 
       function queuePcm(samples, sampleRate, turnId) {
@@ -726,21 +784,86 @@
 
       function sendAudioFrame(turnId, frame) {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({
+        const byteLength = frame.byteLength;
+        window.__syrinxReviewState.sentFrames += 1;
+        window.__syrinxReviewState.sentEnvelopeFrames += 1;
+        window.__syrinxReviewState.sentBytes += byteLength;
+        if (!window.__syrinxReviewState.contextIds.includes(turnId)) {
+          window.__syrinxReviewState.contextIds.push(turnId);
+        }
+        socket.send(encodeAudioEnvelope({
           type: "audio",
           contextId: turnId,
-          audio: bytesToBase64(new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength)),
-        }));
+          sampleRateHz: readSampleRate(inputRate.value, 16000),
+          sequence: ++audioSequence,
+          encoding: "pcm_s16le",
+          channels: 1,
+          byteLength,
+          durationMs: Math.round((frame.length / readSampleRate(inputRate.value, 16000)) * 1000),
+        }, new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength)));
+      }
+
+      function encodeAudioEnvelope(metadata, audioBytes) {
+        const magic = new Uint8Array([83, 89, 82, 88, 65, 49, 10]);
+        const header = new TextEncoder().encode(JSON.stringify(metadata));
+        const output = new Uint8Array(magic.byteLength + 4 + header.byteLength + audioBytes.byteLength);
+        output.set(magic, 0);
+        new DataView(output.buffer).setUint32(magic.byteLength, header.byteLength, true);
+        output.set(header, magic.byteLength + 4);
+        output.set(audioBytes, magic.byteLength + 4 + header.byteLength);
+        return output;
       }
 
       async function handleAudio(data) {
-        const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
-        const turn = activeTurn;
-        if (turn && !turn.firstAudioAt) {
-          turn.firstAudioAt = Date.now();
-          updateLatency(turn);
+        try {
+          const arrayBuffer = data instanceof Blob ? await data.arrayBuffer() : data;
+          const decoded = decodeAssistantAudio(arrayBuffer);
+          const chunk = pendingAudioChunks.shift();
+          const sampleRate = decoded.metadata?.sampleRateHz || chunk?.sampleRateHz || readSampleRate(outputRate.value, 16000);
+          const turnId = decoded.metadata?.contextId || chunk?.turnId;
+          const turn = turnId ? ensureTurn(turnId) : activeTurn;
+          window.__syrinxReviewState.receivedAssistantAudioFrames += 1;
+          window.__syrinxReviewState.receivedAssistantBytes += decoded.audio.byteLength;
+          window.__syrinxReviewState.assistantSampleRateHz = sampleRate;
+          if (decoded.metadata) window.__syrinxReviewState.receivedAssistantEnvelopeFrames += 1;
+          if (turn && !turn.firstAudioAt) {
+            turn.firstAudioAt = Date.now();
+            updateLatency(turn);
+          }
+          await playPcm16(decoded.audio, sampleRate);
+        } catch (err) {
+          window.__syrinxReviewState.audioPlaybackErrors += 1;
+          addEvent(`assistant audio failed: ${err instanceof Error ? err.message : String(err)}`, "error");
         }
-        await playPcm16(arrayBuffer, readSampleRate(outputRate.value, 16000));
+      }
+
+      function decodeAssistantAudio(arrayBuffer) {
+        const bytes = new Uint8Array(arrayBuffer);
+        const magic = [83, 89, 82, 88, 65, 49, 10];
+        if (!hasPrefix(bytes, magic)) return { audio: arrayBuffer, metadata: null };
+        if (bytes.byteLength < magic.length + 4) throw new Error("truncated Syrinx audio envelope");
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const headerLength = view.getUint32(magic.length, true);
+        const headerStart = magic.length + 4;
+        const headerEnd = headerStart + headerLength;
+        if (headerLength <= 0 || headerEnd > bytes.byteLength) throw new Error("invalid Syrinx audio envelope");
+        const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, headerEnd)));
+        const audioBytes = bytes.subarray(headerEnd);
+        if (typeof metadata.byteLength === "number" && metadata.byteLength !== audioBytes.byteLength) {
+          throw new Error("Syrinx audio envelope byteLength mismatch");
+        }
+        return {
+          audio: audioBytes.buffer.slice(audioBytes.byteOffset, audioBytes.byteOffset + audioBytes.byteLength),
+          metadata,
+        };
+      }
+
+      function hasPrefix(bytes, prefix) {
+        if (bytes.byteLength < prefix.length) return false;
+        for (let i = 0; i < prefix.length; i += 1) {
+          if (bytes[i] !== prefix[i]) return false;
+        }
+        return true;
       }
 
       async function ensureOutputContext() {
@@ -779,6 +902,7 @@
           }
         }
         outputSources.clear();
+        pendingAudioChunks.length = 0;
         if (outputContext) playbackAt = outputContext.currentTime;
       }
 
@@ -804,14 +928,6 @@
           output[i] = input[lo] * (1 - frac) + input[hi] * frac;
         }
         return output;
-      }
-
-      function bytesToBase64(bytes) {
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        }
-        return btoa(binary);
       }
 
       function readSampleRate(value, fallback) {

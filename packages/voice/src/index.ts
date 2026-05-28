@@ -112,5 +112,16 @@ export { ModeSwitcher, type ModeSwitchHandlers } from "./mode-switcher.js";
 // Conversation events
 export { type ConversationEvent, createConversationEventStream } from "./conversation-event.js";
 
+// Websocket audio envelope
+export {
+  SYRINX_AUDIO_ENVELOPE_NAME,
+  SYRINX_AUDIO_ENVELOPE_MAGIC,
+  encodeSyrinxAudioEnvelope,
+  decodeSyrinxAudioEnvelope,
+  hasSyrinxAudioEnvelope,
+  type SyrinxAudioEnvelope,
+  type SyrinxAudioEnvelopeHeader,
+} from "./audio-envelope.js";
+
 // VoiceAgentSession
 export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";

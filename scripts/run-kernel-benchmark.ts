@@ -354,11 +354,10 @@ function createLiveCartesiaTTS(): {
   close(): void;
 } {
   const params = new URLSearchParams({
-    api_key: CARTESIA_KEY,
     cartesia_version: "2024-06-01",
   });
   const url = `wss://api.cartesia.ai/tts/websocket?${params.toString()}`;
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(url, { headers: { "X-API-Key": CARTESIA_KEY } });
 
   return {
     synthesize(text: string): Promise<TtsResult> {

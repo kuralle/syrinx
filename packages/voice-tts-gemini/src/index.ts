@@ -14,6 +14,7 @@ import {
   Route,
   type VoicePlugin,
   type PluginConfig,
+  type TextToSpeechEndPacket,
   requireStringConfig,
   optionalStringConfig,
   categorizeTtsError,
@@ -82,7 +83,12 @@ export class GeminiTTSPlugin implements VoicePlugin {
         const donePkt = pkt as { text: string; contextId: string };
         const buffered = this.textByContextId.get(donePkt.contextId) ?? "";
         this.textByContextId.delete(donePkt.contextId);
-        await this.synthesize(donePkt.text || buffered, donePkt.contextId);
+        const text = donePkt.text || buffered;
+        if (!text.trim()) {
+          this.emitEnd(donePkt.contextId);
+          return;
+        }
+        await this.synthesize(text, donePkt.contextId);
       }),
 
       // Listen for TTS interrupts
@@ -94,7 +100,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
   }
 
   private async synthesize(text: string, contextId: string): Promise<void> {
-    if (!text.trim() || !this.bus) return;
+    if (!this.bus) return;
 
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
@@ -141,6 +147,14 @@ export class GeminiTTSPlugin implements VoicePlugin {
         await waitForRetryDelay(attempt, this.retryConfig, signal);
       }
     }
+  }
+
+  private emitEnd(contextId: string): void {
+    this.bus?.push(Route.Main, {
+      kind: "tts.end",
+      contextId,
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
   }
 
   private async synthesizeOnce(text: string, contextId: string, signal: AbortSignal): Promise<number> {

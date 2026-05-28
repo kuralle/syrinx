@@ -24,7 +24,8 @@ async function synthesizeFixture(text: string, voiceId: string): Promise<Uint8Ar
 
   return await new Promise((resolve, reject) => {
     const ws = new WebSocket(
-      `wss://api.cartesia.ai/tts/websocket?api_key=${apiKey}&cartesia_version=2024-06-10`,
+      "wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10",
+      { headers: { "X-API-Key": apiKey } },
     );
     const chunks: Uint8Array[] = [];
     const timeout = setTimeout(() => {
