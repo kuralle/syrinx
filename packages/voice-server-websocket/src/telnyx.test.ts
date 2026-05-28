@@ -405,11 +405,6 @@ describe("createTelnyxMediaStreamServer", () => {
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(samples16k),
     });
-    session.bus.push(Route.Critical, {
-      kind: "interrupt.tts",
-      contextId: "telnyx-call-control-test",
-      timestampMs: Date.now(),
-    });
 
     const media = await mediaMessage;
     expect(media).toEqual({
@@ -424,6 +419,11 @@ describe("createTelnyxMediaStreamServer", () => {
       mark: {
         name: "telnyx-call-control-test:1",
       },
+    });
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "telnyx-call-control-test",
+      timestampMs: Date.now(),
     });
     await expect(clearMessage).resolves.toEqual({
       event: "clear",
@@ -504,6 +504,22 @@ describe("createTelnyxMediaStreamServer", () => {
     expect(messages.filter((message) => message.event === "media")).toHaveLength(1);
     expect(messages.filter((message) => message.event === "mark")).toHaveLength(0);
     expect(messages.filter((message) => message.event === "clear")).toHaveLength(1);
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "telnyx-call-control-test",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(320)),
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "telnyx-call-control-test",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(messages.filter((message) => message.event === "media")).toHaveLength(1);
+    expect(messages.filter((message) => message.event === "mark")).toHaveLength(0);
 
     client.close();
     await server.close();

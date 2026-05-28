@@ -38,6 +38,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private closed = false;
   private reconnecting = false;
   private activeContexts = new Set<string>();
+  private cancelledContexts = new Set<string>();
   private disposers: Array<() => void> = [];
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -77,6 +78,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
   async sendText(text: string, contextId: string): Promise<void> {
     if (!text.trim()) return;
+    if (this.cancelledContexts.has(contextId)) return;
     this.activeContexts.add(contextId);
     const sent = await this.sendWithRetry(
       JSON.stringify({
@@ -110,6 +112,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   }
 
   async finishContext(contextId: string): Promise<void> {
+    if (this.cancelledContexts.has(contextId)) return;
     const sent = await this.sendWithRetry(
       JSON.stringify({
         model_id: this.modelId,
@@ -137,6 +140,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.closed = true;
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
+    this.cancelledContexts.clear();
     this.connResolver = null;
     this.connRejecter = null;
     this.ready = false;
@@ -260,12 +264,15 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
   private async cancelActiveContexts(): Promise<void> {
     const contextIds = [...this.activeContexts];
+    for (const contextId of contextIds) this.cancelledContexts.add(contextId);
     this.activeContexts.clear();
     await Promise.all(contextIds.map((contextId) => this.cancelContext(contextId)));
   }
 
   private async cancelContext(contextId: string): Promise<void> {
     if (!contextId) return;
+    this.cancelledContexts.add(contextId);
+    this.activeContexts.delete(contextId);
     await this.sendWithRetry(
       JSON.stringify({
         context_id: contextId,
@@ -285,6 +292,13 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     }
 
     const contextId = typeof msg["context_id"] === "string" ? msg["context_id"] : "";
+    if (this.cancelledContexts.has(contextId)) {
+      if (msg["done"] === true || msg["type"] === "error" || isErrorStatusCode(msg["status_code"])) {
+        this.cancelledContexts.delete(contextId);
+      }
+      return;
+    }
+
     if (msg["type"] === "error" || isErrorStatusCode(msg["status_code"])) {
       this.activeContexts.delete(contextId);
       this.emitError(contextId, cartesiaProviderError(msg));

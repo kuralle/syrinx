@@ -435,6 +435,54 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("does not send late browser audio chunks after a TTS interruption", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const messages: any[] = [];
+    const binaries: Buffer[] = [];
+    client.on("message", (data, isBinary) => {
+      if (isBinary) {
+        binaries.push(Buffer.from(data as Buffer));
+        return;
+      }
+      messages.push(JSON.parse(data.toString()));
+    });
+
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(messages.some((message) => message.type === "audio_clear")).toBe(true);
+    expect(messages.some((message) => message.type === "tts_chunk" || message.type === "tts_end")).toBe(false);
+    expect(binaries).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("forwards VAD speech boundary events to websocket clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = await createVoiceWebSocketServer({

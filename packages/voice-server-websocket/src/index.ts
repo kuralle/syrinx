@@ -380,6 +380,7 @@ function wireSessionEvents(
   maxBufferedAmountBytes: number,
 ): void {
   const ttsSequences = new Map<string, number>();
+  const interruptedContextIds = new Set<string>();
 
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
@@ -425,11 +426,14 @@ function wireSessionEvents(
   disposers.push(
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
+      interruptedContextIds.add(interrupt.contextId);
+      ttsSequences.delete(interrupt.contextId);
       sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
       sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
     }),
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
+      if (interruptedContextIds.has(audioPacket.contextId)) return;
       const audio = audioPacket.audio;
       if (socket.readyState === WebSocket.OPEN) {
         const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
@@ -460,6 +464,7 @@ function wireSessionEvents(
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
+      if (interruptedContextIds.has(end.contextId)) return;
       ttsSequences.delete(end.contextId);
       sendJson(socket, { type: "tts_end", turnId: end.contextId }, maxBufferedAmountBytes);
     }),

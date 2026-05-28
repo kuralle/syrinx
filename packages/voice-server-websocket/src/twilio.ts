@@ -369,11 +369,13 @@ function wireTwilioSessionEvents(args: {
     if (sent) state.pendingEndMarkName = "";
   };
   state.onPlaybackMarkReceived = sendPendingEndMark;
+  const interruptedContextIds = new Set<string>();
 
   disposers.push(
     () => playout.close(),
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
+      interruptedContextIds.add(interrupt.contextId);
       playout.clear();
       state.pendingMarks.clear();
       state.pendingEndMarkName = "";
@@ -392,6 +394,7 @@ function wireTwilioSessionEvents(args: {
     }),
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
+      if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.streamSid || socket.readyState !== WebSocket.OPEN) return;
       const samples = pcm16BytesToSamples(audioPacket.audio);
       const resampled = resamplePcm16(samples, outputSampleRateHz, twilioSampleRateHz);
@@ -444,6 +447,7 @@ function wireTwilioSessionEvents(args: {
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
+      if (interruptedContextIds.has(end.contextId)) return;
       if (state.stopped || !state.streamSid) return;
       playout.enqueueControl(() => {
         if (state.stopped || !state.streamSid) return;
