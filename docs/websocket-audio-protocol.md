@@ -187,7 +187,7 @@ The Twilio adapter buffers bounded early `start`/`media` messages that arrive be
 
 Default path: `/telnyx`
 
-Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with `stream_url`, `stream_track`, `stream_bidirectional_mode`, and `stream_bidirectional_codec` for this path. Set `SYRINX_TELNYX_BIDIRECTIONAL_CODEC` to match the Telnyx call stream codec.
+Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with `stream_url`, `stream_track`, `stream_bidirectional_mode`, `stream_bidirectional_codec`, and `webhook_url` for this path. Set `SYRINX_TELNYX_BIDIRECTIONAL_CODEC` to match the Telnyx call stream codec.
 
 Telnyx remains provider-specific at the adapter boundary:
 
