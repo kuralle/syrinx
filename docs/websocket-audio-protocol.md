@@ -52,7 +52,7 @@ Clients can send JSON audio frames:
 }
 ```
 
-The server validates strict base64, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames on the websocket connection. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream.
+The server validates strict base64, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames on the websocket connection. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream. If a JSON frame includes `sequence`, it must be a non-negative integer that increases over the websocket input stream. Duplicate or regressing sequence values are rejected before audio reaches the engine; forward gaps are accepted but emit a `websocket.audio_sequence_gap` metric with expected, actual, and missed frame counts.
 
 The supplied browser review console sends microphone audio as `syrinx.audio.v1` binary envelopes by default, not JSON base64. JSON audio frames remain supported for scripted clients and compatibility.
 
@@ -97,6 +97,7 @@ Required invariants:
 - `byteLength`, when present, must exactly match the binary payload length.
 - PCM16 payload byte length must be even after envelope decode.
 - All audio frames for one `contextId` on a websocket connection must use the same source sample rate.
+- `sequence`, when present on JSON or enveloped binary input, must increase over the websocket input stream. It is transport evidence, not a conversation-quality gate.
 
 Enveloped input with missing or malformed timing/format metadata is rejected as a transport error instead of being silently interpreted at the server default sample rate. Raw binary PCM is the supported low-overhead path when a client intentionally wants to rely on the advertised `ready.audio.inputSampleRateHz`.
 
