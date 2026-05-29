@@ -8,6 +8,7 @@ import {
   readRecorderPcmSampleRateHz,
   telephonyReviewHealthPayload,
 } from "../scripts/serve-telephony-review.js";
+import { readRecorderAssistantSampleRateHz } from "../scripts/run-live-university-recorder-coherence.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "syrinx-telephony-review-"));
@@ -49,6 +50,16 @@ describe("telephony review recorder artifacts", () => {
       await expect(readRecorderPcmSampleRateHz(dir, "gemini-session/assistant_audio.pcm", "assistant"))
         .resolves.toBe(24000);
     });
+  });
+
+  it("uses recorder manifest sample rate for live recorder coherence assistant artifacts", () => {
+    expect(readRecorderAssistantSampleRateHz({
+      audio: {
+        user: { byteLength: 0, durationMs: 0, chunks: 0 },
+        assistant: { sampleRateHz: 24000, byteLength: 4800, durationMs: 100, chunks: 1, truncations: 0 },
+      },
+      events: { packets: 1 },
+    })).toBe(24000);
   });
 
   it("refuses to infer assistant WAV sample rate without recorder manifest evidence", async () => {

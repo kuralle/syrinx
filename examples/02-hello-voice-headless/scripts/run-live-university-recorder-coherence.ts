@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Route, type TextToSpeechAudioPacket, type TextToSpeechEndPacket } from "@asyncdot/voice";
 import { createVoiceSessionRecorder } from "@asyncdot/voice-recorder";
@@ -70,6 +70,20 @@ interface TurnRecordingArtifact {
   readonly assistantDurationMs: number;
 }
 
+interface RecorderManifest {
+  readonly audio: {
+    readonly user: { readonly byteLength: number; readonly durationMs: number; readonly chunks: number };
+    readonly assistant: {
+      readonly sampleRateHz?: number;
+      readonly byteLength: number;
+      readonly durationMs: number;
+      readonly chunks: number;
+      readonly truncations: number;
+    };
+  };
+  readonly events: { readonly packets: number };
+}
+
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -84,7 +98,7 @@ async function main(): Promise<void> {
   await mkdir(whisperDir, { recursive: true });
 
   const ttsProvider = chooseTtsProvider();
-  const assistantSampleRateHz = ttsProvider === "cartesia" ? 16000 : 24000;
+  const configuredAssistantSampleRateHz = ttsProvider === "cartesia" ? 16000 : 24000;
   const session = createUniversitySupportSession({
     inputSampleRate: INPUT_SAMPLE_RATE_HZ,
     profile: "interactive",
@@ -94,7 +108,7 @@ async function main(): Promise<void> {
     outputDir: recorderDir,
     sessionId: "three-turn-live",
     userSampleRateHz: INPUT_SAMPLE_RATE_HZ,
-    assistantSampleRateHz,
+    assistantSampleRateHz: configuredAssistantSampleRateHz,
   }));
 
   await session.start();
@@ -111,14 +125,16 @@ async function main(): Promise<void> {
   const recorderEventsPath = join(recorderDir, "three-turn-live", "events.jsonl");
   const recorderUserWav = join(runDir, "recorder-user.wav");
   const recorderAssistantWav = join(runDir, "recorder-assistant.wav");
+  const recorderManifest = JSON.parse(readFileSync(recorderManifestPath, "utf8")) as RecorderManifest;
+  const recorderAssistantSampleRateHz = readRecorderAssistantSampleRateHz(recorderManifest);
   await writePcmFileAsWav(recorderUserPcm, recorderUserWav, INPUT_SAMPLE_RATE_HZ);
-  await writePcmFileAsWav(recorderAssistantPcm, recorderAssistantWav, assistantSampleRateHz);
+  await writePcmFileAsWav(recorderAssistantPcm, recorderAssistantWav, recorderAssistantSampleRateHz);
   const turnRecordings = await writeTurnRecordings({
     turns,
     runDir,
     recorderUserPcmPath: recorderUserPcm,
     userSampleRateHz: INPUT_SAMPLE_RATE_HZ,
-    assistantSampleRateHz,
+    assistantSampleRateHz: recorderAssistantSampleRateHz,
   });
 
   const [whisperUser, whisperAssistant] = await Promise.all([
@@ -126,13 +142,6 @@ async function main(): Promise<void> {
     transcribeWithLocalWhisper(recorderAssistantWav, whisperDir, "recorder-assistant"),
   ]);
 
-  const recorderManifest = JSON.parse(readFileSync(recorderManifestPath, "utf8")) as {
-    audio: {
-      user: { byteLength: number; durationMs: number; chunks: number };
-      assistant: { byteLength: number; durationMs: number; chunks: number; truncations: number };
-    };
-    events: { packets: number };
-  };
   const failures = evaluateQuality(turns, recorderManifest, whisperUser.text, whisperAssistant.text);
   const baseline = {
     scenario: "live_university_recorder_three_turn_coherence",
@@ -180,7 +189,7 @@ async function main(): Promise<void> {
       fixtureId: turn.fixtureId,
       inputAudioMs: turn.inputAudioMs,
       userRecordingMs: Math.round((turn.userRecorderByteLength / 2 / INPUT_SAMPLE_RATE_HZ) * 1000),
-      assistantAudioMs: Math.round((turn.assistantAudioBytes / 2 / assistantSampleRateHz) * 1000),
+      assistantAudioMs: Math.round((turn.assistantAudioBytes / 2 / recorderAssistantSampleRateHz) * 1000),
       toolCalls: turn.toolCalls,
       spokenTtsWords: turn.spokenReply.trim() ? turn.spokenReply.trim().split(/\s+/).length : 0,
       latencyMs: {
@@ -376,13 +385,7 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
 
 function evaluateQuality(
   turns: readonly TurnCapture[],
-  recorderManifest: {
-    audio: {
-      user: { byteLength: number; durationMs: number; chunks: number };
-      assistant: { byteLength: number; durationMs: number; chunks: number; truncations: number };
-    };
-    events: { packets: number };
-  },
+  recorderManifest: RecorderManifest,
   recorderUserTranscript: string,
   recorderAssistantTranscript: string,
 ): string[] {
@@ -425,6 +428,14 @@ function evaluateQuality(
   }
   if (recorderManifest.events.packets <= 0) failures.push("recorder events file is empty");
   return failures;
+}
+
+export function readRecorderAssistantSampleRateHz(manifest: RecorderManifest): number {
+  const sampleRateHz = manifest.audio.assistant.sampleRateHz;
+  if (typeof sampleRateHz !== "number" || !Number.isInteger(sampleRateHz) || sampleRateHz <= 0) {
+    throw new Error("recorder manifest audio.assistant.sampleRateHz must be a positive integer");
+  }
+  return sampleRateHz;
 }
 
 async function writeTurnRecordings(options: {
@@ -542,7 +553,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-void main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
