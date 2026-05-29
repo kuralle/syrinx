@@ -373,6 +373,82 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
+  it("discards unconfirmed provider transcript state across recoverable websocket reconnect", async () => {
+    const connections: WebSocket[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      connections.push(socket);
+      if (connections.length === 1) {
+        socket.on("message", (_data, isBinary) => {
+          if (!isBinary) return;
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            channel: { alternatives: [{ transcript: "stale pre reconnect", confidence: 0.8 }] },
+          }));
+          socket.close(1011, "NET-0000");
+        });
+        return;
+      }
+      socket.on("message", (_data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: true,
+          channel: { alternatives: [{ transcript: "fresh after reconnect", confidence: 0.9 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-before-reconnect",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await waitFor(connections, 2);
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-after-reconnect",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await waitFor(finals);
+
+    expect(finals).toEqual([
+      expect.objectContaining({
+        contextId: "turn-after-reconnect",
+        text: "fresh after reconnect",
+      }),
+    ]);
+    expect(metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "stt_provider_reconnect_discarded_state",
+        contextId: "turn-before-reconnect",
+      }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("does not record STT audio bytes when the Deepgram websocket cannot accept the frame", async () => {
     const endpointUrl = await createLocalServer(() => {});
     const bus = new PipelineBusImpl();
