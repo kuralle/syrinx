@@ -372,7 +372,7 @@ describe("createVoiceWebSocketServer", () => {
       kind: "tts.audio",
       contextId: "turn-2",
       timestampMs: Date.now(),
-      audio: new Uint8Array([8, 9, 10]),
+      audio: new Uint8Array([8, 9, 10, 11]),
     });
 
     expect(textPackets).toEqual([
@@ -389,7 +389,7 @@ describe("createVoiceWebSocketServer", () => {
       sampleRateHz: 16000,
       encoding: "pcm_s16le",
       channels: 1,
-      byteLength: 3,
+      byteLength: 4,
       durationMs: 0,
     });
     const envelope = decodeTestBinaryAudioEnvelope(await audioMessage);
@@ -398,9 +398,9 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-2",
       sequence: 1,
       sampleRateHz: 16000,
-      byteLength: 3,
+      byteLength: 4,
     });
-    expect(envelope.audio).toEqual(Buffer.from([8, 9, 10]));
+    expect(envelope.audio).toEqual(Buffer.from([8, 9, 10, 11]));
 
     client.close();
     await server.close();

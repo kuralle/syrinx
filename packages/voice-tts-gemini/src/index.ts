@@ -199,6 +199,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
           contextId,
           timestampMs: Date.now(),
           audio: audioUint8,
+          sampleRateHz: SAMPLE_RATE,
         });
         audioChunks++;
       }

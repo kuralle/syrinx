@@ -442,7 +442,8 @@ function wireSessionEvents(
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
-      const audio = audioPacket.audio;
+      const sourceSampleRateHz = positiveInteger(audioPacket.sampleRateHz) ?? outputSampleRateHz;
+      const audio = normalizePcm16(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
       if (socket.readyState === WebSocket.OPEN) {
         const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
         ttsSequences.set(audioPacket.contextId, sequence);

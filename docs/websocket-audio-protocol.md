@@ -101,14 +101,14 @@ Required invariants:
 
 Enveloped input with missing or malformed timing/format metadata is rejected as a transport error instead of being silently interpreted at the server default sample rate. Raw binary PCM is the supported low-overhead path when a client intentionally wants to rely on the advertised `ready.audio.inputSampleRateHz`.
 
-Assistant audio is sent as the same envelope by default and is still preceded by `tts_chunk` metadata for clients that track lifecycle events in JSON. Server-side `binaryAudioEnvelope: false` restores raw PCM assistant frames for older websocket clients.
+Assistant audio is normalized to the websocket output rate before it is sent as the same envelope by default, and is still preceded by `tts_chunk` metadata for clients that track lifecycle events in JSON. TTS providers may emit PCM at a different source rate from the websocket output rate; maintained Cartesia and Gemini plugins attach `sampleRateHz` to each `tts.audio` packet so the server can resample from provider truth before writing the envelope. Server-side `binaryAudioEnvelope: false` restores raw PCM assistant frames for older websocket clients.
 
 ## Server Events
 
 Assistant audio lifecycle:
 
 - `tts_chunk`: turn id, sequence, sample rate, encoding, channel count, byte length, and duration for the next binary audio frame.
-- Binary frame: enveloped PCM16 audio by default, or raw PCM16 only when `binaryAudioEnvelope: false` is configured.
+- Binary frame: PCM16 audio at the `tts_chunk.sampleRateHz`, enveloped by default, or raw PCM16 only when `binaryAudioEnvelope: false` is configured.
 - `tts_end`: assistant audio is complete for the turn.
 - `audio_clear`: queued assistant audio should be discarded because the user interrupted.
 - `agent_interrupted`: the agent stream was interrupted by barge-in.

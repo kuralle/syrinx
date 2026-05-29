@@ -346,7 +346,7 @@ function wireSmartPbxSessionEvents(args: {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
-      const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, outputSampleRateHz, state, outboundFrameDurationMs)
+      const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, audioPacket.sampleRateHz ?? outputSampleRateHz, state, outboundFrameDurationMs)
         .map((frame) => ({
           send: () => {
             if (state.stopped) return false;

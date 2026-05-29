@@ -314,6 +314,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           contextId,
           timestampMs: Date.now(),
           audio: new Uint8Array(audioBytes),
+          sampleRateHz: this.sampleRate,
         };
         this.bus?.push(Route.Main, packet);
       } catch (err) {
