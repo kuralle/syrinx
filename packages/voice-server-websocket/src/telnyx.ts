@@ -84,6 +84,7 @@ interface TelnyxConnectionState {
   stopped: boolean;
   lastInboundSequenceNumber: number | null;
   lastInboundMediaChunk: number | null;
+  lastInboundMediaTimestampMs: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
   pendingEndMarkName: string;
@@ -198,6 +199,7 @@ async function handleTelnyxConnection(args: {
     stopped: false,
     lastInboundSequenceNumber: null,
     lastInboundMediaChunk: null,
+    lastInboundMediaTimestampMs: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
     pendingEndMarkName: "",
@@ -471,6 +473,7 @@ function handleTelnyxMessage(args: {
     rememberTelnyxMediaChunk(session, state, message.media?.chunk);
     const encoded = decodeStrictBase64(payload, "media.payload");
     const pcm = decodeInboundPayload(encoded, state.inboundCodec);
+    rememberTelnyxMediaTimestamp(session, state, message.media?.timestamp, pcm.length, state.inboundSampleRateHz);
     const resampled = resamplePcm16(pcm, state.inboundSampleRateHz, inputSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
@@ -551,6 +554,39 @@ function rememberTelnyxMediaChunk(
     });
   }
   state.lastInboundMediaChunk = chunk;
+}
+
+function rememberTelnyxMediaTimestamp(
+  session: VoiceAgentSession,
+  state: TelnyxConnectionState,
+  timestampValue: string | undefined,
+  sampleCount: number,
+  sampleRateHz: number,
+): void {
+  const timestampMs = optionalNonNegativeIntegerString(timestampValue, "Telnyx media.timestamp");
+  if (timestampMs === undefined) return;
+  const previous = state.lastInboundMediaTimestampMs;
+  if (previous !== null && timestampMs < previous) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.media_timestamp_regression",
+      value: JSON.stringify({ previous, actual: timestampMs }),
+    });
+  } else if (previous !== null) {
+    const expected = previous + Math.round((sampleCount / sampleRateHz) * 1000);
+    if (timestampMs > expected) {
+      session.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: state.contextId,
+        timestampMs: Date.now(),
+        name: "telnyx.media_timestamp_gap",
+        value: JSON.stringify({ expected, actual: timestampMs, missedMs: timestampMs - expected }),
+      });
+    }
+  }
+  state.lastInboundMediaTimestampMs = timestampMs;
 }
 
 function validateTelnyxStart(start: TelnyxStartPayload): { readonly codec: TelnyxCodec; readonly sampleRateHz: number } {
@@ -655,6 +691,14 @@ function optionalPositiveIntegerString(value: string | undefined, name: string):
   if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a positive integer string`);
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer string`);
+  return parsed;
+}
+
+function optionalNonNegativeIntegerString(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a non-negative integer string`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be a non-negative integer string`);
   return parsed;
 }
 
