@@ -312,10 +312,21 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private handleProviderFinalizeTimeout(contextId: string): void {
     if (!this.finalizeRequestedContextIds.has(contextId) || this.finalizedContextIds.has(contextId)) return;
     this.pushMetric(contextId, "stt_provider_finalize_timeout", this.audioStats(contextId));
+    this.discardUnconfirmedTurn(contextId);
     this.emitError(
       contextId,
       new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"),
     );
+    void this.reconnect();
+  }
+
+  private discardUnconfirmedTurn(contextId: string): void {
+    this.clearProviderFinalizeTimer(contextId);
+    this.finalizeRequestedContextIds.delete(contextId);
+    this.speechFinalContextIds.delete(contextId);
+    this.ignoreNextProviderFinalContextIds.add(contextId);
+    this.audioStatsByContextId.delete(contextId);
+    this.resetPendingTranscript();
   }
 
   private pushBufferedProviderFinal(contextId: string): boolean {
