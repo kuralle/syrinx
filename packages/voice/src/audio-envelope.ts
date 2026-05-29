@@ -6,7 +6,7 @@ export const SYRINX_AUDIO_ENVELOPE_MAGIC = new Uint8Array([83, 89, 82, 88, 65, 4
 export interface SyrinxAudioEnvelopeHeader {
   readonly type: "audio";
   readonly contextId?: string;
-  readonly sampleRateHz?: number;
+  readonly sampleRateHz: number;
   readonly sequence?: number;
   readonly encoding?: "pcm_s16le";
   readonly channels?: 1;
@@ -20,6 +20,7 @@ export interface SyrinxAudioEnvelope {
 }
 
 export function encodeSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: Uint8Array): Uint8Array {
+  validateSyrinxAudioEnvelope(header, audio);
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
   const output = new Uint8Array(SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength + 4 + headerBytes.byteLength + audio.byteLength);
   output.set(SYRINX_AUDIO_ENVELOPE_MAGIC, 0);
@@ -53,6 +54,21 @@ export function decodeSyrinxAudioEnvelope(data: Uint8Array): SyrinxAudioEnvelope
     throw new Error("Syrinx binary audio envelope header must be an object");
   }
   const header = parsed as SyrinxAudioEnvelopeHeader;
+  const audio = data.subarray(headerEnd);
+  validateSyrinxAudioEnvelope(header, audio);
+
+  return { header, audio };
+}
+
+export function hasSyrinxAudioEnvelope(data: Uint8Array): boolean {
+  if (data.byteLength < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength) return false;
+  for (let i = 0; i < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength; i += 1) {
+    if (data[i] !== SYRINX_AUDIO_ENVELOPE_MAGIC[i]) return false;
+  }
+  return true;
+}
+
+function validateSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: Uint8Array): void {
   if (header.type !== "audio") {
     throw new Error("Syrinx binary audio envelope type must be audio");
   }
@@ -74,8 +90,6 @@ export function decodeSyrinxAudioEnvelope(data: Uint8Array): SyrinxAudioEnvelope
   if (header.byteLength !== undefined && !isNonNegativeInteger(header.byteLength)) {
     throw new Error("Syrinx binary audio envelope byteLength must be a non-negative integer");
   }
-
-  const audio = data.subarray(headerEnd);
   if (audio.byteLength % 2 !== 0) {
     throw new Error("Syrinx binary audio envelope PCM16 payload must contain an even number of bytes");
   }
@@ -88,16 +102,6 @@ export function decodeSyrinxAudioEnvelope(data: Uint8Array): SyrinxAudioEnvelope
       throw new Error("Syrinx binary audio envelope durationMs does not match payload and sampleRateHz");
     }
   }
-
-  return { header, audio };
-}
-
-export function hasSyrinxAudioEnvelope(data: Uint8Array): boolean {
-  if (data.byteLength < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength) return false;
-  for (let i = 0; i < SYRINX_AUDIO_ENVELOPE_MAGIC.byteLength; i += 1) {
-    if (data[i] !== SYRINX_AUDIO_ENVELOPE_MAGIC[i]) return false;
-  }
-  return true;
 }
 
 function isPositiveInteger(value: unknown): value is number {

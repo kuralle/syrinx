@@ -103,6 +103,8 @@ Required invariants:
 
 Enveloped input with missing or malformed timing/format metadata is rejected as a transport error instead of being silently interpreted at the server default sample rate. Raw binary PCM is the supported low-overhead path when a client intentionally wants to rely on the advertised `ready.audio.inputSampleRateHz`.
 
+The shared `encodeSyrinxAudioEnvelope()` helper enforces the same invariants before writing bytes. Tests that need malformed packets construct raw wire frames directly, so production senders cannot accidentally emit frames the receiver would later reject.
+
 Assistant audio is normalized to the websocket output rate before it is sent as the same envelope by default, and is still preceded by `tts_chunk` metadata for clients that track lifecycle events in JSON. TTS providers may emit PCM at a different source rate from the websocket output rate; `tts.audio.sampleRateHz` is required so the server can resample from provider truth before writing the envelope. Server-side `binaryAudioEnvelope: false` restores raw PCM assistant frames for explicitly managed websocket clients.
 
 ## Server Events
