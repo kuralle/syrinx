@@ -270,7 +270,49 @@ curl -o events.jsonl http://127.0.0.1:4185/telephony/artifacts/<session>/events.
 
 The artifact index includes `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and generated `user_audio.wav` / `assistant_audio.wav` for listening or Whisper transcription. The WAV endpoints are test-server conveniences over recorder PCM; do not expose this artifact API in production.
 
-Disposable Fly two-host run:
+Disposable Fly two-host run, preferred:
+
+```bash
+SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
+pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:fly-synthetic-carrier
+```
+
+The command creates two disposable Fly apps with generated names:
+
+- Bot app: `review:telephony`, one `shared-cpu-1x` 1024MB machine, auto-stop enabled.
+- Carrier app: `review:synthetic-carrier`, one `shared-cpu-1x` 1024MB machine, auto-stop enabled.
+
+It stages live provider secrets from `.env` into the bot app, deploys both apps with `--ha=false`, runs Twilio, Telnyx, and SmartPBX shaped calls by default, downloads evidence locally, then destroys both Fly apps in a `finally` block. The summary is written under:
+
+```text
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/summary.json
+```
+
+Downloaded evidence is grouped by provider:
+
+```text
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/bot-artifacts/<provider>/<session>/events.jsonl
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/bot-artifacts/<provider>/<session>/manifest.json
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/bot-artifacts/<provider>/<session>/user_audio.wav
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/bot-artifacts/<provider>/<session>/assistant_audio.wav
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/carrier-artifacts/<provider>/call-result.json
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/carrier-artifacts/<provider>/carrier-inbound.wav
+examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/carrier-artifacts/<provider>/carrier-outbound.wav
+```
+
+The bot WAV files are the recorder tracks to inspect with a player or local Whisper. They are stacked per session and separated by direction (`user_audio.wav` for caller audio, `assistant_audio.wav` for bot audio), not split per turn. `events.jsonl` is the recorder event stream for transcript, metric, recorder, and engine timing inspection.
+
+Useful controls:
+
+```bash
+SYRINX_FLY_REGION=sin
+SYRINX_FLY_MEMORY_MB=1024
+SYRINX_TELEPHONY_NETWORK_PROFILE=clean|jittery|bursty
+SYRINX_FLY_SYNTHETIC_PROVIDERS=twilio,telnyx,smartpbx
+SYRINX_FLY_APP_SUFFIX=my-test-suffix
+```
+
+Manual disposable Fly two-host run:
 
 ```bash
 fly config validate -c fly.bot-telephony-spike.toml
@@ -325,15 +367,15 @@ fly apps destroy syrinx-carrier-spike-mcj-20260529 --yes
 fly apps destroy syrinx-bot-spike-mcj-20260529 --yes
 ```
 
-Latest synthetic carrier spike, `2026-05-28`, used two one-machine Fly apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping. Results:
+Latest synthetic carrier spike, `2026-05-29`, used `smoke:fly-synthetic-carrier` with two one-machine Fly apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping. The command downloaded artifacts and destroyed both apps before exit. Results:
 
 | Provider | Network | Inbound frames | Outbound frames | Completion evidence | Quality gate |
 |---|---|---:|---:|---|---|
-| Twilio | jittery | 1,263 | 645 | `outboundEndMarks: 1` | Passed |
-| Telnyx | jittery | 1,263 | 455 | `outboundEndMarks: 1` | Passed |
-| SmartPBX | jittery | 1,263 | 508 | `outboundQuietDrains: 1` | Passed |
+| Twilio | jittery | 1,263 | 537 | `outboundEndMarks: 1` | Passed |
+| Telnyx | jittery | 1,263 | 575 | `outboundEndMarks: 1` | Passed |
+| SmartPBX | jittery | 1,263 | 485 | `outboundQuietDrains: 1` | Passed |
 
-Downloaded bot recorder artifacts are under `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-bot-artifacts-2026-05-28T19-28Z/`. Each provider session contains `events.jsonl`, `manifest.json`, `user_audio.wav`, and `assistant_audio.wav`; all WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz. Both Fly apps were destroyed after the run.
+Downloaded bot recorder artifacts and carrier-boundary artifacts are under `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-2026-05-29T03-42-37-213Z/`. Each provider session contains `events.jsonl`, `manifest.json`, `user_audio.wav`, and `assistant_audio.wav`; all bot WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz. Each provider also has `carrier-inbound.wav` and `carrier-outbound.wav`; those carrier-boundary WAVs validated as RIFF PCM, 16-bit, mono, 8 kHz. `fly apps list` showed no remaining spike apps after the run.
 
 ## Live-Provider Adapter Smoke
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -11,7 +11,6 @@ import WebSocket, { type RawData } from "ws";
 import {
   decodeMuLawToPcm16,
   encodePcm16ToMuLaw,
-  pcm16SamplesToBytes,
   resamplePcm16,
 } from "@asyncdot/voice-server-websocket";
 

@@ -244,17 +244,17 @@ Because no live Twilio/Telnyx/SmartPBX carrier accounts were available, the curr
 - `review:telephony` as the bot server.
 - `review:synthetic-carrier` as the carrier host that calls the bot over provider-shaped websockets.
 
-Latest Fly spike, `2026-05-28`, ran two disposable one-machine apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping and destroyed after artifact download:
+Latest Fly spike, `2026-05-29`, ran two disposable one-machine apps in `sin`, both `shared-cpu-1x:1024MB`, both auto-stopping and destroyed after artifact download:
 
 | Provider | Network | Inbound frames | Outbound frames | Completion evidence | Quality gate |
 |---|---|---:|---:|---|---|
-| Twilio | jittery | 1,263 | 645 | `outboundEndMarks: 1` | Passed |
-| Telnyx | jittery | 1,263 | 455 | `outboundEndMarks: 1` | Passed |
-| SmartPBX | jittery | 1,263 | 508 | `outboundQuietDrains: 1` | Passed |
+| Twilio | jittery | 1,263 | 537 | `outboundEndMarks: 1` | Passed |
+| Telnyx | jittery | 1,263 | 575 | `outboundEndMarks: 1` | Passed |
+| SmartPBX | jittery | 1,263 | 485 | `outboundQuietDrains: 1` | Passed |
 
-Bot recorder artifacts were downloaded before teardown to `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-bot-artifacts-2026-05-28T19-28Z/`. Each provider session has `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and listenable `user_audio.wav` / `assistant_audio.wav`. The WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz.
+Bot recorder artifacts were downloaded before teardown to `examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-2026-05-29T03-42-37-213Z/`. Each provider session has `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and listenable `user_audio.wav` / `assistant_audio.wav`. Carrier-boundary `carrier-inbound.wav` and `carrier-outbound.wav` are also saved per provider. The bot WAVs validated as RIFF PCM, 16-bit, mono, 16 kHz; the carrier-boundary WAVs validated as RIFF PCM, 16-bit, mono, 8 kHz. `fly apps list` showed no remaining `syrinx-bot-spike-260529034237` or `syrinx-carrier-spike-260529034237` apps after teardown.
 
-Use `TELEPHONY-VOICE-HANDOFF.md` for the exact local and Fly commands. The synthetic carrier path does not prove carrier account signaling, but it does prove public TLS websocket routing, carrier-shaped audio packet delivery, live Deepgram/Gemini/Cartesia processing, bot recorder output, and provider-shaped assistant audio return across the network.
+Use `TELEPHONY-VOICE-HANDOFF.md` for the exact local and Fly commands. The new `smoke:fly-synthetic-carrier` command automates app creation, `--ha=false` deploy, artifact download, and app destruction. The synthetic carrier path does not prove carrier account signaling, but it does prove public TLS websocket routing, carrier-shaped audio packet delivery, live Deepgram/Gemini/Cartesia processing, bot recorder output, and provider-shaped assistant audio return across the network.
 
 Start the human review studio:
 

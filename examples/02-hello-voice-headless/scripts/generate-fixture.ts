@@ -7,10 +7,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import WebSocket from "ws";
+
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 
 const require = createRequire(import.meta.url);
-const WebSocket = require("ws") as any;
 const { WaveFile } = require("wavefile") as typeof import("wavefile");
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
