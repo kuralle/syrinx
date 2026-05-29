@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readRecorderPcmSampleRateHz } from "../scripts/serve-telephony-review.js";
+import {
+  readRecorderPcmSampleRateHz,
+  telephonyReviewHealthPayload,
+} from "../scripts/serve-telephony-review.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "syrinx-telephony-review-"));
@@ -16,6 +19,19 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 }
 
 describe("telephony review recorder artifacts", () => {
+  it("separates telephony engine output rate from recorder assistant source rate", () => {
+    expect(telephonyReviewHealthPayload("gemini", "/tmp/syrinx-review")).toMatchObject({
+      inputSampleRateHz: 16000,
+      engineOutputSampleRateHz: 16000,
+      recorderAssistantSampleRateHz: 24000,
+    });
+    expect(telephonyReviewHealthPayload("cartesia", "/tmp/syrinx-review")).toMatchObject({
+      inputSampleRateHz: 16000,
+      engineOutputSampleRateHz: 16000,
+      recorderAssistantSampleRateHz: 16000,
+    });
+  });
+
   it("serves assistant WAV artifacts using the recorder manifest sample rate", async () => {
     await withTempDir(async (dir) => {
       const sessionDir = join(dir, "gemini-session");

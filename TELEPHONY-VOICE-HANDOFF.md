@@ -30,6 +30,8 @@ The server exposes:
 - `WS /telnyx`
 - `WS /media-stream`
 
+`GET /healthz` reports the telephony engine output rate separately from the recorder assistant source rate. Carrier output remains 16 kHz engine PCM before provider encoding, while recorder assistant PCM follows the selected TTS provider (`16 kHz` Cartesia, `24 kHz` Gemini).
+
 Carrier calls require a public TLS endpoint because carrier media streams connect with `wss://`. Use a stable tunnel or deployed host, set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...`, then restart the server.
 
 ## Twilio
