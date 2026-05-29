@@ -625,6 +625,55 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("uses TTS audio sample-rate metadata for idle playback timing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const session = new VoiceAgentSession({
+      plugins: {},
+      idleTimeout: {
+        durationMs: 100,
+        maxConsecutive: 0,
+        escalationMessages: ["still there?"],
+        disconnectAfterMax: false,
+      },
+    });
+    const injected: string[] = [];
+
+    await session.start();
+    session.bus.on("inject.message", (pkt) => {
+      injected.push((pkt as unknown as { text: string }).text);
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "behavior.idle_timeout_start",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      session.bus.push(Route.Main, {
+        kind: "tts.audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(3200),
+        sampleRateHz: 16000,
+      } satisfies TextToSpeechAudioPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(199);
+      expect(injected).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(injected).toEqual(["still there?"]);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
+  });
+
   it("stops assistant audio output within 50ms of VAD barge-in", async () => {
     const tts = new InterruptAwareStreamingTtsPlugin();
     const session = new VoiceAgentSession({ plugins: { tts: {} } });

@@ -400,7 +400,7 @@ function wireTelnyxSessionEvents(args: {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.streamId || socket.readyState !== WebSocket.OPEN) return;
-      const payload = encodeOutboundPayload(audioPacket.audio, outputSampleRateHz, state, outboundFrameDurationMs);
+      const payload = encodeOutboundPayload(audioPacket.audio, audioPacket.sampleRateHz ?? outputSampleRateHz, state, outboundFrameDurationMs);
       const frames: PacedPlayoutFrame[] = payload.map((frame) => ({
         send: () => {
           if (state.stopped) return false;

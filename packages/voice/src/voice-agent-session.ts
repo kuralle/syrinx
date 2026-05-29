@@ -705,8 +705,8 @@ export class VoiceAgentSession {
 
     this.activeTtsContextIds.add(pkt.contextId);
 
-    // Extend idle timeout by audio duration to prevent timeout during playback
-    const audioDurationMs = estimatePcm16Duration(pkt.audio, 24000);
+    // Extend idle timeout by audio duration to prevent timeout during playback.
+    const audioDurationMs = estimatePcm16Duration(pkt.audio, pkt.sampleRateHz ?? 24000);
     this.idleTimeout.extend(audioDurationMs);
 
     this.debugPush({

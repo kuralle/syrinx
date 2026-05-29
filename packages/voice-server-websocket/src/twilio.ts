@@ -404,7 +404,7 @@ function wireTwilioSessionEvents(args: {
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.streamSid || socket.readyState !== WebSocket.OPEN) return;
       const samples = pcm16BytesToSamples(audioPacket.audio);
-      const resampled = resamplePcm16(samples, outputSampleRateHz, twilioSampleRateHz);
+      const resampled = resamplePcm16(samples, audioPacket.sampleRateHz ?? outputSampleRateHz, twilioSampleRateHz);
       const encoded = encodePcm16ToMuLaw(resampled);
       const frames: PacedPlayoutFrame[] = [];
       for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {

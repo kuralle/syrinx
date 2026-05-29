@@ -1,6 +1,6 @@
 # Voice Engine Hardening Notes
 
-Date: 2026-05-28
+Date: 2026-05-29
 
 ## Current Verdict
 
@@ -17,6 +17,7 @@ The latest hardening change makes the websocket layer enforce that contract:
 - Each binary TTS frame is preceded by `tts_chunk` metadata with turn id, sequence, sample rate, byte length, and duration.
 - Browser and smoke clients send input sample-rate metadata and use `tts_chunk` for turn attribution.
 - Non-telephony websocket assistant audio now uses the `syrinx.audio.v1` envelope by default (`SYRXA1\n` magic + little-endian JSON header length + JSON header + PCM payload), carrying turn id, sample rate, sequence, encoding, channel count, duration, and byte length in the same frame as audio. Inbound binary clients may use the same envelope, and enveloped input now requires a valid positive-integer `sampleRateHz` plus well-formed numeric metadata so malformed frames cannot be silently resampled at the wrong rate. Raw inbound PCM16 remains accepted at the advertised input sample rate. Raw outbound PCM is now an explicit `binaryAudioEnvelope: false` opt-out.
+- Assistant TTS audio now carries provider source sample-rate metadata through the engine. Cartesia emits its configured PCM rate, Gemini emits 24 kHz, idle-timeout playback scheduling uses that metadata, and browser/Twilio/Telnyx/SmartPBX websocket adapters resample from the packet source rate to their negotiated output codecs instead of assuming the transport output rate is also the provider TTS rate.
 - Browser client audio utilities now test 48 kHz and 44.1 kHz capture down to 16 kHz PCM16, clamp Float32 samples before conversion, preserve JSON audio frame encoding for compatibility, and make `sendFloat32Audio()` use turn-scoped binary envelopes with explicit `sampleRateHz`.
 - The browser runtime capture smoke now drives the real review console under headless Chrome with fake microphone input and verifies encoded `getUserMedia`/`AudioContext` frames are sent as `syrinx.audio.v1` envelopes, arrive at the websocket server, and that an enveloped assistant-audio frame from the server is decoded by the browser, scheduled for playback, and cleared on interruption without playback errors.
 - The browser review console defaults to continuous listening once the microphone is started. A browser-side energy gate starts capture contexts with 400 ms of pre-speech audio to avoid silent phantom turns; VAD/Smart Turn and Deepgram provider finalize decide end-of-turn instead of the UI promoting push-to-talk. The browser now decodes default enveloped assistant audio before playback.

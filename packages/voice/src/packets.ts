@@ -281,8 +281,10 @@ export interface TextToSpeechDonePacket extends VoicePacket {
 
 export interface TextToSpeechAudioPacket extends VoicePacket {
   readonly kind: "tts.audio";
-  /** PCM audio bytes (16-bit, mono, rate depends on TTS provider). */
+  /** PCM audio bytes (16-bit, mono). */
   readonly audio: Uint8Array;
+  /** Source sample rate for the PCM payload. Defaults to 24 kHz for legacy plugins. */
+  readonly sampleRateHz?: number;
 }
 
 export interface TextToSpeechEndPacket extends VoicePacket {
