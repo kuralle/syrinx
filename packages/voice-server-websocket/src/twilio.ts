@@ -51,6 +51,7 @@ export interface TwilioStartPayload {
 interface TwilioMediaMessage {
   readonly event?: string;
   readonly streamSid?: string;
+  readonly sequenceNumber?: string;
   readonly start?: TwilioStartPayload;
   readonly media?: {
     readonly payload?: string;
@@ -68,6 +69,7 @@ interface TwilioConnectionState {
   contextId: string;
   started: boolean;
   stopped: boolean;
+  lastInboundSequenceNumber: number | null;
   lastInboundMediaChunk: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
@@ -197,6 +199,7 @@ async function handleTwilioConnection(args: {
     contextId: "",
     started: false,
     stopped: false,
+    lastInboundSequenceNumber: null,
     lastInboundMediaChunk: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
@@ -476,6 +479,7 @@ function handleTwilioMessage(args: {
   const { session, data, state, contextId, inputSampleRateHz, twilioSampleRateHz, onStop } = args;
   const message = JSON.parse(rawDataToText(data)) as TwilioMediaMessage;
   const event = message.event;
+  rememberTwilioSequenceNumber(session, state, message.sequenceNumber);
 
   if (event === "connected") return;
   if (event === "start") {
@@ -532,6 +536,29 @@ function handleTwilioMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
+}
+
+function rememberTwilioSequenceNumber(
+  session: VoiceAgentSession,
+  state: TwilioConnectionState,
+  sequenceValue: string | undefined,
+): void {
+  const sequence = optionalPositiveIntegerString(sequenceValue, "Twilio sequenceNumber");
+  if (sequence === undefined) return;
+  const previous = state.lastInboundSequenceNumber;
+  if (previous !== null && sequence <= previous) {
+    throw new Error(`Twilio sequenceNumber must increase monotonically: ${String(previous)} -> ${String(sequence)}`);
+  }
+  if (previous !== null && sequence > previous + 1) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "twilio.sequence_gap",
+      value: JSON.stringify({ expected: previous + 1, actual: sequence, missed: sequence - previous - 1 }),
+    });
+  }
+  state.lastInboundSequenceNumber = sequence;
 }
 
 function rememberTwilioMediaChunk(
