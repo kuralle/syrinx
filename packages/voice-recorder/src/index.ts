@@ -84,6 +84,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
   private assistantChunks: Array<{ readonly byteOffset: number; readonly data: Uint8Array }> = [];
   private assistantCursorBytes = 0;
   private assistantSampleRateHz = 24000;
+  private assistantSampleRateLocked = false;
   private startedAtMs = 0;
   private userAudioBytes = 0;
   private userAudioChunks = 0;
@@ -175,6 +176,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.assistantAudioBytes = 0;
     this.assistantAudioChunks = 0;
     this.assistantTruncations = 0;
+    this.assistantSampleRateLocked = false;
     this.eventBytes = 0;
     this.eventPackets = 0;
     this.packetReader = null;
@@ -235,6 +237,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     const audio = packet.audio;
     if (audio.byteLength === 0) return;
     if (!this.validatePcm16ByteLength(packet.kind, audio)) return;
+    if (!this.acceptAssistantSampleRate(packet)) return;
     const byteOffset = this.assistantChunks.length === 0
       ? 0
       : Math.max(this.assistantCursorBytes, this.currentAssistantWallOffsetBytes());
@@ -362,6 +365,28 @@ export class VoiceSessionRecorder implements VoicePlugin {
     return false;
   }
 
+  private acceptAssistantSampleRate(packet: RecordAssistantAudioPacket): boolean {
+    if (packet.sampleRateHz !== undefined && !isPositiveInteger(packet.sampleRateHz)) {
+      this.writeFailure = new Error("record.assistant_audio sampleRateHz must be a positive integer");
+      return false;
+    }
+
+    const packetSampleRateHz = packet.sampleRateHz ?? this.assistantSampleRateHz;
+    if (!this.assistantSampleRateLocked) {
+      this.assistantSampleRateHz = packetSampleRateHz;
+      this.assistantSampleRateLocked = true;
+      return true;
+    }
+
+    if (packetSampleRateHz !== this.assistantSampleRateHz) {
+      this.writeFailure = new Error(
+        `record.assistant_audio sampleRateHz changed within recorder session: ${String(this.assistantSampleRateHz)} -> ${String(packetSampleRateHz)}`,
+      );
+      return false;
+    }
+    return true;
+  }
+
   private async waitForPendingWrites(): Promise<void> {
     while (this.pendingWrites.size > 0) {
       await Promise.all([...this.pendingWrites]);
@@ -415,7 +440,11 @@ function readString(config: PluginConfig, key: string): string | undefined {
 
 function readPositiveInteger(config: PluginConfig, key: string): number | undefined {
   const value = config[key];
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+  return isPositiveInteger(value) ? value : undefined;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function pcm16DurationMs(byteLength: number, sampleRateHz: number): number {

@@ -149,6 +149,66 @@ describe("VoiceSessionRecorder", () => {
     });
   });
 
+  it("uses assistant recording sample-rate metadata for manifest duration", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir });
+      const start = bus.start();
+
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(3200),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      bus.stop();
+      await start;
+      await recorder.close();
+
+      const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Record<string, any>;
+      expect(manifest.audio.assistant).toMatchObject({
+        sampleRateHz: 16000,
+        byteLength: 3200,
+        durationMs: 100,
+        chunks: 1,
+      });
+    });
+  });
+
+  it("rejects mixed assistant sample rates inside one recorder session", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir });
+
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-2",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(480),
+        sampleRateHz: 24000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await expect(recorder.close()).rejects.toThrow(
+        "record.assistant_audio sampleRateHz changed within recorder session: 16000 -> 24000",
+      );
+    });
+  });
+
   it("truncates queued assistant audio at the wall-clock playback position", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

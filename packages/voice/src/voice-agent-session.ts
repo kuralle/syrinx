@@ -724,6 +724,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: Date.now(),
       audio: pkt.audio,
+      sampleRateHz: pkt.sampleRateHz,
       truncate: false,
     } as RecordAssistantAudioPacket);
   }

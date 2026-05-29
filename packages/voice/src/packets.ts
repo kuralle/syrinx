@@ -308,6 +308,8 @@ export interface RecordUserAudioPacket extends VoicePacket {
 export interface RecordAssistantAudioPacket extends VoicePacket {
   readonly kind: "record.assistant_audio";
   readonly audio: Uint8Array;
+  /** Source sample rate for assistant PCM. */
+  readonly sampleRateHz?: number;
   readonly truncate: boolean;
 }
 
