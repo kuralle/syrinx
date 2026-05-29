@@ -47,6 +47,71 @@ describe("smoke artifact manifest", () => {
     expect(validateSmokeArtifactManifest(bad)).toContain("turn twilio-call assistantAudio.decodedPcmByteLength is required for PCMU audio");
   });
 
+  it("requires explicit wire byte accounting for compressed audio", () => {
+    const manifest = makeTwilioManifest();
+    const bad: SmokeArtifactManifest = {
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        outputWireByteLength: undefined,
+      },
+      turns: [
+        {
+          ...manifest.turns[0]!,
+          assistantAudio: {
+            ...manifest.turns[0]!.assistantAudio,
+            wireByteLength: undefined,
+          },
+        },
+      ],
+    };
+
+    expect(validateSmokeArtifactManifest(bad)).toContain("turn twilio-call assistantAudio.wireByteLength is required for PCMU audio");
+  });
+
+  it("rejects unsupported audio encodings instead of treating them as PCM16", () => {
+    const manifest = makeTwilioManifest();
+    const bad: SmokeArtifactManifest = {
+      ...manifest,
+      turns: [
+        {
+          ...manifest.turns[0]!,
+          assistantAudio: {
+            ...manifest.turns[0]!.assistantAudio,
+            encoding: "g711_ulaw",
+          } as unknown as SmokeArtifactManifest["turns"][number]["assistantAudio"],
+        },
+      ],
+    };
+
+    expect(validateSmokeArtifactManifest(bad)).toContain("turn twilio-call assistantAudio.encoding must be pcm_s16le, pcmu, or opus");
+  });
+
+  it("rejects odd decoded PCM byte evidence", () => {
+    const manifest = makeTwilioManifest();
+    const bad: SmokeArtifactManifest = {
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        outputDecodedPcmByteLength: 3841,
+      },
+      turns: [
+        {
+          ...manifest.turns[0]!,
+          assistantAudio: {
+            ...manifest.turns[0]!.assistantAudio,
+            decodedPcmByteLength: 3841,
+            durationMs: 240,
+          },
+        },
+      ],
+    };
+
+    expect(validateSmokeArtifactManifest(bad)).toContain(
+      "turn twilio-call assistantAudio.decodedPcmByteLength must contain an even number of PCM16 bytes",
+    );
+  });
+
   it("rejects duration math derived from compressed Opus bytes instead of decoded PCM bytes", () => {
     const bad = makeSmartPbxOpusManifest({
       outputDurationMs: 17,

@@ -51,6 +51,13 @@ async function waitFor<T>(items: T[], count = 1): Promise<void> {
   }
 }
 
+async function waitForValue<T>(items: T[], value: T): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
+    if (items.includes(value)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("DeepgramSTTPlugin", () => {
   it("uses provider KeepAlive while idle and CloseStream on shutdown", async () => {
     const controlMessages: string[] = [];
@@ -73,7 +80,7 @@ describe("DeepgramSTTPlugin", () => {
     });
     await waitFor(controlMessages);
     await plugin.close();
-    await waitFor(controlMessages, 2);
+    await waitForValue(controlMessages, "CloseStream");
     bus.stop();
     await started;
 

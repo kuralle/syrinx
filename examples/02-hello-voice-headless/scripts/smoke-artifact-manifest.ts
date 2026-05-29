@@ -166,6 +166,7 @@ function validateOptionalTotal(name: string, actual: number | undefined, values:
 
 function validateAudioArtifact(label: string, artifact: SmokeAudioArtifact, failures: string[]): void {
   if (!isPositiveInteger(artifact.sampleRateHz)) failures.push(`${label}.sampleRateHz must be a positive integer`);
+  if (!isSupportedEncoding(artifact.encoding)) failures.push(`${label}.encoding must be pcm_s16le, pcmu, or opus`);
   if (artifact.channels !== 1) failures.push(`${label}.channels must be 1`);
   if (!isNonNegativeInteger(artifact.byteLength)) failures.push(`${label}.byteLength must be a non-negative integer`);
   if (!isNonNegativeInteger(artifact.durationMs)) failures.push(`${label}.durationMs must be a non-negative integer`);
@@ -179,11 +180,18 @@ function validateAudioArtifact(label: string, artifact: SmokeAudioArtifact, fail
     failures.push(`${label}.frameCount must be a non-negative integer`);
   }
 
-  if (artifact.encoding === "pcmu" && artifact.decodedPcmByteLength === undefined) {
-    failures.push(`${label}.decodedPcmByteLength is required for PCMU audio`);
+  if (artifact.encoding === "pcm_s16le" && artifact.byteLength % 2 !== 0) {
+    failures.push(`${label}.byteLength must contain an even number of PCM16 bytes`);
   }
-  if (artifact.encoding === "opus" && artifact.decodedPcmByteLength === undefined) {
-    failures.push(`${label}.decodedPcmByteLength is required for Opus audio`);
+  if (artifact.decodedPcmByteLength !== undefined && artifact.decodedPcmByteLength % 2 !== 0) {
+    failures.push(`${label}.decodedPcmByteLength must contain an even number of PCM16 bytes`);
+  }
+
+  if (isCompressedEncoding(artifact.encoding) && artifact.wireByteLength === undefined) {
+    failures.push(`${label}.wireByteLength is required for ${encodingLabel(artifact.encoding)} audio`);
+  }
+  if (isCompressedEncoding(artifact.encoding) && artifact.decodedPcmByteLength === undefined) {
+    failures.push(`${label}.decodedPcmByteLength is required for ${encodingLabel(artifact.encoding)} audio`);
   }
 
   const expectedDuration = expectedAudioDurationMs(artifact);
@@ -219,6 +227,18 @@ function isNonNegativeInteger(value: number): boolean {
 
 function isNonNegativeFiniteNumber(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
+}
+
+function isSupportedEncoding(value: unknown): value is SmokeAudioArtifact["encoding"] {
+  return value === "pcm_s16le" || value === "pcmu" || value === "opus";
+}
+
+function isCompressedEncoding(value: unknown): value is "pcmu" | "opus" {
+  return value === "pcmu" || value === "opus";
+}
+
+function encodingLabel(encoding: "pcmu" | "opus"): string {
+  return encoding === "pcmu" ? "PCMU" : "Opus";
 }
 
 function withinRoundingTolerance(actual: number, expected: number, count: number): boolean {
