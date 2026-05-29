@@ -12,10 +12,10 @@ export {
   type SyrinxAudioJsonFrame,
 } from "./audio.js";
 
+import { encodeSyrinxAudioEnvelope } from "@asyncdot/voice";
 import {
   decodeBrowserAssistantAudio,
   encodeBrowserAudioEnvelopeFrame,
-  encodeBrowserAudioFrame,
   type BrowserAssistantAudio,
   type EncodeBrowserAudioOptions,
 } from "./audio.js";
@@ -122,17 +122,25 @@ export class SyrinxBrowserClient {
     this.socket?.close(code, reason);
   }
 
-  sendAudioPcm(audio: ArrayBuffer | ArrayBufferView): void {
-    const socket = this.requireOpenSocket();
-    if (ArrayBuffer.isView(audio)) {
-      socket.send(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength));
-      return;
-    }
-    socket.send(audio);
+  sendAudioPcm(
+    audio: ArrayBuffer | ArrayBufferView,
+    sampleRateHz: number,
+    options: { readonly contextId?: string; readonly sequence?: number } = {},
+  ): void {
+    const bytes = ArrayBuffer.isView(audio)
+      ? new Uint8Array(audio.buffer, audio.byteOffset, audio.byteLength)
+      : new Uint8Array(audio);
+    if (bytes.byteLength % 2 !== 0) throw new Error("PCM16 audio payload must contain an even number of bytes");
+    const sampleRate = readPositiveSampleRate(sampleRateHz);
+    this.requireOpenSocket().send(encodeBrowserPcmEnvelope(bytes, sampleRate, options));
   }
 
-  sendAudioBase64(audio: string, contextId?: string): void {
-    this.sendJson({ type: "audio", audio, contextId });
+  sendAudioBase64(
+    audio: string,
+    sampleRateHz: number,
+    options: { readonly contextId?: string; readonly sequence?: number } = {},
+  ): void {
+    this.sendJson({ type: "audio", audio, sampleRateHz, contextId: options.contextId, sequence: options.sequence });
   }
 
   sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
@@ -179,4 +187,26 @@ export class SyrinxBrowserClient {
       handler(event);
     }
   }
+}
+
+function encodeBrowserPcmEnvelope(
+  audio: Uint8Array,
+  sampleRateHz: number,
+  options: { readonly contextId?: string; readonly sequence?: number },
+): Uint8Array {
+  return encodeSyrinxAudioEnvelope({
+    type: "audio",
+    contextId: options.contextId,
+    sampleRateHz,
+    sequence: options.sequence,
+    encoding: "pcm_s16le",
+    channels: 1,
+    byteLength: audio.byteLength,
+    durationMs: Math.round((audio.byteLength / 2 / sampleRateHz) * 1000),
+  }, audio);
+}
+
+function readPositiveSampleRate(value: number): number {
+  if (!Number.isInteger(value) || value <= 0) throw new Error("sampleRateHz must be a positive integer");
+  return value;
 }

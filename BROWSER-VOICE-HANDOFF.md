@@ -30,7 +30,7 @@ Latest verified run:
 - `browser_runtime_capture_to_websocket`
 - `audioContextSampleRateHz: 48000`
 - `targetSampleRateHz: 16000`
-- Artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-runtime-2026-05-29T12-47-54-192Z/baseline.json`
+- Artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-runtime-2026-05-29T12-53-36-642Z/baseline.json`
 - `sentFrames: 87`
 - `sentEnvelopeFrames: 87`
 - `sentBytes: 55298`
@@ -118,6 +118,6 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless typecheck
 
 - The review console accepts `?ws=ws://host:port/ws` to point at a specific websocket server.
 - The review page exposes `window.__syrinxReviewState` for smoke tests: sent frame count, sent byte count, context ids, started turn count, browser `AudioContext` sample rate, and target sample rate.
-- Browser outbound audio is mono PCM16 in `syrinx.audio.v1` binary envelopes with `sampleRateHz`; server normalizes to engine sample rate. JSON audio frames remain supported for compatibility and scripted smokes.
+- Browser outbound audio is mono PCM16 in `syrinx.audio.v1` binary envelopes with `sampleRateHz`; server normalizes to engine sample rate. JSON audio frames remain supported for scripted smokes only when they include explicit `sampleRateHz`.
 - Binary assistant audio uses the default `syrinx.audio.v1` envelope for in-frame turn/sample-rate/byte metadata. The preceding `tts_chunk` remains useful for UI lifecycle timing.
 - Do not add local STT transcript reconstruction in the browser. Provider final text must remain provider-owned.

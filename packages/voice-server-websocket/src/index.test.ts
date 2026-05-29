@@ -908,6 +908,7 @@ describe("createVoiceWebSocketServer", () => {
     client.send(JSON.stringify({
       type: "audio",
       contextId: "turn-bad-base64",
+      sampleRateHz: 16000,
       audio: "not base64",
     }));
 
@@ -916,6 +917,48 @@ describe("createVoiceWebSocketServer", () => {
       component: "transport",
       category: "invalid_input",
       message: "audio must be valid base64",
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects JSON audio without sample-rate metadata before forwarding it", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: "turn-missing-rate",
+      audio: Buffer.from(new Int16Array([0, 1000]).buffer).toString("base64"),
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "JSON websocket audio sampleRateHz must be a positive integer",
     });
     expect(received).toEqual([]);
 
