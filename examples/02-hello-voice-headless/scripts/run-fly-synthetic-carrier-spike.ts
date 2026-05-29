@@ -198,12 +198,29 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
       if (!positiveInteger(manifest.events?.packets)) failures.push(`${provider} recorder event packet count must be positive`);
     }
 
-    await validateJsonFile(carrier.callResultJson, label("carrier call-result.json"), failures);
+    await validateCarrierCallResultArtifact(carrier.callResultJson, label("carrier call-result.json"), provider, callResult, failures);
     await validateWavFile(carrier.carrierInboundWav, label("carrier-inbound.wav"), 8000, failures);
     await validateWavFile(carrier.carrierOutboundWav, label("carrier-outbound.wav"), 8000, failures);
   }
 
   return failures;
+}
+
+async function validateCarrierCallResultArtifact(
+  path: string,
+  label: string,
+  provider: Provider,
+  expectedCallResult: Record<string, unknown>,
+  failures: string[],
+): Promise<void> {
+  const parsed = await validateJsonFile(path, label, failures);
+  if (!isRecord(parsed)) return;
+  if (parsed["provider"] !== provider) failures.push(`${label} provider mismatch`);
+  validateQualityGate(provider, parsed["qualityGate"], failures);
+  validateCarrierCompletionEvidence(provider, parsed, failures);
+  if (stableJson(parsed) !== stableJson(expectedCallResult)) {
+    failures.push(`${label} did not match summary callResult`);
+  }
 }
 
 function validateQualityGate(provider: Provider, qualityGate: unknown, failures: string[]): void {
@@ -224,6 +241,16 @@ function validateQualityGate(provider: Provider, qualityGate: unknown, failures:
   if (qualityGate["passed"] === true && qualityFailures.length > 0) {
     failures.push(`${provider} qualityGate.passed cannot be true when qualityGate.failures is non-empty`);
   }
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJson(value[key])]));
 }
 
 function validateCarrierCompletionEvidence(provider: Provider, callResult: Record<string, unknown>, failures: string[]): void {

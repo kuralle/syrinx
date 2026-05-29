@@ -57,6 +57,15 @@ describe("Fly synthetic carrier artifact validation", () => {
 
     expect(failures).toContain("twilio qualityGate.passed cannot be true when qualityGate.failures is non-empty");
   });
+
+  it("rejects downloaded carrier call result drift from the summary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "telnyx", { downloadedOutboundFrames: 1 });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("telnyx carrier call-result.json did not match summary callResult");
+  });
 });
 
 async function writeProviderEvidence(
@@ -67,6 +76,7 @@ async function writeProviderEvidence(
     readonly carrierSampleRateHz?: number;
     readonly recorderAssistantDurationMs?: number;
     readonly qualityGateFailures?: string[];
+    readonly downloadedOutboundFrames?: number;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -127,7 +137,9 @@ async function writeProviderEvidence(
     ].join(""));
   }
 
-  await writeJson(join(carrierDir, "call-result.json"), callResult(provider));
+  await writeJson(join(carrierDir, "call-result.json"), callResult(provider, [], {
+    outboundFrames: options.downloadedOutboundFrames,
+  }));
   await writePcm16Wav(join(carrierDir, "carrier-inbound.wav"), options.carrierSampleRateHz ?? 8000, 800);
   await writePcm16Wav(join(carrierDir, "carrier-outbound.wav"), options.carrierSampleRateHz ?? 8000, 800);
 
@@ -174,13 +186,17 @@ async function writeProviderEvidence(
   };
 }
 
-function callResult(provider: "twilio" | "telnyx" | "smartpbx", qualityGateFailures: string[] = []): Record<string, unknown> {
+function callResult(
+  provider: "twilio" | "telnyx" | "smartpbx",
+  qualityGateFailures: string[] = [],
+  overrides: { readonly outboundFrames?: number } = {},
+): Record<string, unknown> {
   return {
     provider,
     carrier: {
       inboundFrames: 10,
       inboundWireBytes: 1600,
-      outboundFrames: 12,
+      outboundFrames: overrides.outboundFrames ?? 12,
       outboundWireBytes: 1920,
       maxInboundMediaGapMs: 40,
       firstOutboundMediaAfterStartMs: 900,
