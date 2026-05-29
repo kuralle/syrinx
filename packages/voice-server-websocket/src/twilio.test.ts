@@ -221,6 +221,94 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("records Twilio top-level sequenceNumber gaps", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "twilio-sequence-gap-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify({ ...twilioStart(), sequenceNumber: "1" }));
+    client.send(JSON.stringify({
+      event: "media",
+      sequenceNumber: "4",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "1", timestamp: "20", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "twilio-sequence-gap-test",
+      name: "twilio.sequence_gap",
+      value: JSON.stringify({ expected: 2, actual: 4, missed: 2 }),
+    }));
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects duplicate Twilio top-level sequenceNumber before forwarding duplicate audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "twilio-sequence-duplicate-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
+
+    client.send(JSON.stringify({ ...twilioStart(), sequenceNumber: "1" }));
+    client.send(JSON.stringify({
+      event: "media",
+      sequenceNumber: "2",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "1", timestamp: "20", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    client.send(JSON.stringify({
+      event: "media",
+      sequenceNumber: "2",
+      streamSid: "MZ-test-stream",
+      media: { track: "inbound", chunk: "2", timestamp: "40", payload },
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "syrinx_error",
+      error: {
+        component: "transport",
+        category: "invalid_input",
+        message: "Twilio sequenceNumber must increase monotonically: 2 -> 2",
+      },
+    });
+    expect(received).toHaveLength(1);
+
+    client.close();
+    await server.close();
+  });
+
   it("buffers Twilio start and media sent before session startup completes", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];

@@ -82,6 +82,7 @@ interface TelnyxConnectionState {
   readonly outboundSampleRateHz: number;
   started: boolean;
   stopped: boolean;
+  lastInboundSequenceNumber: number | null;
   lastInboundMediaChunk: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
@@ -195,6 +196,7 @@ async function handleTelnyxConnection(args: {
     outboundSampleRateHz: args.bidirectionalCodec === "L16" ? 16000 : 8000,
     started: false,
     stopped: false,
+    lastInboundSequenceNumber: null,
     lastInboundMediaChunk: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
@@ -446,6 +448,7 @@ function handleTelnyxMessage(args: {
   const { session, data, state, contextId, inputSampleRateHz, onStop } = args;
   const message = JSON.parse(rawDataToText(data)) as TelnyxMediaMessage;
   const event = message.event;
+  rememberTelnyxSequenceNumber(session, state, message.sequence_number);
 
   if (event === "connected") return;
   if (event === "start") {
@@ -502,6 +505,29 @@ function handleTelnyxMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Telnyx Media Streaming event: ${String(event)}`);
+}
+
+function rememberTelnyxSequenceNumber(
+  session: VoiceAgentSession,
+  state: TelnyxConnectionState,
+  sequenceValue: string | undefined,
+): void {
+  const sequence = optionalPositiveIntegerString(sequenceValue, "Telnyx sequence_number");
+  if (sequence === undefined) return;
+  const previous = state.lastInboundSequenceNumber;
+  if (previous !== null && sequence <= previous) {
+    throw new Error(`Telnyx sequence_number must increase monotonically: ${String(previous)} -> ${String(sequence)}`);
+  }
+  if (previous !== null && sequence > previous + 1) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.sequence_gap",
+      value: JSON.stringify({ expected: previous + 1, actual: sequence, missed: sequence - previous - 1 }),
+    });
+  }
+  state.lastInboundSequenceNumber = sequence;
 }
 
 function rememberTelnyxMediaChunk(

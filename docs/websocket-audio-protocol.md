@@ -168,6 +168,7 @@ The probe checks the HTTP setup endpoints, Twilio/Telnyx callback endpoints, and
 Twilio remains provider-specific at the adapter boundary:
 
 - Accept JSON text frames only.
+- Validate top-level Twilio `sequenceNumber` when present. Duplicate or regressing sequence numbers are rejected; forward gaps emit `twilio.sequence_gap` metrics.
 - Validate `start.mediaFormat` as PCMU, 8 kHz, mono.
 - Decode inbound `media.payload` from strict base64 PCMU to PCM16.
 - Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `twilio.media_chunk_gap` metrics with expected, actual, and missed frame counts.
@@ -195,6 +196,7 @@ Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless rev
 Telnyx remains provider-specific at the adapter boundary:
 
 - Accept JSON text frames only.
+- Validate top-level Telnyx `sequence_number` when present. Duplicate or regressing sequence numbers are rejected; forward gaps emit `telnyx.sequence_gap` metrics.
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
 - Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `telnyx.media_chunk_gap` metrics with expected, actual, and missed frame counts.
