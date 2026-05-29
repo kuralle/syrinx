@@ -53,9 +53,26 @@ describe("browser audio utilities", () => {
     expect(frame).toMatchObject({
       type: "audio",
       contextId: "review-turn",
+      sequence: undefined,
       sampleRateHz: 16000,
     });
     expect(Array.from(pcm)).toEqual([-32768, 16384]);
+  });
+
+  it("preserves sequence metadata on encoded browser JSON audio frames", () => {
+    const frame = encodeBrowserAudioFrame(new Float32Array([0, 0.5, 1]), {
+      fromSampleRateHz: 48000,
+      toSampleRateHz: 16000,
+      contextId: "review-turn",
+      sequence: 17,
+    });
+
+    expect(frame).toMatchObject({
+      type: "audio",
+      contextId: "review-turn",
+      sampleRateHz: 16000,
+      sequence: 17,
+    });
   });
 
   it("encodes browser Float32 audio as turn-scoped binary envelope frames", () => {
