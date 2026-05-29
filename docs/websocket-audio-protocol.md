@@ -197,10 +197,10 @@ Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless rev
 Telnyx remains provider-specific at the adapter boundary:
 
 - Accept JSON text frames only.
-- Validate top-level Telnyx `sequence_number` when present. Duplicate or regressing sequence numbers are rejected; forward gaps emit `telnyx.sequence_gap` metrics.
+- Validate top-level Telnyx `sequence_number` when present. Forward gaps emit `telnyx.sequence_gap`; duplicate or regressing sequence numbers emit `telnyx.sequence_regression` because Telnyx does not guarantee websocket event order.
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
-- Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `telnyx.media_chunk_gap` metrics with expected, actual, and missed frame counts.
+- Reorder inbound `media.chunk` within a bounded four-frame default window before audio reaches the engine. Out-of-order media is emitted to STT in chunk order; duplicate or already-emitted chunks are rejected; missing chunks emit `telnyx.media_chunk_gap` only when the reorder window is exceeded or the stream stops.
 - Validate optional inbound `media.timestamp` as a non-negative integer when present. Timestamp gaps and regressions emit `telnyx.media_timestamp_gap` and `telnyx.media_timestamp_regression` metrics for transport observability, but timestamp drift is not a transcript-quality gate and does not by itself drop media.
 - Resample inbound audio into the engine input sample rate.
 - Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default or `L16`), then resample and encode assistant PCM16 accordingly for paced outbound `media` frames.
@@ -216,6 +216,7 @@ Telnyx adapter defaults:
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
 - Inbound message ceiling: 256 KiB, close code `1009`.
 - Queued outbound playout ceiling: 30,000 ms, close code `1013`.
+- Inbound media reorder window: 4 frames.
 
 The Telnyx adapter buffers bounded early `start`/`media` messages that arrive before the `VoiceAgentSession` finishes startup. If pending pre-ready input exceeds the inbound message ceiling, the adapter closes with `1009`.
 
