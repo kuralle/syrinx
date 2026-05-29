@@ -11,9 +11,8 @@
 //   - Final transcripts can trigger eos.turn_complete, or Pipecat EOS can own finalization
 //
 // Guards (Syrinx additions beyond Rapida):
-//   - Tracks last interim transcript for force-finalization
-//   - forceFinalize() emits pending transcript as final on close/timeout
-//   - Prevents silent drop when audio < endpointing duration
+//   - forceFinalize() sends Deepgram Finalize and waits for provider confirmation
+//   - Never promotes interim/cached text to final without speech_final/from_finalize
 //   - Emits provider-boundary metrics for audio byte/duration and finalize provenance
 //
 // Reference: Rapida transformer/deepgram/stt.go + internal/stt_callback.go
@@ -43,7 +42,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private confidenceThreshold: number = 0;
   private finalizeOnSpeechFinal: boolean = true;
   private emitEosOnFinal: boolean = true;
-  private providerFinalizeFallbackMs: number = 1200;
+  private providerFinalizeTimeoutMs: number = 1200;
   private keepAliveIntervalMs: number = 3000;
 
   // Session-long WebSocket
@@ -58,7 +57,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private disposers: Array<() => void> = [];
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Guard: track last interim for force-finalization on short audio
+  // Track provider text for display/debug only; final output requires provider confirmation.
   private lastInterimTranscript = "";
   private lastInterimConfidence = 0;
   private finalTranscriptParts: string[] = [];
@@ -89,7 +88,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       (config["confidence_threshold"] as number) ?? 0;
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
-    this.providerFinalizeFallbackMs = (config["provider_finalize_fallback_ms"] as number) ?? 1200;
+    this.providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
     this.closed = false;
 
@@ -220,7 +219,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     const confidence = typeof alt["confidence"] === "number" ? alt["confidence"] : 0;
     if (!transcript || this.finalizedContextIds.has(this.currentContextId)) return;
 
-    // Guard: track last interim for force-finalize
+    // Track provider text for display/debug; do not treat it as EOS.
     this.lastInterimTranscript = transcript;
     this.lastInterimConfidence = confidence;
 
@@ -283,30 +282,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
   }
 
-  /**
-   * Force-finalize the current turn with the last known interim transcript.
-   *
-   * Guard for: short audio clips (< 5s) where Deepgram's 5000ms endpointing
-   * never fires. Also called on session close() for pending transcription.
-   */
+  /** Request that Deepgram flush buffered audio and return provider-final text. */
   forceFinalize(contextId?: string): void {
     const ctxId = contextId ?? this.currentContextId;
     if (!ctxId || !this.bus) return;
     this.requestProviderFinalize(ctxId);
-  }
-
-  private pushCachedFinal(contextId?: string): void {
-    const ctxId = contextId ?? this.currentContextId;
-    const transcript = this.combinedFinalTranscript() || this.lastInterimTranscript;
-    const confidence = this.finalConfidence || this.lastInterimConfidence;
-
-    if (!transcript || !this.bus) return;
-
-    this.ignoreNextProviderFinalContextIds.add(ctxId);
-    this.pushMetric(ctxId, "stt_provider_finalize_fallback", this.audioStats(ctxId));
-    this.pushFinal(transcript, confidence, ctxId);
-
-    this.resetPendingTranscript();
   }
 
   private requestProviderFinalize(contextId: string): void {
@@ -321,12 +301,21 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
 
     this.clearProviderFinalizeTimer(contextId);
-    if (this.providerFinalizeFallbackMs <= 0) return;
+    if (this.providerFinalizeTimeoutMs <= 0) return;
     const timer = setTimeout(() => {
       this.providerFinalizeTimers.delete(contextId);
-      this.pushCachedFinal(contextId);
-    }, this.providerFinalizeFallbackMs);
+      this.handleProviderFinalizeTimeout(contextId);
+    }, this.providerFinalizeTimeoutMs);
     this.providerFinalizeTimers.set(contextId, timer);
+  }
+
+  private handleProviderFinalizeTimeout(contextId: string): void {
+    if (!this.finalizeRequestedContextIds.has(contextId) || this.finalizedContextIds.has(contextId)) return;
+    this.pushMetric(contextId, "stt_provider_finalize_timeout", this.audioStats(contextId));
+    this.emitError(
+      contextId,
+      new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"),
+    );
   }
 
   private pushBufferedProviderFinal(contextId: string): boolean {
@@ -504,9 +493,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.closed = true;
     this.stopKeepAlive();
     for (const dispose of this.disposers.splice(0)) dispose();
-    // Guard: force-finalize pending transcription (short audio, no endpointing)
-    if (this.lastInterimTranscript) {
-      this.pushCachedFinal();
+    if (this.lastInterimTranscript || this.finalTranscriptParts.length > 0) {
+      this.pushMetric(this.currentContextId, "stt_pending_transcript_discarded_on_close", this.audioStats(this.currentContextId));
     }
     for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
     this.providerFinalizeTimers.clear();

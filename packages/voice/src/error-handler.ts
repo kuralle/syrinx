@@ -51,6 +51,7 @@ export function categorizeSttError(err: unknown): ErrorCategory {
     msg.includes("network") ||
     msg.includes("net-000") ||
     msg.includes("timeout") ||
+    msg.includes("timed out") ||
     msg.includes("econnrefused") ||
     msg.includes("socket hang up") ||
     msg.includes("code=1011") ||
