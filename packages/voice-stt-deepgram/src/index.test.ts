@@ -505,4 +505,94 @@ describe("DeepgramSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("reconnects after an unconfirmed Finalize timeout and discards stale provider text", async () => {
+    const connections: WebSocket[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      connections.push(socket);
+      if (connections.length === 1) {
+        socket.on("message", (data, isBinary) => {
+          if (isBinary) {
+            socket.send(JSON.stringify({
+              is_final: true,
+              speech_final: false,
+              channel: { alternatives: [{ transcript: "stale buffered text", confidence: 0.8 }] },
+            }));
+            return;
+          }
+          const msg = JSON.parse(data.toString()) as { type?: string };
+          if (msg.type !== "Finalize") return;
+          setTimeout(() => {
+            if (socket.readyState === socket.OPEN) {
+              socket.send(JSON.stringify({
+                is_final: true,
+                speech_final: true,
+                channel: { alternatives: [{ transcript: "late stale final", confidence: 0.95 }] },
+              }));
+            }
+          }, 30);
+        });
+        return;
+      }
+      socket.on("message", (_data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: true,
+          channel: { alternatives: [{ transcript: "fresh confirmed text", confidence: 0.9 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      provider_finalize_timeout_ms: 10,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-stale",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    plugin.forceFinalize("turn-stale");
+    await waitFor(errors);
+    await waitFor(connections, 2);
+
+    expect(finals).toHaveLength(0);
+    expect(connections[0]?.readyState).toBe(connections[0]?.CLOSED);
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-fresh",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await waitFor(finals);
+
+    expect(finals).toEqual([
+      expect.objectContaining({
+        contextId: "turn-fresh",
+        text: "fresh confirmed text",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
 });
