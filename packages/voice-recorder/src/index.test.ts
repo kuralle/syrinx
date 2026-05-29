@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineBusImpl, Route } from "@asyncdot/voice";
 import type { RecordAssistantAudioPacket, RecordUserAudioPacket, VoicePacket } from "@asyncdot/voice";
-import { VoiceSessionRecorder } from "./index.js";
+import {
+  VoiceSessionRecorder,
+  validateVoiceSessionRecorderManifest,
+  type VoiceSessionRecorderManifest,
+} from "./index.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "syrinx-recorder-"));
@@ -328,4 +332,90 @@ describe("VoiceSessionRecorder", () => {
       });
     });
   });
+
+  it("validates recorder manifest duration and path evidence", () => {
+    const manifest = makeRecorderManifest();
+
+    expect(validateVoiceSessionRecorderManifest(manifest)).toStrictEqual([]);
+
+    expect(validateVoiceSessionRecorderManifest({
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        assistant: {
+          ...manifest.audio.assistant,
+          durationMs: 1,
+        },
+      },
+    })).toContain("audio.assistant.durationMs 1 did not match 100 from byte count/sample rate");
+
+    expect(validateVoiceSessionRecorderManifest({
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        user: {
+          ...manifest.audio.user,
+          path: "/tmp/other-user-audio.pcm",
+        },
+      },
+    })).toContain("audio.user.path must match files.userAudioPath");
+  });
+
+  it("rejects recorder manifests with invalid PCM byte accounting", () => {
+    const manifest = makeRecorderManifest();
+
+    expect(validateVoiceSessionRecorderManifest({
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        user: {
+          ...manifest.audio.user,
+          byteLength: 3,
+          durationMs: 0,
+        },
+      },
+    })).toContain("audio.user.byteLength must contain an even number of PCM16 bytes");
+  });
 });
+
+function makeRecorderManifest(): VoiceSessionRecorderManifest {
+  return {
+    schemaVersion: 1,
+    sessionId: "session-1",
+    startedAtMs: 1000,
+    closedAtMs: 2000,
+    files: {
+      directory: "/tmp/session-1",
+      eventsPath: "/tmp/session-1/events.jsonl",
+      userAudioPath: "/tmp/session-1/user_audio.pcm",
+      assistantAudioPath: "/tmp/session-1/assistant_audio.pcm",
+      manifestPath: "/tmp/session-1/manifest.json",
+    },
+    audio: {
+      user: {
+        path: "/tmp/session-1/user_audio.pcm",
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: 3200,
+        durationMs: 100,
+        chunks: 1,
+      },
+      assistant: {
+        path: "/tmp/session-1/assistant_audio.pcm",
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: 3200,
+        durationMs: 100,
+        chunks: 1,
+        truncations: 0,
+      },
+    },
+    events: {
+      path: "/tmp/session-1/events.jsonl",
+      packets: 4,
+      byteLength: 256,
+    },
+  };
+}
