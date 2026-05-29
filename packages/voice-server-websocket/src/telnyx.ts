@@ -238,6 +238,10 @@ async function handleTelnyxConnection(args: {
       onStop: () => clearPendingPlayout("stop"),
     });
   };
+  const flushPendingInboundMedia = (): void => {
+    if (!session || !state.started || state.stopped) return;
+    flushTelnyxMediaReorderBuffer(session, state, args.inputSampleRateHz, args.maxInboundReorderFrames, true);
+  };
 
   const handleMessage = (data: RawData, isBinary: boolean): void => {
     try {
@@ -277,6 +281,7 @@ async function handleTelnyxConnection(args: {
 
   args.socket.on("close", () => {
     socketClosed = true;
+    flushPendingInboundMedia();
     clearPendingPlayout("disconnect");
     for (const dispose of disposers.splice(0)) dispose();
     if (session) {
@@ -592,7 +597,7 @@ function flushTelnyxMediaReorderBuffer(
 
     const lowestBufferedChunk = Math.min(...state.inboundMediaReorderBuffer.keys());
     if (lowestBufferedChunk > state.nextInboundMediaChunk) {
-      session.bus.push(Route.Background, {
+      session.bus.push(force ? Route.Critical : Route.Background, {
         kind: "metric.conversation",
         contextId: state.contextId,
         timestampMs: Date.now(),

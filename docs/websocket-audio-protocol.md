@@ -200,7 +200,7 @@ Telnyx remains provider-specific at the adapter boundary:
 - Validate top-level Telnyx `sequence_number` when present. Forward gaps emit `telnyx.sequence_gap`; duplicate or regressing sequence numbers emit `telnyx.sequence_regression` because Telnyx does not guarantee websocket event order.
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
-- Reorder inbound `media.chunk` within a bounded four-frame default window before audio reaches the engine. Out-of-order media is emitted to STT in chunk order; duplicate or already-emitted chunks are rejected; missing chunks emit `telnyx.media_chunk_gap` only when the reorder window is exceeded or the stream stops.
+- Reorder inbound `media.chunk` within a bounded four-frame default window before audio reaches the engine. Out-of-order media is emitted to STT in chunk order; duplicate or already-emitted chunks are rejected; missing chunks emit `telnyx.media_chunk_gap` only when the reorder window is exceeded, the stream stops, or the websocket disconnects.
 - Validate optional inbound `media.timestamp` as a non-negative integer when present. Timestamp gaps and regressions emit `telnyx.media_timestamp_gap` and `telnyx.media_timestamp_regression` metrics for transport observability, but timestamp drift is not a transcript-quality gate and does not by itself drop media.
 - Resample inbound audio into the engine input sample rate.
 - Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default or `L16`), then resample and encode assistant PCM16 accordingly for paced outbound `media` frames.
