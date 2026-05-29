@@ -155,6 +155,64 @@ describe("createTelnyxMediaStreamServer", () => {
     await server.close();
   });
 
+  it("records Telnyx media timestamp gaps and regressions without dropping media", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array(160))).toString("base64");
+
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "1", timestamp: "0", payload },
+    }));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "2", timestamp: "60", payload },
+    }));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { chunk: "3", timestamp: "40", payload },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(received).toHaveLength(3);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "telnyx-call-control-test",
+      name: "telnyx.media_timestamp_gap",
+      value: JSON.stringify({ expected: 20, actual: 60, missedMs: 40 }),
+    }));
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      contextId: "telnyx-call-control-test",
+      name: "telnyx.media_timestamp_regression",
+      value: JSON.stringify({ previous: 60, actual: 40 }),
+    }));
+
+    client.close();
+    await server.close();
+  });
+
   it("rejects duplicate Telnyx media chunks before forwarding duplicate audio", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];

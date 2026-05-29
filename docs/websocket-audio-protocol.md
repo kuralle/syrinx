@@ -172,6 +172,7 @@ Twilio remains provider-specific at the adapter boundary:
 - Validate `start.mediaFormat` as PCMU, 8 kHz, mono.
 - Decode inbound `media.payload` from strict base64 PCMU to PCM16.
 - Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `twilio.media_chunk_gap` metrics with expected, actual, and missed frame counts.
+- Validate optional inbound `media.timestamp` as a non-negative integer when present. Timestamp gaps and regressions emit `twilio.media_timestamp_gap` and `twilio.media_timestamp_regression` metrics for transport observability, but timestamp drift is not a transcript-quality gate and does not by itself drop media.
 - Resample inbound audio from 8 kHz to the engine input sample rate.
 - Resample assistant PCM16 to 8 kHz, encode PCMU, and send paced 20 ms Twilio `media` frames.
 - Send Twilio `mark` after paced outbound audio batches drain and record carrier mark acknowledgements.
@@ -200,6 +201,7 @@ Telnyx remains provider-specific at the adapter boundary:
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
 - Validate inbound `media.chunk` when present. Duplicate or regressing chunks are rejected before audio reaches the engine; forward gaps are accepted but emit `telnyx.media_chunk_gap` metrics with expected, actual, and missed frame counts.
+- Validate optional inbound `media.timestamp` as a non-negative integer when present. Timestamp gaps and regressions emit `telnyx.media_timestamp_gap` and `telnyx.media_timestamp_regression` metrics for transport observability, but timestamp drift is not a transcript-quality gate and does not by itself drop media.
 - Resample inbound audio into the engine input sample rate.
 - Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default or `L16`), then resample and encode assistant PCM16 accordingly for paced outbound `media` frames.
 - Send Telnyx `mark` after paced outbound audio batches drain and record carrier mark acknowledgements.
