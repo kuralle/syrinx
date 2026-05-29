@@ -264,6 +264,37 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("closes browser websocket connections when session startup exceeds startupTimeoutMs", async () => {
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      startupTimeoutMs: 10,
+      createSession: () => new Promise<VoiceAgentSession>(() => undefined),
+      contextId: () => "turn-startup-timeout",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openClient(websocketUrl(address.port));
+    const errorMessage = readJson(client);
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "session",
+      category: "startup_timeout",
+    });
+    await expect(closed).resolves.toEqual({
+      code: 1011,
+      reason: "session initialization failed",
+    });
+
+    await server.close();
+  });
+
   it("resumes a browser websocket session within the retention window", async () => {
     let created = 0;
     const session = new VoiceAgentSession({ plugins: {} });

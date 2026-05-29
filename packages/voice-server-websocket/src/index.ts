@@ -18,7 +18,12 @@ import {
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
-import { startWebSocketHeartbeat, startWebSocketMaxSessionDuration } from "./websocket-lifecycle.js";
+import {
+  WebSocketStartupTimeoutError,
+  startWebSocketHeartbeat,
+  startWebSocketMaxSessionDuration,
+  withWebSocketStartupTimeout,
+} from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 
 export * from "./twilio.js";
@@ -36,6 +41,7 @@ export interface VoiceWebSocketServerOptions {
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly startupTimeoutMs?: number;
   readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
@@ -89,6 +95,7 @@ interface AudioSequenceState {
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
@@ -107,6 +114,7 @@ export async function createVoiceWebSocketServer(
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const startupTimeoutMs = nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
@@ -124,6 +132,7 @@ export async function createVoiceWebSocketServer(
       inputSampleRateHz,
       outputSampleRateHz,
       heartbeatIntervalMs,
+      startupTimeoutMs,
       maxSessionDurationMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
@@ -178,6 +187,7 @@ async function handleConnection(args: {
   readonly inputSampleRateHz: number;
   readonly outputSampleRateHz: number;
   readonly heartbeatIntervalMs: number;
+  readonly startupTimeoutMs: number;
   readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
@@ -194,6 +204,7 @@ async function handleConnection(args: {
     inputSampleRateHz,
     outputSampleRateHz,
     heartbeatIntervalMs,
+    startupTimeoutMs,
     maxSessionDurationMs,
     maxBufferedAmountBytes,
     maxInboundMessageBytes,
@@ -210,6 +221,8 @@ async function handleConnection(args: {
   let ready = false;
   let socketClosed = false;
   let maxSessionTimedOut = false;
+  let startupTimedOut = false;
+  const startupSession: { current?: VoiceAgentSession } = {};
 
   const handleIncomingMessage = (data: RawData, isBinary: boolean): void => {
     try {
@@ -282,12 +295,18 @@ async function handleConnection(args: {
   });
 
   try {
-    const lease = await getOrCreateManagedSession({
+    const startup = getOrCreateManagedSession({
       request,
       createSession,
       sessionId,
       sessions,
+      onSessionCreated: (session) => {
+        startupSession.current = session;
+      },
+      shouldAbort: () => socketClosed || startupTimedOut,
     });
+    startup.catch(() => undefined);
+    const lease = await withWebSocketStartupTimeout(startup, startupTimeoutMs);
     managed = lease.managed;
     managed.connectionCount += 1;
     if (socketClosed) {
@@ -338,10 +357,14 @@ async function handleConnection(args: {
     }
     pendingMessageBytes = 0;
   } catch (err) {
+    if (err instanceof WebSocketStartupTimeoutError) {
+      startupTimedOut = true;
+      void startupSession.current?.close().catch(() => undefined);
+    }
     sendJson(socket, {
       type: "error",
       component: "session",
-      category: "initialization",
+      category: err instanceof WebSocketStartupTimeoutError ? "startup_timeout" : "initialization",
       message: err instanceof Error ? err.message : String(err),
     }, maxBufferedAmountBytes);
     socket.close(1011, "session initialization failed");
@@ -354,6 +377,8 @@ async function getOrCreateManagedSession(args: {
   readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
   readonly sessionId: (request: IncomingMessage) => string;
   readonly sessions: Map<string, ManagedSession>;
+  readonly onSessionCreated?: (session: VoiceAgentSession) => void;
+  readonly shouldAbort?: () => boolean;
 }): Promise<ManagedSessionLease> {
   const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(args.request) ?? args.sessionId(args.request));
   const existing = args.sessions.get(requestedSessionId);
@@ -367,7 +392,16 @@ async function getOrCreateManagedSession(args: {
   }
 
   const session = await args.createSession(args.request);
+  args.onSessionCreated?.(session);
+  if (args.shouldAbort?.()) {
+    await session.close().catch(() => undefined);
+    throw new Error("websocket session startup aborted");
+  }
   await session.start();
+  if (args.shouldAbort?.()) {
+    await session.close().catch(() => undefined);
+    throw new Error("websocket session startup aborted");
+  }
   const managed: ManagedSession = {
     id: requestedSessionId,
     session,

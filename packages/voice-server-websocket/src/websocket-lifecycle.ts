@@ -3,6 +3,28 @@
 import { WebSocket } from "ws";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 
+export class WebSocketStartupTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`websocket session startup exceeded ${String(timeoutMs)}ms`);
+    this.name = "WebSocketStartupTimeoutError";
+  }
+}
+
+export async function withWebSocketStartupTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0) return await promise;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new WebSocketStartupTimeoutError(timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export function startWebSocketHeartbeat(
   socket: WebSocket,
   heartbeatIntervalMs: number,

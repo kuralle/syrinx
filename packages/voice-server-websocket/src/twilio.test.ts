@@ -413,6 +413,37 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("closes Twilio websocket connections when session startup exceeds startupTimeoutMs", async () => {
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      startupTimeoutMs: 10,
+      createSession: () => new Promise<VoiceAgentSession>(() => undefined),
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "syrinx_error",
+      error: {
+        component: "transport",
+      },
+    });
+    await expect(closed).resolves.toEqual({
+      code: 1011,
+      reason: "session initialization failed",
+    });
+
+    await server.close();
+  });
+
   it("rejects unsupported Twilio start media formats before forwarding audio", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
