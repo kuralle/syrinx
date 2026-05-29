@@ -20,7 +20,12 @@ import {
 } from "./twilio.js";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
-import { startWebSocketHeartbeat, startWebSocketMaxSessionDuration } from "./websocket-lifecycle.js";
+import {
+  WebSocketStartupTimeoutError,
+  startWebSocketHeartbeat,
+  startWebSocketMaxSessionDuration,
+  withWebSocketStartupTimeout,
+} from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 
 export interface SmartPbxMediaStreamServerOptions {
@@ -35,6 +40,7 @@ export interface SmartPbxMediaStreamServerOptions {
   readonly outboundFrameDurationMs?: number;
   readonly maxQueuedOutputAudioMs?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly startupTimeoutMs?: number;
   readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
@@ -94,6 +100,7 @@ const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
 const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
@@ -111,6 +118,7 @@ export async function createSmartPbxMediaStreamServer(
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const startupTimeoutMs = nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS;
   const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
@@ -127,6 +135,7 @@ export async function createSmartPbxMediaStreamServer(
       outboundFrameDurationMs,
       maxQueuedOutputAudioMs,
       heartbeatIntervalMs,
+      startupTimeoutMs,
       maxSessionDurationMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
@@ -174,6 +183,7 @@ async function handleSmartPbxConnection(args: {
   readonly outboundFrameDurationMs: number;
   readonly maxQueuedOutputAudioMs: number;
   readonly heartbeatIntervalMs: number;
+  readonly startupTimeoutMs: number;
   readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
@@ -195,6 +205,7 @@ async function handleSmartPbxConnection(args: {
   let pendingMessageBytes = 0;
   let ready = false;
   let socketClosed = false;
+  let startupTimedOut = false;
   let clearPendingPlayout: (reason: SmartPbxPlayoutTerminationReason) => void = () => undefined;
   let session: VoiceAgentSession | null = null;
 
@@ -258,8 +269,24 @@ async function handleSmartPbxConnection(args: {
   });
 
   try {
-    session = await args.createSession(args.request);
-    args.sessions.add(session);
+    const startup = (async () => {
+      const createdSession = await args.createSession(args.request);
+      if (socketClosed || startupTimedOut) {
+        await createdSession.close().catch(() => undefined);
+        throw new Error("SmartPBX websocket session startup aborted");
+      }
+      session = createdSession;
+      args.sessions.add(createdSession);
+      await createdSession.start();
+      if (socketClosed || startupTimedOut) {
+        args.sessions.delete(createdSession);
+        await createdSession.close().catch(() => undefined);
+        throw new Error("SmartPBX websocket session startup aborted");
+      }
+      return createdSession;
+    })();
+    startup.catch(() => undefined);
+    session = await withWebSocketStartupTimeout(startup, args.startupTimeoutMs);
     if (socketClosed) {
       args.sessions.delete(session);
       await session.close().catch(() => undefined);
@@ -277,7 +304,6 @@ async function handleSmartPbxConnection(args: {
       maxQueuedOutputAudioMs: args.maxQueuedOutputAudioMs,
       maxBufferedAmountBytes: args.maxBufferedAmountBytes,
     });
-    await session.start();
     ready = true;
     for (const pending of pendingMessages.splice(0)) {
       pendingMessageBytes -= pending.byteLength;
@@ -289,6 +315,13 @@ async function handleSmartPbxConnection(args: {
     }
     pendingMessageBytes = 0;
   } catch (err) {
+    if (err instanceof WebSocketStartupTimeoutError) {
+      startupTimedOut = true;
+      if (session) {
+        args.sessions.delete(session);
+        void session.close().catch(() => undefined);
+      }
+    }
     sendSmartPbxError(args.socket, state, err instanceof Error ? err.message : String(err), args.maxBufferedAmountBytes);
     args.socket.close(1011, "session initialization failed");
     return;

@@ -341,7 +341,7 @@ describe("createTelnyxMediaStreamServer", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
     const client = await openSocket(telnyxUrl(address.port));
-    const errorMessage = readJsonMatching(client, (message) => message.event === "error");
+    const errorMessage = readJsonMatching(client, (message) => message.event === "error" || message.event === "syrinx_error");
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify(telnyxStart()));
@@ -501,6 +501,32 @@ describe("createTelnyxMediaStreamServer", () => {
     ]);
 
     client.close();
+    await server.close();
+  });
+
+  it("closes Telnyx websocket connections when session startup exceeds startupTimeoutMs", async () => {
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      startupTimeoutMs: 10,
+      createSession: () => new Promise<VoiceAgentSession>(() => undefined),
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "error");
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    await expect(errorMessage).resolves.toEqual(expect.objectContaining({ event: expect.any(String) }));
+    await expect(closed).resolves.toEqual({
+      code: 1011,
+      reason: "session initialization failed",
+    });
+
     await server.close();
   });
 

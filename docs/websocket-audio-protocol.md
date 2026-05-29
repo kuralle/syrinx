@@ -127,6 +127,7 @@ Speech and transcript lifecycle:
 
 Browser websocket defaults:
 
+- Session startup timeout: 15 seconds, close code `1011` with reason `session initialization failed`.
 - Heartbeat ping interval: 30 seconds.
 - Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. Set `maxSessionDurationMs: 0` only for an explicitly managed embedding.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
@@ -183,6 +184,7 @@ Twilio remains provider-specific at the adapter boundary:
 
 Twilio adapter defaults:
 
+- Session startup timeout: 15 seconds, close code `1011` with reason `session initialization failed`.
 - Heartbeat ping interval: 30 seconds.
 - Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path clears queued playout and recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
@@ -215,6 +217,7 @@ Outbound Telnyx `media`, `mark`, and `clear` commands follow Telnyx's client-to-
 
 Telnyx adapter defaults:
 
+- Session startup timeout: 15 seconds, close code `1011` with reason `session initialization failed`.
 - Heartbeat ping interval: 30 seconds.
 - Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path drains inbound reorder state and clears queued playout/recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
@@ -252,6 +255,7 @@ The supplied SmartPBX contract used by this adapter also does not define inbound
 
 SmartPBX adapter defaults:
 
+- Session startup timeout: 15 seconds, close code `1011` with reason `session initialization failed`.
 - Heartbeat ping interval: 30 seconds.
 - Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path clears queued local playout and recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
