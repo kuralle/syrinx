@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import WebSocket, { type RawData } from "ws";
+import WebSocket from "ws";
 
 type Provider = "twilio" | "telnyx" | "smartpbx";
 
@@ -153,7 +153,7 @@ async function probeProvider(
 ): Promise<ProbeResult> {
   const socket = new WebSocket(url, { perMessageDeflate: false });
   let messages = 0;
-  socket.on("message", (_data: RawData) => {
+  socket.on("message", () => {
     messages += 1;
   });
 

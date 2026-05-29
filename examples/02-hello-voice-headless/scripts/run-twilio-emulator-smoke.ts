@@ -59,6 +59,13 @@ interface SmokeResult {
   firstOutboundMediaAfterLastInboundMs: number;
 }
 
+interface JsonMessage {
+  readonly event?: string;
+  readonly media?: { readonly payload?: string };
+  readonly mark?: { readonly name?: string };
+  readonly [key: string]: unknown;
+}
+
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const generatedAt = new Date().toISOString();
@@ -155,7 +162,9 @@ async function main(): Promise<void> {
 
     const firstMedia = await outboundMedia;
     const firstMark = await outboundMark;
-    const firstPayloadBytes = Buffer.from(firstMedia.media.payload, "base64").byteLength;
+    const firstPayload = firstMedia.media?.payload;
+    if (typeof firstPayload !== "string") throw new Error("Expected Twilio outbound media payload");
+    const firstPayloadBytes = Buffer.from(firstPayload, "base64").byteLength;
     if (firstMedia.streamSid !== STREAM_SID) {
       throw new Error(`Twilio media streamSid mismatch: ${String(firstMedia.streamSid)}`);
     }
@@ -165,7 +174,7 @@ async function main(): Promise<void> {
     if (typeof firstMark.mark?.name !== "string" || firstMark.mark.name.length === 0) {
       throw new Error("Expected Twilio playback mark name");
     }
-    const endMarkPromise = waitForJson(socket, (message) => message.event === "mark" && message.mark?.name?.endsWith(":end"), 3000);
+    const endMarkPromise = waitForJson(socket, (message) => message.event === "mark" && message.mark?.name?.endsWith(":end") === true, 3000);
     socket.send(JSON.stringify({
       event: "mark",
       streamSid: STREAM_SID,
@@ -174,11 +183,13 @@ async function main(): Promise<void> {
       },
     }));
     const endMark = await endMarkPromise;
+    const endMarkName = endMark.mark?.name;
+    if (typeof endMarkName !== "string") throw new Error("Expected Twilio terminal playback mark name");
     socket.send(JSON.stringify({
       event: "mark",
       streamSid: STREAM_SID,
       mark: {
-        name: endMark.mark.name,
+        name: endMarkName,
       },
     }));
 
@@ -384,9 +395,9 @@ async function waitForOpen(socket: WebSocket): Promise<void> {
 
 async function waitForJson(
   socket: WebSocket,
-  predicate: (message: any) => boolean,
+  predicate: (message: JsonMessage) => boolean,
   timeoutMs: number,
-): Promise<any> {
+): Promise<JsonMessage> {
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       socket.off("message", onMessage);
@@ -394,7 +405,7 @@ async function waitForJson(
     }, timeoutMs);
     const onMessage = (data: RawData, isBinary: boolean) => {
       if (isBinary) return;
-      const message = JSON.parse(data.toString());
+      const message = JSON.parse(data.toString()) as JsonMessage;
       if (!predicate(message)) return;
       clearTimeout(timeout);
       socket.off("message", onMessage);

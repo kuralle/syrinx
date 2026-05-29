@@ -61,6 +61,12 @@ interface SmokeResult {
   firstOutboundMediaAfterLastInboundMs: number;
 }
 
+interface JsonMessage {
+  readonly event?: string;
+  readonly media?: { readonly payload?: string };
+  readonly [key: string]: unknown;
+}
+
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const generatedAt = new Date().toISOString();
@@ -161,7 +167,9 @@ async function main(): Promise<void> {
     const outboundMedia = waitForJson(socket, (message) => message.event === "media", 3000);
     inboundSendStats = await sendEmulatedPhoneAudio(socket, codec, wireSampleRateHz, inboundOpusEncoder, startedAt);
     const firstMedia = await outboundMedia;
-    const firstPayloadBytes = Buffer.from(firstMedia.media.payload, "base64").byteLength;
+    const firstPayload = firstMedia.media?.payload;
+    if (typeof firstPayload !== "string") throw new Error("Expected SmartPBX outbound media payload");
+    const firstPayloadBytes = Buffer.from(firstPayload, "base64").byteLength;
     if (firstMedia.callId !== CALL_ID || firstMedia.accountId !== ACCOUNT_ID) {
       throw new Error("Outbound SmartPBX media is missing call/account identity");
     }
@@ -393,7 +401,11 @@ async function waitForOpen(socket: WebSocket): Promise<void> {
   });
 }
 
-async function waitForJson(socket: WebSocket, predicate: (message: any) => boolean, timeoutMs: number): Promise<any> {
+async function waitForJson(
+  socket: WebSocket,
+  predicate: (message: JsonMessage) => boolean,
+  timeoutMs: number,
+): Promise<JsonMessage> {
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       socket.off("message", onMessage);
@@ -401,7 +413,7 @@ async function waitForJson(socket: WebSocket, predicate: (message: any) => boole
     }, timeoutMs);
     const onMessage = (data: RawData, isBinary: boolean) => {
       if (isBinary) return;
-      const message = JSON.parse(data.toString());
+      const message = JSON.parse(data.toString()) as JsonMessage;
       if (!predicate(message)) return;
       clearTimeout(timeout);
       socket.off("message", onMessage);
