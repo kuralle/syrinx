@@ -167,8 +167,7 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
       continue;
     }
     if (callResult["provider"] !== provider) failures.push(`${provider} call result provider mismatch`);
-    const qualityGate = callResult["qualityGate"];
-    if (!isRecord(qualityGate) || qualityGate["passed"] !== true) failures.push(`${provider} quality gate failed`);
+    validateQualityGate(provider, callResult["qualityGate"], failures);
     validateCarrierCompletionEvidence(provider, callResult, failures);
 
     const botArtifacts = readStringArray(providerSummary["botArtifacts"]);
@@ -205,6 +204,26 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
   }
 
   return failures;
+}
+
+function validateQualityGate(provider: Provider, qualityGate: unknown, failures: string[]): void {
+  if (!isRecord(qualityGate)) {
+    failures.push(`${provider} quality gate was missing`);
+    return;
+  }
+  const qualityFailures = Array.isArray(qualityGate["failures"]) ? qualityGate["failures"] : null;
+  if (qualityGate["passed"] !== true) failures.push(`${provider} quality gate failed`);
+  if (!qualityFailures) {
+    failures.push(`${provider} qualityGate.failures must be an array`);
+    return;
+  }
+  const invalidFailure = qualityFailures.find((failure) => typeof failure !== "string");
+  if (invalidFailure !== undefined) {
+    failures.push(`${provider} qualityGate.failures must contain only strings`);
+  }
+  if (qualityGate["passed"] === true && qualityFailures.length > 0) {
+    failures.push(`${provider} qualityGate.passed cannot be true when qualityGate.failures is non-empty`);
+  }
 }
 
 function validateCarrierCompletionEvidence(provider: Provider, callResult: Record<string, unknown>, failures: string[]): void {
