@@ -105,6 +105,7 @@ export class FakeTTS implements VoicePlugin {
       contextId,
       timestampMs: now,
       audio: buf,
+      sampleRateHz: 16000,
     });
 
     if (batch.final) {

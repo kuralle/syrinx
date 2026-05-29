@@ -706,7 +706,8 @@ export class VoiceAgentSession {
     this.activeTtsContextIds.add(pkt.contextId);
 
     // Extend idle timeout by audio duration to prevent timeout during playback.
-    const audioDurationMs = estimatePcm16Duration(pkt.audio, pkt.sampleRateHz ?? 24000);
+    const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
+    const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
     this.idleTimeout.extend(audioDurationMs);
 
     this.debugPush({
@@ -724,7 +725,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: Date.now(),
       audio: pkt.audio,
-      sampleRateHz: pkt.sampleRateHz,
+      sampleRateHz,
       truncate: false,
     } as RecordAssistantAudioPacket);
   }
@@ -1044,6 +1045,13 @@ function estimatePcm16Duration(
   // Each sample is 2 bytes (16-bit), mono = 1 channel
   const samples = audio.length / 2;
   return (samples / sampleRate) * 1000;
+}
+
+function requireTtsAudioSampleRate(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("tts.audio sampleRateHz must be a positive integer");
+  }
+  return value;
 }
 
 function languageFromTranscripts(

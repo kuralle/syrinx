@@ -446,7 +446,7 @@ function wireTwilioSessionEvents(args: {
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.streamSid || socket.readyState !== WebSocket.OPEN) return;
       const samples = pcm16BytesToSamples(audioPacket.audio);
-      const resampled = resamplePcm16(samples, audioPacket.sampleRateHz ?? outputSampleRateHz, twilioSampleRateHz);
+      const resampled = resamplePcm16(samples, requireTtsAudioSampleRate(audioPacket.sampleRateHz), twilioSampleRateHz);
       const encoded = encodePcm16ToMuLaw(resampled);
       const frames: PacedPlayoutFrame[] = [];
       for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
@@ -786,6 +786,12 @@ function numberFromString(value: number | string | undefined): number | null {
 function positiveInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
   return value;
+}
+
+function requireTtsAudioSampleRate(value: unknown): number {
+  const sampleRateHz = positiveInteger(value);
+  if (sampleRateHz === null) throw new Error("tts.audio sampleRateHz must be a positive integer");
+  return sampleRateHz;
 }
 
 function nonNegativeInteger(value: unknown): number | null {

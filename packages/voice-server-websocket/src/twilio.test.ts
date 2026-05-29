@@ -564,6 +564,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
 
@@ -622,6 +623,7 @@ describe("createTwilioMediaStreamServer", () => {
         contextId: "twilio-CA-test-call",
         timestampMs: Date.now(),
         audio: pcm16SamplesToBytes(new Int16Array(16000)),
+        sampleRateHz: 16000,
       });
       await firstMedia;
       expect(messages.filter((message) => message.event === "media")).toHaveLength(1);
@@ -683,6 +685,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(16000)),
+      sampleRateHz: 16000,
     });
     await firstMedia;
     client.terminate();
@@ -750,6 +753,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(samples16k),
+      sampleRateHz: 16000,
     });
 
     const media = await mediaMessage;
@@ -804,6 +808,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(16000)),
+      sampleRateHz: 16000,
     });
     await firstMedia;
 
@@ -826,6 +831,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
       kind: "tts.end",
@@ -901,6 +907,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     const mark = await playbackMark;
 
@@ -960,6 +967,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(1280)),
+      sampleRateHz: 16000,
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.bus.push(Route.Main, {
@@ -967,6 +975,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(1280)),
+      sampleRateHz: 16000,
     });
 
     await expect(closed).resolves.toEqual({
@@ -1059,6 +1068,7 @@ describe("createTwilioMediaStreamServer", () => {
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
 
     await expect(closed).resolves.toEqual({

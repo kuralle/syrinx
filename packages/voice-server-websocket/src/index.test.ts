@@ -449,6 +449,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-2",
       timestampMs: Date.now(),
       audio: new Uint8Array([8, 9, 10, 11]),
+      sampleRateHz: 16000,
     });
 
     expect(textPackets).toEqual([
@@ -549,6 +550,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "assistant-turn",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
       kind: "tts.end",
@@ -1272,6 +1274,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-tts",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     });
 
     const envelope = decodeTestBinaryAudioEnvelope(await binaryMessage);
@@ -1316,6 +1319,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-tts",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     });
 
     expect(await binaryMessage).toEqual(Buffer.from([1, 2, 3, 4]));
@@ -1402,6 +1406,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-tts",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     });
 
     await expect(closed).resolves.toEqual({
@@ -1439,6 +1444,7 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-tts",
       timestampMs: Date.now(),
       audio: new Uint8Array(8192),
+      sampleRateHz: 16000,
     });
 
     await expect(closed).resolves.toEqual({

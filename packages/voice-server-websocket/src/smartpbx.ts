@@ -386,7 +386,7 @@ function wireSmartPbxSessionEvents(args: {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
-      const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, audioPacket.sampleRateHz ?? outputSampleRateHz, state, outboundFrameDurationMs)
+      const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, requireTtsAudioSampleRate(audioPacket.sampleRateHz), state, outboundFrameDurationMs)
         .map((frame) => ({
           send: () => {
             if (state.stopped) return false;
@@ -596,6 +596,12 @@ function numberFromString(value: number | string | undefined): number | null {
 function positiveInteger(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
   return value;
+}
+
+function requireTtsAudioSampleRate(value: unknown): number {
+  const sampleRateHz = positiveInteger(value);
+  if (sampleRateHz === null) throw new Error("tts.audio sampleRateHz must be a positive integer");
+  return sampleRateHz;
 }
 
 function nonNegativeInteger(value: unknown): number | null {

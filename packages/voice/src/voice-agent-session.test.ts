@@ -112,6 +112,7 @@ class InterruptAwareStreamingTtsPlugin implements VoicePlugin {
         contextId: this.contextId,
         timestampMs: Date.now(),
         audio: new Uint8Array([1, 2, 3, 4]),
+        sampleRateHz: 16000,
       } satisfies TextToSpeechAudioPacket);
     }, 5);
   }
@@ -627,6 +628,39 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("rejects TTS audio without sample-rate metadata before recording it", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const recorded: RecordAssistantAudioPacket[] = [];
+    const errors: Array<{ stage: string; message: string }> = [];
+
+    await session.start();
+    session.bus.on("record.assistant_audio", (pkt) => {
+      recorded.push(pkt as RecordAssistantAudioPacket);
+    });
+    session.on("error", (event) => {
+      errors.push({ stage: event.stage, message: event.message });
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-missing-rate",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    } as unknown as TextToSpeechAudioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recorded).toEqual([]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        stage: "pipeline.error",
+        message: "tts.audio sampleRateHz must be a positive integer",
+      }),
+    ]);
+
+    await closeSession(session);
+  });
+
   it("uses TTS audio sample-rate metadata for idle playback timing", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -744,6 +778,7 @@ describe("VoiceAgentSession", () => {
       contextId: "assistant-turn",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -799,6 +834,7 @@ describe("VoiceAgentSession", () => {
       contextId: "assistant-turn",
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -827,6 +863,7 @@ describe("VoiceAgentSession", () => {
       contextId: "assistant-turn",
       timestampMs: Date.now(),
       audio: new Uint8Array([5, 6, 7, 8]),
+      sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
     await new Promise((resolve) => setTimeout(resolve, 30));
 
