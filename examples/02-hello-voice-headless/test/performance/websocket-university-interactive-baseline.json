@@ -1,6 +1,6 @@
 {
   "scenario": "websocket_university_student_relations_interactive",
-  "generatedAt": "2026-05-27T15:52:20.657Z",
+  "generatedAt": "2026-05-29T08:48:01.583Z",
   "fixtureProvider": "mixed-wav-fixtures",
   "llmModel": "gemini-2.5-flash",
   "ttsProvider": "cartesia",
@@ -12,12 +12,12 @@
   "postTtsDrainMs": 500,
   "turnCount": 3,
   "latencyMs": {
-    "avgSttFinalAfterSpeechEnd": 1363,
-    "avgVadSpeechEndAfterAudioEnd": 665,
-    "avgLlmTimeToFirstText": 3123,
-    "avgTtsTimeToFirstAudio": 373,
-    "avgSpeechEndToFirstAssistantAudio": 4859,
-    "avgVadSpeechEndToFirstAssistantAudio": 4194
+    "avgSttFinalAfterSpeechEnd": 914,
+    "avgVadSpeechEndAfterAudioEnd": 642,
+    "avgLlmTimeToFirstText": 3604,
+    "avgTtsTimeToFirstAudio": 408,
+    "avgSpeechEndToFirstAssistantAudio": 4926,
+    "avgVadSpeechEndToFirstAssistantAudio": 4284
   },
   "turns": [
     {
@@ -25,23 +25,23 @@
       "fixtureId": "review-late-add",
       "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
       "sttFinal": "Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline, and what form I should submit.",
-      "agentReply": "Yes, you can still add Biology 101 after the deadline by submitting a Late Add Petition. You will need to upload an instructor email and department lab-seat confirmation, then route the petition to the instructor, advising desk, and registrar.",
+      "agentReply": "Yes, you can still add Biology 101 by submitting a Late Add Petition, as the deadline has passed. You will need to upload an instructor email and department lab-seat confirmation, then route the petition to the instructor, advising desk, and registrar.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 8963,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 12307,
-      "audioBytes": 393810,
+      "assistantAudioMs": 13003,
+      "audioBytes": 416100,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1085,
-        "vadSpeechEndAfterAudioEnd": 741,
-        "llmTimeToFirstText": 3571,
-        "ttsTimeToFirstAudio": 385,
-        "speechEndToFirstAssistantAudio": 5041,
-        "vadSpeechEndToFirstAssistantAudio": 4300,
-        "turnWallClock": 20184
+        "sttFinalAfterSpeechEnd": 1030,
+        "vadSpeechEndAfterAudioEnd": 725,
+        "llmTimeToFirstText": 4357,
+        "ttsTimeToFirstAudio": 405,
+        "speechEndToFirstAssistantAudio": 5792,
+        "vadSpeechEndToFirstAssistantAudio": 5067,
+        "turnWallClock": 21001
       }
     },
     {
@@ -49,30 +49,30 @@
       "fixtureId": "02-registration-holds",
       "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
       "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "agentReply": "I checked your record, and you do not have any active registration holds that would block your late add petition. Your student portal warning might be related to another matter, but it will not prevent this petition from going through.",
+      "agentReply": "I can confirm that you do not have any active registration holds that would block your late add petition. Your student portal warning may be a cached message, but your account is clear.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16451,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 9845,
-      "audioBytes": 315048,
+      "assistantAudioMs": 8127,
+      "audioBytes": 260062,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 913,
-        "vadSpeechEndAfterAudioEnd": 720,
-        "llmTimeToFirstText": 2797,
-        "ttsTimeToFirstAudio": 352,
-        "speechEndToFirstAssistantAudio": 4062,
-        "vadSpeechEndToFirstAssistantAudio": 3342,
-        "turnWallClock": 26210
+        "sttFinalAfterSpeechEnd": 1012,
+        "vadSpeechEndAfterAudioEnd": 705,
+        "llmTimeToFirstText": 3160,
+        "ttsTimeToFirstAudio": 407,
+        "speechEndToFirstAssistantAudio": 4579,
+        "vadSpeechEndToFirstAssistantAudio": 3874,
+        "turnWallClock": 26194
       }
     },
     {
       "id": "interactive-03",
       "fixtureId": "10-lab-fee",
       "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
-      "sttFinal": "Does BIOLOGY one hundred one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition because that changes how I plan my payment.",
+      "sttFinal": "Does BIOLOGY one hundred one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar the petition because that changes how I plan my payment.",
       "agentReply": "Yes, Biology 101 has an $85 lab fee. This fee will be posted to your account after the registrar processes your Late Add Petition.",
       "toolCalls": [
         "studentRelationsLookup"
@@ -80,22 +80,22 @@
       "inputAudioMs": 14691,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 7523,
-      "audioBytes": 240742,
+      "assistantAudioMs": 7848,
+      "audioBytes": 251146,
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 2090,
-        "vadSpeechEndAfterAudioEnd": 533,
-        "llmTimeToFirstText": 3000,
-        "ttsTimeToFirstAudio": 383,
-        "speechEndToFirstAssistantAudio": 5473,
-        "vadSpeechEndToFirstAssistantAudio": 4940,
-        "turnWallClock": 24858
+        "sttFinalAfterSpeechEnd": 701,
+        "vadSpeechEndAfterAudioEnd": 497,
+        "llmTimeToFirstText": 3295,
+        "ttsTimeToFirstAudio": 411,
+        "speechEndToFirstAssistantAudio": 4407,
+        "vadSpeechEndToFirstAssistantAudio": 3910,
+        "turnWallClock": 23446
       }
     }
   ],
   "artifacts": {
-    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-27T15-51-07-393Z",
-    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-05-27T15-51-07-393Z/manifest.json"
+    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-29T08-46-48-968Z",
+    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-05-29T08-46-48-968Z/manifest.json"
   },
   "qualityGate": {
     "passed": true,

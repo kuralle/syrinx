@@ -73,17 +73,17 @@ Latest successful baseline:
 | TTS provider | Cartesia streaming websocket |
 | Trailing silence | 1,400 ms |
 | Post-TTS drain | 500 ms |
-| Avg STT final after speech end | 1,363 ms |
-| Avg VAD speech end after audio end | 665 ms |
-| Avg LLM first text after STT final | 3,123 ms |
-| Avg Cartesia first audio after first agent text | 373 ms |
-| Avg speech end to first assistant audio | 4,859 ms |
+| Avg STT final after speech end | 914 ms |
+| Avg VAD speech end after audio end | 642 ms |
+| Avg LLM first text after STT final | 3,604 ms |
+| Avg Cartesia first audio after first agent text | 408 ms |
+| Avg speech end to first assistant audio | 4,926 ms |
 | Quality gate | Passed |
 
 Artifacts:
 
 - `examples/02-hello-voice-headless/test/performance/websocket-university-interactive-baseline.json`
-- `examples/02-hello-voice-headless/test/performance/runs/websocket-university-interactive-2026-05-27T15-51-07-393Z/manifest.json`
+- `examples/02-hello-voice-headless/test/performance/runs/websocket-university-interactive-2026-05-29T08-46-48-968Z/manifest.json`
 
 ### Longform Websocket
 
