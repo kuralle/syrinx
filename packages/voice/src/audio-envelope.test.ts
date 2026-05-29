@@ -42,6 +42,23 @@ describe("Syrinx binary audio envelope", () => {
     expect(() => decodeSyrinxAudioEnvelope(encoded)).toThrow(/byteLength/);
   });
 
+  it("rejects odd-byte PCM16 payloads and inconsistent duration metadata", () => {
+    const oddPayload = encodeSyrinxAudioEnvelope({
+      type: "audio",
+      sampleRateHz: 16000,
+      byteLength: 3,
+    }, new Uint8Array([1, 2, 3]));
+    const wrongDuration = encodeSyrinxAudioEnvelope({
+      type: "audio",
+      sampleRateHz: 16000,
+      byteLength: 640,
+      durationMs: 200,
+    }, new Uint8Array(640));
+
+    expect(() => decodeSyrinxAudioEnvelope(oddPayload)).toThrow(/PCM16/);
+    expect(() => decodeSyrinxAudioEnvelope(wrongDuration)).toThrow(/durationMs/);
+  });
+
   it("rejects envelopes without a valid sample rate", () => {
     const missingSampleRate = encodeSyrinxAudioEnvelope({
       type: "audio",
