@@ -67,7 +67,9 @@ export {
 
 // Pipeline packets — behavior
 export {
+  type RecordAssistantAudioDataPacket,
   type RecordAssistantAudioPacket,
+  type RecordAssistantAudioTruncatePacket,
   type RecordUserAudioPacket,
   type StartIdleTimeoutPacket,
   type StopIdleTimeoutPacket,
