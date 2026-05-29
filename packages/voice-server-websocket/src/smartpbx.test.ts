@@ -16,12 +16,24 @@ function smartPbxUrl(port: number): string {
 }
 
 async function openSocket(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
-  await new Promise<void>((resolveOpen, reject) => {
-    socket.once("open", resolveOpen);
-    socket.once("error", reject);
-  });
-  return socket;
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < 1000) {
+    const socket = new WebSocket(url);
+    try {
+      await new Promise<void>((resolveOpen, reject) => {
+        socket.once("open", resolveOpen);
+        socket.once("error", reject);
+      });
+      return socket;
+    } catch (err) {
+      socket.terminate();
+      lastError = err;
+      if (!(err instanceof Error) || !err.message.includes("Unexpected server response: 404")) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function readJsonMatching(socket: WebSocket, predicate: (message: any) => boolean): Promise<any> {

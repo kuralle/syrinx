@@ -345,6 +345,73 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("rejects malformed Cartesia audio payloads before playback", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        socket.send(JSON.stringify({
+          type: "chunk",
+          context_id: msg.context_id,
+          data: "not-base64",
+          done: false,
+          status_code: 206,
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const errors: TtsErrorPacket[] = [];
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.audio", (pkt) => {
+      audio.push(pkt as TextToSpeechAudioPacket);
+    });
+    bus.on("tts.error", (pkt) => {
+      errors.push(pkt as TtsErrorPacket);
+    });
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-malformed-audio",
+      timestampMs: Date.now(),
+      text: "Trigger malformed provider audio.",
+    });
+    await waitForCondition(() => errors.length > 0);
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-malformed-audio",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => ends.length > 0);
+
+    expect(audio).toEqual([]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "tts.error",
+        contextId: "turn-malformed-audio",
+        component: "tts",
+        cause: expect.objectContaining({
+          message: "Cartesia TTS provider audio data must be valid base64",
+        }),
+      }),
+    ]);
+    expect(ends).toEqual([expect.objectContaining({ contextId: "turn-malformed-audio" })]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("fails active contexts when the Cartesia websocket closes before provider done", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", () => {

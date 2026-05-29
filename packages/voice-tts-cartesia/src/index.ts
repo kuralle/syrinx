@@ -308,7 +308,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
     if (typeof msg["data"] === "string") {
       try {
-        const audioBytes = Buffer.from(msg["data"], "base64");
+        const audioBytes = decodeStrictBase64(msg["data"], "Cartesia TTS provider audio data");
         const packet: TextToSpeechAudioPacket = {
           kind: "tts.audio",
           contextId,
@@ -318,6 +318,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         };
         this.bus?.push(Route.Main, packet);
       } catch (err) {
+        this.activeContexts.delete(contextId);
         this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
       }
     }
@@ -383,4 +384,16 @@ function cartesiaCloseError(code: number, reason: Buffer): Error {
       ? `Cartesia TTS WebSocket closed unexpectedly: code=${code} reason=${reasonText}`
       : `Cartesia TTS WebSocket closed unexpectedly: code=${code}`,
   );
+}
+
+function decodeStrictBase64(value: string, name: string): Buffer {
+  const normalized = value.replace(/\s+/g, "");
+  if (normalized.length === 0 || normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    throw new Error(`${name} must be valid base64`);
+  }
+  const decoded = Buffer.from(normalized, "base64");
+  if (decoded.toString("base64") !== normalized) {
+    throw new Error(`${name} must be valid base64`);
+  }
+  return decoded;
 }
