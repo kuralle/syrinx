@@ -10,8 +10,30 @@ import {
   validateDownloadedFlySyntheticCarrierArtifacts,
   type FlySpikeSummary,
 } from "../scripts/run-fly-synthetic-carrier-spike.js";
+import {
+  evaluateSyntheticCarrierQuality,
+  type CarrierAudioCapture,
+  type CarrierCapture,
+} from "../scripts/serve-synthetic-carrier.js";
 
 describe("Fly synthetic carrier artifact validation", () => {
+  it("accepts synthetic carrier runtime evidence only when decoded PCM matches captured PCM chunks", () => {
+    const capture = carrierCapture();
+    const audioCapture = carrierAudioCapture();
+
+    expect(evaluateSyntheticCarrierQuality("twilio", capture, audioCapture)).toStrictEqual([]);
+  });
+
+  it("rejects synthetic carrier runtime decoded PCM metrics that drift from captured PCM chunks", () => {
+    const capture = carrierCapture({ inboundDecodedPcmBytes: 160, outboundDecodedPcmBytes: 160 });
+    const audioCapture = carrierAudioCapture();
+
+    const failures = evaluateSyntheticCarrierQuality("telnyx", capture, audioCapture);
+
+    expect(failures).toContain("carrier inbound decoded PCM bytes 160 did not match captured PCM bytes 320");
+    expect(failures).toContain("carrier outbound decoded PCM bytes 160 did not match captured PCM bytes 320");
+  });
+
   it("accepts complete downloaded bot and carrier evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
     const summary = await writeProviderEvidence(root, "twilio");
@@ -76,6 +98,35 @@ describe("Fly synthetic carrier artifact validation", () => {
     expect(failures).toContain("smartpbx carrier-outbound.wav data byte length 800 did not match expected 1600");
   });
 });
+
+function carrierCapture(overrides: Partial<CarrierCapture> = {}): CarrierCapture {
+  return {
+    networkProfile: "jittery",
+    inboundFrames: 1,
+    inboundWireBytes: 160,
+    inboundDecodedPcmBytes: 320,
+    outboundFrames: 1,
+    outboundWireBytes: 160,
+    outboundDecodedPcmBytes: 320,
+    outboundMarks: 1,
+    outboundEndMarks: 1,
+    localPlayoutDrains: 0,
+    outboundQuietDrains: 0,
+    firstInboundMediaAfterStartMs: 1,
+    lastInboundMediaAfterStartMs: 40,
+    maxInboundMediaGapMs: 40,
+    firstOutboundMediaAfterStartMs: 100,
+    lastOutboundMediaAfterStartMs: 120,
+    ...overrides,
+  };
+}
+
+function carrierAudioCapture(): CarrierAudioCapture {
+  return {
+    inboundPcm8k: [new Int16Array(160)],
+    outboundPcm8k: [new Int16Array(160)],
+  };
+}
 
 async function writeProviderEvidence(
   root: string,

@@ -39,10 +39,10 @@ const TELNYX_CALL_CONTROL_ID = "telnyx-synthetic-carrier-call-control";
 const SMARTPBX_CALL_ID = "smartpbx-synthetic-carrier-call";
 const SMARTPBX_ACCOUNT_ID = "smartpbx-synthetic-carrier-account";
 
-type TelephonyProvider = "twilio" | "telnyx" | "smartpbx";
+export type TelephonyProvider = "twilio" | "telnyx" | "smartpbx";
 type NetworkProfile = "clean" | "jittery" | "bursty";
 
-interface CarrierCapture {
+export interface CarrierCapture {
   networkProfile: NetworkProfile;
   inboundFrames: number;
   inboundWireBytes: number;
@@ -61,7 +61,7 @@ interface CarrierCapture {
   lastOutboundMediaAfterStartMs: number;
 }
 
-interface CarrierAudioCapture {
+export interface CarrierAudioCapture {
   readonly inboundPcm8k: Int16Array[];
   readonly outboundPcm8k: Int16Array[];
 }
@@ -185,7 +185,7 @@ async function runSyntheticCarrierCall(options: SyntheticCallOptions): Promise<R
       failures: [] as string[],
     },
   };
-  result.qualityGate.failures = evaluateQuality(options.provider, capture);
+  result.qualityGate.failures = evaluateSyntheticCarrierQuality(options.provider, capture, audioCapture);
   result.qualityGate.passed = result.qualityGate.failures.length === 0;
   await writeFile(join(runDir, "baseline.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
   if (result.qualityGate.failures.length > 0) {
@@ -355,7 +355,11 @@ async function waitForCarrierPlayoutDrain(provider: TelephonyProvider, capture: 
   );
 }
 
-function evaluateQuality(provider: TelephonyProvider, capture: CarrierCapture): string[] {
+export function evaluateSyntheticCarrierQuality(
+  provider: TelephonyProvider,
+  capture: CarrierCapture,
+  audioCapture: CarrierAudioCapture = createCarrierAudioCapture(),
+): string[] {
   const failures: string[] = [];
   if (capture.inboundFrames <= 0) failures.push("carrier inbound media frames were not sent");
   if (capture.outboundFrames <= 0) failures.push("carrier outbound media frames were not produced");
@@ -363,6 +367,18 @@ function evaluateQuality(provider: TelephonyProvider, capture: CarrierCapture): 
   if (capture.outboundWireBytes <= 0) failures.push("carrier outbound wire audio was empty");
   if (capture.inboundDecodedPcmBytes <= 0) failures.push("carrier inbound decoded PCM was empty");
   if (capture.outboundDecodedPcmBytes <= 0) failures.push("carrier outbound decoded PCM was empty");
+  const inboundCapturedPcmBytes = capturedPcmByteLength(audioCapture.inboundPcm8k);
+  const outboundCapturedPcmBytes = capturedPcmByteLength(audioCapture.outboundPcm8k);
+  if (inboundCapturedPcmBytes > 0 && capture.inboundDecodedPcmBytes !== inboundCapturedPcmBytes) {
+    failures.push(
+      `carrier inbound decoded PCM bytes ${String(capture.inboundDecodedPcmBytes)} did not match captured PCM bytes ${String(inboundCapturedPcmBytes)}`,
+    );
+  }
+  if (outboundCapturedPcmBytes > 0 && capture.outboundDecodedPcmBytes !== outboundCapturedPcmBytes) {
+    failures.push(
+      `carrier outbound decoded PCM bytes ${String(capture.outboundDecodedPcmBytes)} did not match captured PCM bytes ${String(outboundCapturedPcmBytes)}`,
+    );
+  }
   if (provider !== "smartpbx" && capture.outboundEndMarks <= 0) failures.push("carrier terminal playback mark was not observed");
   if (capture.networkProfile !== "clean" && capture.maxInboundMediaGapMs <= FRAME_DURATION_MS) {
     failures.push(`${capture.networkProfile} network profile did not produce a measurable inbound media gap`);
@@ -377,6 +393,10 @@ function evaluateQuality(provider: TelephonyProvider, capture: CarrierCapture): 
     failures.push("last inbound media preceded first inbound media");
   }
   return failures;
+}
+
+function capturedPcmByteLength(chunks: readonly Int16Array[]): number {
+  return chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
 }
 
 function sendStart(provider: TelephonyProvider, socket: WebSocket): void {
@@ -611,7 +631,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
