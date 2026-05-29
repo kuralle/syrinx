@@ -47,6 +47,13 @@ export interface VoiceWebSocketServerOptions {
   readonly maxInboundMessageBytes?: number;
   readonly resumeWindowMs?: number;
   /**
+   * Raw binary inbound PCM16 lacks turn, sample-rate, sequence, and duration
+   * metadata. Keep disabled for production clients; use JSON audio frames or
+   * the Syrinx binary envelope instead. Set true only for explicitly managed
+   * legacy/embedded clients that send PCM at `inputSampleRateHz`.
+   */
+  readonly rawBinaryInput?: boolean;
+  /**
    * Assistant audio binary frames are wrapped in the Syrinx binary audio
    * envelope by default. Set false only for raw-PCM websocket clients.
    * Inbound binary frames may use the envelope regardless.
@@ -119,6 +126,7 @@ export async function createVoiceWebSocketServer(
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
+  const rawBinaryInput = options.rawBinaryInput ?? false;
   const binaryAudioEnvelope = options.binaryAudioEnvelope ?? true;
 
   wsServer.on("connection", (socket, request) => {
@@ -137,6 +145,7 @@ export async function createVoiceWebSocketServer(
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
       resumeWindowMs,
+      rawBinaryInput,
       binaryAudioEnvelope,
     });
   });
@@ -192,6 +201,7 @@ async function handleConnection(args: {
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
   readonly resumeWindowMs: number;
+  readonly rawBinaryInput: boolean;
   readonly binaryAudioEnvelope: boolean;
 }): Promise<void> {
   const {
@@ -209,6 +219,7 @@ async function handleConnection(args: {
     maxBufferedAmountBytes,
     maxInboundMessageBytes,
     resumeWindowMs,
+    rawBinaryInput,
     binaryAudioEnvelope,
   } = args;
   let managed: ManagedSession | null = null;
@@ -276,6 +287,7 @@ async function handleConnection(args: {
       currentContextId,
       contextId,
       inputSampleRateHz,
+      rawBinaryInput,
       contextSampleRates,
       inputSequence,
     );
@@ -338,6 +350,7 @@ async function handleConnection(args: {
         encoding: "pcm_s16le",
         channels: 1,
         binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
+        rawBinaryInput,
         maxInboundMessageBytes,
       },
     }, maxBufferedAmountBytes);
@@ -539,11 +552,12 @@ function handleClientMessage(
   currentContextId: string,
   contextId: () => string,
   inputSampleRateHz: number,
+  rawBinaryInput: boolean,
   contextSampleRates: Map<string, number>,
   inputSequence: AudioSequenceState,
 ): string {
   if (isBinary) {
-    const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz);
+    const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz, rawBinaryInput);
     const nextContextId = binaryAudio.contextId ?? currentContextId;
     if (nextContextId !== currentContextId) {
       pushTurnChange(session, nextContextId, currentContextId, "websocket_binary_audio_turn");
@@ -671,8 +685,12 @@ function cloneRawData(data: RawData): RawData {
 function decodeBinaryAudioMessage(
   data: Uint8Array,
   defaultSampleRateHz: number,
+  rawBinaryInput: boolean,
 ): { readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number; readonly audio: Uint8Array } {
   if (!hasSyrinxAudioEnvelope(data)) {
+    if (!rawBinaryInput) {
+      throw new Error(`Raw binary websocket audio is disabled; use ${SYRINX_AUDIO_ENVELOPE_NAME} or JSON audio frames`);
+    }
     return { sampleRateHz: defaultSampleRateHz, audio: data };
   }
 

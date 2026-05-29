@@ -133,7 +133,7 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
-  it("bridges binary browser audio into v2 user.audio_received packets", async () => {
+  it("rejects raw binary browser audio unless explicitly enabled", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
     session.bus.on("user.audio_received", (pkt) => {
@@ -150,6 +150,47 @@ describe("createVoiceWebSocketServer", () => {
 
     const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
     expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
+    expect(ready.audio.rawBinaryInput).toBe(false);
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(Buffer.from([1, 2, 3, 4]));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Raw binary websocket audio is disabled; use syrinx.audio.v1 or JSON audio frames",
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("bridges raw binary browser audio only when rawBinaryInput is enabled", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      rawBinaryInput: true,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
+    expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
     expect(ready.sessionId).toMatch(/^session-/);
     expect(ready.maxSessionDurationMs).toBe(30 * 60_000);
     expect(ready.audio).toMatchObject({
@@ -158,6 +199,7 @@ describe("createVoiceWebSocketServer", () => {
       encoding: "pcm_s16le",
       channels: 1,
       binaryEnvelope: "syrinx.audio.v1",
+      rawBinaryInput: true,
       maxInboundMessageBytes: 2097152,
     });
 
@@ -189,6 +231,7 @@ describe("createVoiceWebSocketServer", () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
         return session;
       },
+      rawBinaryInput: true,
       contextId: () => "turn-early",
     });
     const address = server.address();
@@ -230,6 +273,7 @@ describe("createVoiceWebSocketServer", () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
         return session;
       },
+      rawBinaryInput: true,
       contextId: () => "turn-early",
     });
     const address = server.address();
@@ -807,6 +851,7 @@ describe("createVoiceWebSocketServer", () => {
 
     const server = await createVoiceWebSocketServer({
       port: 0,
+      rawBinaryInput: true,
       createSession: () => session,
       contextId: () => "turn-test",
     });

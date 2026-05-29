@@ -22,14 +22,15 @@ The server sends a `ready` message after session startup:
     "encoding": "pcm_s16le",
     "channels": 1,
     "binaryEnvelope": "syrinx.audio.v1",
+    "rawBinaryInput": false,
     "maxInboundMessageBytes": 2097152
   }
 }
 ```
 
-`binaryEnvelope` is present by default for browser websocket assistant-audio output. Inbound clients may use the envelope regardless. Raw outbound PCM can be enabled only by configuring `binaryAudioEnvelope: false` on the server.
+`binaryEnvelope` is present by default for browser websocket assistant-audio output. Inbound clients may use the envelope regardless. Raw inbound PCM is disabled by default because it cannot carry turn, sample-rate, sequence, byte-length, or duration evidence. It can be enabled only for explicitly managed clients by configuring `rawBinaryInput: true` on the server. Raw outbound PCM can be enabled only by configuring `binaryAudioEnvelope: false` on the server.
 
-`sessionId` is the resumable conversation session id. `turnId` is the default turn context for raw binary audio frames that do not carry an explicit `contextId`.
+`sessionId` is the resumable conversation session id. `turnId` is the default turn context for JSON frames that omit `contextId`, or for raw binary audio frames only when `rawBinaryInput` is enabled.
 
 To resume a browser websocket session after a transient disconnect, reconnect with the same session id before `resumeWindowMs` expires:
 
@@ -57,7 +58,7 @@ The server validates strict base64, requires PCM16 payloads to have an even byte
 
 The supplied browser review console sends microphone audio as `syrinx.audio.v1` binary envelopes by default, not JSON base64. JSON audio frames remain supported for scripted clients and compatibility.
 
-Clients can also send raw binary PCM16 at the advertised input sample rate. Raw inbound binary is accepted for low-overhead capture paths, but it cannot carry turn or sample-rate metadata.
+Clients can send raw binary PCM16 at the advertised input sample rate only when the server is configured with `rawBinaryInput: true`. Production clients should prefer JSON audio frames or `syrinx.audio.v1` envelopes so the transport can validate turn, source sample rate, sequence, byte length, and duration metadata before audio reaches VAD/STT.
 
 ## Binary Envelope
 

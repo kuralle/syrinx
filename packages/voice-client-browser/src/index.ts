@@ -30,6 +30,7 @@ export type SyrinxStudioMessage =
         readonly encoding: "pcm_s16le";
         readonly channels: 1;
         readonly binaryEnvelope?: "syrinx.audio.v1";
+        readonly rawBinaryInput?: boolean;
       };
     }
   | { readonly type: "speech_started"; readonly turnId?: string }
