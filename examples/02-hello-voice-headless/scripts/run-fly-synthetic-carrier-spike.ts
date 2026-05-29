@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 
@@ -22,7 +22,7 @@ interface ArtifactIndex {
   readonly artifacts?: Array<{ readonly path?: string; readonly url?: string; readonly source?: string }>;
 }
 
-interface FlySpikeSummary {
+export interface FlySpikeSummary {
   readonly scenario: "fly_synthetic_public_carrier_to_bot";
   readonly generatedAt: string;
   readonly region: string;
@@ -44,6 +44,26 @@ interface FlySpikeSummary {
   cleanup: {
     botDestroyed: boolean;
     carrierDestroyed: boolean;
+  };
+}
+
+interface RecorderManifest {
+  readonly audio?: {
+    readonly user?: {
+      readonly sampleRateHz?: number;
+      readonly byteLength?: number;
+      readonly chunks?: number;
+    };
+    readonly assistant?: {
+      readonly sampleRateHz?: number;
+      readonly byteLength?: number;
+      readonly chunks?: number;
+      readonly truncations?: number;
+    };
+  };
+  readonly events?: {
+    readonly packets?: number;
+    readonly byteLength?: number;
   };
 }
 
@@ -133,28 +153,266 @@ async function main(): Promise<void> {
   }
 
   console.log(JSON.stringify(summary, null, 2));
-  const failures = summary.providers.flatMap((provider) => {
-    const callResult = provider["callResult"];
-    if (!isRecord(callResult)) return [`${String(provider["provider"])} call result was not an object`];
-    const qualityGate = callResult["qualityGate"];
-    if (!isRecord(qualityGate) || qualityGate["passed"] !== true) {
-      return [`${String(provider["provider"])} quality gate failed`];
-    }
-    const botArtifacts = provider["botArtifacts"];
-    if (!Array.isArray(botArtifacts) || !botArtifacts.some((path) => String(path).endsWith("events.jsonl"))) {
-      return [`${String(provider["provider"])} bot events.jsonl was not downloaded`];
-    }
-    if (!botArtifacts.some((path) => String(path).endsWith("user_audio.wav"))) {
-      return [`${String(provider["provider"])} bot user_audio.wav was not downloaded`];
-    }
-    if (!botArtifacts.some((path) => String(path).endsWith("assistant_audio.wav"))) {
-      return [`${String(provider["provider"])} bot assistant_audio.wav was not downloaded`];
-    }
-    return [];
-  });
+  const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, PKG_ROOT);
   if (summary.cleanup.botDestroyed !== true) failures.push(`bot Fly app was not destroyed: ${botApp}`);
   if (summary.cleanup.carrierDestroyed !== true) failures.push(`carrier Fly app was not destroyed: ${carrierApp}`);
   if (failures.length > 0) throw new Error(`Fly synthetic carrier spike failed: ${failures.join("; ")}`);
+}
+
+export async function validateDownloadedFlySyntheticCarrierArtifacts(
+  summary: FlySpikeSummary,
+  pkgRoot = PKG_ROOT,
+): Promise<string[]> {
+  const failures: string[] = [];
+  if (summary.scenario !== "fly_synthetic_public_carrier_to_bot") {
+    failures.push(`unexpected Fly synthetic scenario: ${String(summary.scenario)}`);
+  }
+  if (!Array.isArray(summary.providers) || summary.providers.length === 0) {
+    failures.push("summary.providers is empty");
+    return failures;
+  }
+
+  for (const providerSummary of summary.providers) {
+    const provider = providerSummary["provider"];
+    if (!isProvider(provider)) {
+      failures.push(`unsupported provider in summary: ${String(provider)}`);
+      continue;
+    }
+
+    const callResult = providerSummary["callResult"];
+    if (!isRecord(callResult)) {
+      failures.push(`${provider} call result was not an object`);
+      continue;
+    }
+    if (callResult["provider"] !== provider) failures.push(`${provider} call result provider mismatch`);
+    const qualityGate = callResult["qualityGate"];
+    if (!isRecord(qualityGate) || qualityGate["passed"] !== true) failures.push(`${provider} quality gate failed`);
+    validateCarrierCompletionEvidence(provider, callResult, failures);
+
+    const botArtifacts = readStringArray(providerSummary["botArtifacts"]);
+    const carrierArtifacts = readStringArray(providerSummary["carrierArtifacts"]);
+    const bot = artifactPaths(botArtifacts, pkgRoot);
+    const carrier = artifactPaths(carrierArtifacts, pkgRoot);
+    const label = (name: string) => `${provider} ${name}`;
+
+    const manifest = await readRecorderManifest(bot.manifestJson, label("bot manifest"), failures);
+    await validateEventsJsonl(bot.eventsJsonl, label("bot events.jsonl"), failures);
+    if (manifest) {
+      await validatePcmFile(bot.userPcm, label("bot user_audio.pcm"), manifest.audio?.user?.byteLength, failures);
+      await validatePcmFile(bot.assistantPcm, label("bot assistant_audio.pcm"), manifest.audio?.assistant?.byteLength, failures);
+      await validateWavFile(bot.userWav, label("bot user_audio.wav"), manifest.audio?.user?.sampleRateHz, failures);
+      await validateWavFile(
+        bot.assistantWav,
+        label("bot assistant_audio.wav"),
+        manifest.audio?.assistant?.sampleRateHz,
+        failures,
+      );
+      if (!positiveInteger(manifest.audio?.user?.chunks)) failures.push(`${provider} recorder user chunks must be positive`);
+      if (!positiveInteger(manifest.audio?.assistant?.chunks)) {
+        failures.push(`${provider} recorder assistant chunks must be positive`);
+      }
+      if (manifest.audio?.assistant?.truncations !== 0) {
+        failures.push(`${provider} recorder assistant truncations expected 0, got ${String(manifest.audio?.assistant?.truncations)}`);
+      }
+      if (!positiveInteger(manifest.events?.packets)) failures.push(`${provider} recorder event packet count must be positive`);
+    }
+
+    await validateJsonFile(carrier.callResultJson, label("carrier call-result.json"), failures);
+    await validateWavFile(carrier.carrierInboundWav, label("carrier-inbound.wav"), 8000, failures);
+    await validateWavFile(carrier.carrierOutboundWav, label("carrier-outbound.wav"), 8000, failures);
+  }
+
+  return failures;
+}
+
+function validateCarrierCompletionEvidence(provider: Provider, callResult: Record<string, unknown>, failures: string[]): void {
+  const carrier = callResult["carrier"];
+  if (!isRecord(carrier)) {
+    failures.push(`${provider} carrier result was missing`);
+    return;
+  }
+  for (const field of ["inboundFrames", "outboundFrames", "inboundWireBytes", "outboundWireBytes"]) {
+    if (!positiveInteger(carrier[field])) failures.push(`${provider} carrier.${field} must be positive`);
+  }
+  if (!nonNegativeNumber(carrier["maxInboundMediaGapMs"])) failures.push(`${provider} carrier.maxInboundMediaGapMs is required`);
+  if (!positiveInteger(carrier["firstOutboundMediaAfterStartMs"])) {
+    failures.push(`${provider} carrier.firstOutboundMediaAfterStartMs must be positive`);
+  }
+  if (provider === "twilio" || provider === "telnyx") {
+    if (!positiveInteger(carrier["outboundEndMarks"])) failures.push(`${provider} requires a terminal outbound end mark`);
+  } else if (!positiveInteger(carrier["outboundQuietDrains"]) && !positiveInteger(carrier["localPlayoutDrains"])) {
+    failures.push("smartpbx requires a local playout or quiet-drain completion signal");
+  }
+}
+
+function artifactPaths(paths: readonly string[], pkgRoot: string): {
+  readonly manifestJson: string;
+  readonly eventsJsonl: string;
+  readonly userPcm: string;
+  readonly assistantPcm: string;
+  readonly userWav: string;
+  readonly assistantWav: string;
+  readonly callResultJson: string;
+  readonly carrierInboundWav: string;
+  readonly carrierOutboundWav: string;
+} {
+  const find = (suffix: string) => {
+    const path = paths.find((candidate) => candidate.endsWith(suffix)) ?? "";
+    return path ? join(pkgRoot, path) : "";
+  };
+  return {
+    manifestJson: find("manifest.json"),
+    eventsJsonl: find("events.jsonl"),
+    userPcm: find("user_audio.pcm"),
+    assistantPcm: find("assistant_audio.pcm"),
+    userWav: find("user_audio.wav"),
+    assistantWav: find("assistant_audio.wav"),
+    callResultJson: find("call-result.json"),
+    carrierInboundWav: find("carrier-inbound.wav"),
+    carrierOutboundWav: find("carrier-outbound.wav"),
+  };
+}
+
+async function readRecorderManifest(path: string, label: string, failures: string[]): Promise<RecorderManifest | null> {
+  const parsed = await validateJsonFile(path, label, failures);
+  if (!isRecord(parsed)) return null;
+  const manifest = parsed as RecorderManifest;
+  if (!positiveInteger(manifest.audio?.user?.sampleRateHz)) failures.push(`${label} user sample rate is missing`);
+  if (!positiveInteger(manifest.audio?.assistant?.sampleRateHz)) failures.push(`${label} assistant sample rate is missing`);
+  if (!positiveInteger(manifest.audio?.user?.byteLength)) failures.push(`${label} user byte length is missing`);
+  if (!positiveInteger(manifest.audio?.assistant?.byteLength)) failures.push(`${label} assistant byte length is missing`);
+  return manifest;
+}
+
+async function validateJsonFile(path: string, label: string, failures: string[]): Promise<unknown | null> {
+  if (!path) {
+    failures.push(`${label} was not downloaded`);
+    return null;
+  }
+  try {
+    const text = await readFile(path, "utf8");
+    if (!text.trim()) {
+      failures.push(`${label} is empty`);
+      return null;
+    }
+    return parseJson(text, label);
+  } catch (err) {
+    failures.push(`${label} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+async function validateEventsJsonl(path: string, label: string, failures: string[]): Promise<void> {
+  if (!path) {
+    failures.push(`${label} was not downloaded`);
+    return;
+  }
+  try {
+    const text = await readFile(path, "utf8");
+    const lines = text.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      failures.push(`${label} is empty`);
+      return;
+    }
+    const kinds = new Set<string>();
+    for (const line of lines) {
+      const event = parseJson(line, label);
+      if (!isRecord(event) || typeof event["kind"] !== "string") {
+        failures.push(`${label} contains an event without kind`);
+        return;
+      }
+      kinds.add(event["kind"]);
+    }
+    for (const required of ["stt.result", "llm.delta", "tts.audio", "record.assistant_audio"]) {
+      if (!kinds.has(required)) failures.push(`${label} missing ${required}`);
+    }
+  } catch (err) {
+    failures.push(`${label} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function validatePcmFile(
+  path: string,
+  label: string,
+  expectedByteLength: number | undefined,
+  failures: string[],
+): Promise<void> {
+  if (!path) {
+    failures.push(`${label} was not downloaded`);
+    return;
+  }
+  try {
+    const info = await stat(path);
+    if (info.size <= 0) failures.push(`${label} is empty`);
+    if (info.size % 2 !== 0) failures.push(`${label} has odd PCM16 byte length`);
+    if (expectedByteLength !== undefined && info.size !== expectedByteLength) {
+      failures.push(`${label} byte length ${String(info.size)} did not match manifest ${String(expectedByteLength)}`);
+    }
+  } catch (err) {
+    failures.push(`${label} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function validateWavFile(
+  path: string,
+  label: string,
+  expectedSampleRateHz: number | undefined,
+  failures: string[],
+): Promise<void> {
+  if (!path) {
+    failures.push(`${label} was not downloaded`);
+    return;
+  }
+  try {
+    const info = readPcm16WavInfo(await readFile(path));
+    if (expectedSampleRateHz !== undefined && info.sampleRateHz !== expectedSampleRateHz) {
+      failures.push(`${label} sample rate ${String(info.sampleRateHz)} did not match expected ${String(expectedSampleRateHz)}`);
+    }
+    if (info.channels !== 1) failures.push(`${label} expected mono WAV, got ${String(info.channels)} channels`);
+    if (info.bitsPerSample !== 16 || info.audioFormat !== 1) failures.push(`${label} expected 16-bit PCM WAV`);
+    if (info.dataByteLength <= 0) failures.push(`${label} data chunk is empty`);
+    if (info.dataByteLength % 2 !== 0) failures.push(`${label} data chunk has odd PCM16 byte length`);
+  } catch (err) {
+    failures.push(`${label} could not be validated: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function readPcm16WavInfo(buffer: Buffer): {
+  readonly audioFormat: number;
+  readonly channels: number;
+  readonly sampleRateHz: number;
+  readonly bitsPerSample: number;
+  readonly dataByteLength: number;
+} {
+  if (buffer.byteLength < 44) throw new Error("WAV is too small");
+  if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
+    throw new Error("missing RIFF/WAVE header");
+  }
+  let offset = 12;
+  let audioFormat = 0;
+  let channels = 0;
+  let sampleRateHz = 0;
+  let bitsPerSample = 0;
+  let dataByteLength = 0;
+  while (offset + 8 <= buffer.byteLength) {
+    const id = buffer.toString("ascii", offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (dataOffset + size > buffer.byteLength) throw new Error(`WAV chunk ${id} exceeds file size`);
+    if (id === "fmt ") {
+      if (size < 16) throw new Error("WAV fmt chunk is too small");
+      audioFormat = buffer.readUInt16LE(dataOffset);
+      channels = buffer.readUInt16LE(dataOffset + 2);
+      sampleRateHz = buffer.readUInt32LE(dataOffset + 4);
+      bitsPerSample = buffer.readUInt16LE(dataOffset + 14);
+    } else if (id === "data") {
+      dataByteLength = size;
+    }
+    offset = dataOffset + size + (size % 2);
+  }
+  if (!audioFormat || !channels || !sampleRateHz || !bitsPerSample) throw new Error("WAV fmt chunk was missing");
+  if (!dataByteLength) throw new Error("WAV data chunk was missing");
+  return { audioFormat, channels, sampleRateHz, bitsPerSample, dataByteLength };
 }
 
 function renderBotFlyToml(app: string, region: string, memoryMb: number, publicBaseUrl: string): string {
@@ -408,11 +666,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isProvider(value: unknown): value is Provider {
+  return value === "twilio" || value === "telnyx" || value === "smartpbx";
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => (typeof item === "string" ? [item] : []));
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function nonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
