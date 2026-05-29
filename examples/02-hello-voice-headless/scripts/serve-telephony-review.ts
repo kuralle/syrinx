@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type ConversationMetricPacket, type VoiceAgentSession } from "@asyncdot/voice";
 import { createVoiceSessionRecorder } from "@asyncdot/voice-recorder";
@@ -422,7 +422,9 @@ async function sendRecorderArtifact(response: ServerResponse, recordingDir: stri
     return;
   }
   if (artifactPath.endsWith("assistant_audio.wav")) {
-    await sendPcmAsWav(response, recordingDir, artifactPath.replace(/assistant_audio\.wav$/, "assistant_audio.pcm"), ASSISTANT_SAMPLE_RATE_HZ);
+    const pcmArtifactPath = artifactPath.replace(/assistant_audio\.wav$/, "assistant_audio.pcm");
+    const sampleRateHz = await readRecorderPcmSampleRateHz(recordingDir, pcmArtifactPath, "assistant");
+    await sendPcmAsWav(response, recordingDir, pcmArtifactPath, sampleRateHz);
     return;
   }
   const safePath = resolve(recordingDir, artifactPath);
@@ -449,6 +451,46 @@ async function sendRecorderArtifact(response: ServerResponse, recordingDir: stri
     response.once("finish", resolveDone);
     stream.pipe(response);
   });
+}
+
+export async function readRecorderPcmSampleRateHz(
+  recordingDir: string,
+  pcmArtifactPath: string,
+  track: "user" | "assistant",
+): Promise<number> {
+  if (track === "user") return INPUT_SAMPLE_RATE_HZ;
+
+  const safePcmPath = resolve(recordingDir, pcmArtifactPath);
+  const root = `${resolve(recordingDir)}/`;
+  if (!safePcmPath.startsWith(root)) {
+    throw new Error("invalid_artifact_path");
+  }
+
+  const manifestPath = join(dirname(safePcmPath), "manifest.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
+  } catch (err) {
+    throw new Error(`assistant audio sample rate is unknown without recorder manifest ${relative(recordingDir, manifestPath)}`, { cause: err });
+  }
+
+  const sampleRateHz = readManifestSampleRateHz(parsed, track);
+  if (sampleRateHz === undefined) {
+    throw new Error(`recorder manifest ${relative(recordingDir, manifestPath)} does not contain audio.${track}.sampleRateHz`);
+  }
+  return sampleRateHz;
+}
+
+function readManifestSampleRateHz(manifest: unknown, track: "user" | "assistant"): number | undefined {
+  if (!manifest || typeof manifest !== "object") return undefined;
+  const audio = (manifest as { audio?: unknown }).audio;
+  if (!audio || typeof audio !== "object") return undefined;
+  const section = (audio as Record<string, unknown>)[track];
+  if (!section || typeof section !== "object") return undefined;
+  const sampleRateHz = (section as { sampleRateHz?: unknown }).sampleRateHz;
+  return typeof sampleRateHz === "number" && Number.isInteger(sampleRateHz) && sampleRateHz > 0
+    ? sampleRateHz
+    : undefined;
 }
 
 async function sendPcmAsWav(
@@ -523,7 +565,9 @@ async function listen(server: ReturnType<typeof createServer>, port: number, hos
   });
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
