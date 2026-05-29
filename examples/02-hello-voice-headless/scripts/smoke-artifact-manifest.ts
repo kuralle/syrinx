@@ -77,16 +77,41 @@ export function validateSmokeArtifactManifest(manifest: SmokeArtifactManifest): 
   const failures: string[] = [];
   if (manifest.schemaVersion !== 2) failures.push(`expected schemaVersion 2, got ${String(manifest.schemaVersion)}`);
   if (manifest.turns.length === 0) failures.push("expected at least one turn");
+  validateQualityGate(manifest, failures);
   validateAudioTotals(manifest, failures);
   for (const turn of manifest.turns) {
     validateAudioArtifact(`turn ${turn.id} inputAudio`, turn.inputAudio, failures);
     validateAudioArtifact(`turn ${turn.id} assistantAudio`, turn.assistantAudio, failures);
+    validatePassedAudioEvidence(manifest, turn, failures);
     validateLatencyArtifact(manifest.transport, turn, failures);
     for (const [name, value] of Object.entries(turn.latencyMs)) {
       if (!isNonNegativeFiniteNumber(value)) failures.push(`turn ${turn.id} latency ${name} must be a non-negative finite number`);
     }
   }
   return failures;
+}
+
+function validateQualityGate(manifest: SmokeArtifactManifest, failures: string[]): void {
+  if (manifest.qualityGate.passed && manifest.qualityGate.failures.length > 0) {
+    failures.push("qualityGate.passed cannot be true when qualityGate.failures is non-empty");
+  }
+  if (!manifest.qualityGate.passed && manifest.qualityGate.failures.length === 0) {
+    failures.push("qualityGate.failures must explain a failed quality gate");
+  }
+}
+
+function validatePassedAudioEvidence(
+  manifest: SmokeArtifactManifest,
+  turn: SmokeTurnArtifact,
+  failures: string[],
+): void {
+  if (!manifest.qualityGate.passed) return;
+  if (effectiveDecodedPcmByteLength(turn.inputAudio) === 0) {
+    failures.push(`turn ${turn.id} inputAudio must contain decoded PCM evidence when qualityGate.passed is true`);
+  }
+  if (effectiveDecodedPcmByteLength(turn.assistantAudio) === 0) {
+    failures.push(`turn ${turn.id} assistantAudio must contain decoded PCM evidence when qualityGate.passed is true`);
+  }
 }
 
 function validateLatencyArtifact(

@@ -74,6 +74,94 @@ describe("smoke artifact manifest", () => {
       "turn twilio-call latency firstOutboundMediaAfterLastInbound is required for twilio_media_stream_websocket",
     );
   });
+
+  it("rejects contradictory quality gate evidence", () => {
+    const manifest = makeTwilioManifest();
+
+    expect(validateSmokeArtifactManifest({
+      ...manifest,
+      qualityGate: { passed: true, failures: ["assistant audio was empty"] },
+    })).toContain("qualityGate.passed cannot be true when qualityGate.failures is non-empty");
+
+    expect(validateSmokeArtifactManifest({
+      ...manifest,
+      qualityGate: { passed: false, failures: [] },
+    })).toContain("qualityGate.failures must explain a failed quality gate");
+  });
+
+  it("rejects passing manifests without decoded voice-in and voice-out evidence", () => {
+    const manifest = makeTwilioManifest();
+    const bad: SmokeArtifactManifest = {
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        inputByteLength: 0,
+        inputWireByteLength: 0,
+        inputDecodedPcmByteLength: 0,
+        inputDurationMs: 0,
+        outputByteLength: 0,
+        outputWireByteLength: 0,
+        outputDecodedPcmByteLength: 0,
+        outputDurationMs: 0,
+      },
+      turns: [
+        {
+          ...manifest.turns[0]!,
+          inputAudio: {
+            ...manifest.turns[0]!.inputAudio,
+            byteLength: 0,
+            wireByteLength: 0,
+            decodedPcmByteLength: 0,
+            durationMs: 0,
+          },
+          assistantAudio: {
+            ...manifest.turns[0]!.assistantAudio,
+            byteLength: 0,
+            wireByteLength: 0,
+            decodedPcmByteLength: 0,
+            durationMs: 0,
+          },
+        },
+      ],
+    };
+
+    const failures = validateSmokeArtifactManifest(bad);
+    expect(failures).toContain(
+      "turn twilio-call inputAudio must contain decoded PCM evidence when qualityGate.passed is true",
+    );
+    expect(failures).toContain(
+      "turn twilio-call assistantAudio must contain decoded PCM evidence when qualityGate.passed is true",
+    );
+  });
+
+  it("allows failed manifests to preserve empty-audio diagnostics when the gate explains the failure", () => {
+    const manifest = makeTwilioManifest();
+    const failed: SmokeArtifactManifest = {
+      ...manifest,
+      audio: {
+        ...manifest.audio,
+        outputByteLength: 0,
+        outputWireByteLength: 0,
+        outputDecodedPcmByteLength: 0,
+        outputDurationMs: 0,
+      },
+      turns: [
+        {
+          ...manifest.turns[0]!,
+          assistantAudio: {
+            ...manifest.turns[0]!.assistantAudio,
+            byteLength: 0,
+            wireByteLength: 0,
+            decodedPcmByteLength: 0,
+            durationMs: 0,
+          },
+        },
+      ],
+      qualityGate: { passed: false, failures: ["assistant audio was empty"] },
+    };
+
+    expect(validateSmokeArtifactManifest(failed)).toStrictEqual([]);
+  });
 });
 
 function makeTwilioManifest(): SmokeArtifactManifest {
