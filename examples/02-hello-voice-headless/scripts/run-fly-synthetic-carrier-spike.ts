@@ -5,6 +5,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { validateVoiceSessionRecorderManifest, type VoiceSessionRecorderManifest } from "@asyncdot/voice-recorder";
+
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -44,26 +46,6 @@ export interface FlySpikeSummary {
   cleanup: {
     botDestroyed: boolean;
     carrierDestroyed: boolean;
-  };
-}
-
-interface RecorderManifest {
-  readonly audio?: {
-    readonly user?: {
-      readonly sampleRateHz?: number;
-      readonly byteLength?: number;
-      readonly chunks?: number;
-    };
-    readonly assistant?: {
-      readonly sampleRateHz?: number;
-      readonly byteLength?: number;
-      readonly chunks?: number;
-      readonly truncations?: number;
-    };
-  };
-  readonly events?: {
-    readonly packets?: number;
-    readonly byteLength?: number;
   };
 }
 
@@ -273,15 +255,17 @@ function artifactPaths(paths: readonly string[], pkgRoot: string): {
   };
 }
 
-async function readRecorderManifest(path: string, label: string, failures: string[]): Promise<RecorderManifest | null> {
+async function readRecorderManifest(
+  path: string,
+  label: string,
+  failures: string[],
+): Promise<VoiceSessionRecorderManifest | null> {
   const parsed = await validateJsonFile(path, label, failures);
-  if (!isRecord(parsed)) return null;
-  const manifest = parsed as RecorderManifest;
-  if (!positiveInteger(manifest.audio?.user?.sampleRateHz)) failures.push(`${label} user sample rate is missing`);
-  if (!positiveInteger(manifest.audio?.assistant?.sampleRateHz)) failures.push(`${label} assistant sample rate is missing`);
-  if (!positiveInteger(manifest.audio?.user?.byteLength)) failures.push(`${label} user byte length is missing`);
-  if (!positiveInteger(manifest.audio?.assistant?.byteLength)) failures.push(`${label} assistant byte length is missing`);
-  return manifest;
+  const manifest = parsed;
+  const manifestFailures = validateVoiceSessionRecorderManifest(manifest);
+  failures.push(...manifestFailures.map((failure) => `${label} ${failure}`));
+  if (manifestFailures.length > 0) return null;
+  return manifest as VoiceSessionRecorderManifest;
 }
 
 async function validateJsonFile(path: string, label: string, failures: string[]): Promise<unknown | null> {

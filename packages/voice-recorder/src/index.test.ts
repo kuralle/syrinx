@@ -376,6 +376,15 @@ describe("VoiceSessionRecorder", () => {
       },
     })).toContain("audio.user.byteLength must contain an even number of PCM16 bytes");
   });
+
+  it("reports malformed recorder manifests without throwing", () => {
+    expect(validateVoiceSessionRecorderManifest(null)).toStrictEqual(["manifest must be an object"]);
+    expect(validateVoiceSessionRecorderManifest({ schemaVersion: 1 })).toEqual(expect.arrayContaining([
+      "files must be an object",
+      "audio must be an object",
+      "events must be an object",
+    ]));
+  });
 });
 
 function makeRecorderManifest(): VoiceSessionRecorderManifest {

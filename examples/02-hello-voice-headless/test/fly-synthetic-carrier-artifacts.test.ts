@@ -37,6 +37,17 @@ describe("Fly synthetic carrier artifact validation", () => {
     expect(failures).toContain("smartpbx carrier-inbound.wav sample rate 16000 did not match expected 8000");
     expect(failures).toContain("smartpbx carrier-outbound.wav sample rate 16000 did not match expected 8000");
   });
+
+  it("rejects recorder manifests that fail the recorder artifact contract", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "telnyx", { recorderAssistantDurationMs: 1 });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain(
+      "telnyx bot manifest audio.assistant.durationMs 1 did not match 200 from byte count/sample rate",
+    );
+  });
 });
 
 async function writeProviderEvidence(
@@ -45,6 +56,7 @@ async function writeProviderEvidence(
   options: {
     readonly omitEvents?: boolean;
     readonly carrierSampleRateHz?: number;
+    readonly recorderAssistantDurationMs?: number;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -63,11 +75,38 @@ async function writeProviderEvidence(
   await writePcm16Wav(join(botDir, "assistant_audio.wav"), 16000, 3200);
   await writeJson(join(botDir, "manifest.json"), {
     schemaVersion: 1,
-    audio: {
-      user: { sampleRateHz: 16000, byteLength: userPcm.byteLength, chunks: 2 },
-      assistant: { sampleRateHz: 16000, byteLength: assistantPcm.byteLength, chunks: 3, truncations: 0 },
+    sessionId: session,
+    startedAtMs: 1000,
+    closedAtMs: 2000,
+    files: {
+      directory: botDir,
+      eventsPath: join(botDir, "events.jsonl"),
+      userAudioPath: join(botDir, "user_audio.pcm"),
+      assistantAudioPath: join(botDir, "assistant_audio.pcm"),
+      manifestPath: join(botDir, "manifest.json"),
     },
-    events: { packets: 4, byteLength: 256 },
+    audio: {
+      user: {
+        path: join(botDir, "user_audio.pcm"),
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: userPcm.byteLength,
+        durationMs: 100,
+        chunks: 2,
+      },
+      assistant: {
+        path: join(botDir, "assistant_audio.pcm"),
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: assistantPcm.byteLength,
+        durationMs: options.recorderAssistantDurationMs ?? 200,
+        chunks: 3,
+        truncations: 0,
+      },
+    },
+    events: { path: join(botDir, "events.jsonl"), packets: 4, byteLength: 256 },
   });
   if (!options.omitEvents) {
     await writeFile(join(botDir, "events.jsonl"), [

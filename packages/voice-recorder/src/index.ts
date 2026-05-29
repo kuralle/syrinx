@@ -399,15 +399,16 @@ export function createVoiceSessionRecorder(config: VoiceSessionRecorderConfig): 
   return new VoiceSessionRecorderWithDefaultConfig(config);
 }
 
-export function assertVoiceSessionRecorderManifest(manifest: VoiceSessionRecorderManifest): void {
+export function assertVoiceSessionRecorderManifest(manifest: unknown): asserts manifest is VoiceSessionRecorderManifest {
   const failures = validateVoiceSessionRecorderManifest(manifest);
   if (failures.length > 0) {
     throw new Error(`Invalid recorder manifest: ${failures.join("; ")}`);
   }
 }
 
-export function validateVoiceSessionRecorderManifest(manifest: VoiceSessionRecorderManifest): string[] {
+export function validateVoiceSessionRecorderManifest(manifest: unknown): string[] {
   const failures: string[] = [];
+  if (!isRecord(manifest)) return ["manifest must be an object"];
   if (manifest.schemaVersion !== 1) failures.push(`expected schemaVersion 1, got ${String(manifest.schemaVersion)}`);
   if (!isNonNegativeInteger(manifest.startedAtMs)) failures.push("startedAtMs must be a non-negative integer");
   if (!isNonNegativeInteger(manifest.closedAtMs)) failures.push("closedAtMs must be a non-negative integer");
@@ -418,23 +419,42 @@ export function validateVoiceSessionRecorderManifest(manifest: VoiceSessionRecor
   ) {
     failures.push("closedAtMs must be greater than or equal to startedAtMs");
   }
-  validateRecorderFiles(manifest.files, failures);
-  validateRecorderAudio("audio.user", manifest.audio.user, failures);
-  validateRecorderAudio("audio.assistant", manifest.audio.assistant, failures);
-  if (!isNonNegativeInteger(manifest.audio.assistant.truncations)) {
+  const files = manifest.files;
+  const audio = manifest.audio;
+  const events = manifest.events;
+  if (!isRecorderFiles(files)) {
+    failures.push("files must be an object");
+  } else {
+    validateRecorderFiles(files, failures);
+  }
+  if (!isRecord(audio)) {
+    failures.push("audio must be an object");
+  } else {
+    validateRecorderAudio("audio.user", audio["user"], failures);
+    validateRecorderAudio("audio.assistant", audio["assistant"], failures);
+  }
+  const userAudio = isRecord(audio) && isRecord(audio["user"]) ? audio["user"] : null;
+  const assistantAudio = isRecord(audio) && isRecord(audio["assistant"]) ? audio["assistant"] : null;
+  if (!isRecord(assistantAudio) || !isNonNegativeInteger(assistantAudio["truncations"])) {
     failures.push("audio.assistant.truncations must be a non-negative integer");
   }
-  if (manifest.audio.user.path !== manifest.files.userAudioPath) {
+  if (userAudio && isRecorderFiles(files) && userAudio["path"] !== files.userAudioPath) {
     failures.push("audio.user.path must match files.userAudioPath");
   }
-  if (manifest.audio.assistant.path !== manifest.files.assistantAudioPath) {
+  if (assistantAudio && isRecorderFiles(files) && assistantAudio["path"] !== files.assistantAudioPath) {
     failures.push("audio.assistant.path must match files.assistantAudioPath");
   }
-  if (manifest.events.path !== manifest.files.eventsPath) {
+  if (!isRecord(events)) {
+    failures.push("events must be an object");
+  } else if (isRecorderFiles(files) && events["path"] !== files.eventsPath) {
     failures.push("events.path must match files.eventsPath");
   }
-  if (!isNonNegativeInteger(manifest.events.packets)) failures.push("events.packets must be a non-negative integer");
-  if (!isNonNegativeInteger(manifest.events.byteLength)) failures.push("events.byteLength must be a non-negative integer");
+  if (!isRecord(events) || !isNonNegativeInteger(events["packets"])) {
+    failures.push("events.packets must be a non-negative integer");
+  }
+  if (!isRecord(events) || !isNonNegativeInteger(events["byteLength"])) {
+    failures.push("events.byteLength must be a non-negative integer");
+  }
   return failures;
 }
 
@@ -491,9 +511,24 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function pcm16DurationMs(byteLength: number, sampleRateHz: number): number {
   if (sampleRateHz <= 0) return 0;
   return Math.round((byteLength / 2 / sampleRateHz) * 1000);
+}
+
+function isRecorderFiles(value: unknown): value is VoiceSessionRecorderFiles {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["directory"] === "string"
+    && typeof value["eventsPath"] === "string"
+    && typeof value["userAudioPath"] === "string"
+    && typeof value["assistantAudioPath"] === "string"
+    && typeof value["manifestPath"] === "string"
+  );
 }
 
 function validateRecorderFiles(files: VoiceSessionRecorderFiles, failures: string[]): void {
@@ -506,22 +541,26 @@ function validateRecorderFiles(files: VoiceSessionRecorderFiles, failures: strin
 
 function validateRecorderAudio(
   label: string,
-  audio: VoiceSessionRecorderManifest["audio"]["user"] | VoiceSessionRecorderManifest["audio"]["assistant"],
+  audio: unknown,
   failures: string[],
 ): void {
-  if (!isPositiveInteger(audio.sampleRateHz)) failures.push(`${label}.sampleRateHz must be a positive integer`);
-  if (audio.encoding !== "pcm_s16le") failures.push(`${label}.encoding must be pcm_s16le`);
-  if (audio.channels !== 1) failures.push(`${label}.channels must be 1`);
-  if (!isNonNegativeInteger(audio.byteLength)) failures.push(`${label}.byteLength must be a non-negative integer`);
-  if (isNonNegativeInteger(audio.byteLength) && audio.byteLength % 2 !== 0) {
+  if (!isRecord(audio)) {
+    failures.push(`${label} must be an object`);
+    return;
+  }
+  if (!isPositiveInteger(audio["sampleRateHz"])) failures.push(`${label}.sampleRateHz must be a positive integer`);
+  if (audio["encoding"] !== "pcm_s16le") failures.push(`${label}.encoding must be pcm_s16le`);
+  if (audio["channels"] !== 1) failures.push(`${label}.channels must be 1`);
+  if (!isNonNegativeInteger(audio["byteLength"])) failures.push(`${label}.byteLength must be a non-negative integer`);
+  if (isNonNegativeInteger(audio["byteLength"]) && audio["byteLength"] % 2 !== 0) {
     failures.push(`${label}.byteLength must contain an even number of PCM16 bytes`);
   }
-  if (!isNonNegativeInteger(audio.durationMs)) failures.push(`${label}.durationMs must be a non-negative integer`);
-  if (!isNonNegativeInteger(audio.chunks)) failures.push(`${label}.chunks must be a non-negative integer`);
-  if (isPositiveInteger(audio.sampleRateHz) && isNonNegativeInteger(audio.byteLength)) {
-    const expectedDurationMs = pcm16DurationMs(audio.byteLength, audio.sampleRateHz);
-    if (audio.durationMs !== expectedDurationMs) {
-      failures.push(`${label}.durationMs ${String(audio.durationMs)} did not match ${String(expectedDurationMs)} from byte count/sample rate`);
+  if (!isNonNegativeInteger(audio["durationMs"])) failures.push(`${label}.durationMs must be a non-negative integer`);
+  if (!isNonNegativeInteger(audio["chunks"])) failures.push(`${label}.chunks must be a non-negative integer`);
+  if (isPositiveInteger(audio["sampleRateHz"]) && isNonNegativeInteger(audio["byteLength"])) {
+    const expectedDurationMs = pcm16DurationMs(audio["byteLength"], audio["sampleRateHz"]);
+    if (audio["durationMs"] !== expectedDurationMs) {
+      failures.push(`${label}.durationMs ${String(audio["durationMs"])} did not match ${String(expectedDurationMs)} from byte count/sample rate`);
     }
   }
 }

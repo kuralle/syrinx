@@ -18,12 +18,31 @@ function smartPbxUrl(port: number): string {
 async function openSocket(url: string): Promise<WebSocket> {
   const startedAt = Date.now();
   let lastError: unknown;
-  while (Date.now() - startedAt < 1000) {
+  while (Date.now() - startedAt < 5000) {
     const socket = new WebSocket(url);
     try {
       await new Promise<void>((resolveOpen, reject) => {
-        socket.once("open", resolveOpen);
-        socket.once("error", reject);
+        const cleanup = () => {
+          socket.off("open", onOpen);
+          socket.off("error", onError);
+          socket.off("unexpected-response", onUnexpectedResponse);
+        };
+        const onOpen = () => {
+          cleanup();
+          resolveOpen();
+        };
+        const onError = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+        const onUnexpectedResponse = (_request: unknown, response: { statusCode?: number; resume: () => void }) => {
+          cleanup();
+          response.resume();
+          reject(new Error(`Unexpected server response: ${String(response.statusCode)}`));
+        };
+        socket.once("open", onOpen);
+        socket.once("error", onError);
+        socket.once("unexpected-response", onUnexpectedResponse);
       });
       return socket;
     } catch (err) {
