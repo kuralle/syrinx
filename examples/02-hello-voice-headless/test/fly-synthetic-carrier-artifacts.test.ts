@@ -66,6 +66,15 @@ describe("Fly synthetic carrier artifact validation", () => {
 
     expect(failures).toContain("telnyx carrier call-result.json did not match summary callResult");
   });
+
+  it("rejects carrier WAV data length that disagrees with decoded carrier metrics", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "smartpbx", { carrierOutboundSampleCount: 400 });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("smartpbx carrier-outbound.wav data byte length 800 did not match expected 1600");
+  });
 });
 
 async function writeProviderEvidence(
@@ -77,6 +86,7 @@ async function writeProviderEvidence(
     readonly recorderAssistantDurationMs?: number;
     readonly qualityGateFailures?: string[];
     readonly downloadedOutboundFrames?: number;
+    readonly carrierOutboundSampleCount?: number;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -141,7 +151,7 @@ async function writeProviderEvidence(
     outboundFrames: options.downloadedOutboundFrames,
   }));
   await writePcm16Wav(join(carrierDir, "carrier-inbound.wav"), options.carrierSampleRateHz ?? 8000, 800);
-  await writePcm16Wav(join(carrierDir, "carrier-outbound.wav"), options.carrierSampleRateHz ?? 8000, 800);
+  await writePcm16Wav(join(carrierDir, "carrier-outbound.wav"), options.carrierSampleRateHz ?? 8000, options.carrierOutboundSampleCount ?? 800);
 
   return {
     scenario: "fly_synthetic_public_carrier_to_bot",
@@ -196,8 +206,10 @@ function callResult(
     carrier: {
       inboundFrames: 10,
       inboundWireBytes: 1600,
+      inboundDecodedPcmBytes: 1600,
       outboundFrames: overrides.outboundFrames ?? 12,
       outboundWireBytes: 1920,
+      outboundDecodedPcmBytes: 1600,
       maxInboundMediaGapMs: 40,
       firstOutboundMediaAfterStartMs: 900,
       outboundEndMarks: provider === "smartpbx" ? 0 : 1,

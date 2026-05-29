@@ -181,12 +181,19 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
     if (manifest) {
       await validatePcmFile(bot.userPcm, label("bot user_audio.pcm"), manifest.audio?.user?.byteLength, failures);
       await validatePcmFile(bot.assistantPcm, label("bot assistant_audio.pcm"), manifest.audio?.assistant?.byteLength, failures);
-      await validateWavFile(bot.userWav, label("bot user_audio.wav"), manifest.audio?.user?.sampleRateHz, failures);
+      await validateWavFile(
+        bot.userWav,
+        label("bot user_audio.wav"),
+        manifest.audio?.user?.sampleRateHz,
+        failures,
+        manifest.audio?.user?.byteLength,
+      );
       await validateWavFile(
         bot.assistantWav,
         label("bot assistant_audio.wav"),
         manifest.audio?.assistant?.sampleRateHz,
         failures,
+        manifest.audio?.assistant?.byteLength,
       );
       if (!positiveInteger(manifest.audio?.user?.chunks)) failures.push(`${provider} recorder user chunks must be positive`);
       if (!positiveInteger(manifest.audio?.assistant?.chunks)) {
@@ -198,9 +205,10 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
       if (!positiveInteger(manifest.events?.packets)) failures.push(`${provider} recorder event packet count must be positive`);
     }
 
-    await validateCarrierCallResultArtifact(carrier.callResultJson, label("carrier call-result.json"), provider, callResult, failures);
-    await validateWavFile(carrier.carrierInboundWav, label("carrier-inbound.wav"), 8000, failures);
-    await validateWavFile(carrier.carrierOutboundWav, label("carrier-outbound.wav"), 8000, failures);
+    const downloadedCallResult = await validateCarrierCallResultArtifact(carrier.callResultJson, label("carrier call-result.json"), provider, callResult, failures);
+    const downloadedCarrier = isRecord(downloadedCallResult?.["carrier"]) ? downloadedCallResult["carrier"] : null;
+    await validateWavFile(carrier.carrierInboundWav, label("carrier-inbound.wav"), 8000, failures, readOptionalPositiveInteger(downloadedCarrier?.["inboundDecodedPcmBytes"]));
+    await validateWavFile(carrier.carrierOutboundWav, label("carrier-outbound.wav"), 8000, failures, readOptionalPositiveInteger(downloadedCarrier?.["outboundDecodedPcmBytes"]));
   }
 
   return failures;
@@ -212,15 +220,16 @@ async function validateCarrierCallResultArtifact(
   provider: Provider,
   expectedCallResult: Record<string, unknown>,
   failures: string[],
-): Promise<void> {
+): Promise<Record<string, unknown> | null> {
   const parsed = await validateJsonFile(path, label, failures);
-  if (!isRecord(parsed)) return;
+  if (!isRecord(parsed)) return null;
   if (parsed["provider"] !== provider) failures.push(`${label} provider mismatch`);
   validateQualityGate(provider, parsed["qualityGate"], failures);
   validateCarrierCompletionEvidence(provider, parsed, failures);
   if (stableJson(parsed) !== stableJson(expectedCallResult)) {
     failures.push(`${label} did not match summary callResult`);
   }
+  return parsed;
 }
 
 function validateQualityGate(provider: Provider, qualityGate: unknown, failures: string[]): void {
@@ -259,7 +268,7 @@ function validateCarrierCompletionEvidence(provider: Provider, callResult: Recor
     failures.push(`${provider} carrier result was missing`);
     return;
   }
-  for (const field of ["inboundFrames", "outboundFrames", "inboundWireBytes", "outboundWireBytes"]) {
+  for (const field of ["inboundFrames", "outboundFrames", "inboundWireBytes", "outboundWireBytes", "inboundDecodedPcmBytes", "outboundDecodedPcmBytes"]) {
     if (!positiveInteger(carrier[field])) failures.push(`${provider} carrier.${field} must be positive`);
   }
   if (!nonNegativeNumber(carrier["maxInboundMediaGapMs"])) failures.push(`${provider} carrier.maxInboundMediaGapMs is required`);
@@ -271,6 +280,10 @@ function validateCarrierCompletionEvidence(provider: Provider, callResult: Recor
   } else if (!positiveInteger(carrier["outboundQuietDrains"]) && !positiveInteger(carrier["localPlayoutDrains"])) {
     failures.push("smartpbx requires a local playout or quiet-drain completion signal");
   }
+}
+
+function readOptionalPositiveInteger(value: unknown): number | undefined {
+  return positiveInteger(value) ? value : undefined;
 }
 
 function artifactPaths(paths: readonly string[], pkgRoot: string): {
@@ -388,6 +401,7 @@ async function validateWavFile(
   label: string,
   expectedSampleRateHz: number | undefined,
   failures: string[],
+  expectedDataByteLength?: number,
 ): Promise<void> {
   if (!path) {
     failures.push(`${label} was not downloaded`);
@@ -402,6 +416,9 @@ async function validateWavFile(
     if (info.bitsPerSample !== 16 || info.audioFormat !== 1) failures.push(`${label} expected 16-bit PCM WAV`);
     if (info.dataByteLength <= 0) failures.push(`${label} data chunk is empty`);
     if (info.dataByteLength % 2 !== 0) failures.push(`${label} data chunk has odd PCM16 byte length`);
+    if (expectedDataByteLength !== undefined && info.dataByteLength !== expectedDataByteLength) {
+      failures.push(`${label} data byte length ${String(info.dataByteLength)} did not match expected ${String(expectedDataByteLength)}`);
+    }
   } catch (err) {
     failures.push(`${label} could not be validated: ${err instanceof Error ? err.message : String(err)}`);
   }
