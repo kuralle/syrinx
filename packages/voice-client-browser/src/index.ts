@@ -194,6 +194,9 @@ export class SyrinxBrowserClient {
   private nextAudioSequence(sequence: number | undefined): number {
     if (sequence !== undefined) {
       if (!Number.isInteger(sequence) || sequence < 0) throw new Error("audio sequence must be a non-negative integer");
+      if (sequence <= this.audioSequence) {
+        throw new Error(`audio sequence must increase monotonically: ${String(this.audioSequence)} -> ${String(sequence)}`);
+      }
       this.audioSequence = Math.max(this.audioSequence, sequence);
       return sequence;
     }

@@ -85,4 +85,28 @@ describe("SyrinxBrowserClient", () => {
     expect(pcmEnvelope.header).toMatchObject({ contextId: "turn-pcm", sequence: 10 });
     expect(floatEnvelope.header).toMatchObject({ contextId: "turn-float", sequence: 11 });
   });
+
+  it("rejects duplicate or regressing explicit audio sequence overrides before sending", () => {
+    const client = new SyrinxBrowserClient({ url: "ws://localhost/ws" });
+    client.connect();
+    const socket = sockets[0]!;
+
+    client.sendAudioBase64(Buffer.from([1, 0, 2, 0]).toString("base64"), 16000, {
+      contextId: "turn-json",
+      sequence: 3,
+    });
+
+    expect(() => client.sendAudioPcm(new Uint8Array([3, 0, 4, 0]), 16000, {
+      contextId: "turn-pcm",
+      sequence: 3,
+    })).toThrow("audio sequence must increase monotonically: 3 -> 3");
+    expect(() => client.sendFloat32Audio(new Float32Array([0, 0.5, 1]), {
+      fromSampleRateHz: 48000,
+      toSampleRateHz: 16000,
+      contextId: "turn-float",
+      sequence: 2,
+    })).toThrow("audio sequence must increase monotonically: 3 -> 2");
+
+    expect(socket.sent).toHaveLength(1);
+  });
 });
