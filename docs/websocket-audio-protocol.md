@@ -38,7 +38,7 @@ To resume a browser websocket session after a transient disconnect, reconnect wi
 ws://host/ws?sessionId=session-...
 ```
 
-The server keeps the underlying `VoiceAgentSession` alive during the retention window, reuses it on reconnect, and returns `"resumed": true` in `ready`. If the retention window expires without a reconnect, the session is finalized and closed.
+The server keeps the underlying `VoiceAgentSession` alive during the retention window, reuses it on reconnect, and returns `"resumed": true` in `ready`. The retained session also keeps the current turn id, per-context source sample-rate locks, and input sequence tracker, so a reconnect cannot mix a different source rate or replay/regress sequence values inside the same logical stream. If the retention window expires without a reconnect, the session is finalized and closed.
 
 The server accepts frames immediately after WebSocket connection and buffers bounded early input until `ready`. Clients should still wait for `ready` before streaming microphone audio so they know the negotiated audio contract and `turnId`, but a fast client sending a small frame after `open` will not silently lose it during session startup. If pending pre-ready input exceeds `maxInboundMessageBytes`, the server closes with code `1009`.
 
@@ -54,7 +54,7 @@ Clients can send JSON audio frames. `sampleRateHz` is required; the server rejec
 }
 ```
 
-The server validates strict base64, requires a positive-integer `sampleRateHz`, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames on the websocket connection. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream. If a JSON frame includes `sequence`, it must be a non-negative integer that increases over the websocket input stream. Duplicate or regressing sequence values are rejected before audio reaches the engine; forward gaps are accepted but emit a `websocket.audio_sequence_gap` metric with expected, actual, and missed frame counts.
+The server validates strict base64, requires a positive-integer `sampleRateHz`, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames in the retained websocket session, including after a browser reconnect/resume. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream. If a JSON frame includes `sequence`, it must be a non-negative integer that increases over the retained websocket session input stream. Duplicate or regressing sequence values are rejected before audio reaches the engine; forward gaps are accepted but emit a `websocket.audio_sequence_gap` metric with expected, actual, and missed frame counts.
 
 The supplied browser review console sends microphone audio as `syrinx.audio.v1` binary envelopes by default, not JSON base64. JSON audio frames remain supported for scripted clients when they carry explicit source-rate metadata.
 
@@ -98,8 +98,8 @@ Required invariants:
 - `durationMs`, when present, must be a non-negative integer and match the PCM16 payload duration computed from `byteLength` and `sampleRateHz`, allowing only rounding tolerance.
 - `byteLength`, when present, must exactly match the binary payload length.
 - PCM16 payload byte length must be even after envelope decode.
-- All audio frames for one `contextId` on a websocket connection must use the same source sample rate.
-- `sequence`, when present on JSON or enveloped binary input, must increase over the websocket input stream. It is transport evidence, not a conversation-quality gate.
+- All audio frames for one `contextId` in a retained websocket session must use the same source sample rate, including across reconnect/resume.
+- `sequence`, when present on JSON or enveloped binary input, must increase over the retained websocket session input stream. It is transport evidence, not a conversation-quality gate.
 
 Enveloped input with missing or malformed timing/format metadata is rejected as a transport error instead of being silently interpreted at the server default sample rate. Raw binary PCM is the supported low-overhead path when a client intentionally wants to rely on the advertised `ready.audio.inputSampleRateHz`.
 

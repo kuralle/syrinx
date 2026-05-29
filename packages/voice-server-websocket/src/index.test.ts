@@ -390,6 +390,120 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("keeps browser websocket audio format invariants across session resume", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      resumeWindowMs: 200,
+      createSession: () => session,
+      contextId: () => "turn-initial",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [first] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
+    first.send(JSON.stringify({
+      type: "audio",
+      audio: Buffer.from([1, 0, 2, 0]).toString("base64"),
+      contextId: "turn-resume-rate",
+      sampleRateHz: 48000,
+      sequence: 1,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    first.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const [second, secondReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
+    expect(secondReady).toMatchObject({
+      type: "ready",
+      sessionId: "resume-rate-test",
+      turnId: "turn-resume-rate",
+      resumed: true,
+    });
+    const errorMessage = new Promise<any>((resolve) => {
+      second.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    second.send(JSON.stringify({
+      type: "audio",
+      audio: Buffer.from([3, 0, 4, 0]).toString("base64"),
+      contextId: "turn-resume-rate",
+      sampleRateHz: 44100,
+      sequence: 2,
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sampleRateHz changed within context turn-resume-rate: 48000 -> 44100",
+    });
+
+    second.close();
+    await server.close();
+  });
+
+  it("keeps browser websocket audio sequence invariants across session resume", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      resumeWindowMs: 200,
+      createSession: () => session,
+      contextId: () => "turn-initial",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [first] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
+    first.send(JSON.stringify({
+      type: "audio",
+      audio: Buffer.from([1, 0, 2, 0]).toString("base64"),
+      contextId: "turn-resume-sequence",
+      sampleRateHz: 16000,
+      sequence: 5,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    first.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const [second, secondReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
+    expect(secondReady).toMatchObject({
+      type: "ready",
+      sessionId: "resume-sequence-test",
+      turnId: "turn-resume-sequence",
+      resumed: true,
+    });
+    const errorMessage = new Promise<any>((resolve) => {
+      second.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    second.send(JSON.stringify({
+      type: "audio",
+      audio: Buffer.from([3, 0, 4, 0]).toString("base64"),
+      contextId: "turn-resume-sequence",
+      sampleRateHz: 16000,
+      sequence: 4,
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket audio sequence must increase monotonically: 5 -> 4",
+    });
+
+    second.close();
+    await server.close();
+  });
+
   it("closes retained browser websocket sessions after the resume window expires", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const closeSpy = vi.spyOn(session, "close");
