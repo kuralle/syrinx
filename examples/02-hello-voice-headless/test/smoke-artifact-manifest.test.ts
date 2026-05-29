@@ -13,6 +13,30 @@ import {
 } from "../scripts/smoke-artifact-manifest.js";
 
 describe("smoke artifact manifest", () => {
+  it("returns validation failures instead of throwing on malformed parsed JSON", () => {
+    expect(validateSmokeArtifactManifest(null)).toStrictEqual(["manifest must be an object"]);
+    expect(validateSmokeArtifactManifest({
+      schemaVersion: 2,
+      transport: "websocket",
+      audio: {},
+      turns: "not-an-array",
+      qualityGate: { passed: true, failures: [] },
+    })).toContain("turns must be an array");
+    expect(validateSmokeArtifactManifest({
+      schemaVersion: 2,
+      transport: "websocket",
+      audio: {},
+      turns: [{ id: "", latencyMs: null }],
+      qualityGate: { passed: true, failures: [] },
+    })).toEqual(expect.arrayContaining([
+      "turn 0.id must be a non-empty string",
+      "turn 0.fixtureId must be a non-empty string",
+      "turn 0 inputAudio must be an object",
+      "turn 0 assistantAudio must be an object",
+      "turn 0.latencyMs must be an object",
+    ]));
+  });
+
   it("accepts explicit wire and decoded PCM byte accounting for compressed telephony audio", async () => {
     const manifest = makeTwilioManifest();
 
