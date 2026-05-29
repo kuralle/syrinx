@@ -607,6 +607,7 @@ describe("VoiceAgentSession", () => {
       contextId: "turn-1",
       timestampMs: Date.now(),
       audio,
+      sampleRateHz: 16000,
     };
     session.bus.push(Route.Main, ttsAudioPacket);
 
@@ -618,6 +619,7 @@ describe("VoiceAgentSession", () => {
         contextId: "turn-1",
         timestampMs: expect.any(Number),
         audio,
+        sampleRateHz: 16000,
         truncate: false,
       },
     ]);
