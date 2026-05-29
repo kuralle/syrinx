@@ -507,7 +507,7 @@ function wireSessionEvents(
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
-      const sourceSampleRateHz = positiveInteger(audioPacket.sampleRateHz) ?? outputSampleRateHz;
+      const sourceSampleRateHz = requireTtsAudioSampleRate(audioPacket.sampleRateHz);
       const audio = normalizePcm16(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
       if (socket.readyState === WebSocket.OPEN) {
         const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
@@ -760,6 +760,12 @@ function optionalSequence(value: unknown): number | undefined {
 function requiredJsonAudioSampleRate(value: unknown): number {
   const sampleRateHz = positiveInteger(value);
   if (sampleRateHz === null) throw new Error("JSON websocket audio sampleRateHz must be a positive integer");
+  return sampleRateHz;
+}
+
+function requireTtsAudioSampleRate(value: unknown): number {
+  const sampleRateHz = positiveInteger(value);
+  if (sampleRateHz === null) throw new Error("tts.audio sampleRateHz must be a positive integer");
   return sampleRateHz;
 }
 

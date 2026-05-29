@@ -103,7 +103,7 @@ Required invariants:
 
 Enveloped input with missing or malformed timing/format metadata is rejected as a transport error instead of being silently interpreted at the server default sample rate. Raw binary PCM is the supported low-overhead path when a client intentionally wants to rely on the advertised `ready.audio.inputSampleRateHz`.
 
-Assistant audio is normalized to the websocket output rate before it is sent as the same envelope by default, and is still preceded by `tts_chunk` metadata for clients that track lifecycle events in JSON. TTS providers may emit PCM at a different source rate from the websocket output rate; maintained Cartesia and Gemini plugins attach `sampleRateHz` to each `tts.audio` packet so the server can resample from provider truth before writing the envelope. Server-side `binaryAudioEnvelope: false` restores raw PCM assistant frames for older websocket clients.
+Assistant audio is normalized to the websocket output rate before it is sent as the same envelope by default, and is still preceded by `tts_chunk` metadata for clients that track lifecycle events in JSON. TTS providers may emit PCM at a different source rate from the websocket output rate; `tts.audio.sampleRateHz` is required so the server can resample from provider truth before writing the envelope. Server-side `binaryAudioEnvelope: false` restores raw PCM assistant frames for explicitly managed websocket clients.
 
 ## Server Events
 

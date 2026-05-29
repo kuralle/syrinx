@@ -65,6 +65,7 @@ async function main(): Promise<void> {
       contextId: audio.contextId,
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(generateTone(TARGET_SAMPLE_RATE_HZ, 440, 0.5)),
+      sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
       kind: "tts.end",

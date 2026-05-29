@@ -214,6 +214,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
 
     await expect(outbound).resolves.toMatchObject({
@@ -247,6 +248,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array([1000, -1000, 500, -500])),
+      sampleRateHz: 16000,
     });
     const media = await outbound;
     const bytes = Buffer.from(media.media.payload, "base64");
@@ -314,6 +316,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     const media = await outbound;
     const opus = Buffer.from(media.media.payload, "base64");
@@ -346,6 +349,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(80)),
+      sampleRateHz: 16000,
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     session.bus.push(Route.Main, {
@@ -437,6 +441,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     await new Promise((resolve) => setTimeout(resolve, 40));
 
@@ -490,6 +495,7 @@ describe("createSmartPbxMediaStreamServer", () => {
         contextId: "smartpbx-call-test",
         timestampMs: Date.now(),
         audio: pcm16SamplesToBytes(new Int16Array(16000)),
+        sampleRateHz: 16000,
       });
       await firstMedia;
       expect(messages.filter((message) => message.event === "media")).toHaveLength(1);
@@ -549,6 +555,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(16000)),
+      sampleRateHz: 16000,
     });
     await firstMedia;
     client.terminate();
@@ -586,6 +593,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(640)),
+      sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
       kind: "tts.end",
@@ -633,6 +641,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(1280)),
+      sampleRateHz: 16000,
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(sent.filter((message) => message.event === "media")).toHaveLength(1);
@@ -655,6 +664,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
       kind: "tts.end",
@@ -756,6 +766,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
       audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
     });
     await expect(closed).resolves.toBe(1013);
     await new Promise((resolve) => setTimeout(resolve, 20));
