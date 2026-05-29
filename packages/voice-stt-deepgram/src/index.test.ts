@@ -128,7 +128,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
       finalize_on_speech_final: false,
-      provider_finalize_fallback_ms: 0,
+      provider_finalize_timeout_ms: 0,
       emit_eos_on_final: false,
     });
     bus.push(Route.Main, {
@@ -207,7 +207,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
       finalize_on_speech_final: false,
-      provider_finalize_fallback_ms: 100,
+      provider_finalize_timeout_ms: 100,
       emit_eos_on_final: false,
     });
     bus.push(Route.Main, {
@@ -424,6 +424,80 @@ describe("DeepgramSTTPlugin", () => {
         name: "stt_provider_finalize_requested",
         contextId: "turn-unsent",
         value: expect.stringContaining("\"bytes\":0"),
+      }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not promote cached provider text when Finalize is not confirmed", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            channel: { alternatives: [{ transcript: "unconfirmed segment", confidence: 0.8 }] },
+          }));
+          return;
+        }
+        const msg = JSON.parse(data.toString()) as { type?: string };
+        if (msg.type !== "Finalize") return;
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 10,
+      emit_eos_on_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-unconfirmed",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    plugin.forceFinalize("turn-unconfirmed");
+    await waitFor(errors);
+
+    expect(finals).toHaveLength(0);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "stt.error",
+        contextId: "turn-unconfirmed",
+        isRecoverable: true,
+        cause: expect.objectContaining({
+          message: "Deepgram STT Finalize timed out before speech_final/from_finalize confirmation",
+        }),
+      }),
+    ]);
+    expect(metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "stt_provider_finalize_timeout",
+        contextId: "turn-unconfirmed",
+        value: expect.stringContaining("\"bytes\":640"),
       }),
     ]));
 

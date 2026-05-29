@@ -27,6 +27,13 @@ describe("LLM error handling", () => {
     expect(isRecoverable(category)).toBe(true);
   });
 
+  it("maps provider finalization timed-out wording to recoverable timeout", () => {
+    const category = categorizeSttError(new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"));
+
+    expect(category).toBe(ErrorCategory.NetworkTimeout);
+    expect(isRecoverable(category)).toBe(true);
+  });
+
   it("maps Deepgram DATA websocket close frames to fatal input failures", () => {
     const category = categorizeSttError(new Error("Deepgram STT WebSocket closed unexpectedly: code=1008 reason=DATA-0000"));
 
