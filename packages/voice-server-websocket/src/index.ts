@@ -18,6 +18,7 @@ import {
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { startWebSocketHeartbeat, startWebSocketMaxSessionDuration } from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 
 export * from "./twilio.js";
@@ -35,6 +36,7 @@ export interface VoiceWebSocketServerOptions {
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
   readonly resumeWindowMs?: number;
@@ -87,6 +89,7 @@ interface AudioSequenceState {
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
@@ -104,6 +107,7 @@ export async function createVoiceWebSocketServer(
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
@@ -120,6 +124,7 @@ export async function createVoiceWebSocketServer(
       inputSampleRateHz,
       outputSampleRateHz,
       heartbeatIntervalMs,
+      maxSessionDurationMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
       resumeWindowMs,
@@ -173,6 +178,7 @@ async function handleConnection(args: {
   readonly inputSampleRateHz: number;
   readonly outputSampleRateHz: number;
   readonly heartbeatIntervalMs: number;
+  readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
   readonly resumeWindowMs: number;
@@ -188,6 +194,7 @@ async function handleConnection(args: {
     inputSampleRateHz,
     outputSampleRateHz,
     heartbeatIntervalMs,
+    maxSessionDurationMs,
     maxBufferedAmountBytes,
     maxInboundMessageBytes,
     resumeWindowMs,
@@ -202,6 +209,7 @@ async function handleConnection(args: {
   let pendingMessageBytes = 0;
   let ready = false;
   let socketClosed = false;
+  let maxSessionTimedOut = false;
 
   const handleIncomingMessage = (data: RawData, isBinary: boolean): void => {
     try {
@@ -269,7 +277,7 @@ async function handleConnection(args: {
     }
     if (managed) {
       managed.connectionCount = Math.max(0, managed.connectionCount - 1);
-      scheduleManagedSessionClose(managed, sessions, resumeWindowMs);
+      scheduleManagedSessionClose(managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
     }
   });
 
@@ -284,10 +292,19 @@ async function handleConnection(args: {
     managed.connectionCount += 1;
     if (socketClosed) {
       managed.connectionCount = Math.max(0, managed.connectionCount - 1);
-      scheduleManagedSessionClose(managed, sessions, resumeWindowMs);
+      scheduleManagedSessionClose(managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
       return;
     }
     startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers);
+    startWebSocketMaxSessionDuration(socket, maxSessionDurationMs, disposers, () => {
+      maxSessionTimedOut = true;
+      sendJson(socket, {
+        type: "error",
+        component: "transport",
+        category: "session_timeout",
+        message: "Websocket max session duration exceeded",
+      }, maxBufferedAmountBytes);
+    });
     wireSessionEvents(managed.session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, maxBufferedAmountBytes);
     sendJson(socket, {
       type: "ready",
@@ -295,6 +312,7 @@ async function handleConnection(args: {
       turnId: currentContextId,
       resumed: lease.resumed,
       resumeWindowMs,
+      maxSessionDurationMs,
       audio: {
         inputSampleRateHz,
         outputSampleRateHz,
@@ -737,32 +755,6 @@ function sendSocketData(socket: WebSocket, data: string | Buffer, maxBufferedAmo
 
 function outboundMessageByteLength(data: string | Buffer): number {
   return typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
-}
-
-function startWebSocketHeartbeat(
-  socket: WebSocket,
-  heartbeatIntervalMs: number,
-  disposers: Array<() => void>,
-): void {
-  if (heartbeatIntervalMs <= 0) return;
-  let alive = true;
-  const onPong = () => {
-    alive = true;
-  };
-  socket.on("pong", onPong);
-  const interval = setInterval(() => {
-    if (socket.readyState !== WebSocket.OPEN) return;
-    if (!alive) {
-      socket.terminate();
-      return;
-    }
-    alive = false;
-    socket.ping();
-  }, heartbeatIntervalMs);
-  disposers.push(() => {
-    clearInterval(interval);
-    socket.off("pong", onPong);
-  });
 }
 
 function defaultContextId(): string {

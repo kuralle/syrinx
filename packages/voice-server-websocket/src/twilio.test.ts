@@ -971,6 +971,31 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("closes Twilio websocket sessions that exceed maxSessionDurationMs", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      maxSessionDurationMs: 10,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    await expect(closed).resolves.toEqual({
+      code: 1000,
+      reason: "websocket max session duration exceeded",
+    });
+
+    await server.close();
+  });
+
   it("closes slow Twilio consumers before outbound media buffers grow unbounded", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const metrics: ConversationMetricPacket[] = [];

@@ -19,6 +19,7 @@ import {
 } from "./twilio.js";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { startWebSocketHeartbeat, startWebSocketMaxSessionDuration } from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 
 export interface TelnyxMediaStreamServerOptions {
@@ -36,6 +37,7 @@ export interface TelnyxMediaStreamServerOptions {
   readonly maxQueuedOutputAudioMs?: number;
   readonly maxInboundReorderFrames?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
 }
@@ -114,6 +116,7 @@ const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
 const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
 const DEFAULT_MAX_INBOUND_REORDER_FRAMES = 4;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
 
@@ -132,6 +135,7 @@ export async function createTelnyxMediaStreamServer(
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
   const maxInboundReorderFrames = positiveInteger(options.maxInboundReorderFrames) ?? DEFAULT_MAX_INBOUND_REORDER_FRAMES;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
 
@@ -149,6 +153,7 @@ export async function createTelnyxMediaStreamServer(
       maxQueuedOutputAudioMs,
       maxInboundReorderFrames,
       heartbeatIntervalMs,
+      maxSessionDurationMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
     });
@@ -197,6 +202,7 @@ async function handleTelnyxConnection(args: {
   readonly maxQueuedOutputAudioMs: number;
   readonly maxInboundReorderFrames: number;
   readonly heartbeatIntervalMs: number;
+  readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
 }): Promise<void> {
@@ -299,6 +305,7 @@ async function handleTelnyxConnection(args: {
       return;
     }
     startWebSocketHeartbeat(args.socket, args.heartbeatIntervalMs, disposers);
+    startWebSocketMaxSessionDuration(args.socket, args.maxSessionDurationMs, disposers);
     clearPendingPlayout = wireTelnyxSessionEvents({
       session,
       socket: args.socket,
@@ -828,26 +835,4 @@ function sendTelnyxJson(socket: WebSocket, value: unknown, maxBufferedAmountByte
   }
   socket.send(data);
   return true;
-}
-
-function startWebSocketHeartbeat(socket: WebSocket, heartbeatIntervalMs: number, disposers: Array<() => void>): void {
-  if (heartbeatIntervalMs <= 0) return;
-  let alive = true;
-  const onPong = () => {
-    alive = true;
-  };
-  socket.on("pong", onPong);
-  const interval = setInterval(() => {
-    if (socket.readyState !== WebSocket.OPEN) return;
-    if (!alive) {
-      socket.terminate();
-      return;
-    }
-    alive = false;
-    socket.ping();
-  }, heartbeatIntervalMs);
-  disposers.push(() => {
-    clearInterval(interval);
-    socket.off("pong", onPong);
-  });
 }
