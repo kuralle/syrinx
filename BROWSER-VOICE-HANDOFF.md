@@ -30,10 +30,10 @@ Latest verified run:
 - `browser_runtime_capture_to_websocket`
 - `audioContextSampleRateHz: 48000`
 - `targetSampleRateHz: 16000`
-- Artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-runtime-2026-05-28T12-56-34-367Z/baseline.json`
-- `sentFrames: 89`
-- `sentEnvelopeFrames: 89`
-- `sentBytes: 56664`
+- Artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-runtime-2026-05-29T08-32-59-896Z/baseline.json`
+- `sentFrames: 87`
+- `sentEnvelopeFrames: 87`
+- `sentBytes: 55298`
 - `receivedAssistantAudioFrames: 1`
 - `receivedAssistantEnvelopeFrames: 1`
 - `receivedAssistantBytes: 16000`
