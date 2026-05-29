@@ -305,13 +305,21 @@ export interface RecordUserAudioPacket extends VoicePacket {
   readonly audio: Uint8Array;
 }
 
-export interface RecordAssistantAudioPacket extends VoicePacket {
+export interface RecordAssistantAudioDataPacket extends VoicePacket {
   readonly kind: "record.assistant_audio";
   readonly audio: Uint8Array;
   /** Source sample rate for assistant PCM. */
-  readonly sampleRateHz?: number;
-  readonly truncate: boolean;
+  readonly sampleRateHz: number;
+  readonly truncate: false;
 }
+
+export interface RecordAssistantAudioTruncatePacket extends VoicePacket {
+  readonly kind: "record.assistant_audio";
+  readonly audio: Uint8Array;
+  readonly truncate: true;
+}
+
+export type RecordAssistantAudioPacket = RecordAssistantAudioDataPacket | RecordAssistantAudioTruncatePacket;
 
 // =============================================================================
 // Behavior Packets

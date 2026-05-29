@@ -90,6 +90,7 @@ describe("VoiceSessionRecorder", () => {
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array([5, 6, 7, 8]),
+        sampleRateHz: 24000,
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
@@ -146,10 +147,29 @@ describe("VoiceSessionRecorder", () => {
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array([1, 2, 3]),
+        sampleRateHz: 16000,
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
       await expect(recorder.close()).rejects.toThrow("record.assistant_audio audio must contain an even number of PCM16 bytes");
+    });
+  });
+
+  it("rejects assistant audio without source sample-rate metadata", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir });
+
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3, 4]),
+        truncate: false,
+      } as RecordAssistantAudioPacket);
+
+      await expect(recorder.close()).rejects.toThrow("record.assistant_audio sampleRateHz must be a positive integer");
     });
   });
 
@@ -232,6 +252,7 @@ describe("VoiceSessionRecorder", () => {
           contextId: "turn-1",
           timestampMs: Date.now(),
           audio: new Uint8Array(320).fill(value),
+          sampleRateHz: 16000,
           truncate: false,
         } satisfies RecordAssistantAudioPacket);
       }
@@ -301,6 +322,7 @@ describe("VoiceSessionRecorder", () => {
           contextId: "turn-1",
           timestampMs: Date.now(),
           audio: new Uint8Array(320).fill(value),
+          sampleRateHz: 16000,
           truncate: false,
         } satisfies RecordAssistantAudioPacket);
       }

@@ -7,6 +7,7 @@ import {
   Route,
   type PipelineBus,
   type PluginConfig,
+  type RecordAssistantAudioDataPacket,
   type RecordAssistantAudioPacket,
   type RecordUserAudioPacket,
   type VoicePacket,
@@ -366,13 +367,13 @@ export class VoiceSessionRecorder implements VoicePlugin {
     return false;
   }
 
-  private acceptAssistantSampleRate(packet: RecordAssistantAudioPacket): boolean {
-    if (packet.sampleRateHz !== undefined && !isPositiveInteger(packet.sampleRateHz)) {
+  private acceptAssistantSampleRate(packet: RecordAssistantAudioDataPacket): boolean {
+    if (!isPositiveInteger(packet.sampleRateHz)) {
       this.writeFailure = new Error("record.assistant_audio sampleRateHz must be a positive integer");
       return false;
     }
 
-    const packetSampleRateHz = packet.sampleRateHz ?? this.assistantSampleRateHz;
+    const packetSampleRateHz = packet.sampleRateHz;
     if (!this.assistantSampleRateLocked) {
       this.assistantSampleRateHz = packetSampleRateHz;
       this.assistantSampleRateLocked = true;
