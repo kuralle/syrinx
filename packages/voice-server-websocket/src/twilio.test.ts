@@ -46,6 +46,15 @@ async function readJsonMatching(socket: WebSocket, predicate: (message: any) => 
   });
 }
 
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 1000) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 function twilioStart(streamSid = "MZ-test-stream", callSid = "CA-test-call"): Record<string, unknown> {
   return {
     event: "start",
@@ -306,7 +315,10 @@ describe("createTwilioMediaStreamServer", () => {
       streamSid: "MZ-test-stream",
       media: { track: "inbound", chunk: "1", timestamp: "20", payload },
     }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => metrics.some((metric) =>
+      metric.contextId === "twilio-sequence-gap-test" &&
+      metric.name === "twilio.sequence_gap",
+    ));
 
     expect(metrics).toContainEqual(expect.objectContaining({
       kind: "metric.conversation",

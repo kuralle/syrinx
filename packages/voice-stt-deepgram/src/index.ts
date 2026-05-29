@@ -533,6 +533,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private async reconnect(): Promise<void> {
     if (this.closed || this.reconnecting) return;
     this.reconnecting = true;
+    this.discardProviderStateForReconnect();
     this.stopKeepAlive();
     try {
       this.ws?.close();
@@ -543,6 +544,25 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       await this.connect();
     } finally {
       this.reconnecting = false;
+    }
+  }
+
+  private discardProviderStateForReconnect(): void {
+    const contextId = this.currentContextId;
+    const discarded = this.finalTranscriptParts.length > 0 ||
+      this.lastInterimTranscript.length > 0 ||
+      this.finalizeRequestedContextIds.size > 0 ||
+      this.audioStatsByContextId.size > 0 ||
+      this.providerFinalizeTimers.size > 0;
+    for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
+    this.providerFinalizeTimers.clear();
+    this.finalizeRequestedContextIds.clear();
+    this.speechFinalContextIds.clear();
+    this.ignoreNextProviderFinalContextIds.clear();
+    this.audioStatsByContextId.clear();
+    this.resetPendingTranscript();
+    if (discarded && contextId) {
+      this.pushMetric(contextId, "stt_provider_reconnect_discarded_state", {});
     }
   }
 
