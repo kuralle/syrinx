@@ -82,6 +82,9 @@ type ClientMessage =
 interface ManagedSession {
   readonly id: string;
   readonly session: VoiceAgentSession;
+  currentContextId: string;
+  readonly contextSampleRates: Map<string, number>;
+  readonly inputSequence: AudioSequenceState;
   closeTimer: ReturnType<typeof setTimeout> | null;
   connectionCount: number;
 }
@@ -223,9 +226,7 @@ async function handleConnection(args: {
     binaryAudioEnvelope,
   } = args;
   let managed: ManagedSession | null = null;
-  let currentContextId = contextId();
-  const contextSampleRates = new Map<string, number>();
-  const inputSequence: AudioSequenceState = { lastSequence: null };
+  const initialContextId = contextId();
   const disposers: Array<() => void> = [];
   const pendingMessages: PendingClientMessage[] = [];
   let pendingMessageBytes = 0;
@@ -280,17 +281,18 @@ async function handleConnection(args: {
 
   const processClientMessage = (data: RawData, isBinary: boolean): void => {
     if (!managed) return;
-    currentContextId = handleClientMessage(
+    const currentContextId = handleClientMessage(
       managed.session,
       data,
       isBinary,
-      currentContextId,
+      managed.currentContextId,
       contextId,
       inputSampleRateHz,
       rawBinaryInput,
-      contextSampleRates,
-      inputSequence,
+      managed.contextSampleRates,
+      managed.inputSequence,
     );
+    managed.currentContextId = currentContextId;
   };
 
   socket.on("message", handleIncomingMessage);
@@ -312,6 +314,7 @@ async function handleConnection(args: {
       createSession,
       sessionId,
       sessions,
+      initialContextId,
       onSessionCreated: (session) => {
         startupSession.current = session;
       },
@@ -340,7 +343,7 @@ async function handleConnection(args: {
     sendJson(socket, {
       type: "ready",
       sessionId: managed.id,
-      turnId: currentContextId,
+      turnId: managed.currentContextId,
       resumed: lease.resumed,
       resumeWindowMs,
       maxSessionDurationMs,
@@ -390,6 +393,7 @@ async function getOrCreateManagedSession(args: {
   readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
   readonly sessionId: (request: IncomingMessage) => string;
   readonly sessions: Map<string, ManagedSession>;
+  readonly initialContextId: string;
   readonly onSessionCreated?: (session: VoiceAgentSession) => void;
   readonly shouldAbort?: () => boolean;
 }): Promise<ManagedSessionLease> {
@@ -418,6 +422,9 @@ async function getOrCreateManagedSession(args: {
   const managed: ManagedSession = {
     id: requestedSessionId,
     session,
+    currentContextId: args.initialContextId,
+    contextSampleRates: new Map(),
+    inputSequence: { lastSequence: null },
     closeTimer: null,
     connectionCount: 0,
   };
