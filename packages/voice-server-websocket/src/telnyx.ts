@@ -34,6 +34,7 @@ export interface TelnyxMediaStreamServerOptions {
   readonly bidirectionalCodec?: "PCMU" | "L16";
   readonly outboundFrameDurationMs?: number;
   readonly maxQueuedOutputAudioMs?: number;
+  readonly maxInboundReorderFrames?: number;
   readonly heartbeatIntervalMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
@@ -83,7 +84,8 @@ interface TelnyxConnectionState {
   started: boolean;
   stopped: boolean;
   lastInboundSequenceNumber: number | null;
-  lastInboundMediaChunk: number | null;
+  nextInboundMediaChunk: number;
+  readonly inboundMediaReorderBuffer: Map<number, PendingTelnyxMediaFrame>;
   lastInboundMediaTimestampMs: number | null;
   outboundSequence: number;
   pendingMarks: Set<string>;
@@ -97,6 +99,12 @@ interface PendingTelnyxMessage {
   readonly byteLength: number;
 }
 
+interface PendingTelnyxMediaFrame {
+  readonly chunk: number;
+  readonly timestamp?: string;
+  readonly pcm: Int16Array;
+}
+
 type TelnyxPlayoutTerminationReason = "stop" | "disconnect" | "overflow" | "send_buffer";
 
 type TelnyxCodec = "PCMU" | "L16";
@@ -104,6 +112,7 @@ type TelnyxCodec = "PCMU" | "L16";
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
 const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
+const DEFAULT_MAX_INBOUND_REORDER_FRAMES = 4;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
@@ -121,6 +130,7 @@ export async function createTelnyxMediaStreamServer(
   const bidirectionalCodec = options.bidirectionalCodec ?? "PCMU";
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
+  const maxInboundReorderFrames = positiveInteger(options.maxInboundReorderFrames) ?? DEFAULT_MAX_INBOUND_REORDER_FRAMES;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
@@ -137,6 +147,7 @@ export async function createTelnyxMediaStreamServer(
       bidirectionalCodec,
       outboundFrameDurationMs,
       maxQueuedOutputAudioMs,
+      maxInboundReorderFrames,
       heartbeatIntervalMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
@@ -184,6 +195,7 @@ async function handleTelnyxConnection(args: {
   readonly bidirectionalCodec: TelnyxCodec;
   readonly outboundFrameDurationMs: number;
   readonly maxQueuedOutputAudioMs: number;
+  readonly maxInboundReorderFrames: number;
   readonly heartbeatIntervalMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
@@ -198,7 +210,8 @@ async function handleTelnyxConnection(args: {
     started: false,
     stopped: false,
     lastInboundSequenceNumber: null,
-    lastInboundMediaChunk: null,
+    nextInboundMediaChunk: 1,
+    inboundMediaReorderBuffer: new Map(),
     lastInboundMediaTimestampMs: null,
     outboundSequence: 0,
     pendingMarks: new Set(),
@@ -221,6 +234,7 @@ async function handleTelnyxConnection(args: {
       state,
       contextId: args.contextId,
       inputSampleRateHz: args.inputSampleRateHz,
+      maxInboundReorderFrames: args.maxInboundReorderFrames,
       onStop: () => clearPendingPlayout("stop"),
     });
   };
@@ -445,9 +459,10 @@ function handleTelnyxMessage(args: {
   readonly state: TelnyxConnectionState;
   readonly contextId: (start: TelnyxStartPayload) => string;
   readonly inputSampleRateHz: number;
+  readonly maxInboundReorderFrames: number;
   readonly onStop: () => void;
 }): void {
-  const { session, data, state, contextId, inputSampleRateHz, onStop } = args;
+  const { session, data, state, contextId, inputSampleRateHz, maxInboundReorderFrames, onStop } = args;
   const message = JSON.parse(rawDataToText(data)) as TelnyxMediaMessage;
   const event = message.event;
   rememberTelnyxSequenceNumber(session, state, message.sequence_number);
@@ -463,6 +478,8 @@ function handleTelnyxMessage(args: {
     state.inboundCodec = format.codec;
     state.inboundSampleRateHz = format.sampleRateHz;
     state.started = true;
+    state.nextInboundMediaChunk = 1;
+    state.inboundMediaReorderBuffer.clear();
     return;
   }
   if (event === "media") {
@@ -470,20 +487,18 @@ function handleTelnyxMessage(args: {
     if (!state.started || !state.contextId) throw new Error("Telnyx media event received before a valid start event");
     const payload = message.media?.payload;
     if (!payload) throw new Error("Telnyx media event is missing media.payload");
-    rememberTelnyxMediaChunk(session, state, message.media?.chunk);
     const encoded = decodeStrictBase64(payload, "media.payload");
     const pcm = decodeInboundPayload(encoded, state.inboundCodec);
-    rememberTelnyxMediaTimestamp(session, state, message.media?.timestamp, pcm.length, state.inboundSampleRateHz);
-    const resampled = resamplePcm16(pcm, state.inboundSampleRateHz, inputSampleRateHz);
-    session.bus.push(Route.Main, {
-      kind: "user.audio_received",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      audio: pcm16SamplesToBytes(resampled),
-    });
+    const chunk = optionalPositiveIntegerString(message.media?.chunk, "Telnyx media.chunk");
+    if (chunk === undefined) {
+      emitTelnyxMediaFrame(session, state, { chunk: 0, timestamp: message.media?.timestamp, pcm }, inputSampleRateHz);
+    } else {
+      rememberTelnyxMediaChunk(session, state, { chunk, timestamp: message.media?.timestamp, pcm }, inputSampleRateHz, maxInboundReorderFrames);
+    }
     return;
   }
   if (event === "stop") {
+    flushTelnyxMediaReorderBuffer(session, state, inputSampleRateHz, maxInboundReorderFrames, true);
     state.stopped = true;
     state.started = false;
     state.pendingMarks.clear();
@@ -519,7 +534,14 @@ function rememberTelnyxSequenceNumber(
   if (sequence === undefined) return;
   const previous = state.lastInboundSequenceNumber;
   if (previous !== null && sequence <= previous) {
-    throw new Error(`Telnyx sequence_number must increase monotonically: ${String(previous)} -> ${String(sequence)}`);
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.sequence_regression",
+      value: JSON.stringify({ previous, actual: sequence }),
+    });
+    return;
   }
   if (previous !== null && sequence > previous + 1) {
     session.bus.push(Route.Background, {
@@ -536,24 +558,72 @@ function rememberTelnyxSequenceNumber(
 function rememberTelnyxMediaChunk(
   session: VoiceAgentSession,
   state: TelnyxConnectionState,
-  chunkValue: string | undefined,
+  frame: PendingTelnyxMediaFrame,
+  inputSampleRateHz: number,
+  maxInboundReorderFrames: number,
 ): void {
-  const chunk = optionalPositiveIntegerString(chunkValue, "Telnyx media.chunk");
-  if (chunk === undefined) return;
-  const previous = state.lastInboundMediaChunk;
-  if (previous !== null && chunk <= previous) {
-    throw new Error(`Telnyx media.chunk must increase monotonically: ${String(previous)} -> ${String(chunk)}`);
+  if (frame.chunk < state.nextInboundMediaChunk) {
+    throw new Error(`Telnyx media.chunk is stale or duplicated: expected at least ${String(state.nextInboundMediaChunk)}, received ${String(frame.chunk)}`);
   }
-  if (previous !== null && chunk > previous + 1) {
-    session.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      name: "telnyx.media_chunk_gap",
-      value: JSON.stringify({ expected: previous + 1, actual: chunk, missed: chunk - previous - 1 }),
-    });
+  if (state.inboundMediaReorderBuffer.has(frame.chunk)) {
+    throw new Error(`Telnyx media.chunk is stale or duplicated: expected at least ${String(state.nextInboundMediaChunk)}, received ${String(frame.chunk)}`);
   }
-  state.lastInboundMediaChunk = chunk;
+  state.inboundMediaReorderBuffer.set(frame.chunk, frame);
+  flushTelnyxMediaReorderBuffer(session, state, inputSampleRateHz, maxInboundReorderFrames, false);
+}
+
+function flushTelnyxMediaReorderBuffer(
+  session: VoiceAgentSession,
+  state: TelnyxConnectionState,
+  inputSampleRateHz: number,
+  maxInboundReorderFrames: number,
+  force: boolean,
+): void {
+  while (state.inboundMediaReorderBuffer.size > 0) {
+    const next = state.inboundMediaReorderBuffer.get(state.nextInboundMediaChunk);
+    if (next) {
+      state.inboundMediaReorderBuffer.delete(state.nextInboundMediaChunk);
+      state.nextInboundMediaChunk += 1;
+      emitTelnyxMediaFrame(session, state, next, inputSampleRateHz);
+      continue;
+    }
+
+    if (!force && state.inboundMediaReorderBuffer.size <= maxInboundReorderFrames) break;
+
+    const lowestBufferedChunk = Math.min(...state.inboundMediaReorderBuffer.keys());
+    if (lowestBufferedChunk > state.nextInboundMediaChunk) {
+      session.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: state.contextId,
+        timestampMs: Date.now(),
+        name: "telnyx.media_chunk_gap",
+        value: JSON.stringify({
+          expected: state.nextInboundMediaChunk,
+          actual: lowestBufferedChunk,
+          missed: lowestBufferedChunk - state.nextInboundMediaChunk,
+        }),
+      });
+      state.nextInboundMediaChunk = lowestBufferedChunk;
+      continue;
+    }
+    break;
+  }
+}
+
+function emitTelnyxMediaFrame(
+  session: VoiceAgentSession,
+  state: TelnyxConnectionState,
+  frame: PendingTelnyxMediaFrame,
+  inputSampleRateHz: number,
+): void {
+  rememberTelnyxMediaTimestamp(session, state, frame.timestamp, frame.pcm.length, state.inboundSampleRateHz);
+  const resampled = resamplePcm16(frame.pcm, state.inboundSampleRateHz, inputSampleRateHz);
+  session.bus.push(Route.Main, {
+    kind: "user.audio_received",
+    contextId: state.contextId,
+    timestampMs: Date.now(),
+    audio: pcm16SamplesToBytes(resampled),
+  });
 }
 
 function rememberTelnyxMediaTimestamp(
