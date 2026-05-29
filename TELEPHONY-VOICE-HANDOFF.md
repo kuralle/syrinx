@@ -1,6 +1,9 @@
 # Telephony Voice Handoff
 
-This guide is for live/sandbox phone-to-agent review over carrier websockets.
+This guide covers two phone-to-agent paths over carrier websockets:
+
+- Accepted production-replication run: Mac/local command -> Fly synthetic carrier sandbox -> Fly agent bot -> downloaded recorder/event evidence -> destroyed Fly apps.
+- Provider-account validation: real Twilio, Telnyx, or SmartPBX account setup against the same `review:telephony` server.
 
 ## Start The Server
 
@@ -32,9 +35,11 @@ The server exposes:
 
 `GET /healthz` reports the telephony engine output rate separately from the recorder assistant source rate. Carrier output remains 16 kHz engine PCM before provider encoding, while recorder assistant PCM follows the selected TTS provider (`16 kHz` Cartesia, `24 kHz` Gemini).
 
-Carrier calls require a public TLS endpoint because carrier media streams connect with `wss://`. Use a stable tunnel or deployed host, set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...`, then restart the server.
+Carrier and provider-account calls require a public TLS endpoint because carrier media streams connect with `wss://`. Use a stable tunnel or deployed host, set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...`, then restart the server. The Fly synthetic carrier run provisions both the carrier and bot hosts for you and tears them down after evidence download.
 
 ## Twilio
+
+Twilio's current Media Streams docs define `<Connect><Stream>` as the bidirectional stream form, require `wss://` for the stream URL, receive only the inbound track for bidirectional streams, and use `audio/x-mulaw` / 8 kHz payloads for websocket media. Twilio also documents server-to-Twilio `media`, `mark`, and `clear` messages for bidirectional streams. The adapter follows those provider rules directly.
 
 Point a Twilio Voice webhook or TwiML Bin to:
 
@@ -80,6 +85,8 @@ SYRINX_TWILIO_STATUS_CALLBACK_URL=https://your-public-tls-host.example/twilio/st
 The script calls Twilio's REST API, points the call at `/twilio/twiml`, polls the Call resource until a terminal status, writes `test/performance/runs/twilio-carrier-call-*/baseline.json`, and fails unless Twilio reports final status `completed` with non-zero duration. If polling times out, it completes the call by default to avoid leaving a paid call running. This proves Twilio carrier call setup reached a connected leg; the review server logs and recorder artifacts still need to be inspected to prove media websocket timing, transcript, TTS, marks, and interruption behavior.
 
 ## Telnyx
+
+Telnyx Media Streaming over WebSockets supports bidirectional RTP by setting `stream_bidirectional_mode` to `rtp`; its Call Control dial command exposes `stream_url`, `stream_track`, `stream_bidirectional_codec`, `stream_bidirectional_sampling_rate`, `stream_establish_before_call_originate`, and `send_silence_when_idle`. Telnyx documents bidirectional RTP codecs including PCMU/8 kHz and L16/16 kHz, plus websocket `clear` and `mark` events. The adapter and smoke script stay on those provider fields instead of inventing a separate contract.
 
 Fetch:
 
@@ -129,6 +136,8 @@ The script calls Telnyx `POST /v2/calls` with `stream_url`, `stream_track: both_
 
 ## SmartPBX
 
+SmartPBX validation is based on the SmartPBX AI Provider protocol document supplied for this project. That contract defines the `/media-stream` websocket shape with JSON `start`, `media`, `dtmf`, and `hangup` style events, `callId`/`accountId`, and the media formats below. It does not define Twilio/Telnyx-style playback `mark` or `clear` events.
+
 Configure the SmartPBX AI Provider websocket URL as:
 
 ```text
@@ -141,11 +150,11 @@ Supported SmartPBX media formats:
 - `pcm16` / 24 kHz little-endian
 - `opus` / 48 kHz
 
-SmartPBX documentation provided for this project does not define a playback `clear` event. The adapter clears local queued playout and recorder evidence on barge-in, but live testing still needs to confirm whether SmartPBX has a supported carrier-side playback clear command.
+SmartPBX documentation provided for this project does not define a playback `clear` event. The adapter clears local queued playout and recorder evidence on barge-in and emits internal drain/discard metrics; do not add a carrier-side clear command unless SmartPBX publishes or confirms a supported event.
 
 ## What To Verify
 
-For every live/sandbox call, capture:
+For every Fly synthetic carrier run or provider-account call, capture:
 
 - Provider connection reaches the expected websocket path.
 - `start` arrives before or with first media and validates the expected codec/sample rate.
@@ -183,7 +192,7 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public h
 pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
-The probe validates `/healthz`, `/telephony/config.json`, `/twilio/twiml`, `POST /twilio/status`, `POST /telnyx/webhook`, opens Twilio/Telnyx/SmartPBX-shaped websocket sessions, sends one valid PCMU media frame plus the provider's terminal event, and fails if websocket compression is negotiated. Passing this probe proves public routing, callback routing, and websocket upgrade shape, not a real carrier call.
+The probe validates `/healthz`, `/telephony/config.json`, `/twilio/twiml`, `POST /twilio/status`, `POST /telnyx/webhook`, opens Twilio/Telnyx/SmartPBX-shaped websocket sessions, sends one valid PCMU media frame plus the provider's terminal event, and fails if websocket compression is negotiated. Passing this probe proves public routing, callback routing, and websocket upgrade shape. Use `smoke:fly-synthetic-carrier` for the accepted public-host media run.
 
 ## Disposable Fly Public-TLS Spike
 
@@ -226,7 +235,13 @@ The spike exposed two deployment-only issues that are now fixed: multiple provid
 
 ## Synthetic Carrier-To-Bot Spike
 
-When real Twilio, Telnyx, or SmartPBX carrier accounts are unavailable, run two hosts:
+This is the accepted production-replication run for the current voice-engine hardening goal. It treats a Fly carrier sandbox as the carrier, so the path is:
+
+```text
+Mac/local command -> Fly carrier sandbox -> Fly agent bot -> recorder/event artifacts -> destroy both apps
+```
+
+Run two hosts:
 
 - Bot host: `review:telephony`, serving the real university-support agent and recorder.
 - Carrier host: `review:synthetic-carrier`, acting as the public carrier. It fetches the bot's `/telephony/config.json`, opens the provider-shaped websocket, sends the university fixture as PCMU/8 kHz phone media with optional jitter, captures assistant media back from the bot, and writes carrier-boundary WAV evidence.
@@ -284,7 +299,7 @@ The command creates two disposable Fly apps with generated names:
 - Bot app: `review:telephony`, one `shared-cpu-1x` 1024MB machine, auto-stop enabled.
 - Carrier app: `review:synthetic-carrier`, one `shared-cpu-1x` 1024MB machine, auto-stop enabled.
 
-It stages live provider secrets from `.env` into the bot app, deploys both apps with `--ha=false`, runs Twilio, Telnyx, and SmartPBX shaped calls by default, downloads evidence locally, then destroys both Fly apps in a `finally` block. The summary is written under:
+It stages live provider secrets from `.env` into the bot app, deploys both apps with `--ha=false`, runs Twilio, Telnyx, and SmartPBX shaped calls by default, downloads evidence locally, then destroys both Fly apps in a `finally` block. This is the run to use when real carrier accounts are unavailable; the provider-account sections above validate account setup, not the core engine path. The summary is written under:
 
 ```text
 examples/02-hello-voice-headless/test/performance/runs/fly-synthetic-carrier-*/summary.json
@@ -411,4 +426,12 @@ Each run writes:
 - `whisper/carrier-outbound/carrier-outbound.json`
 - `recorder/<provider>/manifest.json`
 
-Passing this smoke does not prove carrier signaling, TLS, or real provider media timing. It proves the local carrier adapter plus live STT/LLM/TTS/recorder path before a real Twilio/Telnyx/SmartPBX call.
+Passing this smoke does not prove carrier signaling, TLS, or real provider media timing. It proves the local carrier adapter plus live STT/LLM/TTS/recorder path before the Fly synthetic carrier run or a real Twilio/Telnyx/SmartPBX account validation.
+
+## Provider Documentation References
+
+- Twilio `<Stream>` TwiML: https://www.twilio.com/docs/voice/twiml/stream
+- Twilio Media Streams websocket messages: https://www.twilio.com/docs/voice/media-streams/websocket-messages
+- Telnyx Media Streaming over WebSockets: https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming
+- Telnyx Call Control Dial command: https://developers.telnyx.com/api-reference/call-commands/dial
+- SmartPBX AI Provider protocol: supplied project document and example bridge (`ChanakaDev-ai-provider-example-websocket`, version 2026.01.23)
