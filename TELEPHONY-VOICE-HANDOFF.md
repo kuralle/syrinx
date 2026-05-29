@@ -268,7 +268,7 @@ curl -o assistant.wav http://127.0.0.1:4185/telephony/artifacts/<session>/assist
 curl -o events.jsonl http://127.0.0.1:4185/telephony/artifacts/<session>/events.jsonl
 ```
 
-The artifact index includes `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and generated `user_audio.wav` / `assistant_audio.wav` for listening or Whisper transcription. The WAV endpoints are test-server conveniences over recorder PCM; do not expose this artifact API in production.
+The artifact index includes `events.jsonl`, `manifest.json`, `user_audio.pcm`, `assistant_audio.pcm`, and generated `user_audio.wav` / `assistant_audio.wav` for listening or Whisper transcription. The WAV endpoints are test-server conveniences over recorder PCM; `assistant_audio.wav` is generated from the recorder manifest sample rate, so Cartesia and Gemini recordings keep their true output rates. Do not expose this artifact API in production.
 
 Disposable Fly two-host run, preferred:
 
