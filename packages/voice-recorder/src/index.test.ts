@@ -85,7 +85,7 @@ describe("VoiceSessionRecorder", () => {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
-        audio: new Uint8Array([5, 6, 7]),
+        audio: new Uint8Array([5, 6, 7, 8]),
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
@@ -95,7 +95,7 @@ describe("VoiceSessionRecorder", () => {
       await recorder.close();
 
       await expect(readFile(join(dir, "user_audio.pcm"))).resolves.toEqual(Buffer.from([1, 2, 3, 4]));
-      await expect(readFile(join(dir, "assistant_audio.pcm"))).resolves.toEqual(Buffer.from([5, 6, 7]));
+      await expect(readFile(join(dir, "assistant_audio.pcm"))).resolves.toEqual(Buffer.from([5, 6, 7, 8]));
       await expect(stat(join(dir, "events.jsonl"))).resolves.toMatchObject({ size: expect.any(Number) });
       const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Record<string, any>;
       expect(manifest).toMatchObject({
@@ -118,7 +118,7 @@ describe("VoiceSessionRecorder", () => {
             sampleRateHz: 24000,
             encoding: "pcm_s16le",
             channels: 1,
-            byteLength: 3,
+            byteLength: 4,
             chunks: 1,
             truncations: 0,
           },
@@ -128,6 +128,24 @@ describe("VoiceSessionRecorder", () => {
           byteLength: expect.any(Number),
         },
       });
+    });
+  });
+
+  it("rejects odd-byte PCM16 audio before writing misleading recorder artifacts", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir });
+
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3]),
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await expect(recorder.close()).rejects.toThrow("record.assistant_audio audio must contain an even number of PCM16 bytes");
     });
   });
 

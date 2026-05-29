@@ -154,8 +154,8 @@ export class VoiceSessionRecorder implements VoicePlugin {
 
     await this.flushAssistantAudio();
     await this.waitForPendingWrites();
-    if (this.writeFailure) throw this.writeFailure;
-    await this.writeManifest();
+    const writeFailure = this.writeFailure;
+    if (!writeFailure) await this.writeManifest();
 
     await Promise.all([
       closeWriteStream(this.events),
@@ -182,6 +182,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.pendingWrites.clear();
     this.writeFailure = null;
     this.closing = false;
+    if (writeFailure) throw writeFailure;
   }
 
   private async recordPackets(): Promise<void> {
@@ -219,6 +220,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
 
   private recordUserAudio(packet: RecordUserAudioPacket): void {
     if (packet.audio.byteLength === 0) return;
+    if (!this.validatePcm16ByteLength(packet.kind, packet.audio)) return;
     this.userAudioChunks += 1;
     this.userAudioBytes += packet.audio.byteLength;
     this.writeStreamData(this.userAudio, packet.audio);
@@ -232,6 +234,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     }
     const audio = packet.audio;
     if (audio.byteLength === 0) return;
+    if (!this.validatePcm16ByteLength(packet.kind, audio)) return;
     const byteOffset = this.assistantChunks.length === 0
       ? 0
       : Math.max(this.assistantCursorBytes, this.currentAssistantWallOffsetBytes());
@@ -351,6 +354,12 @@ export class VoiceSessionRecorder implements VoicePlugin {
       this.pendingWrites.delete(writePromise);
     });
     this.pendingWrites.add(writePromise);
+  }
+
+  private validatePcm16ByteLength(kind: string, audio: Uint8Array): boolean {
+    if (audio.byteLength % 2 === 0) return true;
+    this.writeFailure = new Error(`${kind} audio must contain an even number of PCM16 bytes`);
+    return false;
   }
 
   private async waitForPendingWrites(): Promise<void> {
