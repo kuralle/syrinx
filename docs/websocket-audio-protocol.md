@@ -15,6 +15,7 @@ The server sends a `ready` message after session startup:
   "turnId": "turn-...",
   "resumed": false,
   "resumeWindowMs": 15000,
+  "maxSessionDurationMs": 1800000,
   "audio": {
     "inputSampleRateHz": 16000,
     "outputSampleRateHz": 16000,
@@ -127,6 +128,7 @@ Speech and transcript lifecycle:
 Browser websocket defaults:
 
 - Heartbeat ping interval: 30 seconds.
+- Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. Set `maxSessionDurationMs: 0` only for an explicitly managed embedding.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
 - Inbound message ceiling: 2 MiB, close code `1009`.
 - Resume retention window: 15 seconds.
@@ -182,6 +184,7 @@ Twilio remains provider-specific at the adapter boundary:
 Twilio adapter defaults:
 
 - Heartbeat ping interval: 30 seconds.
+- Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path clears queued playout and recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
 - Inbound message ceiling: 256 KiB, close code `1009`.
 - Queued outbound playout ceiling: 30,000 ms, close code `1013`.
@@ -213,6 +216,7 @@ Outbound Telnyx `media`, `mark`, and `clear` commands follow Telnyx's client-to-
 Telnyx adapter defaults:
 
 - Heartbeat ping interval: 30 seconds.
+- Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path drains inbound reorder state and clears queued playout/recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
 - Inbound message ceiling: 256 KiB, close code `1009`.
 - Queued outbound playout ceiling: 30,000 ms, close code `1013`.
@@ -249,6 +253,7 @@ The supplied SmartPBX contract used by this adapter also does not define inbound
 SmartPBX adapter defaults:
 
 - Heartbeat ping interval: 30 seconds.
+- Max session duration: 30 minutes, close code `1000` with reason `websocket max session duration exceeded`. The normal disconnect cleanup path clears queued local playout and recorder evidence.
 - Outbound buffered send ceiling: 8 MiB, close code `1013`.
 - Inbound message ceiling: 256 KiB, close code `1009`.
 - Queued outbound playout ceiling: 30,000 ms, close code `1013`.

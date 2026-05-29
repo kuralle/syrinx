@@ -12,6 +12,7 @@ import {
 } from "@asyncdot/voice";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { startWebSocketHeartbeat, startWebSocketMaxSessionDuration } from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 
 export interface TwilioMediaStreamServerOptions {
@@ -27,6 +28,7 @@ export interface TwilioMediaStreamServerOptions {
   readonly outboundFrameDurationMs?: number;
   readonly maxQueuedOutputAudioMs?: number;
   readonly heartbeatIntervalMs?: number;
+  readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
 }
@@ -91,6 +93,7 @@ const DEFAULT_TWILIO_SAMPLE_RATE_HZ = 8000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
 const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
 const MULAW_BIAS = 0x84;
@@ -110,6 +113,7 @@ export async function createTwilioMediaStreamServer(
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
   const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
 
@@ -126,6 +130,7 @@ export async function createTwilioMediaStreamServer(
       outboundFrameDurationMs,
       maxQueuedOutputAudioMs,
       heartbeatIntervalMs,
+      maxSessionDurationMs,
       maxBufferedAmountBytes,
       maxInboundMessageBytes,
     });
@@ -177,6 +182,7 @@ async function handleTwilioConnection(args: {
   readonly outboundFrameDurationMs: number;
   readonly maxQueuedOutputAudioMs: number;
   readonly heartbeatIntervalMs: number;
+  readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
 }): Promise<void> {
@@ -192,6 +198,7 @@ async function handleTwilioConnection(args: {
     outboundFrameDurationMs,
     maxQueuedOutputAudioMs,
     heartbeatIntervalMs,
+    maxSessionDurationMs,
     maxBufferedAmountBytes,
     maxInboundMessageBytes,
   } = args;
@@ -286,6 +293,7 @@ async function handleTwilioConnection(args: {
       return;
     }
     startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers);
+    startWebSocketMaxSessionDuration(socket, maxSessionDurationMs, disposers);
     clearPendingPlayout = wireTwilioSessionEvents({
       session,
       socket,
@@ -822,30 +830,4 @@ function sendTwilioJson(socket: WebSocket, value: unknown, maxBufferedAmountByte
   }
   socket.send(data);
   return true;
-}
-
-function startWebSocketHeartbeat(
-  socket: WebSocket,
-  heartbeatIntervalMs: number,
-  disposers: Array<() => void>,
-): void {
-  if (heartbeatIntervalMs <= 0) return;
-  let alive = true;
-  const onPong = () => {
-    alive = true;
-  };
-  socket.on("pong", onPong);
-  const interval = setInterval(() => {
-    if (socket.readyState !== WebSocket.OPEN) return;
-    if (!alive) {
-      socket.terminate();
-      return;
-    }
-    alive = false;
-    socket.ping();
-  }, heartbeatIntervalMs);
-  disposers.push(() => {
-    clearInterval(interval);
-    socket.off("pong", onPong);
-  });
 }

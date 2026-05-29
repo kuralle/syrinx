@@ -151,6 +151,7 @@ describe("createVoiceWebSocketServer", () => {
     const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
     expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
     expect(ready.sessionId).toMatch(/^session-/);
+    expect(ready.maxSessionDurationMs).toBe(30 * 60_000);
     expect(ready.audio).toMatchObject({
       inputSampleRateHz: 16000,
       outputSampleRateHz: 16000,
@@ -1176,6 +1177,36 @@ describe("createVoiceWebSocketServer", () => {
     await expect(ping).resolves.toBeUndefined();
 
     client.close();
+    await server.close();
+  });
+
+  it("closes browser websocket sessions that exceed maxSessionDurationMs", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const closeSpy = vi.spyOn(session, "close");
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      maxSessionDurationMs: 10,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.once("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    await expect(closed).resolves.toEqual({
+      code: 1000,
+      reason: "websocket max session duration exceeded",
+    });
+    await vi.waitFor(() => {
+      expect(closeSpy).toHaveBeenCalled();
+    });
+
     await server.close();
   });
 
