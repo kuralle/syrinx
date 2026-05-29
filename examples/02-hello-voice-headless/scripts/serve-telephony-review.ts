@@ -141,13 +141,7 @@ function handleHttpRequest(args: {
   const publicWs = args.publicWsBaseUrl ?? publicHttp.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
 
   if (url.pathname === "/healthz") {
-    sendJson(response, 200, {
-      ok: true,
-      ttsProvider: args.ttsProvider,
-      inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
-      assistantSampleRateHz: ASSISTANT_SAMPLE_RATE_HZ,
-      recordingDir: relative(PKG_ROOT, args.recordingDir),
-    });
+    sendJson(response, 200, telephonyReviewHealthPayload(args.ttsProvider, args.recordingDir));
     return;
   }
 
@@ -222,6 +216,24 @@ function handleHttpRequest(args: {
   }
 
   sendJson(response, 404, { error: "not_found" });
+}
+
+export function telephonyReviewHealthPayload(
+  ttsProvider: UniversitySupportTtsProvider,
+  recordingDir: string,
+): Record<string, unknown> {
+  return {
+    ok: true,
+    ttsProvider,
+    inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+    engineOutputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+    recorderAssistantSampleRateHz: expectedTtsProviderSampleRateHz(ttsProvider),
+    recordingDir: relative(PKG_ROOT, recordingDir),
+  };
+}
+
+function expectedTtsProviderSampleRateHz(ttsProvider: UniversitySupportTtsProvider): number {
+  return ttsProvider === "cartesia" ? 16000 : 24000;
 }
 
 function carrierConfig(publicHttp: string, publicWs: string): Record<string, unknown> {
