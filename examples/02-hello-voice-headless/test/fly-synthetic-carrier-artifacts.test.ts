@@ -48,6 +48,15 @@ describe("Fly synthetic carrier artifact validation", () => {
       "telnyx bot manifest audio.assistant.durationMs 1 did not match 200 from byte count/sample rate",
     );
   });
+
+  it("rejects contradictory carrier quality gate evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "twilio", { qualityGateFailures: ["carrier outbound audio was empty"] });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("twilio qualityGate.passed cannot be true when qualityGate.failures is non-empty");
+  });
 });
 
 async function writeProviderEvidence(
@@ -57,6 +66,7 @@ async function writeProviderEvidence(
     readonly omitEvents?: boolean;
     readonly carrierSampleRateHz?: number;
     readonly recorderAssistantDurationMs?: number;
+    readonly qualityGateFailures?: string[];
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -132,7 +142,7 @@ async function writeProviderEvidence(
     providers: [
       {
         provider,
-        callResult: callResult(provider),
+        callResult: callResult(provider, options.qualityGateFailures),
         botArtifacts: options.omitEvents
           ? [
               `${botBase}/assistant_audio.pcm`,
@@ -164,7 +174,7 @@ async function writeProviderEvidence(
   };
 }
 
-function callResult(provider: "twilio" | "telnyx" | "smartpbx"): Record<string, unknown> {
+function callResult(provider: "twilio" | "telnyx" | "smartpbx", qualityGateFailures: string[] = []): Record<string, unknown> {
   return {
     provider,
     carrier: {
@@ -178,7 +188,7 @@ function callResult(provider: "twilio" | "telnyx" | "smartpbx"): Record<string, 
       outboundQuietDrains: provider === "smartpbx" ? 1 : 0,
       localPlayoutDrains: 0,
     },
-    qualityGate: { passed: true, failures: [] },
+    qualityGate: { passed: true, failures: qualityGateFailures },
   };
 }
 
