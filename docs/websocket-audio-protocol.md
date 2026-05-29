@@ -42,7 +42,7 @@ The server keeps the underlying `VoiceAgentSession` alive during the retention w
 
 The server accepts frames immediately after WebSocket connection and buffers bounded early input until `ready`. Clients should still wait for `ready` before streaming microphone audio so they know the negotiated audio contract and `turnId`, but a fast client sending a small frame after `open` will not silently lose it during session startup. If pending pre-ready input exceeds `maxInboundMessageBytes`, the server closes with code `1009`.
 
-Clients can send JSON audio frames:
+Clients can send JSON audio frames. `sampleRateHz` is required; the server rejects JSON audio that does not declare its source rate.
 
 ```json
 {
@@ -54,9 +54,9 @@ Clients can send JSON audio frames:
 }
 ```
 
-The server validates strict base64, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames on the websocket connection. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream. If a JSON frame includes `sequence`, it must be a non-negative integer that increases over the websocket input stream. Duplicate or regressing sequence values are rejected before audio reaches the engine; forward gaps are accepted but emit a `websocket.audio_sequence_gap` metric with expected, actual, and missed frame counts.
+The server validates strict base64, requires a positive-integer `sampleRateHz`, requires PCM16 payloads to have an even byte length, and resamples from `sampleRateHz` to `inputSampleRateHz` before pushing `user.audio_received` into the engine. A single `contextId` must keep one source `sampleRateHz` for all audio frames on the websocket connection. A new turn/context may declare a different source rate, but changing rates inside the same context is rejected as invalid transport input instead of being silently stitched into one STT stream. If a JSON frame includes `sequence`, it must be a non-negative integer that increases over the websocket input stream. Duplicate or regressing sequence values are rejected before audio reaches the engine; forward gaps are accepted but emit a `websocket.audio_sequence_gap` metric with expected, actual, and missed frame counts.
 
-The supplied browser review console sends microphone audio as `syrinx.audio.v1` binary envelopes by default, not JSON base64. JSON audio frames remain supported for scripted clients and compatibility.
+The supplied browser review console sends microphone audio as `syrinx.audio.v1` binary envelopes by default, not JSON base64. JSON audio frames remain supported for scripted clients when they carry explicit source-rate metadata.
 
 Clients can send raw binary PCM16 at the advertised input sample rate only when the server is configured with `rawBinaryInput: true`. Production clients should prefer JSON audio frames or `syrinx.audio.v1` envelopes so the transport can validate turn, source sample rate, sequence, byte length, and duration metadata before audio reaches VAD/STT.
 

@@ -74,7 +74,7 @@ type ClientMessage =
       readonly type: "audio";
       readonly audio: string;
       readonly contextId?: string;
-      readonly sampleRateHz?: number;
+      readonly sampleRateHz: number;
       readonly sequence?: number;
     }
   | { readonly type: "ping" };
@@ -595,7 +595,7 @@ function handleClientMessage(
     if (nextContextId !== currentContextId) {
       pushTurnChange(session, nextContextId, currentContextId, "websocket_audio_turn");
     }
-    const sourceSampleRateHz = positiveInteger(message.sampleRateHz) ?? inputSampleRateHz;
+    const sourceSampleRateHz = requiredJsonAudioSampleRate(message.sampleRateHz);
     rememberContextSampleRate(contextSampleRates, nextContextId, sourceSampleRateHz);
     rememberInputSequence(session, inputSequence, nextContextId, optionalSequence(message.sequence));
     session.bus.push(Route.Main, {
@@ -755,6 +755,12 @@ function optionalSequence(value: unknown): number | undefined {
   const sequence = nonNegativeInteger(value);
   if (sequence === null) throw new Error("Websocket audio sequence must be a non-negative integer");
   return sequence;
+}
+
+function requiredJsonAudioSampleRate(value: unknown): number {
+  const sampleRateHz = positiveInteger(value);
+  if (sampleRateHz === null) throw new Error("JSON websocket audio sampleRateHz must be a positive integer");
+  return sampleRateHz;
 }
 
 function sessionIdFromRequest(request: IncomingMessage): string | null {
