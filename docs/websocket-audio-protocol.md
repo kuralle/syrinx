@@ -94,7 +94,7 @@ Required invariants:
 - `encoding`, when present, must be `pcm_s16le`.
 - `channels`, when present, must be `1`.
 - `sequence`, when present, must be a non-negative integer.
-- `durationMs`, when present, must be a non-negative integer.
+- `durationMs`, when present, must be a non-negative integer and match the PCM16 payload duration computed from `byteLength` and `sampleRateHz`, allowing only rounding tolerance.
 - `byteLength`, when present, must exactly match the binary payload length.
 - PCM16 payload byte length must be even after envelope decode.
 - All audio frames for one `contextId` on a websocket connection must use the same source sample rate.

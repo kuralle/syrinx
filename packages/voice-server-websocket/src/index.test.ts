@@ -1112,6 +1112,53 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("rejects enveloped audio with inconsistent duration metadata", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-envelope",
+      sampleRateHz: 16000,
+      encoding: "pcm_s16le",
+      channels: 1,
+      byteLength: 640,
+      durationMs: 200,
+    }, new Uint8Array(640)));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Syrinx binary audio envelope durationMs does not match payload and sampleRateHz",
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("wraps outgoing assistant audio in the binary audio envelope by default", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = await createVoiceWebSocketServer({

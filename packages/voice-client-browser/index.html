@@ -849,8 +849,21 @@
         if (headerLength <= 0 || headerEnd > bytes.byteLength) throw new Error("invalid Syrinx audio envelope");
         const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(headerStart, headerEnd)));
         const audioBytes = bytes.subarray(headerEnd);
+        if (metadata.type !== "audio") throw new Error("Syrinx audio envelope type must be audio");
+        if (!Number.isInteger(metadata.sampleRateHz) || metadata.sampleRateHz <= 0) {
+          throw new Error("Syrinx audio envelope sampleRateHz must be a positive integer");
+        }
+        if (audioBytes.byteLength % 2 !== 0) {
+          throw new Error("Syrinx audio envelope PCM16 payload must contain an even number of bytes");
+        }
         if (typeof metadata.byteLength === "number" && metadata.byteLength !== audioBytes.byteLength) {
           throw new Error("Syrinx audio envelope byteLength mismatch");
+        }
+        if (typeof metadata.durationMs === "number") {
+          const expectedDurationMs = Math.round((audioBytes.byteLength / 2 / metadata.sampleRateHz) * 1000);
+          if (Math.abs(metadata.durationMs - expectedDurationMs) > 1) {
+            throw new Error("Syrinx audio envelope durationMs mismatch");
+          }
         }
         return {
           audio: audioBytes.buffer.slice(audioBytes.byteOffset, audioBytes.byteOffset + audioBytes.byteLength),

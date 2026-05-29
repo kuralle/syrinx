@@ -76,8 +76,17 @@ export function decodeSyrinxAudioEnvelope(data: Uint8Array): SyrinxAudioEnvelope
   }
 
   const audio = data.subarray(headerEnd);
+  if (audio.byteLength % 2 !== 0) {
+    throw new Error("Syrinx binary audio envelope PCM16 payload must contain an even number of bytes");
+  }
   if (header.byteLength !== undefined && header.byteLength !== audio.byteLength) {
     throw new Error("Syrinx binary audio envelope byteLength does not match payload");
+  }
+  if (header.durationMs !== undefined) {
+    const expectedDurationMs = Math.round((audio.byteLength / 2 / header.sampleRateHz) * 1000);
+    if (Math.abs(header.durationMs - expectedDurationMs) > 1) {
+      throw new Error("Syrinx binary audio envelope durationMs does not match payload and sampleRateHz");
+    }
   }
 
   return { header, audio };
