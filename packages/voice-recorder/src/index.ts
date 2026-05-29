@@ -321,6 +321,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
         byteLength: this.eventBytes,
       },
     };
+    assertVoiceSessionRecorderManifest(manifest);
     await writeFile(files.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   }
 
@@ -398,6 +399,45 @@ export function createVoiceSessionRecorder(config: VoiceSessionRecorderConfig): 
   return new VoiceSessionRecorderWithDefaultConfig(config);
 }
 
+export function assertVoiceSessionRecorderManifest(manifest: VoiceSessionRecorderManifest): void {
+  const failures = validateVoiceSessionRecorderManifest(manifest);
+  if (failures.length > 0) {
+    throw new Error(`Invalid recorder manifest: ${failures.join("; ")}`);
+  }
+}
+
+export function validateVoiceSessionRecorderManifest(manifest: VoiceSessionRecorderManifest): string[] {
+  const failures: string[] = [];
+  if (manifest.schemaVersion !== 1) failures.push(`expected schemaVersion 1, got ${String(manifest.schemaVersion)}`);
+  if (!isNonNegativeInteger(manifest.startedAtMs)) failures.push("startedAtMs must be a non-negative integer");
+  if (!isNonNegativeInteger(manifest.closedAtMs)) failures.push("closedAtMs must be a non-negative integer");
+  if (
+    isNonNegativeInteger(manifest.startedAtMs)
+    && isNonNegativeInteger(manifest.closedAtMs)
+    && manifest.closedAtMs < manifest.startedAtMs
+  ) {
+    failures.push("closedAtMs must be greater than or equal to startedAtMs");
+  }
+  validateRecorderFiles(manifest.files, failures);
+  validateRecorderAudio("audio.user", manifest.audio.user, failures);
+  validateRecorderAudio("audio.assistant", manifest.audio.assistant, failures);
+  if (!isNonNegativeInteger(manifest.audio.assistant.truncations)) {
+    failures.push("audio.assistant.truncations must be a non-negative integer");
+  }
+  if (manifest.audio.user.path !== manifest.files.userAudioPath) {
+    failures.push("audio.user.path must match files.userAudioPath");
+  }
+  if (manifest.audio.assistant.path !== manifest.files.assistantAudioPath) {
+    failures.push("audio.assistant.path must match files.assistantAudioPath");
+  }
+  if (manifest.events.path !== manifest.files.eventsPath) {
+    failures.push("events.path must match files.eventsPath");
+  }
+  if (!isNonNegativeInteger(manifest.events.packets)) failures.push("events.packets must be a non-negative integer");
+  if (!isNonNegativeInteger(manifest.events.byteLength)) failures.push("events.byteLength must be a non-negative integer");
+  return failures;
+}
+
 class VoiceSessionRecorderWithDefaultConfig extends VoiceSessionRecorder {
   constructor(private readonly defaultConfig: VoiceSessionRecorderConfig) {
     super();
@@ -447,9 +487,43 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function pcm16DurationMs(byteLength: number, sampleRateHz: number): number {
   if (sampleRateHz <= 0) return 0;
   return Math.round((byteLength / 2 / sampleRateHz) * 1000);
+}
+
+function validateRecorderFiles(files: VoiceSessionRecorderFiles, failures: string[]): void {
+  for (const [key, value] of Object.entries(files) as Array<[keyof VoiceSessionRecorderFiles, string]>) {
+    if (typeof value !== "string" || value.length === 0) {
+      failures.push(`files.${key} must be a non-empty string`);
+    }
+  }
+}
+
+function validateRecorderAudio(
+  label: string,
+  audio: VoiceSessionRecorderManifest["audio"]["user"] | VoiceSessionRecorderManifest["audio"]["assistant"],
+  failures: string[],
+): void {
+  if (!isPositiveInteger(audio.sampleRateHz)) failures.push(`${label}.sampleRateHz must be a positive integer`);
+  if (audio.encoding !== "pcm_s16le") failures.push(`${label}.encoding must be pcm_s16le`);
+  if (audio.channels !== 1) failures.push(`${label}.channels must be 1`);
+  if (!isNonNegativeInteger(audio.byteLength)) failures.push(`${label}.byteLength must be a non-negative integer`);
+  if (isNonNegativeInteger(audio.byteLength) && audio.byteLength % 2 !== 0) {
+    failures.push(`${label}.byteLength must contain an even number of PCM16 bytes`);
+  }
+  if (!isNonNegativeInteger(audio.durationMs)) failures.push(`${label}.durationMs must be a non-negative integer`);
+  if (!isNonNegativeInteger(audio.chunks)) failures.push(`${label}.chunks must be a non-negative integer`);
+  if (isPositiveInteger(audio.sampleRateHz) && isNonNegativeInteger(audio.byteLength)) {
+    const expectedDurationMs = pcm16DurationMs(audio.byteLength, audio.sampleRateHz);
+    if (audio.durationMs !== expectedDurationMs) {
+      failures.push(`${label}.durationMs ${String(audio.durationMs)} did not match ${String(expectedDurationMs)} from byte count/sample rate`);
+    }
+  }
 }
 
 function sanitizePacket(packet: VoicePacket): Record<string, unknown> {
