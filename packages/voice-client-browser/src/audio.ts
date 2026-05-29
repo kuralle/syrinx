@@ -22,6 +22,7 @@ export interface SyrinxAudioJsonFrame {
   readonly audio: string;
   readonly sampleRateHz: number;
   readonly contextId?: string;
+  readonly sequence?: number;
 }
 
 export interface BrowserAssistantAudio {
@@ -65,6 +66,7 @@ export function encodeBrowserAudioFrame(input: Float32Array, options: EncodeBrow
   return {
     type: "audio",
     contextId: options.contextId,
+    sequence: options.sequence,
     sampleRateHz: targetRate,
     audio: bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)),
   };

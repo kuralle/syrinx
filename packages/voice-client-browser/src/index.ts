@@ -132,7 +132,10 @@ export class SyrinxBrowserClient {
       : new Uint8Array(audio);
     if (bytes.byteLength % 2 !== 0) throw new Error("PCM16 audio payload must contain an even number of bytes");
     const sampleRate = readPositiveSampleRate(sampleRateHz);
-    this.requireOpenSocket().send(encodeBrowserPcmEnvelope(bytes, sampleRate, options));
+    this.requireOpenSocket().send(encodeBrowserPcmEnvelope(bytes, sampleRate, {
+      ...options,
+      sequence: this.nextAudioSequence(options.sequence),
+    }));
   }
 
   sendAudioBase64(
@@ -140,11 +143,17 @@ export class SyrinxBrowserClient {
     sampleRateHz: number,
     options: { readonly contextId?: string; readonly sequence?: number } = {},
   ): void {
-    this.sendJson({ type: "audio", audio, sampleRateHz, contextId: options.contextId, sequence: options.sequence });
+    this.sendJson({
+      type: "audio",
+      audio,
+      sampleRateHz,
+      contextId: options.contextId,
+      sequence: this.nextAudioSequence(options.sequence),
+    });
   }
 
   sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
-    const sequence = options.sequence ?? (this.audioSequence += 1);
+    const sequence = this.nextAudioSequence(options.sequence);
     this.requireOpenSocket().send(encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }));
   }
 
@@ -180,6 +189,16 @@ export class SyrinxBrowserClient {
       throw new Error("SyrinxBrowserClient WebSocket is not open");
     }
     return this.socket;
+  }
+
+  private nextAudioSequence(sequence: number | undefined): number {
+    if (sequence !== undefined) {
+      if (!Number.isInteger(sequence) || sequence < 0) throw new Error("audio sequence must be a non-negative integer");
+      this.audioSequence = Math.max(this.audioSequence, sequence);
+      return sequence;
+    }
+    this.audioSequence += 1;
+    return this.audioSequence;
   }
 
   private emit(event: SyrinxBrowserClientEvent): void {
