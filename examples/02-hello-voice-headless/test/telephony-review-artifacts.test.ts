@@ -8,7 +8,10 @@ import {
   readRecorderPcmSampleRateHz,
   telephonyReviewHealthPayload,
 } from "../scripts/serve-telephony-review.js";
-import { readRecorderAssistantSampleRateHz } from "../scripts/run-live-university-recorder-coherence.js";
+import {
+  readRecorderAssistantSampleRateHz,
+  readValidatedRecorderManifest,
+} from "../scripts/run-live-university-recorder-coherence.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "syrinx-telephony-review-"));
@@ -60,6 +63,23 @@ describe("telephony review recorder artifacts", () => {
       },
       events: { packets: 1 },
     })).toBe(24000);
+  });
+
+  it("validates live recorder manifests before they drive review artifacts", async () => {
+    await withTempDir(async (dir) => {
+      const manifestPath = join(dir, "manifest.json");
+      await writeFile(manifestPath, `${JSON.stringify({
+        schemaVersion: 1,
+        audio: {
+          assistant: {
+            sampleRateHz: 24000,
+          },
+        },
+      })}\n`);
+
+      expect(() => readValidatedRecorderManifest(manifestPath))
+        .toThrow("Invalid recorder manifest");
+    });
   });
 
   it("refuses to infer assistant WAV sample rate without recorder manifest evidence", async () => {
