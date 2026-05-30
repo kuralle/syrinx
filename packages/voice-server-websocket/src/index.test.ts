@@ -1693,4 +1693,42 @@ describe("createVoiceWebSocketServer", () => {
 
     await server.close();
   });
+
+  it("records a send_after_close metric and does not throw when tts.audio arrives after socket closes", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const serverSocket = [...server.wsServer.clients][0]!;
+
+    // terminate() sets readyState to CLOSING synchronously; the 'close' event (and disposer cleanup) fires asynchronously
+    serverSocket.terminate();
+
+    // Push tts.audio while the bus handler is still registered but socket is no longer OPEN — must not throw
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-test",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(32),
+      sampleRateHz: 16000,
+    });
+
+    // Allow the close event to propagate
+    await new Promise<void>((resolve) => client.once("close", resolve));
+
+    expect(metrics.some((m) => m.name === "websocket.send_after_close")).toBe(true);
+
+    await server.close();
+  });
 });

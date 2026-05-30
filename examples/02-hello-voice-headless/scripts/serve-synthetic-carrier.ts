@@ -74,7 +74,7 @@ interface SyntheticCallOptions {
 
 let latestRunDir = "";
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   ensureRepoRootDotenv();
   await ensureGeminiUniversityFixtures();
 

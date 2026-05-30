@@ -34,7 +34,7 @@ interface TelephonyReviewServer {
   readonly close: () => Promise<void>;
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
   const ttsProvider = inferTtsProvider();

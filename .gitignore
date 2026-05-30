@@ -5,3 +5,10 @@ dist/
 .DS_Store
 test-cartesia-output.pcm
 examples/02-hello-voice-headless/test/performance/runs/
+
+# Reliability-hardening research scratch (parsed copyrighted PDF, raw delegated worker dumps, Fly logs)
+research-notes/
+
+# Delegation + worker scratch (not deliverables)
+.handoff/
+.antigravitycli/

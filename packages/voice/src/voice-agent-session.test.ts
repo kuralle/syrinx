@@ -14,13 +14,16 @@ import type {
   LlmResponseDonePacket,
   TextToSpeechDonePacket,
   TextToSpeechAudioPacket,
+  TextToSpeechEndPacket,
   TextToSpeechTextPacket,
   InterruptTtsPacket,
+  VadSpeechEndedPacket,
   UserAudioReceivedPacket,
   UserInputPacket,
   VadAudioPacket,
   ModeSwitchCompletedPacket,
   VadSpeechStartedPacket,
+  VadSpeechActivityPacket,
 } from "./packets.js";
 
 class CapturingPlugin implements VoicePlugin {
@@ -712,7 +715,8 @@ describe("VoiceAgentSession", () => {
 
   it("stops assistant audio output within 50ms of VAD barge-in", async () => {
     const tts = new InterruptAwareStreamingTtsPlugin();
-    const session = new VoiceAgentSession({ plugins: { tts: {} } });
+    // Gate disabled: this test exercises the immediate-cut path latency.
+    const session = new VoiceAgentSession({ plugins: { tts: {} }, minInterruptionMs: 0 });
     const recordedAtMs: number[] = [];
     const interrupts: InterruptTtsPacket[] = [];
 
@@ -764,8 +768,345 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
-  it("tells the recorder to truncate queued assistant audio on barge-in", async () => {
+  it("commits a barge-in only after user speech is sustained past minInterruptionMs", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    // Assistant is speaking.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    // Activity below threshold — no interrupt yet.
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 100,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(interrupts).toEqual([]);
+
+    // Activity past threshold — interrupt commits.
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+    expect(metrics).toContain("interrupt.committed_after_ms");
+
+    await closeSession(session);
+  });
+
+  it("suppresses a short speech blip during playback without interrupting the agent", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 90,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    // Speech ends before sustaining past the gate — a blip (cough / click / "mhm").
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "user",
+      timestampMs: t0 + 130,
+    } satisfies VadSpeechEndedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_short_speech");
+
+    await closeSession(session);
+  });
+
+  it("emits vaqi.latency_ms once per turn from user stop to first assistant audio", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: Array<{ name: string; value: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const m = pkt as unknown as { name: string; value: string };
+      if (m.name === "vaqi.latency_ms") metrics.push({ name: m.name, value: m.value });
+    });
+
+    const userStoppedMs = 1000;
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-1",
+      timestampMs: userStoppedMs,
+    } satisfies VadSpeechEndedPacket);
+
+    const firstAudioMs = 1350;
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: firstAudioMs,
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+
+    // Second audio packet for same turn — must NOT emit a second latency metric.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: firstAudioMs + 50,
+      audio: new Uint8Array([5, 6, 7, 8]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(metrics).toEqual([{ name: "vaqi.latency_ms", value: "350" }]);
+
+    await closeSession(session);
+  });
+
+  it("emits vaqi.interruption and interrupt.latency_ms when a barge-in is committed via the gate", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 200 });
+    const metrics: Array<{ name: string; value: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const m = pkt as unknown as { name: string; value: string };
+      if (m.name === "vaqi.interruption" || m.name === "interrupt.latency_ms") {
+        metrics.push({ name: m.name, value: m.value });
+      }
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = 5000;
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(metrics).toContainEqual({ name: "vaqi.interruption", value: "1" });
+    expect(metrics).toContainEqual({ name: "interrupt.latency_ms", value: "300" });
+
+    await closeSession(session);
+  });
+
+  it("emits vaqi.interruption immediately when the interruption gate is disabled", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const metrics: Array<{ name: string; value: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const m = pkt as unknown as { name: string; value: string };
+      if (m.name === "vaqi.interruption") metrics.push({ name: m.name, value: m.value });
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge-in",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(metrics).toEqual([{ name: "vaqi.interruption", value: "1" }]);
+
+    await closeSession(session);
+  });
+
+  it("emits vaqi.missed_response when no assistant audio arrives within the window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const session = new VoiceAgentSession({
+      plugins: {},
+      vaqiMissedResponseMs: 2000,
+    });
+    const metrics: Array<{ name: string; value: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const m = pkt as unknown as { name: string; value: string };
+      if (m.name === "vaqi.missed_response") metrics.push({ name: m.name, value: m.value });
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "vad.speech_ended",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+      } satisfies VadSpeechEndedPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(metrics).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(metrics).toHaveLength(1);
+      expect(metrics[0]!.name).toBe("vaqi.missed_response");
+      expect(Number(metrics[0]!.value)).toBeGreaterThanOrEqual(2000);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
+  });
+
+  it("cancels vaqi.missed_response timer on session close to avoid leaks", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      vaqiMissedResponseMs: 30,
+    });
+    const metrics: Array<{ name: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const m = pkt as unknown as { name: string };
+      if (m.name === "vaqi.missed_response") metrics.push({ name: m.name });
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+    } satisfies VadSpeechEndedPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await session.close();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(metrics).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("does not fire a stale barge-in if the assistant finishes during the gate window", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    // Assistant finishes speaking before the user's speech sustains past the gate.
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: t0 + 50,
+    } satisfies TextToSpeechEndPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.gate_resolved_after_tts_end");
+
+    await closeSession(session);
+  });
+
+  it("tells the recorder to truncate queued assistant audio on barge-in", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
     const recorded: RecordAssistantAudioPacket[] = [];
 
     await session.start();
@@ -808,7 +1149,7 @@ describe("VoiceAgentSession", () => {
   });
 
   it("does not reopen TTS from late LLM or TTS packets after barge-in", async () => {
-    const session = new VoiceAgentSession({ plugins: {} });
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
     const ttsText: TextToSpeechTextPacket[] = [];
     const ttsDone: TextToSpeechDonePacket[] = [];
     const recorded: RecordAssistantAudioPacket[] = [];

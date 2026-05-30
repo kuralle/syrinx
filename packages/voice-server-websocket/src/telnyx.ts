@@ -409,6 +409,14 @@ function wireTelnyxSessionEvents(args: {
   }, (discardedMs) => {
     state.stopped = true;
     recordDiscardedPlayout(discardedMs, "send_buffer");
+  }, (lateMs) => {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.pacer_deadline_miss",
+      value: String(lateMs),
+    });
   });
   const sendPendingEndMark = (): void => {
     if (state.stopped || !state.streamId || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
@@ -446,7 +454,17 @@ function wireTelnyxSessionEvents(args: {
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
-      if (state.stopped || !state.streamId || socket.readyState !== WebSocket.OPEN) return;
+      if (state.stopped || !state.streamId) return;
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: audioPacket.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
+      }
       const payload = encodeOutboundPayload(audioPacket.audio, requireTtsAudioSampleRate(audioPacket.sampleRateHz), state, outboundFrameDurationMs);
       const frames: PacedPlayoutFrame[] = payload.map((frame) => ({
         send: () => {
