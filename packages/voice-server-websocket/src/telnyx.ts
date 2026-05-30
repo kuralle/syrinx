@@ -20,6 +20,13 @@ import {
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
+  optionalRecord,
+  optionalString,
+  optionalStringOrNumber,
+  parseJsonRecord,
+  requiredString,
+} from "./json-message.js";
+import {
   WebSocketStartupTimeoutError,
   startWebSocketHeartbeat,
   startWebSocketMaxSessionDuration,
@@ -508,7 +515,7 @@ function handleTelnyxMessage(args: {
   readonly onStop: () => void;
 }): void {
   const { session, data, state, contextId, inputSampleRateHz, maxInboundReorderFrames, onStop } = args;
-  const message = JSON.parse(rawDataToText(data)) as TelnyxMediaMessage;
+  const message = parseTelnyxMessage(parseJsonRecord(rawDataToText(data), "Telnyx Media Streaming message"));
   const event = message.event;
   rememberTelnyxSequenceNumber(session, state, message.sequence_number);
 
@@ -568,6 +575,45 @@ function handleTelnyxMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Telnyx Media Streaming event: ${String(event)}`);
+}
+
+function parseTelnyxMessage(value: Record<string, unknown>): TelnyxMediaMessage {
+  const start = optionalRecord(value.start, "Telnyx start");
+  const media = optionalRecord(value.media, "Telnyx media");
+  const mark = optionalRecord(value.mark, "Telnyx mark");
+  const mediaFormat = optionalRecord(start?.media_format, "Telnyx start.media_format");
+  return {
+    event: requiredString(value.event, "Telnyx event"),
+    stream_id: optionalString(value.stream_id, "Telnyx stream_id"),
+    sequence_number: optionalString(value.sequence_number, "Telnyx sequence_number"),
+    start: start
+      ? {
+          stream_id: optionalString(start.stream_id, "Telnyx start.stream_id"),
+          call_control_id: optionalString(start.call_control_id, "Telnyx start.call_control_id"),
+          call_session_id: optionalString(start.call_session_id, "Telnyx start.call_session_id"),
+          media_format: mediaFormat
+            ? {
+                encoding: optionalString(mediaFormat.encoding, "Telnyx start.media_format.encoding"),
+                sample_rate: optionalStringOrNumber(mediaFormat.sample_rate, "Telnyx start.media_format.sample_rate"),
+                channels: optionalStringOrNumber(mediaFormat.channels, "Telnyx start.media_format.channels"),
+              }
+            : undefined,
+        }
+      : undefined,
+    media: media
+      ? {
+          payload: optionalString(media.payload, "Telnyx media.payload"),
+          track: optionalString(media.track, "Telnyx media.track"),
+          chunk: optionalString(media.chunk, "Telnyx media.chunk"),
+          timestamp: optionalString(media.timestamp, "Telnyx media.timestamp"),
+        }
+      : undefined,
+    mark: mark
+      ? {
+          name: optionalString(mark.name, "Telnyx mark.name"),
+        }
+      : undefined,
+  };
 }
 
 function rememberTelnyxSequenceNumber(

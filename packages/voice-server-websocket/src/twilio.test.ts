@@ -539,6 +539,43 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("rejects malformed Twilio JSON media envelopes before forwarding audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createTwilioMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
+    client.send(JSON.stringify(twilioStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      streamSid: "MZ-test-stream",
+      media: "not an object",
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "syrinx_error",
+      error: {
+        component: "transport",
+        category: "invalid_input",
+        message: "Twilio media must be a JSON object",
+      },
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("treats Twilio stop as a terminal stream boundary", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];

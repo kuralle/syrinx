@@ -18,6 +18,7 @@ import {
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import {
   WebSocketStartupTimeoutError,
   startWebSocketHeartbeat,
@@ -581,8 +582,7 @@ function handleClientMessage(
     return nextContextId;
   }
 
-  const text = rawDataToText(data);
-  const message = parseClientMessage(JSON.parse(text));
+  const message = parseClientMessage(parseJsonRecord(rawDataToText(data), "Websocket JSON message"));
   if (message.type === "ping") return currentContextId;
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
@@ -623,14 +623,14 @@ function parseClientMessage(value: unknown): ClientMessage {
   if (type === "text") {
     return {
       type,
-      text: requiredString(value.text, "text"),
+      text: requiredString(value.text, "Websocket JSON text"),
       contextId: optionalContextId(value.contextId),
     };
   }
   if (type === "audio") {
     return {
       type,
-      audio: requiredString(value.audio, "audio"),
+      audio: requiredString(value.audio, "Websocket JSON audio"),
       contextId: optionalContextId(value.contextId),
       sampleRateHz: requiredJsonAudioSampleRate(value.sampleRateHz),
       sequence: optionalSequence(value.sequence),
@@ -639,23 +639,8 @@ function parseClientMessage(value: unknown): ClientMessage {
   throw new Error("Unsupported client message type");
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requiredString(value: unknown, fieldName: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Websocket JSON ${fieldName} must be a non-empty string`);
-  }
-  return value;
-}
-
 function optionalContextId(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error("Websocket JSON contextId must be a non-empty string");
-  }
-  return value;
+  return optionalString(value, "Websocket JSON contextId");
 }
 
 function rememberInputSequence(

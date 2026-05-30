@@ -21,6 +21,13 @@ import {
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
+  optionalRecord,
+  optionalString,
+  optionalStringOrNumber,
+  parseJsonRecord,
+  requiredString,
+} from "./json-message.js";
+import {
   WebSocketStartupTimeoutError,
   startWebSocketHeartbeat,
   startWebSocketMaxSessionDuration,
@@ -449,7 +456,7 @@ function handleSmartPbxMessage(args: {
   readonly onStop: () => void;
 }): void {
   const { session, data, state, contextId, inputSampleRateHz, onStop } = args;
-  const message = JSON.parse(rawDataToText(data)) as SmartPbxMessage;
+  const message = parseSmartPbxMessage(parseJsonRecord(rawDataToText(data), "SmartPBX AI Provider message"));
 
   if (message.event === "connected") return;
   if (message.event === "start") {
@@ -495,6 +502,35 @@ function handleSmartPbxMessage(args: {
   }
   if (message.event === "dtmf") return;
   throw new Error(`Unsupported SmartPBX AI Provider event: ${String(message.event)}`);
+}
+
+function parseSmartPbxMessage(value: Record<string, unknown>): SmartPbxMessage {
+  const start = optionalRecord(value.start, "SmartPBX start");
+  const media = optionalRecord(value.media, "SmartPBX media");
+  const mediaFormat = optionalRecord(start?.mediaFormat, "SmartPBX start.mediaFormat");
+  return {
+    event: requiredString(value.event, "SmartPBX event"),
+    start: start
+      ? {
+          callId: optionalString(start.callId, "SmartPBX start.callId"),
+          otherLegCallId: optionalString(start.otherLegCallId, "SmartPBX start.otherLegCallId"),
+          callerIdNumber: optionalString(start.callerIdNumber, "SmartPBX start.callerIdNumber"),
+          calleeIdNumber: optionalString(start.calleeIdNumber, "SmartPBX start.calleeIdNumber"),
+          accountId: optionalString(start.accountId, "SmartPBX start.accountId"),
+          mediaFormat: mediaFormat
+            ? {
+                encoding: optionalString(mediaFormat.encoding, "SmartPBX start.mediaFormat.encoding"),
+                sampleRate: optionalStringOrNumber(mediaFormat.sampleRate, "SmartPBX start.mediaFormat.sampleRate"),
+              }
+            : undefined,
+        }
+      : undefined,
+    media: media
+      ? {
+          payload: optionalString(media.payload, "SmartPBX media.payload"),
+        }
+      : undefined,
+  };
 }
 
 function validateSmartPbxStart(start: SmartPbxStartPayload): { readonly codec: SmartPbxCodec; readonly sampleRateHz: number } {

@@ -13,6 +13,13 @@ import {
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
+  optionalRecord,
+  optionalString,
+  optionalStringOrNumber,
+  parseJsonRecord,
+  requiredString,
+} from "./json-message.js";
+import {
   WebSocketStartupTimeoutError,
   startWebSocketHeartbeat,
   startWebSocketMaxSessionDuration,
@@ -521,7 +528,7 @@ function handleTwilioMessage(args: {
   readonly onStop: () => void;
 }): void {
   const { session, data, state, contextId, inputSampleRateHz, twilioSampleRateHz, onStop } = args;
-  const message = JSON.parse(rawDataToText(data)) as TwilioMediaMessage;
+  const message = parseTwilioMessage(parseJsonRecord(rawDataToText(data), "Twilio Media Streams message"));
   const event = message.event;
   rememberTwilioSequenceNumber(session, state, message.sequenceNumber);
 
@@ -581,6 +588,44 @@ function handleTwilioMessage(args: {
   if (event === "dtmf") return;
 
   throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
+}
+
+function parseTwilioMessage(value: Record<string, unknown>): TwilioMediaMessage {
+  const start = optionalRecord(value.start, "Twilio start");
+  const media = optionalRecord(value.media, "Twilio media");
+  const mark = optionalRecord(value.mark, "Twilio mark");
+  const mediaFormat = optionalRecord(start?.mediaFormat, "Twilio start.mediaFormat");
+  return {
+    event: requiredString(value.event, "Twilio event"),
+    streamSid: optionalString(value.streamSid, "Twilio streamSid"),
+    sequenceNumber: optionalString(value.sequenceNumber, "Twilio sequenceNumber"),
+    start: start
+      ? {
+          streamSid: optionalString(start.streamSid, "Twilio start.streamSid"),
+          callSid: optionalString(start.callSid, "Twilio start.callSid"),
+          mediaFormat: mediaFormat
+            ? {
+                encoding: optionalString(mediaFormat.encoding, "Twilio start.mediaFormat.encoding"),
+                sampleRate: optionalStringOrNumber(mediaFormat.sampleRate, "Twilio start.mediaFormat.sampleRate"),
+                channels: optionalStringOrNumber(mediaFormat.channels, "Twilio start.mediaFormat.channels"),
+              }
+            : undefined,
+        }
+      : undefined,
+    media: media
+      ? {
+          payload: optionalString(media.payload, "Twilio media.payload"),
+          track: optionalString(media.track, "Twilio media.track"),
+          chunk: optionalString(media.chunk, "Twilio media.chunk"),
+          timestamp: optionalString(media.timestamp, "Twilio media.timestamp"),
+        }
+      : undefined,
+    mark: mark
+      ? {
+          name: optionalString(mark.name, "Twilio mark.name"),
+        }
+      : undefined,
+  };
 }
 
 function rememberTwilioSequenceNumber(
