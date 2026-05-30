@@ -128,6 +128,8 @@ Speech and transcript lifecycle:
 - `agent_chunk`
 - `agent_end`
 
+The browser client library validates server JSON events before dispatching them to application handlers. Unknown event types, malformed required strings, invalid numeric timing fields, malformed `ready.audio` contracts, and malformed `tts_chunk` metadata are emitted as client errors rather than typed timeline events.
+
 ## Transport Guards
 
 Browser websocket defaults:
