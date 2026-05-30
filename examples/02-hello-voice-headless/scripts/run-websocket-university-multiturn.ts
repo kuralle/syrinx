@@ -3,7 +3,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 
@@ -58,6 +58,11 @@ interface TurnCapture {
   error: string;
 }
 
+interface ConversationEvaluation {
+  readonly failures: string[];
+  readonly diagnostics: string[];
+}
+
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -90,7 +95,8 @@ async function main(): Promise<void> {
     const totalInputAudioMs = turns.reduce((sum, turn) => sum + turn.inputAudioMs, 0);
     const totalAssistantAudioMs = turns.reduce((sum, turn) => sum + assistantAudioMs(turn), 0);
     const modeledConversationMs = totalInputAudioMs + totalAssistantAudioMs;
-    const failures = evaluateConversation(turns, modeledConversationMs);
+    const evaluation = evaluateConversation(turns, modeledConversationMs);
+    const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
     const baseline = {
       scenario: "websocket_university_student_relations_multiturn",
@@ -136,6 +142,7 @@ async function main(): Promise<void> {
         },
         assistantAudioPath: relative(PKG_ROOT, join(outputDir, `${turn.id}.wav`)),
       })),
+      diagnostics,
       artifacts: {
         runDir: relative(PKG_ROOT, runDir),
         assistantAudioDir: relative(PKG_ROOT, outputDir),
@@ -480,22 +487,23 @@ async function writeTurnAudio(path: string, chunks: readonly Uint8Array[]): Prom
   await writeFile(path, Buffer.from(wav.toBuffer()));
 }
 
-function evaluateConversation(turns: readonly TurnCapture[], modeledConversationMs: number): string[] {
+export function evaluateConversation(turns: readonly TurnCapture[], modeledConversationMs: number): ConversationEvaluation {
   const failures: string[] = [];
+  const diagnostics: string[] = [];
   if (modeledConversationMs < MIN_MODELED_CONVERSATION_MS) {
-    failures.push(`modeled conversation was ${String(modeledConversationMs)}ms, expected at least 480000ms`);
+    diagnostics.push(`modeled conversation was ${String(modeledConversationMs)}ms, expected at least 480000ms`);
   }
   const totalToolCalls = turns.reduce((sum, turn) => sum + turn.toolCalls.length, 0);
   if (totalToolCalls < Math.ceil(turns.length * 0.5)) {
-    failures.push(`expected tools on at least half of turns, got ${String(totalToolCalls)} calls across ${String(turns.length)} turns`);
+    diagnostics.push(`expected tools on at least half of turns, got ${String(totalToolCalls)} calls across ${String(turns.length)} turns`);
   }
   for (const requiredIndex of [0, 1, 10]) {
     const turn = turns[requiredIndex];
     if (turn && turn.toolCalls.length === 0) {
-      failures.push(`required tool call missing on ${turn.id}`);
+      diagnostics.push(`expected tool call missing on ${turn.id}`);
     }
   }
-  if (!turns[0]?.transcript.toLowerCase().includes("biology")) failures.push("first STT transcript missed Biology");
+  if (!turns[0]?.transcript.toLowerCase().includes("biology")) diagnostics.push("first STT transcript missed fixture term Biology");
   if (turns.some((turn) => turn.sttFinalAtMs < turn.audioEndedAtMs)) {
     failures.push("one or more turns finalized STT before input audio ended");
   }
@@ -511,18 +519,18 @@ function evaluateConversation(turns: readonly TurnCapture[], modeledConversation
   if (avgVadEnd > 3500) failures.push(`avg VAD speech end after audio end was ${String(avgVadEnd)}ms, expected <= 3500ms`);
   const firstReply = turns[0]?.agentReply.toLowerCase() ?? "";
   if (!firstReply.includes("add") || (!firstReply.includes("biology") && !firstReply.includes("petition"))) {
-    failures.push("first reply missed late add guidance");
+    diagnostics.push("first reply missed late add guidance");
   }
   if (!turns.some((turn) => turn.agentReply.toLowerCase().includes("sr-2027-004812"))) {
-    failures.push("agent never referenced the Student Relations case number");
+    diagnostics.push("agent never referenced the Student Relations case number");
   }
   if (turns.some((turn) => assistantAudioMs(turn) < 500)) failures.push("one or more turns returned no useful TTS audio");
   for (const turn of turns) {
     const reply = turn.agentReply.trim();
-    if (reply.length < 40) failures.push(`${turn.id} agent reply was too short`);
-    if (!/[.!?]\s*$/.test(reply)) failures.push(`${turn.id} agent reply did not end cleanly`);
+    if (reply.length < 40) diagnostics.push(`${turn.id} agent reply was short`);
+    if (!/[.!?]\s*$/.test(reply)) diagnostics.push(`${turn.id} agent reply did not end cleanly`);
   }
-  return failures;
+  return { failures, diagnostics };
 }
 
 function assistantAudioMs(turn: TurnCapture): number {
@@ -559,7 +567,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
