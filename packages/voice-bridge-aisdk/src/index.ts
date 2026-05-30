@@ -71,10 +71,16 @@ export class AISDKBridgePlugin implements VoicePlugin {
 
     // Listen for EOS turn completions
     this.disposers.push(
+      // Concurrent producer: a turn's LLM generation streams its own packets over
+      // (potentially) several seconds. Running it fire-and-forget keeps the pipeline
+      // bus drain loop free, so the llm.delta -> tts.text streaming it produces is
+      // dispatched as it arrives (not deferred until generation ends), and Critical
+      // interrupts are handled promptly mid-generation. processTurn supersedes any
+      // still-in-flight generation (see below).
       bus.on("eos.turn_complete", async (pkt: unknown) => {
         const eos = pkt as { text: string; contextId: string };
         await this.processTurn(eos.text, eos.contextId);
-      }),
+      }, { concurrent: true }),
 
       // Listen for LLM interrupts
       bus.on("interrupt.llm", () => {
@@ -87,6 +93,9 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private async processTurn(userText: string, contextId: string): Promise<void> {
     if (!this.bus) return;
 
+    // Handlers are concurrent, so a new turn can begin while a prior generation is
+    // still in flight. Supersede it: abort the previous controller before starting.
+    this.abortController?.abort();
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 

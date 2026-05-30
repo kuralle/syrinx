@@ -34,10 +34,20 @@ export interface PipelineBus {
   /** Push one or more packets into a priority route. */
   push<T extends readonly VoicePacket[]>(route: Route, ...packets: T): void;
 
-  /** Register a handler for a specific packet kind. Returns unsubscribe function. */
+  /**
+   * Register a handler for a specific packet kind. Returns unsubscribe function.
+   *
+   * By default handlers are awaited in registration order (consumer semantics — the
+   * handler's state mutations are visible to the next packet's handlers). Pass
+   * `{ concurrent: true }` for a long-running PRODUCER handler (e.g. an LLM-generation
+   * loop that emits its own packets over time): it is dispatched fire-and-forget so it
+   * does not park the drain loop and defer subsequent Main packets / Critical interrupts
+   * behind it. Concurrent handler errors are surfaced as `pipeline.error`, like async packets.
+   */
   on<T extends VoicePacket>(
     kind: T["kind"],
     handler: PacketHandler<T>,
+    opts?: { concurrent?: boolean },
   ): () => void;
 
   /** Start draining the bus. Resolves when stop() is called and final drain completes. */
@@ -85,6 +95,7 @@ export class PipelineBusImpl implements PipelineBus {
   private main: VoicePacket[] = [];
   private background: VoicePacket[] = [];
   private handlers = new Map<string, Set<PacketHandler>>();
+  private concurrentHandlers = new Set<PacketHandler>();
   private running = false;
   private resolver: (() => void) | null = null;
   private drainedCount = 0;
@@ -160,6 +171,7 @@ export class PipelineBusImpl implements PipelineBus {
   on<T extends VoicePacket>(
     kind: T["kind"],
     handler: PacketHandler<T>,
+    opts?: { concurrent?: boolean },
   ): () => void {
     let set = this.handlers.get(kind);
     if (!set) {
@@ -168,8 +180,10 @@ export class PipelineBusImpl implements PipelineBus {
     }
     const h = handler as PacketHandler;
     set.add(h);
+    if (opts?.concurrent) this.concurrentHandlers.add(h);
     return () => {
       set!.delete(h);
+      this.concurrentHandlers.delete(h);
       if (set!.size === 0) {
         this.handlers.delete(kind);
       }
@@ -306,25 +320,42 @@ export class PipelineBusImpl implements PipelineBus {
       return;
     }
 
-    // Sync packets: await each handler in order
+    // Sync packets: await each consumer handler in registration order. Concurrent
+    // (producer) handlers are fired fire-and-forget so a long-running handler does
+    // not park the drain loop and defer subsequent Main/Critical packets behind it.
     for (const h of matches) {
+      const handler = h as PacketHandler;
+      if (this.concurrentHandlers.has(handler)) {
+        void (async () => {
+          try {
+            await handler(pkt);
+          } catch (err) {
+            this.emitHandlerError(pkt, err);
+          }
+        })();
+        continue;
+      }
       try {
-        await (h as PacketHandler)(pkt);
+        await handler(pkt);
       } catch (err) {
-        // Handler error → emit PipelineErrorPacket on Critical
-        const errorPkt: PipelineErrorPacket = {
-          kind: "pipeline.error",
-          contextId: pkt.contextId,
-          timestampMs: Date.now(),
-          component: "pipeline",
-          category: ErrorCategory.InternalFault,
-          cause: err instanceof Error ? err : new Error(String(err)),
-          isRecoverable: true,
-        };
-        this.push(Route.Critical, errorPkt);
-        // Continue processing other handlers — don't abort the bus
+        // Handler error → emit PipelineErrorPacket on Critical.
+        // Continue processing other handlers — don't abort the bus.
+        this.emitHandlerError(pkt, err);
       }
     }
+  }
+
+  private emitHandlerError(pkt: VoicePacket, err: unknown): void {
+    const errorPkt: PipelineErrorPacket = {
+      kind: "pipeline.error",
+      contextId: pkt.contextId,
+      timestampMs: Date.now(),
+      component: "pipeline",
+      category: ErrorCategory.InternalFault,
+      cause: err instanceof Error ? err : new Error(String(err)),
+      isRecoverable: true,
+    };
+    this.push(Route.Critical, errorPkt);
   }
 
   /** Synchronous dispatch for drain-on-stop. Swallows errors. */

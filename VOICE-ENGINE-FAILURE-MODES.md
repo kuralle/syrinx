@@ -46,7 +46,7 @@ P (priority) = Severity × Frequency, adjusted for blast radius.
 |---|-----|-------|-----|------|---------------------------|---|
 | G1 | **✅ SHIPPED — False barge-in** — raw VAD speech-start instantly interrupted; no min-duration/backchannel guard | capture/playback | High | High | `voice/src/voice-agent-session.ts` (gated) | **P0 done** |
 | G2 | **Interrupted-turn history divergence** — on playback barge-in, history keeps the FULL generated text though only part was heard (see corrected analysis below) | reasoning | High | High | `voice-bridge-aisdk/src/index.ts:154` | **P0** |
-| G10 | **Bus head-of-line blocking** — drain loop awaits long sync handlers; during slow LLM generation, VAD/interrupt packets queue until it returns | transport/core | Med | Med | `voice/src/pipeline-bus.ts:191-194,309-312` | **P1** |
+| G10 | **✅ SHIPPED — Bus head-of-line blocking** — `PipelineBus.on()` now supports a per-handler `{concurrent}` opt-in; the bridge runs generation as a concurrent producer so the drain loop is never parked (LLM→TTS streams during generation; interrupts handled promptly) | transport/core | Med | Med | `voice/src/pipeline-bus.ts` + `voice-bridge-aisdk` + repro/sim | **P1 done** |
 | G11 | **✅ SHIPPED — Periodic Silero VAD state reset mid-speech** — now gated on `!this.speaking` so the RNN state is never zeroed mid-utterance (only at silence) | capture | High | Med | `voice-vad-silero/src/index.ts` (gated + 2 tests) | **P1 done** |
 | G3 | **No mid-turn STT/TTS stall watchdog** — only LLM has idle timeout; silent provider stall → dead air | transcription/synthesis | High | Low-Med | `withStreamIdleTimeout` only at `voice-bridge-aisdk/src/index.ts:100` | **P1** |
 | G4 | **No graceful degradation / provider fallback** — any provider failure fails the turn (no failover/canned audio) | all | Med-High | Low-Med | absent (cf. LiveKit `*/fallback_adapter.py`) | **P1** |
@@ -195,7 +195,19 @@ no-op + metric, not a throw.
 
 ---
 
-### G10 — Bus head-of-line blocking on long sync handlers  ·  P1  ·  transport/core  *(found during G2 investigation)*
+### G10 — Bus head-of-line blocking on long sync handlers  ·  ✅ SHIPPED  ·  transport/core
+**Shipped (2026-05-30).** Repro harness (`voice/src/pipeline-bus.g10.test.ts`): (1) a bus-level test proving a Critical
+interrupt is not dispatched while a slow sync Main handler runs, and (2) a session-level **production simulation** with a
+streaming LLM bridge — which quantified the bug: all `tts.text` arrived **batched at 383 ms, after** generation ended
+(370 ms), i.e. TTS could not start until the *entire* LLM response was generated. Fix: `PipelineBus.on()` gained a
+per-handler `{ concurrent: true }` opt-in — consumer handlers stay awaited in order (state-mutation ordering preserved),
+while a PRODUCER handler (the AI-SDK bridge's `eos.turn_complete` generation) is dispatched fire-and-forget so it never
+parks the drain loop. The bridge registers generation concurrent and supersedes any still-in-flight generation
+(`abortController?.abort()` before starting a new turn). Both harness tests flip GREEN; full suite green (no regression to
+the interruption-suppression / barge-in invariants); live 3-turn interactive smoke passed end-to-end. Result: LLM→TTS
+streams during generation, and barge-in is processed promptly mid-generation.
+
+**Original analysis (kept for context).**
 **Problem.** `PipelineBus.start()` drains one packet at a time and **awaits each sync-packet handler** before continuing
 (`pipeline-bus.ts:191-194` → `dispatch` `:309-312`). The bridge's `eos.turn_complete` handler `await`s the whole LLM
 generation, so for the duration of generation the drain loop is parked: VAD `speech_started`, `interrupt.*`, and even
