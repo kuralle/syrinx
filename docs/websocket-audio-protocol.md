@@ -175,7 +175,7 @@ The probe checks the HTTP setup endpoints, Twilio/Telnyx callback endpoints, and
 
 Twilio remains provider-specific at the adapter boundary:
 
-- Accept JSON text frames only.
+- Accept JSON text frames only, with provider event envelopes validated as JSON objects before nested media/start/mark fields are read.
 - Validate top-level Twilio `sequenceNumber` when present. Duplicate or regressing sequence numbers are rejected; forward gaps emit `twilio.sequence_gap` metrics.
 - Validate `start.mediaFormat` as PCMU, 8 kHz, mono.
 - Decode inbound `media.payload` from strict base64 PCMU to PCM16.
@@ -206,7 +206,7 @@ Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless rev
 
 Telnyx remains provider-specific at the adapter boundary:
 
-- Accept JSON text frames only.
+- Accept JSON text frames only, with provider event envelopes validated as JSON objects before nested media/start/mark fields are read.
 - Validate top-level Telnyx `sequence_number` when present. Forward gaps emit `telnyx.sequence_gap`; duplicate or regressing sequence numbers emit `telnyx.sequence_regression` because Telnyx does not guarantee websocket event order.
 - Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
 - Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
@@ -246,7 +246,7 @@ Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless rev
 
 SmartPBX remains provider-specific at the adapter boundary:
 
-- Accept JSON text frames only.
+- Accept JSON text frames only, with provider event envelopes validated as JSON objects before nested start/media fields are read.
 - Receive lifecycle events as `start`, `media`, `dtmf`, and `hangup` (`stop` is accepted for compatibility with the supplied example bridge).
 - Validate `start.mediaFormat` as `g711_ulaw`/8 kHz, `pcm16`/24 kHz, or `opus`/48 kHz.
 - Decode strict-base64 inbound `media.payload`, treating `pcm16` as little-endian PCM and `opus` as 48 kHz mono Opus frames, then resample into the engine input sample rate.

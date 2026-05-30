@@ -1039,6 +1039,42 @@ describe("createTelnyxMediaStreamServer", () => {
     await server.close();
   });
 
+  it("rejects malformed Telnyx JSON media envelopes before forwarding audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "error");
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: "not an object",
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      event: "error",
+      payload: {
+        title: "syrinx_transport_error",
+        detail: "Telnyx media must be a JSON object",
+      },
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("sends heartbeat pings to Telnyx websocket peers", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = await createTelnyxMediaStreamServer({

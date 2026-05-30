@@ -441,6 +441,31 @@ describe("createSmartPbxMediaStreamServer", () => {
     await server.close();
   });
 
+  it("rejects malformed SmartPBX JSON media envelopes before forwarding audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    const client = await openSocket(smartPbxUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
+
+    client.send(JSON.stringify(smartPbxStart()));
+    client.send(JSON.stringify({ event: "media", media: "not an object" }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      error: { message: "SmartPBX media must be a JSON object" },
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("treats SmartPBX hangup as a terminal stream boundary", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
