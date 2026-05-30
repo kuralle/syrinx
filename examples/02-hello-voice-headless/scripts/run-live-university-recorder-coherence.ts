@@ -74,6 +74,11 @@ interface TurnRecordingArtifact {
   readonly assistantDurationMs: number;
 }
 
+interface RecorderCoherenceEvaluation {
+  readonly failures: string[];
+  readonly diagnostics: string[];
+}
+
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -132,7 +137,8 @@ async function main(): Promise<void> {
     transcribeWithLocalWhisper(recorderAssistantWav, whisperDir, "recorder-assistant"),
   ]);
 
-  const failures = evaluateQuality(turns, recorderManifest, whisperUser.text, whisperAssistant.text);
+  const evaluation = evaluateQuality(turns, recorderManifest, whisperUser.text, whisperAssistant.text);
+  const { failures, diagnostics } = evaluation;
   const baseline = {
     scenario: "live_university_recorder_three_turn_coherence",
     generatedAt,
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
       turnRecordings,
       manifest: recorderManifest,
     },
+    diagnostics,
     artifacts: {
       runDir: relative(PKG_ROOT, runDir),
       whisperUserJsonPath: relative(PKG_ROOT, whisperUser.jsonPath),
@@ -373,20 +380,21 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
   );
 }
 
-function evaluateQuality(
+export function evaluateQuality(
   turns: readonly TurnCapture[],
   recorderManifest: VoiceSessionRecorderManifest,
   recorderUserTranscript: string,
   recorderAssistantTranscript: string,
-): string[] {
+): RecorderCoherenceEvaluation {
   const failures: string[] = [];
+  const diagnostics: string[] = [];
   if (turns.length !== TURN_COUNT) failures.push(`expected ${TURN_COUNT} turns, got ${turns.length}`);
   for (const turn of turns) {
-    if (turn.toolCalls.length === 0) failures.push(`${turn.id} did not call studentRelationsLookup`);
+    if (turn.toolCalls.length === 0) diagnostics.push(`${turn.id} did not call studentRelationsLookup`);
     if (turn.assistantAudioBytes <= 0) failures.push(`${turn.id} produced no assistant audio`);
     if (!turn.spokenReply.trim()) failures.push(`${turn.id} produced no TTS text`);
     if (turn.spokenReply.trim() && !/[.!?]\s*$/.test(turn.spokenReply.trim())) {
-      failures.push(`${turn.id} TTS text did not end cleanly`);
+      diagnostics.push(`${turn.id} TTS text did not end cleanly`);
     }
   }
   if (!recorderUserTranscript.trim()) failures.push("recorder user Whisper transcript is empty");
@@ -417,7 +425,7 @@ function evaluateQuality(
     if (turn.assistantAudioChunks.length <= 0) failures.push(`${turn.id} recorder assistant slice is empty`);
   }
   if (recorderManifest.events.packets <= 0) failures.push("recorder events file is empty");
-  return failures;
+  return { failures, diagnostics };
 }
 
 export function readValidatedRecorderManifest(path: string): VoiceSessionRecorderManifest {
