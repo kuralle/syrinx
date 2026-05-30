@@ -5,7 +5,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket from "ws";
 import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
@@ -26,7 +26,7 @@ const REPO_ROOT = resolve(SCRIPT_DIR, "../../..");
 const REVIEW_HTML = join(REPO_ROOT, "packages", "voice-client-browser", "index.html");
 const RUNS_DIR = join(PKG_ROOT, "test", "performance", "runs");
 
-interface BrowserSmokeResult {
+export interface BrowserSmokeResult {
   readonly ok: boolean;
   readonly readySessionId?: string;
   readonly audioContextSampleRateHz?: number;
@@ -288,7 +288,11 @@ async function waitForReceivedAudio(received: readonly UserAudioReceivedPacket[]
   throw new Error("Timed out waiting for browser websocket audio packets");
 }
 
-function evaluate(result: BrowserSmokeResult, received: readonly UserAudioReceivedPacket[], receiveError: string): string[] {
+export function evaluate(
+  result: BrowserSmokeResult,
+  received: readonly UserAudioReceivedPacket[],
+  receiveError: string,
+): string[] {
   const failures: string[] = [];
   if (!result.ok) failures.push(`browser reported failure: ${result.error ?? "unknown"}`);
   if (receiveError) failures.push(receiveError);
@@ -318,6 +322,13 @@ function evaluate(result: BrowserSmokeResult, received: readonly UserAudioReceiv
   }
   if (!result.sentBytes || result.sentBytes <= 0) failures.push("browser sent no PCM bytes");
   if (received.length < 2) failures.push(`server received too few audio packets: ${String(received.length)}`);
+  if (result.sentFrames !== undefined && received.length !== result.sentFrames) {
+    failures.push(`server received ${String(received.length)} audio packets, browser sent ${String(result.sentFrames)}`);
+  }
+  const receivedBytes = received.reduce((sum, pkt) => sum + pkt.audio.byteLength, 0);
+  if (result.sentBytes !== undefined && receivedBytes !== result.sentBytes) {
+    failures.push(`server received ${String(receivedBytes)} PCM bytes, browser sent ${String(result.sentBytes)}`);
+  }
   const contextIds = result.contextIds ?? [];
   if (!result.startedTurns || result.startedTurns < 1) {
     failures.push(`browser allocated unexpected turn count: ${String(result.startedTurns)}`);
@@ -407,7 +418,9 @@ function pcm16SamplesToBytes(samples: Int16Array): Uint8Array {
   return new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
 }
 
-void main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
