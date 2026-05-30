@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { evaluateQuality as evaluateRecorderCoherence } from "../scripts/run-live-university-recorder-coherence.js";
 import { evaluateConversation as evaluateInteractiveConversation } from "../scripts/run-websocket-university-interactive.js";
 import { evaluateConversation as evaluateMultiturnConversation } from "../scripts/run-websocket-university-multiturn.js";
 
@@ -74,5 +75,114 @@ describe("websocket smoke quality gates", () => {
     expect(evaluation.diagnostics).toContain("agent never referenced the Student Relations case number");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply did not end cleanly");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply was short");
+  });
+
+  it("keeps live recorder tool and TTS punctuation checks diagnostic", () => {
+    const evaluation = evaluateRecorderCoherence([
+      {
+        id: "live-turn-01",
+        fixtureId: "fixture-1",
+        inputText: "expected fixture text",
+        inputAudioMs: 1000,
+        userRecorderOffsetBytes: 0,
+        userRecorderByteLength: 32000,
+        audioEndedAtMs: 1000,
+        speechEndedAtMs: 1200,
+        sttFinalAtMs: 1400,
+        firstAgentAtMs: 1600,
+        firstAudioAtMs: 1900,
+        ttsEndedAtMs: 2200,
+        sttTranscript: "hello",
+        agentReply: "ok",
+        spokenReply: "spoken reply",
+        toolCalls: [],
+        assistantAudioBytes: 48000,
+        assistantAudioChunks: [new Uint8Array(48000)],
+        error: "",
+      },
+      {
+        id: "live-turn-02",
+        fixtureId: "fixture-2",
+        inputText: "expected fixture text",
+        inputAudioMs: 1000,
+        userRecorderOffsetBytes: 32000,
+        userRecorderByteLength: 32000,
+        audioEndedAtMs: 1000,
+        speechEndedAtMs: 1200,
+        sttFinalAtMs: 1400,
+        firstAgentAtMs: 1600,
+        firstAudioAtMs: 1900,
+        ttsEndedAtMs: 2200,
+        sttTranscript: "hello",
+        agentReply: "ok",
+        spokenReply: "spoken reply.",
+        toolCalls: ["studentRelationsLookup"],
+        assistantAudioBytes: 48000,
+        assistantAudioChunks: [new Uint8Array(48000)],
+        error: "",
+      },
+      {
+        id: "live-turn-03",
+        fixtureId: "fixture-3",
+        inputText: "expected fixture text",
+        inputAudioMs: 1000,
+        userRecorderOffsetBytes: 64000,
+        userRecorderByteLength: 32000,
+        audioEndedAtMs: 1000,
+        speechEndedAtMs: 1200,
+        sttFinalAtMs: 1400,
+        firstAgentAtMs: 1600,
+        firstAudioAtMs: 1900,
+        ttsEndedAtMs: 2200,
+        sttTranscript: "hello",
+        agentReply: "ok",
+        spokenReply: "spoken reply.",
+        toolCalls: ["studentRelationsLookup"],
+        assistantAudioBytes: 48000,
+        assistantAudioChunks: [new Uint8Array(48000)],
+        error: "",
+      },
+    ], {
+      schemaVersion: 1,
+      startedAtMs: 0,
+      closedAtMs: 1,
+      files: {
+        directory: "/tmp/session",
+        eventsPath: "/tmp/session/events.jsonl",
+        userAudioPath: "/tmp/session/user_audio.pcm",
+        assistantAudioPath: "/tmp/session/assistant_audio.pcm",
+        manifestPath: "/tmp/session/manifest.json",
+      },
+      audio: {
+        user: {
+          path: "/tmp/session/user_audio.pcm",
+          sampleRateHz: 16000,
+          encoding: "pcm_s16le",
+          channels: 1,
+          byteLength: 96000,
+          durationMs: 3000,
+          chunks: 3,
+        },
+        assistant: {
+          path: "/tmp/session/assistant_audio.pcm",
+          sampleRateHz: 24000,
+          encoding: "pcm_s16le",
+          channels: 1,
+          byteLength: 144000,
+          durationMs: 3000,
+          chunks: 3,
+          truncations: 0,
+        },
+      },
+      events: {
+        path: "/tmp/session/events.jsonl",
+        packets: 1,
+        byteLength: 1,
+      },
+    }, "user whisper", "assistant whisper");
+
+    expect(evaluation.failures).toStrictEqual([]);
+    expect(evaluation.diagnostics).toContain("live-turn-01 did not call studentRelationsLookup");
+    expect(evaluation.diagnostics).toContain("live-turn-01 TTS text did not end cleanly");
   });
 });
