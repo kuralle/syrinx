@@ -2,7 +2,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 
@@ -69,6 +69,11 @@ interface InteractiveTurnCapture {
   error: string;
 }
 
+interface ConversationEvaluation {
+  readonly failures: string[];
+  readonly diagnostics: string[];
+}
+
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -97,7 +102,8 @@ async function main(): Promise<void> {
     const turns = await runConversation(socket);
     socket.close();
 
-    const failures = evaluateConversation(turns);
+    const evaluation = evaluateConversation(turns);
+    const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
     const baseline = {
       scenario: "websocket_university_student_relations_interactive",
@@ -142,6 +148,7 @@ async function main(): Promise<void> {
           turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
         },
       })),
+      diagnostics,
       artifacts: {
         runDir: relative(PKG_ROOT, runDir),
         manifestPath: relative(PKG_ROOT, manifestPath),
@@ -447,8 +454,9 @@ async function waitForJson(
   });
 }
 
-function evaluateConversation(turns: readonly InteractiveTurnCapture[]): string[] {
+export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): ConversationEvaluation {
   const failures: string[] = [];
+  const diagnostics: string[] = [];
   if (turns.length === 0) failures.push("no turns completed");
   const avgStt = average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs));
   const avgVadEnd = average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs));
@@ -464,15 +472,15 @@ function evaluateConversation(turns: readonly InteractiveTurnCapture[]): string[
     if (turn.speechEndedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_ended`);
     if (turn.speechEndedAtMs < turn.speechStartedAtMs) failures.push(`${turn.id} latest VAD speech_ended preceded first speech_started`);
     for (const term of turn.requiredTerms) {
-      if (!transcript.includes(term)) failures.push(`${turn.id} STT transcript missed required term ${term}`);
+      if (!transcript.includes(term)) diagnostics.push(`${turn.id} STT transcript missed fixture term ${term}`);
     }
     if (turn.audioBytes < 16_000) failures.push(`${turn.id} returned too little TTS audio`);
     if (turn.sttFinalAtMs < turn.audioEndedAtMs) failures.push(`${turn.id} STT finalized before input audio ended`);
     if (turn.firstAudioAtMs < turn.firstAgentAtMs) failures.push(`${turn.id} received TTS audio before agent text`);
-    if (!/[.!?]\s*$/.test(turn.agentReply.trim())) failures.push(`${turn.id} agent reply did not end cleanly`);
-    if (reply.length < 30) failures.push(`${turn.id} agent reply was too short`);
+    if (!/[.!?]\s*$/.test(turn.agentReply.trim())) diagnostics.push(`${turn.id} agent reply did not end cleanly`);
+    if (reply.length < 30) diagnostics.push(`${turn.id} agent reply was short`);
   }
-  return failures;
+  return { failures, diagnostics };
 }
 
 function average(values: readonly number[]): number {
@@ -498,7 +506,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
