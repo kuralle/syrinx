@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
+import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type TextToSpeechPlayoutProgressPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
 import {
   createTelnyxMediaStreamServer,
 } from "./telnyx.js";
@@ -813,6 +813,52 @@ describe("createTelnyxMediaStreamServer", () => {
     await expect(clearMessage).resolves.toEqual({
       event: "clear",
     });
+
+    client.close();
+    await server.close();
+  });
+
+  it("emits tts.playout_progress with completion after the paced audio drains", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = await createTelnyxMediaStreamServer({
+      port: 0,
+      outputSampleRateHz: 16000,
+      createSession: () => session,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const progress: Array<{ playedOutMs: number; complete: boolean }> = [];
+    session.bus.on("tts.playout_progress", (pkt) => {
+      const p = pkt as TextToSpeechPlayoutProgressPacket;
+      if (p.contextId === "telnyx-playout") progress.push({ playedOutMs: p.playedOutMs, complete: p.complete });
+    });
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart()));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 200ms of audio @ 16 kHz = 10 paced frames of 20ms.
+    const samples = new Int16Array(3200);
+    for (let i = 0; i < samples.length; i += 1) samples[i] = i % 2 === 0 ? 1200 : -1200;
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "telnyx-playout",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(samples),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "telnyx-playout",
+      timestampMs: Date.now(),
+    });
+    // Wait for the ~200ms of realtime pacing to drain, plus margin.
+    await new Promise((resolve) => setTimeout(resolve, 340));
+
+    const last = progress.at(-1);
+    expect(last?.complete).toBe(true);
+    expect(last?.playedOutMs).toBeGreaterThanOrEqual(180);
 
     client.close();
     await server.close();

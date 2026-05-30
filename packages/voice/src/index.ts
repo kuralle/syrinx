@@ -62,6 +62,7 @@ export {
   type TextToSpeechDonePacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
+  type TextToSpeechPlayoutProgressPacket,
   type TtsErrorPacket,
 } from "./packets.js";
 

@@ -18,6 +18,7 @@ import {
   resamplePcm16,
 } from "./twilio.js";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
+import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
   optionalRecord,
@@ -402,6 +403,7 @@ function wireTelnyxSessionEvents(args: {
       value: String(discardedMs),
     });
   };
+  const playoutProgress = new PlayoutProgressEmitter(session.bus);
   const playout = new PacedPlayoutQueue(outboundFrameDurationMs, maxQueuedOutputAudioMs, (discardedMs) => {
     state.stopped = true;
     recordDiscardedPlayout(discardedMs, "overflow");
@@ -417,7 +419,7 @@ function wireTelnyxSessionEvents(args: {
       name: "telnyx.pacer_deadline_miss",
       value: String(lateMs),
     });
-  });
+  }, playoutProgress.onFramePlayed);
   const sendPendingEndMark = (): void => {
     if (state.stopped || !state.streamId || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
     const markName = state.pendingEndMarkName;
@@ -437,6 +439,7 @@ function wireTelnyxSessionEvents(args: {
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
       interruptedContextIds.add(interrupt.contextId);
+      playoutProgress.discard(interrupt.contextId);
       playout.clear();
       state.pendingMarks.clear();
       state.pendingEndMarkName = "";
@@ -467,6 +470,7 @@ function wireTelnyxSessionEvents(args: {
       }
       const payload = encodeOutboundPayload(audioPacket.audio, requireTtsAudioSampleRate(audioPacket.sampleRateHz), state, outboundFrameDurationMs);
       const frames: PacedPlayoutFrame[] = payload.map((frame) => ({
+        contextId: audioPacket.contextId,
         send: () => {
           if (state.stopped) return false;
           return sendTelnyxJson(socket, {
@@ -512,6 +516,7 @@ function wireTelnyxSessionEvents(args: {
       if (state.stopped || !state.streamId) return;
       playout.enqueueControl(() => {
         if (state.stopped || !state.streamId) return;
+        playoutProgress.complete(end.contextId);
         state.pendingEndMarkName = `${end.contextId}:end`;
         sendPendingEndMark();
       });

@@ -40,6 +40,7 @@ import type {
   TextToSpeechTextPacket,
   TextToSpeechDonePacket,
   TextToSpeechEndPacket,
+  TextToSpeechPlayoutProgressPacket,
   TtsErrorPacket,
   RecordAssistantAudioPacket,
   RecordUserAudioPacket,
@@ -180,6 +181,11 @@ export class VoiceAgentSession {
   // until it is actually done being heard.
   private ttsPlayoutEndMs = new Map<string, number>();
   private ttsPlayoutReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Contexts for which the output transport has reported real playout progress.
+  // When present, the transport's `complete` signal is authoritative and the
+  // sample-duration estimate defers to it (it is only a fallback for transports
+  // without a paced-playout layer, e.g. headless).
+  private ttsRealPlayoutContexts = new Set<string>();
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
@@ -308,6 +314,7 @@ export class VoiceAgentSession {
       this.cancelTtsPlayoutRelease(contextId);
     }
     this.ttsPlayoutEndMs.clear();
+    this.ttsRealPlayoutContexts.clear();
     this.activeTtsContextIds.clear();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
@@ -407,6 +414,7 @@ export class VoiceAgentSession {
     // TTS
     this.bus.on("tts.audio", this.handleTtsAudio.bind(this));
     this.bus.on("tts.end", this.handleTtsEnd.bind(this));
+    this.bus.on("tts.playout_progress", this.handleTtsPlayoutProgress.bind(this));
 
     // Interrupts
     this.bus.on("interrupt.detected", this.handleInterruptDetected.bind(this));
@@ -949,9 +957,19 @@ export class VoiceAgentSession {
       contextId,
       setTimeout(() => {
         this.ttsPlayoutReleaseTimers.delete(contextId);
+        // If a paced transport is reporting real playout for this context, it
+        // owns the release via tts.playout_progress{complete} — the estimate
+        // must not pre-empt it (real playout can run past the audio length
+        // under send-buffer backpressure). close() is the backstop.
+        if (this.ttsRealPlayoutContexts.has(contextId)) return;
         this.releaseTtsContext(contextId);
       }, remainingMs),
     );
+  }
+
+  private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
+    this.ttsRealPlayoutContexts.add(pkt.contextId);
+    if (pkt.complete) this.releaseTtsContext(pkt.contextId);
   }
 
   private cancelTtsPlayoutRelease(contextId: string): void {
@@ -966,6 +984,7 @@ export class VoiceAgentSession {
     this.cancelTtsPlayoutRelease(contextId);
     this.activeTtsContextIds.delete(contextId);
     this.ttsPlayoutEndMs.delete(contextId);
+    this.ttsRealPlayoutContexts.delete(contextId);
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
