@@ -16,6 +16,7 @@ import type {
   TextToSpeechDonePacket,
   TextToSpeechAudioPacket,
   TextToSpeechEndPacket,
+  TextToSpeechPlayoutProgressPacket,
   TextToSpeechTextPacket,
   InterruptTtsPacket,
   VadSpeechEndedPacket,
@@ -896,6 +897,101 @@ describe("VoiceAgentSession", () => {
     } satisfies TextToSpeechEndPacket);
     // Past the 100ms playout window — the assistant has finished speaking.
     await new Promise((resolve) => setTimeout(resolve, 250));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("keeps the context interruptible past the duration estimate while the transport reports active playout", async () => {
+    // A paced transport reports real playout; under send-buffer backpressure the
+    // audio plays longer than its sample-duration. The estimate must defer to the
+    // transport so barge-in stays armed for the real playout window.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    // 3200 bytes @ 16 kHz s16 = 100ms estimate.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(3200),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
+    // Transport is still pacing this context (not complete) — real playout ongoing.
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      playedOutMs: 40,
+      complete: false,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    // Past the 100ms estimate, but the transport has not reported completion.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("releases the assistant context when the transport reports playout complete", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(25600),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
+    // Transport confirms the audio finished playing out (authoritative).
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      playedOutMs: 800,
+      complete: true,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     session.bus.push(Route.Main, {
       kind: "vad.speech_started",

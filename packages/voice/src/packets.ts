@@ -296,6 +296,22 @@ export interface TtsErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly component: "tts";
 }
 
+/**
+ * Realtime playout position for a context, emitted by the output transport's
+ * paced-playout layer as audio actually reaches the wire. This is the
+ * authoritative playout clock; turn-taking and recording consume it instead of
+ * reconstructing timing from generation arrival. Absent when no paced transport
+ * is wired (e.g. headless), in which case consumers fall back to a
+ * sample-duration estimate.
+ */
+export interface TextToSpeechPlayoutProgressPacket extends VoicePacket {
+  readonly kind: "tts.playout_progress";
+  /** Cumulative realtime audio (ms) paced out to the wire for this context. */
+  readonly playedOutMs: number;
+  /** True on the final progress for the context — all generated audio has played out. */
+  readonly complete: boolean;
+}
+
 // =============================================================================
 // Recording Packets
 // =============================================================================
@@ -429,6 +445,7 @@ export type TtsPacket =
   | TextToSpeechDonePacket
   | TextToSpeechAudioPacket
   | TextToSpeechEndPacket
+  | TextToSpeechPlayoutProgressPacket
   | TtsErrorPacket;
 
 /** All error packets (any component). */

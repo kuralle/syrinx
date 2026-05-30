@@ -19,6 +19,7 @@ import {
   resamplePcm16,
 } from "./twilio.js";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
+import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
   optionalRecord,
@@ -363,6 +364,7 @@ function wireSmartPbxSessionEvents(args: {
       value: String(discardedMs),
     });
   };
+  const playoutProgress = new PlayoutProgressEmitter(session.bus);
   const playout = new PacedPlayoutQueue(outboundFrameDurationMs, maxQueuedOutputAudioMs, (discardedMs) => {
     state.stopped = true;
     recordDiscardedPlayout(discardedMs, "overflow");
@@ -379,7 +381,7 @@ function wireSmartPbxSessionEvents(args: {
       name: "smartpbx.pacer_deadline_miss",
       value: String(lateMs),
     });
-  });
+  }, playoutProgress.onFramePlayed);
   const interruptedContextIds = new Set<string>();
 
   disposers.push(
@@ -387,6 +389,7 @@ function wireSmartPbxSessionEvents(args: {
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
       interruptedContextIds.add(interrupt.contextId);
+      playoutProgress.discard(interrupt.contextId);
       playout.clear();
       state.opusEncodeRemainder = new Int16Array(0);
       session.bus.push(Route.Background, {
@@ -413,6 +416,7 @@ function wireSmartPbxSessionEvents(args: {
       }
       const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, requireTtsAudioSampleRate(audioPacket.sampleRateHz), state, outboundFrameDurationMs)
         .map((frame) => ({
+          contextId: audioPacket.contextId,
           send: () => {
             if (state.stopped) return false;
             return sendSmartPbxJson(socket, {
@@ -443,6 +447,7 @@ function wireSmartPbxSessionEvents(args: {
       }
       const frames: PacedPlayoutFrame[] = encodePendingOpusFrame(state, outboundFrameDurationMs)
         .map((frame) => ({
+          contextId: end.contextId,
           send: () => {
             if (state.stopped) return false;
             return sendSmartPbxJson(socket, {
@@ -458,6 +463,7 @@ function wireSmartPbxSessionEvents(args: {
       playout.enqueue(frames);
       playout.enqueueControl(() => {
         if (state.stopped) return;
+        playoutProgress.complete(end.contextId);
         session.bus.push(Route.Background, {
           kind: "metric.conversation",
           contextId: end.contextId,

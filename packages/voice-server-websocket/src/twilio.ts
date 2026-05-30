@@ -11,6 +11,7 @@ import {
   type VoiceAgentSession,
 } from "@asyncdot/voice";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
+import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
   optionalRecord,
@@ -404,6 +405,7 @@ function wireTwilioSessionEvents(args: {
       value: String(discardedMs),
     });
   };
+  const playoutProgress = new PlayoutProgressEmitter(session.bus);
   const playout = new PacedPlayoutQueue(outboundFrameDurationMs, maxQueuedOutputAudioMs, (discardedMs) => {
     state.stopped = true;
     recordDiscardedPlayout(discardedMs, "overflow");
@@ -419,7 +421,7 @@ function wireTwilioSessionEvents(args: {
       name: "twilio.pacer_deadline_miss",
       value: String(lateMs),
     });
-  });
+  }, playoutProgress.onFramePlayed);
   const sendPendingEndMark = (): void => {
     if (state.stopped || !state.streamSid || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
     const markName = state.pendingEndMarkName;
@@ -440,6 +442,7 @@ function wireTwilioSessionEvents(args: {
     session.bus.on("interrupt.tts", (pkt) => {
       const interrupt = pkt as InterruptTtsPacket;
       interruptedContextIds.add(interrupt.contextId);
+      playoutProgress.discard(interrupt.contextId);
       playout.clear();
       state.pendingMarks.clear();
       state.pendingEndMarkName = "";
@@ -477,6 +480,7 @@ function wireTwilioSessionEvents(args: {
       for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
         const frame = encoded.subarray(offset, Math.min(encoded.byteLength, offset + frameBytes));
         frames.push({
+          contextId: audioPacket.contextId,
           send: () => {
             if (state.stopped) return false;
             return sendTwilioJson(socket, {
@@ -494,6 +498,7 @@ function wireTwilioSessionEvents(args: {
       const finalFrame = frames.at(-1);
       if (finalFrame) {
         frames[frames.length - 1] = {
+          contextId: audioPacket.contextId,
           send: finalFrame.send,
           afterSend: () => {
             if (state.stopped) return;
@@ -525,6 +530,7 @@ function wireTwilioSessionEvents(args: {
       if (state.stopped || !state.streamSid) return;
       playout.enqueueControl(() => {
         if (state.stopped || !state.streamSid) return;
+        playoutProgress.complete(end.contextId);
         state.pendingEndMarkName = `${end.contextId}:end`;
         sendPendingEndMark();
       });

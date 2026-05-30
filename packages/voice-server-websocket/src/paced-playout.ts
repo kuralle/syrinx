@@ -3,6 +3,8 @@
 export interface PacedPlayoutFrame {
   readonly send: () => void | boolean;
   readonly afterSend?: () => void;
+  /** Context this frame belongs to, for realtime playout-position reporting. */
+  readonly contextId?: string;
 }
 
 interface QueuedPlayoutFrame extends PacedPlayoutFrame {
@@ -25,6 +27,9 @@ export class PacedPlayoutQueue {
     private readonly onOverflow: (discardedDurationMs: number) => void,
     private readonly onSendFailure: (discardedDurationMs: number) => void = () => undefined,
     private readonly onDeadlineMiss: (lateMs: number) => void = () => undefined,
+    // Fires after each audio frame is paced to the wire — the realtime playout
+    // clock. durationMs is the frame's realtime length; contextId tags the turn.
+    private readonly onFramePlayed: (contextId: string | undefined, durationMs: number) => void = () => undefined,
   ) {}
 
   enqueue(frames: readonly PacedPlayoutFrame[]): boolean {
@@ -97,6 +102,7 @@ export class PacedPlayoutQueue {
       return;
     }
     frame.afterSend?.();
+    if (frame.durationMs > 0) this.onFramePlayed(frame.contextId, frame.durationMs);
     this.pumping = false;
     if (this.frames.length > 0) {
       this.nextDeadlineMs += this.frameDurationMs;
