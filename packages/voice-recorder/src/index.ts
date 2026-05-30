@@ -282,9 +282,11 @@ export class VoiceSessionRecorder implements VoicePlugin {
     if (audio.byteLength === 0) return;
     if (!this.validatePcm16ByteLength(packet.kind, audio)) return;
     if (!this.acceptAssistantSampleRate(packet)) return;
-    const byteOffset = this.assistantChunks.length === 0
-      ? 0
-      : Math.max(this.assistantCursorBytes, this.currentAssistantWallOffsetBytes());
+    // Anchor every chunk — including the first — at its wall-clock position. The
+    // assistant speaks after the user, so pinning the first chunk to offset 0
+    // strands a whole turn at the start of the recording for providers that emit
+    // one packet per turn (e.g. Gemini), overlapping the user's opening turn.
+    const byteOffset = Math.max(this.assistantCursorBytes, this.currentAssistantWallOffsetBytes());
     const copy = Uint8Array.from(audio);
     this.assistantChunks.push({ byteOffset, data: copy, contextId: packet.contextId });
     this.assistantCursorBytes = byteOffset + copy.byteLength;

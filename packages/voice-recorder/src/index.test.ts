@@ -73,6 +73,11 @@ describe("VoiceSessionRecorder", () => {
   });
 
   it("flushes user and assistant audio files on close", async () => {
+    // Pin the clock so the assistant's first chunk anchors at offset 0 (no
+    // leading silence), keeping the exact-bytes assertions deterministic.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
     await withTempDir(async (dir) => {
       const bus = new PipelineBusImpl();
       const recorder = new VoiceSessionRecorder();
@@ -94,10 +99,13 @@ describe("VoiceSessionRecorder", () => {
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
       bus.stop();
       await start;
-      await recorder.close();
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
 
       await expect(readFile(join(dir, "user_audio.pcm"))).resolves.toEqual(Buffer.from([1, 2, 3, 4]));
       await expect(readFile(join(dir, "assistant_audio.pcm"))).resolves.toEqual(Buffer.from([5, 6, 7, 8]));
@@ -174,6 +182,11 @@ describe("VoiceSessionRecorder", () => {
   });
 
   it("uses assistant recording sample-rate metadata for manifest duration", async () => {
+    // Pin the clock so the first chunk's wall-clock anchor is 0 (no leading
+    // silence), isolating the duration-from-sample-rate behavior under test.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
     await withTempDir(async (dir) => {
       const bus = new PipelineBusImpl();
       const recorder = new VoiceSessionRecorder();
@@ -189,10 +202,13 @@ describe("VoiceSessionRecorder", () => {
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
       bus.stop();
       await start;
-      await recorder.close();
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
 
       const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Record<string, any>;
       expect(manifest.audio.assistant).toMatchObject({
@@ -400,6 +416,47 @@ describe("VoiceSessionRecorder", () => {
     });
   });
 
+  it("anchors a single-packet assistant turn at its wall-clock position, not offset 0", async () => {
+    // Providers that emit one packet per turn (e.g. Gemini) deliver the whole
+    // response as the first assistant chunk. It must land at the time it was
+    // produced — not pinned to offset 0, which would overlap the user's opening
+    // turn. No playout signal here: this is the generation-arrival fallback path.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir, assistant_sample_rate_hz: 16000 });
+      const start = bus.start();
+
+      // The assistant's first (and only) chunk arrives 500ms into the session.
+      vi.setSystemTime(500);
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320).fill(0xa1),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      bus.stop();
+      await start;
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
+
+      // 500ms @ 16 kHz s16 = 16000 bytes of leading silence, then the chunk.
+      const pcm = await readFile(join(dir, "assistant_audio.pcm"));
+      expect(pcm.byteLength).toBe(16320);
+      expect(pcm.subarray(0, 16000)).toEqual(Buffer.alloc(16000, 0));
+      expect(pcm.subarray(16000)).toEqual(Buffer.alloc(320, 0xa1));
+    });
+  });
+
   it("retains terminal playback truncation when main dispatch is blocked during shutdown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -580,6 +637,8 @@ describe("VoiceSessionRecorder", () => {
   });
 
   it("writes stereo conversation.wav with user on L and assistant on R", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     await withTempDir(async (dir) => {
       const bus = new PipelineBusImpl();
       const recorder = new VoiceSessionRecorder();
@@ -614,10 +673,13 @@ describe("VoiceSessionRecorder", () => {
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
       bus.stop();
       await start;
-      await recorder.close();
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
 
       const wav = await readFile(join(dir, "conversation.wav"));
       // channels field at offset 22
@@ -636,6 +698,8 @@ describe("VoiceSessionRecorder", () => {
   });
 
   it("resamples assistant audio from 24kHz to user rate when rates differ", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     await withTempDir(async (dir) => {
       const bus = new PipelineBusImpl();
       const recorder = new VoiceSessionRecorder();
@@ -663,10 +727,13 @@ describe("VoiceSessionRecorder", () => {
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
       bus.stop();
       await start;
-      await recorder.close();
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
 
       const wav = await readFile(join(dir, "conversation.wav"));
       // Resampled assistant: round(240 * 16000 / 24000) = 160 samples
@@ -678,6 +745,8 @@ describe("VoiceSessionRecorder", () => {
   });
 
   it("includes conversation entry in manifest and validates it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     await withTempDir(async (dir) => {
       const bus = new PipelineBusImpl();
       const recorder = new VoiceSessionRecorder();
@@ -704,10 +773,13 @@ describe("VoiceSessionRecorder", () => {
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
       bus.stop();
       await start;
-      await recorder.close();
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
 
       const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Record<string, any>;
       expect(manifest.audio.conversation).toMatchObject({
