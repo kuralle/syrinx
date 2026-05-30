@@ -127,7 +127,7 @@ export class SileroVADPlugin implements VoicePlugin {
       this.context = input.slice(-CONTEXT_SAMPLES_16K);
 
       const now = Date.now();
-      if (now - this.lastResetMs >= 5000) {
+      if (!this.speaking && now - this.lastResetMs >= 5000) {
         this.resetModelState();
       }
 

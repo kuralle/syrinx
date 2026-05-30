@@ -411,6 +411,14 @@ function wireTwilioSessionEvents(args: {
   }, (discardedMs) => {
     state.stopped = true;
     recordDiscardedPlayout(discardedMs, "send_buffer");
+  }, (lateMs) => {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "twilio.pacer_deadline_miss",
+      value: String(lateMs),
+    });
   });
   const sendPendingEndMark = (): void => {
     if (state.stopped || !state.streamSid || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
@@ -451,7 +459,17 @@ function wireTwilioSessionEvents(args: {
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
-      if (state.stopped || !state.streamSid || socket.readyState !== WebSocket.OPEN) return;
+      if (state.stopped || !state.streamSid) return;
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: audioPacket.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
+      }
       const samples = pcm16BytesToSamples(audioPacket.audio);
       const resampled = resamplePcm16(samples, requireTtsAudioSampleRate(audioPacket.sampleRateHz), twilioSampleRateHz);
       const encoded = encodePcm16ToMuLaw(resampled);

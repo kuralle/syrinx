@@ -517,37 +517,55 @@ function wireSessionEvents(
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       const sourceSampleRateHz = requireTtsAudioSampleRate(audioPacket.sampleRateHz);
       const audio = normalizePcm16(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
-      if (socket.readyState === WebSocket.OPEN) {
-        const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
-        ttsSequences.set(audioPacket.contextId, sequence);
-        sendJson(socket, {
-          type: "tts_chunk",
-          turnId: audioPacket.contextId,
-          sequence,
-          sampleRateHz: outputSampleRateHz,
-          encoding: "pcm_s16le",
-          channels: 1,
-          byteLength: audio.byteLength,
-          durationMs: pcm16DurationMs(audio, outputSampleRateHz),
-        }, maxBufferedAmountBytes);
-        sendSocketData(socket, binaryAudioEnvelope
-          ? Buffer.from(encodeSyrinxAudioEnvelope({
-              type: "audio",
-              contextId: audioPacket.contextId,
-              sequence,
-              sampleRateHz: outputSampleRateHz,
-              encoding: "pcm_s16le",
-              channels: 1,
-              byteLength: audio.byteLength,
-              durationMs: pcm16DurationMs(audio, outputSampleRateHz),
-            }, audio))
-          : Buffer.from(audio), maxBufferedAmountBytes);
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: audioPacket.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
       }
+      const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
+      ttsSequences.set(audioPacket.contextId, sequence);
+      sendJson(socket, {
+        type: "tts_chunk",
+        turnId: audioPacket.contextId,
+        sequence,
+        sampleRateHz: outputSampleRateHz,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: audio.byteLength,
+        durationMs: pcm16DurationMs(audio, outputSampleRateHz),
+      }, maxBufferedAmountBytes);
+      sendSocketData(socket, binaryAudioEnvelope
+        ? Buffer.from(encodeSyrinxAudioEnvelope({
+            type: "audio",
+            contextId: audioPacket.contextId,
+            sequence,
+            sampleRateHz: outputSampleRateHz,
+            encoding: "pcm_s16le",
+            channels: 1,
+            byteLength: audio.byteLength,
+            durationMs: pcm16DurationMs(audio, outputSampleRateHz),
+          }, audio))
+        : Buffer.from(audio), maxBufferedAmountBytes);
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
       if (interruptedContextIds.has(end.contextId)) return;
       ttsSequences.delete(end.contextId);
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: end.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
+      }
       sendJson(socket, { type: "tts_end", turnId: end.contextId }, maxBufferedAmountBytes);
     }),
   );

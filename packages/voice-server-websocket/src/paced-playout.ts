@@ -9,18 +9,22 @@ interface QueuedPlayoutFrame extends PacedPlayoutFrame {
   readonly durationMs: number;
 }
 
+const DEADLINE_MISS_TOLERANCE_MS = 5;
+
 export class PacedPlayoutQueue {
   private readonly frames: QueuedPlayoutFrame[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pumping = false;
   private queuedDurationMs = 0;
   private closed = false;
+  private nextDeadlineMs = 0;
 
   constructor(
     private readonly frameDurationMs: number,
     private readonly maxQueuedDurationMs: number,
     private readonly onOverflow: (discardedDurationMs: number) => void,
     private readonly onSendFailure: (discardedDurationMs: number) => void = () => undefined,
+    private readonly onDeadlineMiss: (lateMs: number) => void = () => undefined,
   ) {}
 
   enqueue(frames: readonly PacedPlayoutFrame[]): boolean {
@@ -51,6 +55,7 @@ export class PacedPlayoutQueue {
     const removedAudioDurationMs = this.queuedDurationMs;
     this.frames.length = 0;
     this.queuedDurationMs = 0;
+    this.nextDeadlineMs = 0;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -74,6 +79,15 @@ export class PacedPlayoutQueue {
     const frame = this.frames.shift();
     if (!frame) return;
     this.pumping = true;
+    const now = Date.now();
+
+    // On the first frame after a clear/start, establish the deadline baseline.
+    if (this.nextDeadlineMs === 0) {
+      this.nextDeadlineMs = now;
+    } else if (now - this.nextDeadlineMs > DEADLINE_MISS_TOLERANCE_MS) {
+      this.onDeadlineMiss(now - this.nextDeadlineMs);
+    }
+
     this.queuedDurationMs = Math.max(0, this.queuedDurationMs - frame.durationMs);
     const sent = frame.send();
     if (sent === false) {
@@ -85,7 +99,14 @@ export class PacedPlayoutQueue {
     frame.afterSend?.();
     this.pumping = false;
     if (this.frames.length > 0) {
-      this.timer = setTimeout(() => this.pump(), this.frameDurationMs);
+      this.nextDeadlineMs += this.frameDurationMs;
+      const delay = Math.max(0, this.nextDeadlineMs - Date.now());
+      this.timer = setTimeout(() => this.pump(), delay);
+    } else {
+      // Queue drained on a natural inter-sentence gap (no clear() — clear() only
+      // runs on overflow/send-failure/interrupt). Re-baseline so the next burst's
+      // first frame doesn't read the stale deadline as a huge spurious miss.
+      this.nextDeadlineMs = 0;
     }
   }
 }

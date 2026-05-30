@@ -306,7 +306,10 @@ export class CartesiaTTSPlugin implements VoicePlugin {
       return;
     }
 
-    if (typeof msg["data"] === "string") {
+    // Cartesia audio arrives as non-empty base64 `data`. Control frames such as
+    // `flush_done` (the acknowledgement of a `flush: true` request) carry an empty
+    // `data` string and must not be decoded as audio.
+    if (typeof msg["data"] === "string" && msg["data"].length > 0) {
       try {
         const audioBytes = decodeStrictBase64(msg["data"], "Cartesia TTS provider audio data");
         const packet: TextToSpeechAudioPacket = {

@@ -47,6 +47,7 @@ import type {
   SttInterimPacket,
   VadAudioPacket,
   VadSpeechStartedPacket,
+  VadSpeechActivityPacket,
   VadSpeechEndedPacket,
   EndOfSpeechAudioPacket,
   EndOfSpeechPacket,
@@ -86,6 +87,21 @@ export interface VoiceAgentSessionConfig {
    * Default: 7000 (endpointing + 2s grace)
    */
   sttForceFinalizeTimeoutMs?: number;
+  /**
+   * Minimum sustained user-speech duration (ms) during assistant playback before a
+   * barge-in is committed. Filters transient noise, clicks, and very short blips that
+   * would otherwise falsely cut off the agent. The agent keeps speaking until the
+   * user's speech is sustained past this threshold, then interruption fires
+   * immediately. Set to 0 to disable the gate and interrupt on the first VAD speech
+   * frame (legacy behavior). Default: 280 ms.
+   */
+  minInterruptionMs?: number;
+  /**
+   * Maximum ms after a user turn ends to wait for first assistant audio before
+   * emitting a vaqi.missed_response metric (VAQI-M). 0 disables the check.
+   * Default: 4000.
+   */
+  vaqiMissedResponseMs?: number;
 }
 
 export interface VoiceAgentSessionEvents {
@@ -138,10 +154,24 @@ export class VoiceAgentSession {
   private activeTtsContextIds = new Set<string>();
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
+  private readonly minInterruptionMs: number;
+  private pendingInterruption: {
+    userContextId: string;
+    interruptedContextId: string;
+    firstSpeechMs: number;
+  } | null = null;
+  private readonly vaqiMissedResponseMs: number;
+  private turnUserStoppedAtMs = new Map<string, number>();
+  private firstTtsAudioFired = new Set<string>();
+  private vaqiMissedResponseTimer: ReturnType<typeof setTimeout> | null = null;
+  private vaqiMissedResponseContextId = "";
+  private vaqiMissedResponseStartMs = 0;
 
   constructor(config: VoiceAgentSessionConfig) {
     this.config = config;
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
+    this.minInterruptionMs = config.minInterruptionMs ?? 280;
+    this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
 
     // Debug events
     const [stream, push] = createConversationEventStream();
@@ -237,6 +267,9 @@ export class VoiceAgentSession {
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
     this.clearSttForceFinalizeTimer();
+    this.clearVaqiMissedResponseTimer();
+    this.turnUserStoppedAtMs.clear();
+    this.firstTtsAudioFired.clear();
     this.ttsTextBuffers.clear();
     this.interruptedGenerationContextIds.clear();
 
@@ -316,6 +349,7 @@ export class VoiceAgentSession {
 
     // VAD
     this.bus.on("vad.speech_started", this.handleVadSpeechStarted.bind(this));
+    this.bus.on("vad.speech_activity", this.handleVadSpeechActivity.bind(this));
     this.bus.on("vad.speech_ended", this.handleVadSpeechEnded.bind(this));
 
     // EOS
@@ -475,14 +509,87 @@ export class VoiceAgentSession {
     });
 
     const interruptedContextId = this.latestActiveTtsContextId();
-    if (interruptedContextId) {
-      this.bus.push(Route.Critical, {
-        kind: "interrupt.detected",
+    if (!interruptedContextId) return;
+
+    if (this.minInterruptionMs <= 0) {
+      // Gate disabled — interrupt on the first VAD speech frame (legacy behavior).
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
         contextId: interruptedContextId,
         timestampMs: Date.now(),
-        source: "vad",
-      } as InterruptionDetectedPacket);
+        name: "vaqi.interruption",
+        value: "1",
+      });
+      this.emitInterruptDetected(interruptedContextId);
+      return;
     }
+
+    // Defer the cut until the user's speech is sustained past minInterruptionMs.
+    // VAD emits `vad.speech_activity` per speech frame (never during silence), so a
+    // transient noise spike / click / very short blip produces only a few activity
+    // frames and then `vad.speech_ended` — which cancels this pending interruption
+    // instead of cutting off the agent. Sustained speech keeps emitting activity and
+    // crosses the threshold in handleVadSpeechActivity.
+    this.pendingInterruption = {
+      userContextId: pkt.contextId,
+      interruptedContextId,
+      firstSpeechMs: pkt.timestampMs,
+    };
+  }
+
+  private handleVadSpeechActivity(pkt: VadSpeechActivityPacket): void {
+    const pending = this.pendingInterruption;
+    if (!pending || pending.userContextId !== pkt.contextId) return;
+    if (pkt.timestampMs - pending.firstSpeechMs < this.minInterruptionMs) return;
+
+    // Sustained speech — resolve the pending interruption.
+    this.pendingInterruption = null;
+    const sustainedMs = pkt.timestampMs - pending.firstSpeechMs;
+
+    if (!this.activeTtsContextIds.has(pending.interruptedContextId)) {
+      // The assistant finished speaking on its own during the gate window; there is
+      // nothing left to interrupt. Record it rather than firing a stale barge-in.
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pending.interruptedContextId,
+        timestampMs: Date.now(),
+        name: "interrupt.gate_resolved_after_tts_end",
+        value: String(sustainedMs),
+      });
+      return;
+    }
+
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: pending.interruptedContextId,
+      timestampMs: Date.now(),
+      name: "interrupt.committed_after_ms",
+      value: String(sustainedMs),
+    });
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: pending.interruptedContextId,
+      timestampMs: Date.now(),
+      name: "vaqi.interruption",
+      value: "1",
+    });
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: pending.interruptedContextId,
+      timestampMs: Date.now(),
+      name: "interrupt.latency_ms",
+      value: String(sustainedMs),
+    });
+    this.emitInterruptDetected(pending.interruptedContextId);
+  }
+
+  private emitInterruptDetected(interruptedContextId: string): void {
+    this.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: interruptedContextId,
+      timestampMs: Date.now(),
+      source: "vad",
+    } as InterruptionDetectedPacket);
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
@@ -496,6 +603,25 @@ export class VoiceAgentSession {
       data: { context_id: pkt.contextId },
       timestampMs: pkt.timestampMs,
     });
+
+    const pending = this.pendingInterruption;
+    if (pending && pending.userContextId === pkt.contextId) {
+      // Speech ended before sustaining past the gate: a non-interrupting blip
+      // (transient noise / very short backchannel). Leave assistant playback running.
+      this.pendingInterruption = null;
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pending.interruptedContextId,
+        timestampMs: Date.now(),
+        name: "interrupt.suppressed_short_speech",
+        value: String(pkt.timestampMs - pending.firstSpeechMs),
+      });
+    }
+
+    this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
+    if (this.vaqiMissedResponseMs > 0) {
+      this.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
+    }
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
@@ -700,6 +826,24 @@ export class VoiceAgentSession {
         value: String(pkt.audio.byteLength),
       });
       return;
+    }
+
+    if (!this.firstTtsAudioFired.has(pkt.contextId)) {
+      this.firstTtsAudioFired.add(pkt.contextId);
+      if (this.vaqiMissedResponseContextId === pkt.contextId) {
+        this.clearVaqiMissedResponseTimer();
+      }
+      const userStoppedMs = this.turnUserStoppedAtMs.get(pkt.contextId);
+      if (userStoppedMs !== undefined) {
+        this.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: pkt.contextId,
+          timestampMs: Date.now(),
+          name: "vaqi.latency_ms",
+          value: String(pkt.timestampMs - userStoppedMs),
+        });
+        this.turnUserStoppedAtMs.delete(pkt.contextId);
+      }
     }
 
     this.activeTtsContextIds.add(pkt.contextId);
@@ -936,6 +1080,36 @@ export class VoiceAgentSession {
     if (clearContext) {
       this.pendingSttContextId = "";
     }
+  }
+
+  private startVaqiMissedResponseTimer(contextId: string, startMs: number): void {
+    this.clearVaqiMissedResponseTimer();
+    this.vaqiMissedResponseContextId = contextId;
+    this.vaqiMissedResponseStartMs = startMs;
+    this.vaqiMissedResponseTimer = setTimeout(() => {
+      this.vaqiMissedResponseTimer = null;
+      const cid = this.vaqiMissedResponseContextId;
+      const elapsedMs = Date.now() - this.vaqiMissedResponseStartMs;
+      this.vaqiMissedResponseContextId = "";
+      this.vaqiMissedResponseStartMs = 0;
+      this.turnUserStoppedAtMs.delete(cid);
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: cid,
+        timestampMs: Date.now(),
+        name: "vaqi.missed_response",
+        value: String(elapsedMs),
+      });
+    }, this.vaqiMissedResponseMs);
+  }
+
+  private clearVaqiMissedResponseTimer(): void {
+    if (this.vaqiMissedResponseTimer) {
+      clearTimeout(this.vaqiMissedResponseTimer);
+      this.vaqiMissedResponseTimer = null;
+    }
+    this.vaqiMissedResponseContextId = "";
+    this.vaqiMissedResponseStartMs = 0;
   }
 
   private findForceFinalizableSttPlugin(): ForceFinalizableSttPlugin | null {

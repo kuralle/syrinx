@@ -371,6 +371,14 @@ function wireSmartPbxSessionEvents(args: {
     state.stopped = true;
     state.opusEncodeRemainder = new Int16Array(0);
     recordDiscardedPlayout(discardedMs, "send_buffer");
+  }, (lateMs) => {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "smartpbx.pacer_deadline_miss",
+      value: String(lateMs),
+    });
   });
   const interruptedContextIds = new Set<string>();
 
@@ -392,7 +400,17 @@ function wireSmartPbxSessionEvents(args: {
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
-      if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
+      if (state.stopped || !state.started) return;
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: audioPacket.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
+      }
       const frames: PacedPlayoutFrame[] = encodeOutboundFrames(audioPacket.audio, requireTtsAudioSampleRate(audioPacket.sampleRateHz), state, outboundFrameDurationMs)
         .map((frame) => ({
           send: () => {
@@ -412,7 +430,17 @@ function wireSmartPbxSessionEvents(args: {
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
       if (interruptedContextIds.has(end.contextId)) return;
-      if (state.stopped || !state.started || socket.readyState !== WebSocket.OPEN) return;
+      if (state.stopped || !state.started) return;
+      if (socket.readyState !== WebSocket.OPEN) {
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: end.contextId,
+          timestampMs: Date.now(),
+          name: "websocket.send_after_close",
+          value: "1",
+        });
+        return;
+      }
       const frames: PacedPlayoutFrame[] = encodePendingOpusFrame(state, outboundFrameDurationMs)
         .map((frame) => ({
           send: () => {

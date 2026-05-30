@@ -412,6 +412,89 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("ignores the empty-data flush_done acknowledgement instead of treating it as malformed audio", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.transcript === "Hello there.") {
+          socket.send(JSON.stringify({
+            type: "chunk",
+            context_id: msg.context_id,
+            data: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString("base64"),
+            done: false,
+            status_code: 206,
+          }));
+        }
+        if (msg.context_id === "turn-flush" && msg.continue === false) {
+          // Real Cartesia answers a flush request with a flush_done control frame
+          // that carries an empty `data` string before the terminal done frame.
+          socket.send(JSON.stringify({
+            type: "flush_done",
+            context_id: "turn-flush",
+            data: "",
+            done: false,
+            status_code: 206,
+            flush_done: true,
+          }));
+          socket.send(JSON.stringify({
+            type: "done",
+            context_id: "turn-flush",
+            done: true,
+            status_code: 200,
+          }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const errors: TtsErrorPacket[] = [];
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.audio", (pkt) => {
+      audio.push(pkt as TextToSpeechAudioPacket);
+    });
+    bus.on("tts.error", (pkt) => {
+      errors.push(pkt as TtsErrorPacket);
+    });
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-flush",
+      timestampMs: Date.now(),
+      text: "Hello there.",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-flush",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => ends.length >= 1);
+
+    expect(errors).toEqual([]);
+    expect(audio).toEqual([
+      expect.objectContaining({
+        contextId: "turn-flush",
+        audio: new Uint8Array([1, 2, 3, 4]),
+      }),
+    ]);
+    expect(ends).toEqual([expect.objectContaining({ contextId: "turn-flush" })]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("fails active contexts when the Cartesia websocket closes before provider done", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", () => {
