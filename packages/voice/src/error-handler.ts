@@ -29,7 +29,19 @@ export function categorizeSttError(err: unknown): ErrorCategory {
   const msg = extractMessage(err).toLowerCase();
   const code = extractHttpStatus(err);
 
-  if (code === 429 || msg.includes("rate limit") || msg.includes("too many requests")) {
+  if (
+    code === 429 ||
+    msg.includes("rate limit") ||
+    msg.includes("rate_limit") ||
+    msg.includes("too many requests") ||
+    // Provider concurrency limits (e.g. Cartesia) — recoverable, retry with backoff.
+    msg.includes("concurrency limit") ||
+    msg.includes("concurrency_limit") ||
+    msg.includes("concurrent limit") ||
+    msg.includes("too many concurrent") ||
+    msg.includes("max concurrency") ||
+    (msg.includes("concurren") && (msg.includes("exceed") || msg.includes("limit")))
+  ) {
     return ErrorCategory.RateLimit;
   }
   if (code === 401 || code === 403 || msg.includes("unauthorized") || msg.includes("forbidden")) {
