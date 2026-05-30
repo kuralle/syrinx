@@ -62,9 +62,13 @@ the highest-value reliability fixes — all grounded in source, not assumptions.
   `pacer_deadline_miss` metric. The worker shipped it but had a **false-miss-on-natural-gap bug** (deadline only
   re-baselined on `clear()`, not on a natural drain) — I caught it in review, fixed it (`else { nextDeadlineMs = 0 }`
   on drain) and added the regression test (verified red→green). ws package 116 tests.
-- **Wave 3 (remaining, NOT delegated hands-off):** G10 (bus non-blocking generation) → G2+G6 (spoken-prefix history +
-  tool-call contract) → G3 (stall watchdog) → G4 (graceful degradation). These touch the core dispatch loop and the
-  interruption invariants; to be driven directly with close review as a focused effort, not sprayed to a worker.
+- **Wave 3 (SHIPPED, driven directly with repro-first + commits):** **G10** (bus per-handler `{concurrent}` opt-in;
+  repro harness + production sim proving LLM→TTS streamed during generation; commit `ef628c4`) → **G2** (bridge tracks
+  tts.text and rewrites interrupted-turn history to the spoken prefix; both interrupt cases tested, proven red→green;
+  `9e93b53`) → **G6** (investigated → N/A: text-only history, abortSignal already propagates) → **G3** (TTS output stall
+  watchdog, recoverable error instead of dead air; `2019eaf`) → **G4** (speak a fallback on recoverable LLM failure
+  instead of silence; `6b6129d`). Each: failing test/repro first, full suite green, committed.
+- **Only real gap remaining: G8** (per-provider concurrency / rate-limit backoff, P3 / scale-only).
 
 ## Deviations / decisions not in the spec (running log)
 
