@@ -14,6 +14,7 @@ class FakeWebSocket {
   binaryType: BinaryType = "blob";
   readyState = FakeWebSocket.OPEN;
   readonly sent: unknown[] = [];
+  private readonly listeners = new Map<string, Array<(event: any) => void>>();
 
   constructor(
     readonly url: string | URL,
@@ -22,8 +23,10 @@ class FakeWebSocket {
     sockets.push(this);
   }
 
-  addEventListener(): void {
-    return;
+  addEventListener(type: string, listener: (event: any) => void): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
   }
 
   send(data: unknown): void {
@@ -32,6 +35,10 @@ class FakeWebSocket {
 
   close(): void {
     this.readyState = FakeWebSocket.CLOSED;
+  }
+
+  dispatch(type: string, event: any): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
 }
 
@@ -108,5 +115,62 @@ describe("SyrinxBrowserClient", () => {
     })).toThrow("audio sequence must increase monotonically: 3 -> 2");
 
     expect(socket.sent).toHaveLength(1);
+  });
+
+  it("emits validated server JSON messages", () => {
+    const client = new SyrinxBrowserClient({ url: "ws://localhost/ws" });
+    const messages: unknown[] = [];
+    client.on((event) => {
+      if (event.type === "message") messages.push(event.message);
+    });
+    client.connect();
+
+    sockets[0]!.dispatch("message", {
+      data: JSON.stringify({
+        type: "tts_chunk",
+        turnId: "turn-1",
+        sequence: 1,
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: 320,
+        durationMs: 10,
+      }),
+    });
+
+    expect(messages).toEqual([
+      {
+        type: "tts_chunk",
+        turnId: "turn-1",
+        sequence: 1,
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: 320,
+        durationMs: 10,
+      },
+    ]);
+  });
+
+  it("surfaces malformed server JSON messages as client errors", () => {
+    const client = new SyrinxBrowserClient({ url: "ws://localhost/ws" });
+    const messages: unknown[] = [];
+    const errors: string[] = [];
+    client.on((event) => {
+      if (event.type === "message") messages.push(event.message);
+      if (event.type === "error" && event.error instanceof Error) errors.push(event.error.message);
+    });
+    client.connect();
+
+    sockets[0]!.dispatch("message", {
+      data: JSON.stringify({
+        type: "agent_chunk",
+        turnId: "turn-1",
+        text: 42,
+      }),
+    });
+
+    expect(messages).toEqual([]);
+    expect(errors).toEqual(["agent_chunk.text must be a non-empty string"]);
   });
 });

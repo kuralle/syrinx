@@ -63,10 +63,12 @@ export type SyrinxStudioMessage =
     }
   | { readonly type: "error"; readonly component?: string; readonly category?: string; readonly message: string };
 
+type SyrinxReadyAudio = Extract<SyrinxStudioMessage, { readonly type: "ready" }>["audio"];
+
 export type SyrinxBrowserClientEvent =
   | { readonly type: "open" }
   | { readonly type: "close"; readonly code: number; readonly reason: string }
-  | { readonly type: "error"; readonly error: Event }
+  | { readonly type: "error"; readonly error: Event | Error }
   | { readonly type: "message"; readonly message: SyrinxStudioMessage }
   | { readonly type: "audio"; readonly data: ArrayBuffer; readonly metadata?: BrowserAssistantAudio["metadata"] };
 
@@ -167,20 +169,29 @@ export class SyrinxBrowserClient {
 
   private handleMessage(data: unknown): void {
     if (typeof data === "string") {
-      const message = JSON.parse(data) as SyrinxStudioMessage;
-      this.emit({ type: "message", message });
+      try {
+        this.emit({ type: "message", message: parseStudioMessage(JSON.parse(data) as unknown) });
+      } catch (err) {
+        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
+      }
       return;
     }
     if (data instanceof Blob) {
       void data.arrayBuffer().then((buffer) => {
         const audio = decodeBrowserAssistantAudio(buffer);
         this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+      }).catch((err: unknown) => {
+        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
       });
       return;
     }
     if (data instanceof ArrayBuffer) {
-      const audio = decodeBrowserAssistantAudio(data);
-      this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+      try {
+        const audio = decodeBrowserAssistantAudio(data);
+        this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+      } catch (err) {
+        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
+      }
     }
   }
 
@@ -231,4 +242,148 @@ function encodeBrowserPcmEnvelope(
 function readPositiveSampleRate(value: number): number {
   if (!Number.isInteger(value) || value <= 0) throw new Error("sampleRateHz must be a positive integer");
   return value;
+}
+
+function parseStudioMessage(value: unknown): SyrinxStudioMessage {
+  if (!isRecord(value)) throw new Error("Syrinx websocket message must be an object");
+  const type = requiredString(value.type, "Syrinx websocket message type");
+  if (type === "ready") {
+    return {
+      type,
+      sessionId: optionalString(value.sessionId, "ready.sessionId"),
+      audio: parseReadyAudio(value.audio),
+    };
+  }
+  if (type === "speech_started" || type === "speech_ended" || type === "agent_end" || type === "tts_end") {
+    return { type, turnId: optionalString(value.turnId, `${type}.turnId`) };
+  }
+  if (type === "stt_chunk" || type === "stt_output") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, `${type}.turnId`),
+      transcript: requiredString(value.transcript, `${type}.transcript`),
+      ...(type === "stt_output" ? { confidence: optionalNumber(value.confidence, "stt_output.confidence") } : {}),
+    } as SyrinxStudioMessage;
+  }
+  if (type === "agent_chunk") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "agent_chunk.turnId"),
+      text: requiredString(value.text, "agent_chunk.text"),
+    };
+  }
+  if (type === "agent_tool_call") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "agent_tool_call.turnId"),
+      id: optionalString(value.id, "agent_tool_call.id"),
+      name: requiredString(value.name, "agent_tool_call.name"),
+      args: value.args,
+    };
+  }
+  if (type === "agent_tool_result") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "agent_tool_result.turnId"),
+      id: optionalString(value.id, "agent_tool_result.id"),
+      result: value.result,
+    };
+  }
+  if (type === "agent_interrupted" || type === "audio_clear") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, `${type}.turnId`),
+      reason: optionalString(value.reason, `${type}.reason`),
+    };
+  }
+  if (type === "tts_chunk") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "tts_chunk.turnId"),
+      sequence: requiredNonNegativeInteger(value.sequence, "tts_chunk.sequence"),
+      sampleRateHz: requiredPositiveInteger(value.sampleRateHz, "tts_chunk.sampleRateHz"),
+      encoding: requiredLiteral(value.encoding, "pcm_s16le", "tts_chunk.encoding"),
+      channels: requiredLiteral(value.channels, 1, "tts_chunk.channels"),
+      byteLength: requiredNonNegativeInteger(value.byteLength, "tts_chunk.byteLength"),
+      durationMs: requiredNonNegativeInteger(value.durationMs, "tts_chunk.durationMs"),
+    };
+  }
+  if (type === "metrics") {
+    return {
+      type,
+      sttMs: optionalNumber(value.sttMs, "metrics.sttMs"),
+      llmTTFTMs: optionalNumber(value.llmTTFTMs, "metrics.llmTTFTMs"),
+      ttsTTFBMs: optionalNumber(value.ttsTTFBMs, "metrics.ttsTTFBMs"),
+      e2eMs: optionalNumber(value.e2eMs, "metrics.e2eMs"),
+    };
+  }
+  if (type === "error") {
+    return {
+      type,
+      component: optionalString(value.component, "error.component"),
+      category: optionalString(value.category, "error.category"),
+      message: requiredString(value.message, "error.message"),
+    };
+  }
+  throw new Error(`Unsupported Syrinx websocket message type: ${type}`);
+}
+
+function parseReadyAudio(value: unknown): SyrinxReadyAudio {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("ready.audio must be an object");
+  return {
+    inputSampleRateHz: requiredPositiveInteger(value.inputSampleRateHz, "ready.audio.inputSampleRateHz"),
+    outputSampleRateHz: requiredPositiveInteger(value.outputSampleRateHz, "ready.audio.outputSampleRateHz"),
+    encoding: requiredLiteral(value.encoding, "pcm_s16le", "ready.audio.encoding"),
+    channels: requiredLiteral(value.channels, 1, "ready.audio.channels"),
+    binaryEnvelope: value.binaryEnvelope === undefined
+      ? undefined
+      : requiredLiteral(value.binaryEnvelope, "syrinx.audio.v1", "ready.audio.binaryEnvelope"),
+    rawBinaryInput: optionalBoolean(value.rawBinaryInput, "ready.audio.rawBinaryInput"),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requiredString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${name} must be a non-empty string`);
+  return value;
+}
+
+function optionalString(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  return requiredString(value, name);
+}
+
+function requiredPositiveInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function requiredNonNegativeInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function optionalNumber(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${name} must be a finite number`);
+  return value;
+}
+
+function optionalBoolean(value: unknown, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
+  return value;
+}
+
+function requiredLiteral<T extends string | number>(value: unknown, expected: T, name: string): T {
+  if (value !== expected) throw new Error(`${name} must be ${String(expected)}`);
+  return expected;
 }

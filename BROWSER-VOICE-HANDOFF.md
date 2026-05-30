@@ -120,4 +120,5 @@ pnpm --filter @asyncdot-example/02-hello-voice-headless typecheck
 - The review page exposes `window.__syrinxReviewState` for smoke tests: sent frame count, sent byte count, context ids, started turn count, browser `AudioContext` sample rate, and target sample rate.
 - Browser outbound audio is mono PCM16 in `syrinx.audio.v1` binary envelopes with `sampleRateHz`; server normalizes to engine sample rate. JSON audio frames remain supported for scripted smokes only when they include explicit `sampleRateHz`.
 - Binary assistant audio uses the default `syrinx.audio.v1` envelope for in-frame turn/sample-rate/byte metadata. The preceding `tts_chunk` remains useful for UI lifecycle timing.
+- The browser client validates inbound server JSON before dispatching UI events. Malformed server event shapes are surfaced through the client `error` event and should be treated as transport/protocol failures during review.
 - Do not add local STT transcript reconstruction in the browser. Provider final text must remain provider-owned.
