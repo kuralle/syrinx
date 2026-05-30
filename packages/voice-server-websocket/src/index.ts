@@ -582,7 +582,7 @@ function handleClientMessage(
   }
 
   const text = rawDataToText(data);
-  const message = JSON.parse(text) as ClientMessage;
+  const message = parseClientMessage(JSON.parse(text));
   if (message.type === "ping") return currentContextId;
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
@@ -614,6 +614,48 @@ function handleClientMessage(
     return nextContextId;
   }
   throw new Error("Unsupported client message type");
+}
+
+function parseClientMessage(value: unknown): ClientMessage {
+  if (!isRecord(value)) throw new Error("Websocket JSON message must be an object");
+  const type = value.type;
+  if (type === "ping") return { type };
+  if (type === "text") {
+    return {
+      type,
+      text: requiredString(value.text, "text"),
+      contextId: optionalContextId(value.contextId),
+    };
+  }
+  if (type === "audio") {
+    return {
+      type,
+      audio: requiredString(value.audio, "audio"),
+      contextId: optionalContextId(value.contextId),
+      sampleRateHz: requiredJsonAudioSampleRate(value.sampleRateHz),
+      sequence: optionalSequence(value.sequence),
+    };
+  }
+  throw new Error("Unsupported client message type");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requiredString(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Websocket JSON ${fieldName} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalContextId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("Websocket JSON contextId must be a non-empty string");
+  }
+  return value;
 }
 
 function rememberInputSequence(
