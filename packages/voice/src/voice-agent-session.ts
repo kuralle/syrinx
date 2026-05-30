@@ -40,6 +40,7 @@ import type {
   TextToSpeechTextPacket,
   TextToSpeechDonePacket,
   TextToSpeechEndPacket,
+  TtsErrorPacket,
   RecordAssistantAudioPacket,
   RecordUserAudioPacket,
   SpeechToTextAudioPacket,
@@ -102,6 +103,16 @@ export interface VoiceAgentSessionConfig {
    * Default: 4000.
    */
   vaqiMissedResponseMs?: number;
+  /**
+   * Max ms of silence from the TTS provider AFTER it has begun producing audio for a
+   * turn before the output is treated as a stalled provider. Guards against a TTS
+   * provider that goes silent mid-utterance without `tts.end` or an error (dead air).
+   * Armed only after the first `tts.audio`, so first-audio latency (which can be many
+   * seconds on some providers, e.g. Gemini) is never watchdogged. On breach, a
+   * recoverable `tts.error` (NetworkTimeout) is emitted so the turn fails visibly
+   * instead of hanging. 0 disables. Default: 15000.
+   */
+  ttsStallMs?: number;
 }
 
 export interface VoiceAgentSessionEvents {
@@ -166,12 +177,16 @@ export class VoiceAgentSession {
   private vaqiMissedResponseTimer: ReturnType<typeof setTimeout> | null = null;
   private vaqiMissedResponseContextId = "";
   private vaqiMissedResponseStartMs = 0;
+  private readonly ttsStallMs: number;
+  private ttsStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private ttsStallContextId = "";
 
   constructor(config: VoiceAgentSessionConfig) {
     this.config = config;
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
     this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
+    this.ttsStallMs = config.ttsStallMs ?? 15000;
 
     // Debug events
     const [stream, push] = createConversationEventStream();
@@ -268,6 +283,7 @@ export class VoiceAgentSession {
     this.idleTimeout.dispose();
     this.clearSttForceFinalizeTimer();
     this.clearVaqiMissedResponseTimer();
+    this.clearTtsStallTimer();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
     this.ttsTextBuffers.clear();
@@ -847,6 +863,8 @@ export class VoiceAgentSession {
     }
 
     this.activeTtsContextIds.add(pkt.contextId);
+    // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
+    this.armTtsStallTimer(pkt.contextId);
 
     // Extend idle timeout by audio duration to prevent timeout during playback.
     const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
@@ -875,6 +893,7 @@ export class VoiceAgentSession {
 
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
     this.activeTtsContextIds.delete(pkt.contextId);
+    this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
       type: "end",
@@ -887,6 +906,7 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
     this.activeTtsContextIds.delete(pkt.contextId);
+    this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "turn",
       type: "interrupt_detected",
@@ -1110,6 +1130,53 @@ export class VoiceAgentSession {
     }
     this.vaqiMissedResponseContextId = "";
     this.vaqiMissedResponseStartMs = 0;
+  }
+
+  // G3: TTS output stall watchdog. Armed/reset on each tts.audio; if the provider goes
+  // silent (no further audio and no tts.end) for ttsStallMs after producing audio, the
+  // turn is treated as a stalled provider and surfaced as a recoverable tts.error so it
+  // fails visibly instead of hanging. Only arms after first audio, so first-audio latency
+  // is never watchdogged.
+  private armTtsStallTimer(contextId: string): void {
+    if (this.ttsStallMs <= 0) return;
+    this.clearTtsStallTimer();
+    this.ttsStallContextId = contextId;
+    this.ttsStallTimer = setTimeout(() => {
+      this.ttsStallTimer = null;
+      const cid = this.ttsStallContextId;
+      this.ttsStallContextId = "";
+      if (this.interruptedGenerationContextIds.has(cid)) return; // interrupted, not stalled
+      if (!this.activeTtsContextIds.has(cid)) return; // already ended
+      this.activeTtsContextIds.delete(cid);
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: cid,
+        timestampMs: Date.now(),
+        name: "tts.stall_detected",
+        value: String(this.ttsStallMs),
+      });
+      this.bus.push(Route.Critical, {
+        kind: "tts.error",
+        contextId: cid,
+        timestampMs: Date.now(),
+        component: "tts",
+        category: ErrorCategory.NetworkTimeout,
+        cause: new Error(`TTS output stalled: no audio or tts.end for ${String(this.ttsStallMs)}ms`),
+        isRecoverable: true,
+      } as TtsErrorPacket);
+    }, this.ttsStallMs);
+  }
+
+  private clearTtsStallTimer(): void {
+    if (this.ttsStallTimer) {
+      clearTimeout(this.ttsStallTimer);
+      this.ttsStallTimer = null;
+    }
+    this.ttsStallContextId = "";
+  }
+
+  private clearTtsStallTimerFor(contextId: string): void {
+    if (this.ttsStallContextId === contextId) this.clearTtsStallTimer();
   }
 
   private findForceFinalizableSttPlugin(): ForceFinalizableSttPlugin | null {
