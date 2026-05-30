@@ -50,6 +50,24 @@ describe("Fly synthetic carrier artifact validation", () => {
     expect(failures).toContain("twilio bot events.jsonl was not downloaded");
   });
 
+  it("rejects recorder event streams without user-audio evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "twilio", { omitUserAudioEvent: true });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("twilio bot events.jsonl missing record.user_audio");
+  });
+
+  it("rejects recorder event streams that disagree with manifest packet counts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "telnyx", { recorderEventPackets: 99 });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("telnyx recorder event packet count 5 did not match manifest 99");
+  });
+
   it("rejects carrier WAVs with the wrong sample rate", async () => {
     const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
     const summary = await writeProviderEvidence(root, "smartpbx", { carrierSampleRateHz: 16000 });
@@ -138,6 +156,8 @@ async function writeProviderEvidence(
     readonly qualityGateFailures?: string[];
     readonly downloadedOutboundFrames?: number;
     readonly carrierOutboundSampleCount?: number;
+    readonly omitUserAudioEvent?: boolean;
+    readonly recorderEventPackets?: number;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -187,15 +207,17 @@ async function writeProviderEvidence(
         truncations: 0,
       },
     },
-    events: { path: join(botDir, "events.jsonl"), packets: 4, byteLength: 256 },
+    events: { path: join(botDir, "events.jsonl"), packets: options.recorderEventPackets ?? 5, byteLength: 256 },
   });
   if (!options.omitEvents) {
-    await writeFile(join(botDir, "events.jsonl"), [
+    const events = [
       jsonLine("stt.result"),
       jsonLine("llm.delta"),
       jsonLine("tts.audio"),
       jsonLine("record.assistant_audio"),
-    ].join(""));
+    ];
+    if (!options.omitUserAudioEvent) events.unshift(jsonLine("record.user_audio"));
+    await writeFile(join(botDir, "events.jsonl"), events.join(""));
   }
 
   await writeJson(join(carrierDir, "call-result.json"), callResult(provider, [], {
