@@ -113,6 +113,14 @@ export interface VoiceAgentSessionConfig {
    * instead of hanging. 0 disables. Default: 15000.
    */
   ttsStallMs?: number;
+  /**
+   * Spoken fallback when the reasoning (LLM) layer fails a turn with a recoverable
+   * error. "Never fail silently" (Deepgram guide Ch3): rather than ending the turn in
+   * unexplained silence, the agent speaks this line via the normal TTS path (which is
+   * unaffected by an LLM failure). Empty string disables. Default: a brief apology.
+   * (TTS/STT-failure fallback needs canned audio / a clarification prompt — out of scope.)
+   */
+  errorFallbackText?: string;
 }
 
 export interface VoiceAgentSessionEvents {
@@ -140,6 +148,9 @@ interface TtsTextBuffer {
 interface SentenceSegment {
   segment: string;
 }
+
+/** Suffix marking a context created to speak an error fallback, so it never recurses. */
+const FALLBACK_CONTEXT_SUFFIX = ":error-fallback";
 
 // =============================================================================
 // Session Implementation
@@ -180,6 +191,8 @@ export class VoiceAgentSession {
   private readonly ttsStallMs: number;
   private ttsStallTimer: ReturnType<typeof setTimeout> | null = null;
   private ttsStallContextId = "";
+  private readonly errorFallbackText: string;
+  private fallbackInjectedContexts = new Set<string>();
 
   constructor(config: VoiceAgentSessionConfig) {
     this.config = config;
@@ -187,6 +200,7 @@ export class VoiceAgentSession {
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
     this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
     this.ttsStallMs = config.ttsStallMs ?? 15000;
+    this.errorFallbackText = config.errorFallbackText ?? "Sorry, I'm having trouble right now. Could you try again?";
 
     // Debug events
     const [stream, push] = createConversationEventStream();
@@ -286,6 +300,7 @@ export class VoiceAgentSession {
     this.clearTtsStallTimer();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
+    this.fallbackInjectedContexts.clear();
     this.ttsTextBuffers.clear();
     this.interruptedGenerationContextIds.clear();
 
@@ -974,8 +989,36 @@ export class VoiceAgentSession {
       void this.close().catch(() => {
         // Best effort
       });
+      return;
     }
-    // Recoverable errors are handled by individual component retry logic
+    // Recoverable errors are handled by individual component retry logic. But never
+    // leave the caller in unexplained silence: if the reasoning layer failed the turn,
+    // speak a graceful fallback (G4 — Deepgram guide "never fail silently").
+    this.maybeSpeakErrorFallback(pkt);
+  }
+
+  private maybeSpeakErrorFallback(pkt: VoiceErrorPacket): void {
+    if (!this.errorFallbackText) return;
+    // Only the reasoning layer: a TTS/STT failure can't reliably use the same TTS path
+    // for a fallback (that needs canned audio / a clarification prompt — out of scope).
+    if (pkt.component !== "llm") return;
+    const contextId = pkt.contextId;
+    if (contextId.endsWith(FALLBACK_CONTEXT_SUFFIX)) return; // never fall back for a fallback
+    if (this.fallbackInjectedContexts.has(contextId)) return; // at most once per turn
+    this.fallbackInjectedContexts.add(contextId);
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name: "error.fallback_spoken",
+      value: pkt.component,
+    });
+    this.bus.push(Route.Main, {
+      kind: "inject.message",
+      contextId: `${contextId}${FALLBACK_CONTEXT_SUFFIX}`,
+      timestampMs: Date.now(),
+      text: this.errorFallbackText,
+    } as InjectMessagePacket);
   }
 
   private handleInitFailed(pkt: InitializationFailedPacket): void {
