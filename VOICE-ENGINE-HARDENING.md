@@ -2,6 +2,25 @@
 
 Date: 2026-05-29
 
+## Goal Exit Conditions
+
+Voice-engine hardening is complete only when the engine has current, reproducible evidence for all of these conditions:
+
+- Browser websocket voice-to-voice is continuous-listening by default after microphone start; VAD/Smart Turn and provider finalization decide turn boundaries, not push-to-talk or fixture-specific gates.
+- Browser and telephony websocket transports reject malformed input at the provider boundary: missing or inconsistent sample-rate evidence, mixed sample rates inside one logical stream, invalid PCM16 byte alignment, malformed envelopes, malformed base64 media, duplicate or regressing sequence/chunk metadata, oversized messages, and slow outbound consumers.
+- Websocket sessions prove audio delivery separately from transcript quality: every smoke artifact records declared encoding, source sample rate, wire bytes, decoded PCM bytes, chunk/frame counts, timing, and lifecycle events needed to reconstruct what crossed the transport.
+- STT, LLM, and TTS provider adapters follow provider contracts instead of local transcript or timing workarounds: persistent realtime websockets where supported, provider-native finalize/keepalive/close/cancel semantics, explicit sample-rate handling, structured provider errors, and no language-specific transcript reconstruction.
+- Interruption is terminal for the interrupted generation context across the core engine, browser websocket, Twilio, Telnyx, SmartPBX, TTS providers, and recorder. Late LLM/TTS/provider output for that context must be ignored or measured, never played or recorded as heard audio.
+- Recorder artifacts are audit-grade evidence: user and assistant PCM/WAV files, events JSONL, and manifest metadata are written after pending file writes drain; manifests are runtime-validated before use; assistant audio records provider sample-rate metadata; truncation reflects unheard queued playout; and per-turn plus stacked recordings can be locally transcribed.
+- The live university voice-to-voice smoke passes three turns with Deepgram STT, Gemini agent, Cartesia or configured TTS, recorder WAV export, local Whisper transcription of recorded user and assistant audio, stage latency metrics, and preserved provider/agent/TTS transcripts.
+- Twilio, Telnyx, and SmartPBX adapter smokes pass under clean and impaired network profiles using provider-shaped websocket media, paced outbound playout, carrier mark or local playout-drain evidence, decoded carrier WAV export, recorder manifests, and local Whisper checks where enabled.
+- The two-host Fly synthetic carrier path passes as the production-replication floor: local Mac sends fixture audio to a Fly carrier sandbox, the carrier opens public-TLS provider-shaped websockets to a Fly agent bot, the bot uses live STT/LLM/TTS plus recorder, carrier-bound assistant media returns, bot/carrier artifacts are downloaded, and spike Fly machines are destroyed afterward.
+- Real Twilio/Telnyx/SmartPBX account validation is documented as provider-account evidence, with commands and expected artifacts, but it is not required to close core websocket transport hardening when those accounts are unavailable.
+- Human handoff docs explain how to run the browser HTML/server, live recorder smoke, local/emulated telephony smokes, Fly synthetic carrier run, and real-provider account validation; each command names the artifact paths a developer should inspect or transcribe.
+- The repository is green after the final hardening change with targeted tests for the changed surface, `pnpm -r typecheck`, `git diff --check`, and `pnpm -r test`, and the final commit is pushed to `origin/v2`.
+
+The goal is not complete if any exit condition depends on a TypeScript-only cast, a fixture-specific semantic gate, an assumed provider sample rate, a missing artifact, an unvalidated parsed JSON manifest, or a smoke that passes without proving both wire-level delivery and decoded PCM evidence.
+
 ## Current Verdict
 
 Syrinx should keep the websocket-first engine, but the transport must be explicit about audio format and lifecycle. The active production contract is PCM16 mono at 16 kHz into the kernel, Smart Turn gated STT finalization, streamed agent text into TTS, and binary PCM output with sideband lifecycle metadata.
