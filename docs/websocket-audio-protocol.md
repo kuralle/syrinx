@@ -42,6 +42,8 @@ The server keeps the underlying `VoiceAgentSession` alive during the retention w
 
 The server accepts frames immediately after WebSocket connection and buffers bounded early input until `ready`. Clients should still wait for `ready` before streaming microphone audio so they know the negotiated audio contract and `turnId`, but a fast client sending a small frame after `open` will not silently lose it during session startup. If pending pre-ready input exceeds `maxInboundMessageBytes`, the server closes with code `1009`.
 
+Clients can send JSON messages only as objects with a supported `type`. `text` messages require a non-empty string `text`; `audio` messages require a non-empty base64 string `audio`; optional `contextId` must be a non-empty string. Malformed JSON shapes are rejected at the websocket boundary before they can become engine bus packets.
+
 Clients can send JSON audio frames. `sampleRateHz` is required; the server rejects JSON audio that does not declare its source rate.
 
 ```json

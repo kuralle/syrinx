@@ -764,6 +764,130 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("rejects non-object websocket JSON messages before forwarding them", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const textPackets: UserTextReceivedPacket[] = [];
+    const audioPackets: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.text_received", (pkt) => {
+      textPackets.push(pkt as UserTextReceivedPacket);
+    });
+    session.bus.on("user.audio_received", (pkt) => {
+      audioPackets.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send("null");
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket JSON message must be an object",
+    });
+    expect(textPackets).toEqual([]);
+    expect(audioPackets).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects malformed websocket JSON text messages before forwarding them", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const textPackets: UserTextReceivedPacket[] = [];
+    session.bus.on("user.text_received", (pkt) => {
+      textPackets.push(pkt as UserTextReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(JSON.stringify({ type: "text", text: 42, contextId: "turn-bad-text" }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket JSON text must be a non-empty string",
+    });
+    expect(textPackets).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("rejects malformed websocket JSON context identifiers before forwarding them", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const errorMessage = new Promise<any>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const message = JSON.parse(data.toString());
+        if (message.type === "error") resolve(message);
+      });
+    });
+
+    client.send(JSON.stringify({
+      type: "audio",
+      contextId: 123,
+      sampleRateHz: 16000,
+      audio: Buffer.from(new Int16Array([0, 1000]).buffer).toString("base64"),
+    }));
+
+    await expect(errorMessage).resolves.toMatchObject({
+      type: "error",
+      component: "transport",
+      category: "invalid_input",
+      message: "Websocket JSON contextId must be a non-empty string",
+    });
+    expect(received).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("rejects JSON audio that changes sample rate inside the same websocket context", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const received: UserAudioReceivedPacket[] = [];
