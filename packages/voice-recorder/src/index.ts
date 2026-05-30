@@ -21,6 +21,7 @@ export interface VoiceSessionRecorderConfig {
   readonly userAudioFile?: string;
   readonly assistantAudioFile?: string;
   readonly manifestFile?: string;
+  readonly conversationFile?: string;
   readonly userSampleRateHz?: number;
   readonly assistantSampleRateHz?: number;
 }
@@ -31,6 +32,7 @@ export interface VoiceSessionRecorderFiles {
   readonly userAudioPath: string;
   readonly assistantAudioPath: string;
   readonly manifestPath: string;
+  readonly conversationAudioPath?: string;
 }
 
 export interface VoiceSessionRecorderManifest {
@@ -59,6 +61,14 @@ export interface VoiceSessionRecorderManifest {
       readonly chunks: number;
       readonly truncations: number;
     };
+    readonly conversation?: {
+      readonly path: string;
+      readonly sampleRateHz: number;
+      readonly channels: 2;
+      readonly encoding: "pcm_s16le";
+      readonly byteLength: number;
+      readonly durationMs: number;
+    };
   };
   readonly events: {
     readonly path: string;
@@ -75,6 +85,8 @@ type PacketRecord = {
   readonly packet: Record<string, unknown>;
 };
 
+type AudioChunk = { readonly byteOffset: number; readonly data: Uint8Array };
+
 export class VoiceSessionRecorder implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private events: WriteStream | null = null;
@@ -82,7 +94,9 @@ export class VoiceSessionRecorder implements VoicePlugin {
   private assistantAudio: WriteStream | null = null;
   private sessionId: string | undefined;
   private userSampleRateHz = 16000;
-  private assistantChunks: Array<{ readonly byteOffset: number; readonly data: Uint8Array }> = [];
+  private userChunks: AudioChunk[] = [];
+  private userCursorBytes = 0;
+  private assistantChunks: AudioChunk[] = [];
   private assistantCursorBytes = 0;
   private assistantSampleRateHz = 24000;
   private assistantSampleRateLocked = false;
@@ -94,6 +108,9 @@ export class VoiceSessionRecorder implements VoicePlugin {
   private assistantTruncations = 0;
   private eventBytes = 0;
   private eventPackets = 0;
+  private conversationFile = "conversation.wav";
+  private conversationAudioPath = "";
+  private conversationAudioBytes = 0;
   private packetReader: ReadableStreamDefaultReader<{ route: Route; packet: VoicePacket }> | null = null;
   private packetPump: Promise<void> | null = null;
   private pendingWrites = new Set<Promise<void>>();
@@ -115,6 +132,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.sessionId = recorderConfig.sessionId;
     this.userSampleRateHz = recorderConfig.userSampleRateHz ?? 16000;
     this.assistantSampleRateHz = recorderConfig.assistantSampleRateHz ?? 24000;
+    this.conversationFile = recorderConfig.conversationFile ?? "conversation.wav";
     this.startedAtMs = Date.now();
 
     const eventsPath = join(recorderConfig.outputDir, recorderConfig.eventsFile ?? "events.jsonl");
@@ -124,6 +142,10 @@ export class VoiceSessionRecorder implements VoicePlugin {
       recorderConfig.assistantAudioFile ?? "assistant_audio.pcm",
     );
     const manifestPath = join(recorderConfig.outputDir, recorderConfig.manifestFile ?? "manifest.json");
+    const conversationAudioPath = this.conversationFile
+      ? join(recorderConfig.outputDir, this.conversationFile)
+      : "";
+    this.conversationAudioPath = conversationAudioPath;
 
     this.bus = bus;
     this.events = createWriteStream(eventsPath, { flags: "w" });
@@ -138,6 +160,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
       userAudioPath,
       assistantAudioPath,
       manifestPath,
+      ...(conversationAudioPath ? { conversationAudioPath } : {}),
     };
 
     this.packetReader = bus.allPackets.getReader();
@@ -154,10 +177,14 @@ export class VoiceSessionRecorder implements VoicePlugin {
     }
     await this.packetPump?.catch(() => undefined);
 
-    await this.flushAssistantAudio();
+    const userPcm = await this.flushUserAudio();
+    const assistantPcm = await this.flushAssistantAudio();
     await this.waitForPendingWrites();
     const writeFailure = this.writeFailure;
-    if (!writeFailure) await this.writeManifest();
+    if (!writeFailure) {
+      await this.writeConversationWav(userPcm, assistantPcm);
+      await this.writeManifest();
+    }
 
     await Promise.all([
       closeWriteStream(this.events),
@@ -170,6 +197,8 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.userAudio = null;
     this.assistantAudio = null;
     this.sessionId = undefined;
+    this.userChunks = [];
+    this.userCursorBytes = 0;
     this.assistantChunks = [];
     this.assistantCursorBytes = 0;
     this.userAudioBytes = 0;
@@ -178,6 +207,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.assistantAudioChunks = 0;
     this.assistantTruncations = 0;
     this.assistantSampleRateLocked = false;
+    this.conversationAudioBytes = 0;
     this.eventBytes = 0;
     this.eventPackets = 0;
     this.packetReader = null;
@@ -224,9 +254,12 @@ export class VoiceSessionRecorder implements VoicePlugin {
   private recordUserAudio(packet: RecordUserAudioPacket): void {
     if (packet.audio.byteLength === 0) return;
     if (!this.validatePcm16ByteLength(packet.kind, packet.audio)) return;
-    this.userAudioChunks += 1;
-    this.userAudioBytes += packet.audio.byteLength;
-    this.writeStreamData(this.userAudio, packet.audio);
+    const byteOffset = this.userChunks.length === 0
+      ? 0
+      : Math.max(this.userCursorBytes, this.currentUserWallOffsetBytes());
+    const copy = Uint8Array.from(packet.audio);
+    this.userChunks.push({ byteOffset, data: copy });
+    this.userCursorBytes = byteOffset + copy.byteLength;
   }
 
   private recordAssistantAudio(packet: RecordAssistantAudioPacket): void {
@@ -249,7 +282,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
 
   private truncateAssistantAudio(): void {
     const cutoff = this.currentAssistantWallOffsetBytes();
-    const kept: Array<{ readonly byteOffset: number; readonly data: Uint8Array }> = [];
+    const kept: AudioChunk[] = [];
     for (const chunk of this.assistantChunks) {
       const chunkEnd = chunk.byteOffset + chunk.data.byteLength;
       if (chunkEnd <= cutoff) {
@@ -264,31 +297,61 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.assistantCursorBytes = cutoff;
   }
 
-  private async flushAssistantAudio(): Promise<void> {
-    const stream = this.assistantAudio;
-    if (!stream) return;
-    let cursor = 0;
-    this.assistantAudioBytes = 0;
-    this.assistantAudioChunks = 0;
-    for (const chunk of this.assistantChunks) {
-      if (chunk.byteOffset > cursor) {
-        const silence = Buffer.alloc(chunk.byteOffset - cursor);
-        this.writeStreamData(stream, silence);
-        this.assistantAudioBytes += silence.byteLength;
-        cursor += silence.byteLength;
-      }
-      this.writeStreamData(stream, chunk.data);
-      this.assistantAudioChunks += 1;
-      this.assistantAudioBytes += chunk.data.byteLength;
-      cursor = chunk.byteOffset + chunk.data.byteLength;
+  private async flushUserAudio(): Promise<Buffer> {
+    const stream = this.userAudio;
+    // The persisted user track stays contiguous (speech only) for backward
+    // compatibility with downstream per-turn slicing. Wall-clock alignment (silence
+    // for inter-turn gaps) is applied only to the combined conversation.wav.
+    const contiguous = this.userChunks.length > 0
+      ? Buffer.concat(this.userChunks.map((chunk) => Buffer.from(chunk.data)))
+      : Buffer.alloc(0);
+    this.userAudioBytes = contiguous.byteLength;
+    this.userAudioChunks = this.userChunks.length;
+    if (stream && contiguous.byteLength > 0) {
+      this.writeStreamData(stream, contiguous);
     }
     await this.waitForPendingWrites();
+    return renderChunks(this.userChunks).pcm;
+  }
+
+  private async flushAssistantAudio(): Promise<Buffer> {
+    const stream = this.assistantAudio;
+    const { pcm, bytes, count } = renderChunks(this.assistantChunks);
+    this.assistantAudioBytes = bytes;
+    this.assistantAudioChunks = count;
+    if (stream && pcm.byteLength > 0) {
+      this.writeStreamData(stream, pcm);
+    }
+    await this.waitForPendingWrites();
+    return pcm;
+  }
+
+  private async writeConversationWav(userPcm: Buffer, assistantPcm: Buffer): Promise<void> {
+    if (!this.conversationAudioPath) return;
+    const userRate = this.userSampleRateHz;
+    const assistantRate = this.assistantSampleRateHz;
+    const resampled = assistantRate !== userRate
+      ? resampleLinear(assistantPcm, assistantRate, userRate)
+      : assistantPcm;
+    const stereo = interleaveInt16(userPcm, resampled);
+    this.conversationAudioBytes = stereo.byteLength;
+    await writeFile(this.conversationAudioPath, buildWav(stereo, 2, userRate));
   }
 
   private async writeManifest(): Promise<void> {
     const files = this.filesValue;
     if (!files) return;
     const closedAtMs = Date.now();
+    const conversationEntry = this.conversationAudioPath
+      ? {
+          path: this.conversationAudioPath,
+          sampleRateHz: this.userSampleRateHz,
+          channels: 2 as const,
+          encoding: "pcm_s16le" as const,
+          byteLength: this.conversationAudioBytes,
+          durationMs: Math.round((this.conversationAudioBytes / 4 / this.userSampleRateHz) * 1000),
+        }
+      : undefined;
     const manifest: VoiceSessionRecorderManifest = {
       schemaVersion: 1,
       sessionId: this.sessionId,
@@ -315,6 +378,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
           chunks: this.assistantAudioChunks,
           truncations: this.assistantTruncations,
         },
+        ...(conversationEntry ? { conversation: conversationEntry } : {}),
       },
       events: {
         path: files.eventsPath,
@@ -324,6 +388,12 @@ export class VoiceSessionRecorder implements VoicePlugin {
     };
     assertVoiceSessionRecorderManifest(manifest);
     await writeFile(files.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  }
+
+  private currentUserWallOffsetBytes(): number {
+    const elapsedMs = Math.max(0, Date.now() - this.startedAtMs);
+    const bytes = Math.floor((elapsedMs * this.userSampleRateHz * 2) / 1000);
+    return bytes - (bytes % 2);
   }
 
   private currentAssistantWallOffsetBytes(): number {
@@ -433,6 +503,17 @@ export function validateVoiceSessionRecorderManifest(manifest: unknown): string[
   } else {
     validateRecorderAudio("audio.user", audio["user"], failures);
     validateRecorderAudio("audio.assistant", audio["assistant"], failures);
+    if (isRecord(audio["conversation"])) {
+      validateConversationAudio("audio.conversation", audio["conversation"], failures);
+      if (
+        isRecorderFiles(files)
+        && typeof files["conversationAudioPath"] === "string"
+        && files["conversationAudioPath"].length > 0
+        && audio["conversation"]["path"] !== files["conversationAudioPath"]
+      ) {
+        failures.push("audio.conversation.path must match files.conversationAudioPath");
+      }
+    }
   }
   const userAudio = isRecord(audio) && isRecord(audio["user"]) ? audio["user"] : null;
   const assistantAudio = isRecord(audio) && isRecord(audio["assistant"]) ? audio["assistant"] : null;
@@ -472,6 +553,7 @@ class VoiceSessionRecorderWithDefaultConfig extends VoiceSessionRecorder {
       user_audio_file: this.defaultConfig.userAudioFile,
       assistant_audio_file: this.defaultConfig.assistantAudioFile,
       manifest_file: this.defaultConfig.manifestFile,
+      conversation_file: this.defaultConfig.conversationFile,
       user_sample_rate_hz: this.defaultConfig.userSampleRateHz,
       assistant_sample_rate_hz: this.defaultConfig.assistantSampleRateHz,
       ...config,
@@ -482,6 +564,9 @@ class VoiceSessionRecorderWithDefaultConfig extends VoiceSessionRecorder {
 function readRecorderConfig(config: PluginConfig): VoiceSessionRecorderConfig {
   const baseDir = readString(config, "output_dir") ?? readString(config, "dir") ?? "recordings";
   const sessionId = readString(config, "session_id");
+  // Allow "" to disable; undefined means use default filename.
+  const conversationFileRaw = config["conversation_file"];
+  const conversationFile = typeof conversationFileRaw === "string" ? conversationFileRaw : "conversation.wav";
   return {
     outputDir: resolve(sessionId ? join(baseDir, sessionId) : baseDir),
     sessionId,
@@ -489,6 +574,7 @@ function readRecorderConfig(config: PluginConfig): VoiceSessionRecorderConfig {
     userAudioFile: readString(config, "user_audio_file"),
     assistantAudioFile: readString(config, "assistant_audio_file"),
     manifestFile: readString(config, "manifest_file"),
+    conversationFile,
     userSampleRateHz: readPositiveInteger(config, "user_sample_rate_hz"),
     assistantSampleRateHz: readPositiveInteger(config, "assistant_sample_rate_hz"),
   };
@@ -533,8 +619,11 @@ function isRecorderFiles(value: unknown): value is VoiceSessionRecorderFiles {
 }
 
 function validateRecorderFiles(files: VoiceSessionRecorderFiles, failures: string[]): void {
-  for (const [key, value] of Object.entries(files) as Array<[keyof VoiceSessionRecorderFiles, string]>) {
-    if (typeof value !== "string" || value.length === 0) {
+  const required: Array<keyof VoiceSessionRecorderFiles> = [
+    "directory", "eventsPath", "userAudioPath", "assistantAudioPath", "manifestPath",
+  ];
+  for (const key of required) {
+    if (typeof files[key] !== "string" || (files[key] as string).length === 0) {
       failures.push(`files.${key} must be a non-empty string`);
     }
   }
@@ -560,6 +649,23 @@ function validateRecorderAudio(
   if (!isNonNegativeInteger(audio["chunks"])) failures.push(`${label}.chunks must be a non-negative integer`);
   if (isPositiveInteger(audio["sampleRateHz"]) && isNonNegativeInteger(audio["byteLength"])) {
     const expectedDurationMs = pcm16DurationMs(audio["byteLength"], audio["sampleRateHz"]);
+    if (audio["durationMs"] !== expectedDurationMs) {
+      failures.push(`${label}.durationMs ${String(audio["durationMs"])} did not match ${String(expectedDurationMs)} from byte count/sample rate`);
+    }
+  }
+}
+
+function validateConversationAudio(label: string, audio: Record<string, unknown>, failures: string[]): void {
+  if (!isPositiveInteger(audio["sampleRateHz"])) failures.push(`${label}.sampleRateHz must be a positive integer`);
+  if (audio["encoding"] !== "pcm_s16le") failures.push(`${label}.encoding must be pcm_s16le`);
+  if (audio["channels"] !== 2) failures.push(`${label}.channels must be 2`);
+  if (!isNonNegativeInteger(audio["byteLength"])) failures.push(`${label}.byteLength must be a non-negative integer`);
+  if (isNonNegativeInteger(audio["byteLength"]) && audio["byteLength"] % 4 !== 0) {
+    failures.push(`${label}.byteLength must be a multiple of 4 (stereo PCM16 frame)`);
+  }
+  if (!isNonNegativeInteger(audio["durationMs"])) failures.push(`${label}.durationMs must be a non-negative integer`);
+  if (isPositiveInteger(audio["sampleRateHz"]) && isNonNegativeInteger(audio["byteLength"])) {
+    const expectedDurationMs = Math.round((audio["byteLength"] / 4 / audio["sampleRateHz"]) * 1000);
     if (audio["durationMs"] !== expectedDurationMs) {
       failures.push(`${label}.durationMs ${String(audio["durationMs"])} did not match ${String(expectedDurationMs)} from byte count/sample rate`);
     }
@@ -599,4 +705,80 @@ async function closeWriteStream(stream: WriteStream | null): Promise<void> {
       resolveClose();
     });
   });
+}
+
+function renderChunks(chunks: AudioChunk[]): { pcm: Buffer; bytes: number; count: number } {
+  const parts: Buffer[] = [];
+  let cursor = 0;
+  let bytes = 0;
+  let count = 0;
+  for (const chunk of chunks) {
+    if (chunk.byteOffset > cursor) {
+      const silence = Buffer.alloc(chunk.byteOffset - cursor);
+      parts.push(silence);
+      bytes += silence.byteLength;
+      cursor += silence.byteLength;
+    }
+    const buf = Buffer.from(chunk.data);
+    parts.push(buf);
+    count += 1;
+    bytes += chunk.data.byteLength;
+    cursor = chunk.byteOffset + chunk.data.byteLength;
+  }
+  return { pcm: parts.length > 0 ? Buffer.concat(parts) : Buffer.alloc(0), bytes, count };
+}
+
+// Linear interpolation resampler for int16 mono PCM. Quality is sufficient for a recording artifact.
+function resampleLinear(src: Buffer, srcRate: number, dstRate: number): Buffer {
+  if (srcRate === dstRate) return src;
+  const srcSamples = src.byteLength >> 1;
+  const dstSamples = Math.round((srcSamples * dstRate) / srcRate);
+  if (dstSamples === 0 || srcSamples === 0) return Buffer.alloc(0);
+  const dst = Buffer.allocUnsafe(dstSamples * 2);
+  for (let i = 0; i < dstSamples; i++) {
+    const srcPos = (i * srcRate) / dstRate;
+    const srcIdx = Math.floor(srcPos);
+    const frac = srcPos - srcIdx;
+    const s0 = src.readInt16LE(Math.min(srcIdx, srcSamples - 1) * 2);
+    const s1 = src.readInt16LE(Math.min(srcIdx + 1, srcSamples - 1) * 2);
+    const val = Math.round(s0 + frac * (s1 - s0));
+    dst.writeInt16LE(Math.max(-32768, Math.min(32767, val)), i * 2);
+  }
+  return dst;
+}
+
+function interleaveInt16(left: Buffer, right: Buffer): Buffer {
+  const leftSamples = left.byteLength >> 1;
+  const rightSamples = right.byteLength >> 1;
+  const maxSamples = Math.max(leftSamples, rightSamples);
+  if (maxSamples === 0) return Buffer.alloc(0);
+  const out = Buffer.alloc(maxSamples * 4);
+  for (let i = 0; i < maxSamples; i++) {
+    const l = i < leftSamples ? left.readInt16LE(i * 2) : 0;
+    const r = i < rightSamples ? right.readInt16LE(i * 2) : 0;
+    out.writeInt16LE(l, i * 4);
+    out.writeInt16LE(r, i * 4 + 2);
+  }
+  return out;
+}
+
+function buildWav(pcm: Buffer, channels: number, sampleRateHz: number): Buffer {
+  const bitsPerSample = 16;
+  const blockAlign = channels * (bitsPerSample >> 3);
+  const byteRate = sampleRateHz * blockAlign;
+  const header = Buffer.allocUnsafe(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcm.byteLength, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRateHz, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcm.byteLength, 40);
+  return Buffer.concat([header, pcm]);
 }
