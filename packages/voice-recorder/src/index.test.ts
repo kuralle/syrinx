@@ -407,6 +407,209 @@ describe("VoiceSessionRecorder", () => {
       "events must be an object",
     ]));
   });
+
+  it("keeps the persisted user track contiguous and applies wall-clock gaps only in conversation.wav", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, {
+        output_dir: dir,
+        user_sample_rate_hz: 16000,
+      });
+      const start = bus.start();
+
+      bus.push(Route.Main, {
+        kind: "record.user_audio",
+        contextId: "turn-1",
+        timestampMs: 0,
+        audio: new Uint8Array(320).fill(0x11),
+      } satisfies RecordUserAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      // Advance 100ms → 3200 bytes at 16 kHz. Second chunk lands at wall-clock byteOffset=3200.
+      vi.setSystemTime(100);
+
+      bus.push(Route.Main, {
+        kind: "record.user_audio",
+        contextId: "turn-2",
+        timestampMs: 100,
+        audio: new Uint8Array(320).fill(0x22),
+      } satisfies RecordUserAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      bus.stop();
+      await start;
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
+
+      // Persisted user track: contiguous speech only (no inter-turn silence).
+      const userPcm = await readFile(join(dir, "user_audio.pcm"));
+      expect(userPcm.byteLength).toBe(640);
+      expect(userPcm.subarray(0, 320)).toEqual(Buffer.alloc(320, 0x11));
+      expect(userPcm.subarray(320, 640)).toEqual(Buffer.alloc(320, 0x22));
+
+      // conversation.wav LEFT (user) channel: wall-clock positioned with the silence gap.
+      const wav = await readFile(join(dir, "conversation.wav"));
+      const data = wav.subarray(44);
+      const frames = data.byteLength >> 2;
+      const left = Buffer.alloc(frames * 2);
+      for (let i = 0; i < frames; i++) data.copy(left, i * 2, i * 4, i * 4 + 2);
+      expect(left.byteLength).toBe(3520);
+      expect(left.subarray(0, 320)).toEqual(Buffer.alloc(320, 0x11));
+      expect(left.subarray(320, 3200)).toEqual(Buffer.alloc(2880, 0));
+      expect(left.subarray(3200, 3520)).toEqual(Buffer.alloc(320, 0x22));
+    });
+  });
+
+  it("writes stereo conversation.wav with user on L and assistant on R", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, {
+        output_dir: dir,
+        user_sample_rate_hz: 16000,
+        assistant_sample_rate_hz: 16000,
+      });
+      const start = bus.start();
+
+      const userSample = 0x0100;
+      const assistSample = 0x0200;
+      const userBytes = Buffer.alloc(8);
+      const assistBytes = Buffer.alloc(8);
+      for (let i = 0; i < 4; i++) {
+        userBytes.writeInt16LE(userSample, i * 2);
+        assistBytes.writeInt16LE(assistSample, i * 2);
+      }
+
+      bus.push(Route.Main, {
+        kind: "record.user_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(userBytes),
+      } satisfies RecordUserAudioPacket);
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(assistBytes),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      bus.stop();
+      await start;
+      await recorder.close();
+
+      const wav = await readFile(join(dir, "conversation.wav"));
+      // channels field at offset 22
+      expect(wav.readUInt16LE(22)).toBe(2);
+      // sample rate at offset 24
+      expect(wav.readUInt32LE(24)).toBe(16000);
+      // 4 stereo frames = 16 bytes PCM; total = 44 + 16 = 60
+      expect(wav.byteLength).toBe(60);
+      // Frame 0: L = userSample, R = assistSample
+      expect(wav.readInt16LE(44)).toBe(userSample);
+      expect(wav.readInt16LE(46)).toBe(assistSample);
+      // Frame 1 same
+      expect(wav.readInt16LE(48)).toBe(userSample);
+      expect(wav.readInt16LE(50)).toBe(assistSample);
+    });
+  });
+
+  it("resamples assistant audio from 24kHz to user rate when rates differ", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, {
+        output_dir: dir,
+        user_sample_rate_hz: 16000,
+        assistant_sample_rate_hz: 24000,
+      });
+      const start = bus.start();
+
+      // User: 160 samples = 10ms at 16kHz
+      bus.push(Route.Main, {
+        kind: "record.user_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320),
+      } satisfies RecordUserAudioPacket);
+      // Assistant: 240 samples = 10ms at 24kHz
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(480),
+        sampleRateHz: 24000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      bus.stop();
+      await start;
+      await recorder.close();
+
+      const wav = await readFile(join(dir, "conversation.wav"));
+      // Resampled assistant: round(240 * 16000 / 24000) = 160 samples
+      // Both tracks: 160 samples → 160 stereo frames × 4 bytes = 640 bytes PCM
+      expect(wav.byteLength).toBe(44 + 640);
+      expect(wav.readUInt16LE(22)).toBe(2);
+      expect(wav.readUInt32LE(24)).toBe(16000);
+    });
+  });
+
+  it("includes conversation entry in manifest and validates it", async () => {
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, {
+        output_dir: dir,
+        user_sample_rate_hz: 16000,
+        assistant_sample_rate_hz: 16000,
+      });
+      const start = bus.start();
+
+      // 3200 bytes = 100ms at 16kHz
+      bus.push(Route.Main, {
+        kind: "record.user_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(3200),
+      } satisfies RecordUserAudioPacket);
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(3200),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      bus.stop();
+      await start;
+      await recorder.close();
+
+      const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as Record<string, any>;
+      expect(manifest.audio.conversation).toMatchObject({
+        channels: 2,
+        encoding: "pcm_s16le",
+        sampleRateHz: 16000,
+        // 1600 user samples + 1600 assistant samples interleaved = 3200 stereo frames × 2 bytes × 2 ch = 6400
+        byteLength: 6400,
+        durationMs: 100,
+      });
+      expect(manifest.audio.conversation.path).toBe(join(dir, "conversation.wav"));
+      expect(validateVoiceSessionRecorderManifest(manifest)).toStrictEqual([]);
+    });
+  });
 });
 
 function makeRecorderManifest(): VoiceSessionRecorderManifest {
