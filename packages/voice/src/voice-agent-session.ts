@@ -174,6 +174,12 @@ export class VoiceAgentSession {
   private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSttContextId = "";
   private activeTtsContextIds = new Set<string>();
+  // Wall-clock estimate of when each context's audio finishes playing out. TTS
+  // streams faster than realtime, so generation (tts.end) ends well before
+  // playout; turn-taking keys on these so the assistant stays interruptible
+  // until it is actually done being heard.
+  private ttsPlayoutEndMs = new Map<string, number>();
+  private ttsPlayoutReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
@@ -298,6 +304,11 @@ export class VoiceAgentSession {
     this.clearSttForceFinalizeTimer();
     this.clearVaqiMissedResponseTimer();
     this.clearTtsStallTimer();
+    for (const contextId of [...this.ttsPlayoutReleaseTimers.keys()]) {
+      this.cancelTtsPlayoutRelease(contextId);
+    }
+    this.ttsPlayoutEndMs.clear();
+    this.activeTtsContextIds.clear();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
@@ -877,6 +888,7 @@ export class VoiceAgentSession {
       }
     }
 
+    this.cancelTtsPlayoutRelease(pkt.contextId);
     this.activeTtsContextIds.add(pkt.contextId);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.armTtsStallTimer(pkt.contextId);
@@ -885,6 +897,12 @@ export class VoiceAgentSession {
     const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
     const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
     this.idleTimeout.extend(audioDurationMs);
+
+    // Advance this context's playout cursor by the chunk's realtime duration,
+    // anchored to now if the previous estimate already lapsed (a gap in delivery).
+    const now = Date.now();
+    const playoutBaseMs = Math.max(now, this.ttsPlayoutEndMs.get(pkt.contextId) ?? now);
+    this.ttsPlayoutEndMs.set(pkt.contextId, playoutBaseMs + audioDurationMs);
 
     this.debugPush({
       component: "tts",
@@ -907,7 +925,9 @@ export class VoiceAgentSession {
   }
 
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
-    this.activeTtsContextIds.delete(pkt.contextId);
+    // Generation finished, but the streamed audio is still playing out. Keep the
+    // context interruptible until its playout estimate elapses, then release it.
+    this.scheduleTtsPlayoutRelease(pkt.contextId);
     this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
@@ -917,10 +937,41 @@ export class VoiceAgentSession {
     });
   }
 
+  private scheduleTtsPlayoutRelease(contextId: string): void {
+    const playoutEndMs = this.ttsPlayoutEndMs.get(contextId);
+    const remainingMs = playoutEndMs === undefined ? 0 : playoutEndMs - Date.now();
+    if (remainingMs <= 0) {
+      this.releaseTtsContext(contextId);
+      return;
+    }
+    this.cancelTtsPlayoutRelease(contextId);
+    this.ttsPlayoutReleaseTimers.set(
+      contextId,
+      setTimeout(() => {
+        this.ttsPlayoutReleaseTimers.delete(contextId);
+        this.releaseTtsContext(contextId);
+      }, remainingMs),
+    );
+  }
+
+  private cancelTtsPlayoutRelease(contextId: string): void {
+    const timer = this.ttsPlayoutReleaseTimers.get(contextId);
+    if (timer) {
+      clearTimeout(timer);
+      this.ttsPlayoutReleaseTimers.delete(contextId);
+    }
+  }
+
+  private releaseTtsContext(contextId: string): void {
+    this.cancelTtsPlayoutRelease(contextId);
+    this.activeTtsContextIds.delete(contextId);
+    this.ttsPlayoutEndMs.delete(contextId);
+  }
+
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
-    this.activeTtsContextIds.delete(pkt.contextId);
+    this.releaseTtsContext(pkt.contextId);
     this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "turn",
@@ -1190,7 +1241,7 @@ export class VoiceAgentSession {
       this.ttsStallContextId = "";
       if (this.interruptedGenerationContextIds.has(cid)) return; // interrupted, not stalled
       if (!this.activeTtsContextIds.has(cid)) return; // already ended
-      this.activeTtsContextIds.delete(cid);
+      this.releaseTtsContext(cid);
       this.bus.push(Route.Background, {
         kind: "metric.conversation",
         contextId: cid,

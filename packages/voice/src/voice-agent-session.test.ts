@@ -828,6 +828,88 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("keeps the assistant interruptible after tts.end until its audio finishes playing out", async () => {
+    // TTS streams faster than realtime: a chunk representing ~800ms of audio can
+    // arrive (and tts.end fire) within a few ms. The assistant is still audibly
+    // playing for the remaining ~800ms, so a barge-in in that window must still
+    // interrupt it — the speaking state is keyed on playout, not generation.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    // 25600 bytes @ 16 kHz s16 = 800ms of playout, delivered as one burst.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(25600),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
+    // Well inside the 800ms playout window — the assistant is still talking.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("releases the assistant context once its playout estimate elapses", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    // 3200 bytes @ 16 kHz s16 = 100ms of playout.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(3200),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
+    // Past the 100ms playout window — the assistant has finished speaking.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: Date.now(),
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
   it("suppresses a short speech blip during playback without interrupting the agent", async () => {
     const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
     const interrupts: InterruptTtsPacket[] = [];

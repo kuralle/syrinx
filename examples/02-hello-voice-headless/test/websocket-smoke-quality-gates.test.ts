@@ -128,6 +128,7 @@ describe("websocket smoke quality gates", () => {
         toolCalls: [],
         assistantAudioBytes: 48000,
         assistantAudioChunks: [new Uint8Array(48000)],
+        assistantPlayoutEndMs: 2200,
         error: "",
       },
       {
@@ -149,6 +150,7 @@ describe("websocket smoke quality gates", () => {
         toolCalls: ["studentRelationsLookup"],
         assistantAudioBytes: 48000,
         assistantAudioChunks: [new Uint8Array(48000)],
+        assistantPlayoutEndMs: 2200,
         error: "",
       },
       {
@@ -170,6 +172,7 @@ describe("websocket smoke quality gates", () => {
         toolCalls: ["studentRelationsLookup"],
         assistantAudioBytes: 48000,
         assistantAudioChunks: [new Uint8Array(48000)],
+        assistantPlayoutEndMs: 2200,
         error: "",
       },
     ], {
@@ -209,7 +212,7 @@ describe("websocket smoke quality gates", () => {
         packets: 1,
         byteLength: 1,
       },
-    }, "user whisper", "assistant whisper");
+    }, "user whisper", "assistant whisper", 0);
 
     expect(evaluation.failures).toStrictEqual([]);
     expect(evaluation.diagnostics).toContain("live-turn-01 did not call studentRelationsLookup");
