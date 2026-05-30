@@ -335,6 +335,71 @@ describe("VoiceSessionRecorder", () => {
     });
   });
 
+  it("lays a multi-chunk assistant turn contiguously from its playout-start", async () => {
+    // The first assistant chunk is recorded at generation offset 0; later chunks
+    // jump to bursty wall-clock offsets. A re-anchor must lay them contiguously
+    // from the playout-start, not add each chunk's generation offset on top of it
+    // (which doubled the position and stranded the speech in dead air).
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir, assistant_sample_rate_hz: 16000 });
+      const start = bus.start();
+
+      // First chunk arrives at t=0 → generation offset 0.
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320).fill(0xa1),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      // Second chunk arrives at t=1000ms → generation offset jumps to ~32000.
+      vi.setSystemTime(1000);
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320).fill(0xb2),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      // Playout for the turn began at t=1000ms.
+      bus.push(Route.Main, {
+        kind: "tts.playout_progress",
+        contextId: "turn-1",
+        timestampMs: 1000,
+        playedOutMs: 0,
+        complete: true,
+      } satisfies TextToSpeechPlayoutProgressPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      bus.stop();
+      await start;
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
+
+      // 32000 bytes of leading silence, then BOTH chunks back-to-back (no gap).
+      const pcm = await readFile(join(dir, "assistant_audio.pcm"));
+      expect(pcm.byteLength).toBe(32640);
+      expect(pcm.subarray(0, 32000)).toEqual(Buffer.alloc(32000, 0));
+      expect(pcm.subarray(32000, 32320)).toEqual(Buffer.alloc(320, 0xa1));
+      expect(pcm.subarray(32320, 32640)).toEqual(Buffer.alloc(320, 0xb2));
+    });
+  });
+
   it("retains terminal playback truncation when main dispatch is blocked during shutdown", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
