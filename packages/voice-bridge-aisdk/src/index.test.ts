@@ -2,8 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 import { PipelineBusImpl, Route } from "@asyncdot/voice";
-import type { EndOfSpeechPacket, LlmErrorPacket, LlmResponseDonePacket } from "@asyncdot/voice";
-import type { FinishReason, TextStreamPart, ToolSet } from "ai";
+import type { EndOfSpeechPacket, InterruptLlmPacket, LlmErrorPacket, LlmResponseDonePacket, TextToSpeechTextPacket } from "@asyncdot/voice";
+import type { FinishReason, ModelMessage, TextStreamPart, ToolSet } from "ai";
 import { AISDKBridgePlugin } from "./index.js";
 
 const ZERO_USAGE = {
@@ -111,7 +111,121 @@ describe("AISDKBridgePlugin", () => {
       } satisfies Partial<LlmErrorPacket>),
     });
   });
+
+  it("rewrites an interrupted turn's history to the spoken prefix on barge-in during playback", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const capturedMessages: ModelMessage[][] = [];
+    const plugin = new AISDKBridgePlugin(async function* ({ messages }) {
+      capturedMessages.push(messages);
+      if (capturedMessages.length === 1) {
+        yield textDelta("Sentence one. Sentence two.");
+        yield finish("stop");
+        return;
+      }
+      yield textDelta("ok.");
+      yield finish("stop");
+    });
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    // Turn 1 generates fully and is committed to history (full text).
+    bus.push(Route.Main, turnComplete("turn-1", "first question"));
+    await waitFor(() => hasPacket(packets, "llm.done", "turn-1"));
+
+    // Only the first sentence reached TTS before the user barged in.
+    bus.push(Route.Main, ttsText("turn-1", "Sentence one."));
+    await new Promise((resolve) => setTimeout(resolve, 10)); // tts.text dispatched before the Critical interrupt
+    bus.push(Route.Critical, interruptLlm("turn-1"));
+    await waitFor(() => hasMetric(packets, "llm.history_truncated_to_spoken"));
+
+    bus.push(Route.Main, turnComplete("turn-2", "second question"));
+    await waitFor(() => hasPacket(packets, "llm.done", "turn-2"));
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(capturedMessages[1]).toEqual([
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "Sentence one." },
+      { role: "user", content: "second question" },
+    ]);
+  });
+
+  it("records an interrupted mid-generation turn as the spoken prefix instead of dropping it", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const capturedMessages: ModelMessage[][] = [];
+    const plugin = new AISDKBridgePlugin(async function* ({ signal, messages }) {
+      capturedMessages.push(messages);
+      if (capturedMessages.length === 1) {
+        yield textDelta("Hello");
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return;
+      }
+      yield textDelta("ok.");
+      yield finish("stop");
+    });
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, turnComplete("turn-1", "first question"));
+    await waitFor(() =>
+      packets.some(
+        ({ packet }) =>
+          (packet as { kind?: string }).kind === "llm.delta" &&
+          (packet as { text?: string }).text === "Hello",
+      ),
+    );
+
+    // The session spoke "Hello", then the user barged in mid-generation (G10 makes
+    // this interrupt land while generation is still streaming).
+    bus.push(Route.Main, ttsText("turn-1", "Hello"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    bus.push(Route.Critical, interruptLlm("turn-1"));
+    await waitFor(() => hasMetric(packets, "llm.history_truncated_to_spoken"));
+
+    bus.push(Route.Main, turnComplete("turn-2", "second question"));
+    await waitFor(() => hasPacket(packets, "llm.done", "turn-2"));
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(capturedMessages[1]).toEqual([
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "Hello" },
+      { role: "user", content: "second question" },
+    ]);
+  });
 });
+
+function hasPacket(packets: Array<{ packet: unknown }>, kind: string, contextId: string): boolean {
+  return packets.some(
+    ({ packet }) =>
+      (packet as { kind?: string }).kind === kind &&
+      (packet as { contextId?: string }).contextId === contextId,
+  );
+}
+
+function hasMetric(packets: Array<{ packet: unknown }>, name: string): boolean {
+  return packets.some(({ packet }) => (packet as { name?: string }).name === name);
+}
+
+function ttsText(contextId: string, text: string): TextToSpeechTextPacket {
+  return { kind: "tts.text", contextId, timestampMs: Date.now(), text };
+}
+
+function interruptLlm(contextId: string): InterruptLlmPacket {
+  return { kind: "interrupt.llm", contextId, timestampMs: Date.now() };
+}
 
 function baseConfig(): Record<string, unknown> {
   return {

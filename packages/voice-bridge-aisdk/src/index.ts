@@ -52,6 +52,14 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private abortController: AbortController | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
+  // G2: per-turn state so a barged-in turn is remembered as what the user HEARD (the
+  // text sent to TTS), not the full generated reply. `spokenByContext` accumulates
+  // tts.text; `assistantMsgByContext` holds the live history message object so it can
+  // be rewritten in place on interrupt; `turnUserText` lets a mid-generation interrupt
+  // (which has no committed assistant message yet) still record the turn.
+  private spokenByContext = new Map<string, string>();
+  private turnUserText = new Map<string, string>();
+  private assistantMsgByContext = new Map<string, { role: "assistant"; content: string }>();
 
   constructor(private readonly streamFactory?: AISDKStreamFactory) {}
 
@@ -82,16 +90,27 @@ export class AISDKBridgePlugin implements VoicePlugin {
         await this.processTurn(eos.text, eos.contextId);
       }, { concurrent: true }),
 
-      // Listen for LLM interrupts
-      bus.on("interrupt.llm", () => {
+      // Track what was actually sent to TTS (the spoken approximation), per turn.
+      bus.on("tts.text", (pkt: unknown) => {
+        const t = pkt as { contextId: string; text: string };
+        this.spokenByContext.set(t.contextId, (this.spokenByContext.get(t.contextId) ?? "") + t.text);
+      }),
+
+      // Listen for LLM interrupts. Abort generation AND rewrite the interrupted turn's
+      // history to the spoken prefix (G2), so the model isn't left believing it said
+      // words the user never heard (nor amnesiac about the exchange).
+      bus.on("interrupt.llm", (pkt: unknown) => {
         this.abortController?.abort();
         this.abortController = null;
+        this.commitInterruptedHistory((pkt as { contextId: string }).contextId);
       }),
     );
   }
 
   private async processTurn(userText: string, contextId: string): Promise<void> {
     if (!this.bus) return;
+
+    this.turnUserText.set(contextId, userText);
 
     // Handlers are concurrent, so a new turn can begin while a prior generation is
     // still in flight. Supersede it: abort the previous controller before starting.
@@ -154,13 +173,17 @@ export class AISDKBridgePlugin implements VoicePlugin {
 
         validateFinalFinishReason(finishReason, rawFinishReason);
 
+        // Interrupted as generation finished — the interrupt handler owns the history
+        // for this turn (spoken prefix); don't commit the full reply or emit llm.done.
+        if (signal.aborted) return;
+
         this.bus.push(Route.Main, {
           kind: "llm.done",
           contextId,
           timestampMs: Date.now(),
           text: reply,
         });
-        this.rememberTurn(userText, reply);
+        this.rememberTurn(userText, reply, contextId);
         return;
       } catch (err) {
         if (signal.aborted) return;
@@ -236,15 +259,69 @@ export class AISDKBridgePlugin implements VoicePlugin {
   async close(): Promise<void> {
     this.abortController?.abort();
     for (const dispose of this.disposers.splice(0)) dispose();
+    this.spokenByContext.clear();
+    this.turnUserText.clear();
+    this.assistantMsgByContext.clear();
     this.bus = null;
   }
 
-  private rememberTurn(userText: string, assistantText: string): void {
-    this.history.push({ role: "user", content: userText }, { role: "assistant", content: assistantText });
+  private rememberTurn(userText: string, assistantText: string, contextId: string): void {
+    const assistantMsg = { role: "assistant" as const, content: assistantText };
+    this.history.push({ role: "user", content: userText }, assistantMsg);
+    this.assistantMsgByContext.set(contextId, assistantMsg);
+    this.trimHistory();
+  }
+
+  /**
+   * Barge-in: rewrite the interrupted turn's history to what the user actually HEARD
+   * (the text sent to TTS), not the full generated reply. If the turn was already
+   * committed (generation completed before barge-in), truncate its assistant message;
+   * if it was interrupted mid-generation (never committed), record the spoken prefix now.
+   * Either way the user utterance is preserved, so the model is neither divergent nor amnesiac.
+   */
+  private commitInterruptedHistory(contextId: string): void {
+    const spoken = (this.spokenByContext.get(contextId) ?? "").trim();
+    const existing = this.assistantMsgByContext.get(contextId);
+    if (existing) {
+      if (spoken) {
+        existing.content = spoken;
+      } else {
+        const idx = this.history.indexOf(existing);
+        if (idx >= 0) this.history.splice(idx, 1);
+      }
+    } else {
+      const userText = this.turnUserText.get(contextId);
+      if (userText !== undefined) {
+        this.history.push({ role: "user", content: userText });
+        if (spoken) this.history.push({ role: "assistant", content: spoken });
+        this.trimHistory();
+      }
+    }
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name: "llm.history_truncated_to_spoken",
+      value: String(spoken.length),
+    });
+    this.clearTurnState(contextId);
+  }
+
+  private trimHistory(): void {
     const maxMessages = this.maxHistoryTurns * 2;
     if (this.history.length > maxMessages) {
       this.history = this.history.slice(this.history.length - maxMessages);
     }
+    // Drop tracked per-turn state that has aged out of the history window.
+    for (const [ctx, msg] of this.assistantMsgByContext) {
+      if (!this.history.includes(msg)) this.clearTurnState(ctx);
+    }
+  }
+
+  private clearTurnState(contextId: string): void {
+    this.spokenByContext.delete(contextId);
+    this.turnUserText.delete(contextId);
+    this.assistantMsgByContext.delete(contextId);
   }
 }
 
