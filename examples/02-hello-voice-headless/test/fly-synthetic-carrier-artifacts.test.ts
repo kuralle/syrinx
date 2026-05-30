@@ -77,6 +77,16 @@ describe("Fly synthetic carrier artifact validation", () => {
     expect(failures).toContain("telnyx bot events.jsonl line 1 packet.audio.byteLength must be positive");
   });
 
+  it("rejects recorder event streams whose envelope drifts from packet context or timestamp", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "smartpbx", { mismatchedEventEnvelope: true });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("smartpbx bot events.jsonl line 1 packet.contextId turn-test did not match event context_id other-turn");
+    expect(failures).toContain("smartpbx bot events.jsonl line 1 packet.timestampMs 1000 did not match event timestamp_ms 2000");
+  });
+
   it("rejects recorder event streams that disagree with manifest packet counts", async () => {
     const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
     const summary = await writeProviderEvidence(root, "telnyx", { recorderEventPackets: 99 });
@@ -178,6 +188,7 @@ async function writeProviderEvidence(
     readonly recorderEventPackets?: number;
     readonly mismatchedEventPacketKind?: boolean;
     readonly malformedEventAudio?: boolean;
+    readonly mismatchedEventEnvelope?: boolean;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -240,6 +251,7 @@ async function writeProviderEvidence(
       events.unshift(jsonLine("record.user_audio", {
         packetKind: options.mismatchedEventPacketKind ? "stt.result" : undefined,
         malformedAudio: options.malformedEventAudio,
+        mismatchedEnvelope: options.mismatchedEventEnvelope,
       }));
     }
     await writeFile(join(botDir, "events.jsonl"), events.join(""));
@@ -325,7 +337,11 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 
 function jsonLine(
   kind: string,
-  options: { readonly packetKind?: string; readonly malformedAudio?: boolean } = {},
+  options: {
+    readonly packetKind?: string;
+    readonly malformedAudio?: boolean;
+    readonly mismatchedEnvelope?: boolean;
+  } = {},
 ): string {
   const packetKind = options.packetKind ?? kind;
   const packet: Record<string, unknown> = { kind: packetKind, contextId: "turn-test", timestampMs: 1000 };
@@ -344,8 +360,8 @@ function jsonLine(
   return `${JSON.stringify({
     route: "Main",
     kind,
-    context_id: "turn-test",
-    timestamp_ms: 1000,
+    context_id: options.mismatchedEnvelope ? "other-turn" : "turn-test",
+    timestamp_ms: options.mismatchedEnvelope ? 2000 : 1000,
     packet,
   })}\n`;
 }

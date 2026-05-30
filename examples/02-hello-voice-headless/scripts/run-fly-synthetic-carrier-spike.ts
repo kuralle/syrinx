@@ -411,6 +411,16 @@ function validateRecorderEventShape(
   if (packet["kind"] !== kind) {
     failures.push(`${label} packet.kind ${String(packet["kind"])} did not match event kind ${kind}`);
   }
+  if (typeof packet["contextId"] !== "string") {
+    failures.push(`${label} packet.contextId must be a string`);
+  } else if (typeof event["context_id"] === "string" && packet["contextId"] !== event["context_id"]) {
+    failures.push(`${label} packet.contextId ${packet["contextId"]} did not match event context_id ${event["context_id"]}`);
+  }
+  if (!nonNegativeNumber(packet["timestampMs"])) {
+    failures.push(`${label} packet.timestampMs must be a non-negative number`);
+  } else if (nonNegativeNumber(event["timestamp_ms"]) && packet["timestampMs"] !== event["timestamp_ms"]) {
+    failures.push(`${label} packet.timestampMs ${String(packet["timestampMs"])} did not match event timestamp_ms ${String(event["timestamp_ms"])}`);
+  }
 
   if (kind === "record.user_audio") {
     validateSanitizedAudio(packet["audio"], `${label} packet.audio`, failures);
