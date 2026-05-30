@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineBusImpl, Route } from "@asyncdot/voice";
-import type { RecordAssistantAudioPacket, RecordUserAudioPacket, VoicePacket } from "@asyncdot/voice";
+import type { RecordAssistantAudioPacket, RecordUserAudioPacket, TextToSpeechPlayoutProgressPacket, VoicePacket } from "@asyncdot/voice";
 import {
   VoiceSessionRecorder,
   validateVoiceSessionRecorderManifest,
@@ -285,6 +285,53 @@ describe("VoiceSessionRecorder", () => {
         chunks: 1,
         truncations: 1,
       });
+    });
+  });
+
+  it("re-anchors the assistant track to its real playout-start from tts.playout_progress", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    await withTempDir(async (dir) => {
+      const bus = new PipelineBusImpl();
+      const recorder = new VoiceSessionRecorder();
+      await recorder.initialize(bus, { output_dir: dir, assistant_sample_rate_hz: 16000 });
+      const start = bus.start();
+
+      // Audio generated at t=0 (bursty arrival) — generation anchor is offset 0.
+      bus.push(Route.Main, {
+        kind: "record.assistant_audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(320).fill(0xa1),
+        sampleRateHz: 16000,
+        truncate: false,
+      } satisfies RecordAssistantAudioPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      // The transport reports the audio actually began playing at t=1000ms.
+      bus.push(Route.Main, {
+        kind: "tts.playout_progress",
+        contextId: "turn-1",
+        timestampMs: 1000,
+        playedOutMs: 0,
+        complete: false,
+      } satisfies TextToSpeechPlayoutProgressPacket);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      bus.stop();
+      await start;
+      const closePromise = recorder.close();
+      await vi.runOnlyPendingTimersAsync();
+      await closePromise;
+
+      // 1000ms @ 16 kHz s16 = 32000 bytes of leading silence, then the 320-byte chunk.
+      const pcm = await readFile(join(dir, "assistant_audio.pcm"));
+      expect(pcm.byteLength).toBe(32320);
+      expect(pcm.subarray(0, 32000)).toEqual(Buffer.alloc(32000, 0));
+      expect(pcm.subarray(32000)).toEqual(Buffer.alloc(320, 0xa1));
     });
   });
 

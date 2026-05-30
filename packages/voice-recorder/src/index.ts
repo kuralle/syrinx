@@ -10,6 +10,7 @@ import {
   type RecordAssistantAudioDataPacket,
   type RecordAssistantAudioPacket,
   type RecordUserAudioPacket,
+  type TextToSpeechPlayoutProgressPacket,
   type VoicePacket,
   type VoicePlugin,
 } from "@asyncdot/voice";
@@ -85,7 +86,7 @@ type PacketRecord = {
   readonly packet: Record<string, unknown>;
 };
 
-type AudioChunk = { readonly byteOffset: number; readonly data: Uint8Array };
+type AudioChunk = { readonly byteOffset: number; readonly data: Uint8Array; readonly contextId?: string };
 
 export class VoiceSessionRecorder implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -98,6 +99,12 @@ export class VoiceSessionRecorder implements VoicePlugin {
   private userCursorBytes = 0;
   private assistantChunks: AudioChunk[] = [];
   private assistantCursorBytes = 0;
+  // Real playout-start wall-clock per context, from tts.playout_progress. Used to
+  // re-anchor each assistant turn onto the playout clock at finalize so the
+  // recording reflects what was heard, not when TTS generated it. Empty when no
+  // paced transport is wired (e.g. headless), in which case generation arrival
+  // positioning is kept.
+  private assistantPlayoutStartMs = new Map<string, number>();
   private assistantSampleRateHz = 24000;
   private assistantSampleRateLocked = false;
   private startedAtMs = 0;
@@ -201,6 +208,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
     this.userCursorBytes = 0;
     this.assistantChunks = [];
     this.assistantCursorBytes = 0;
+    this.assistantPlayoutStartMs.clear();
     this.userAudioBytes = 0;
     this.userAudioChunks = 0;
     this.assistantAudioBytes = 0;
@@ -230,6 +238,8 @@ export class VoiceSessionRecorder implements VoicePlugin {
         this.recordUserAudio(next.value.packet as RecordUserAudioPacket);
       } else if (next.value.packet.kind === "record.assistant_audio") {
         this.recordAssistantAudio(next.value.packet as RecordAssistantAudioPacket);
+      } else if (next.value.packet.kind === "tts.playout_progress") {
+        this.recordPlayoutProgress(next.value.packet as TextToSpeechPlayoutProgressPacket);
       }
     }
   }
@@ -276,8 +286,15 @@ export class VoiceSessionRecorder implements VoicePlugin {
       ? 0
       : Math.max(this.assistantCursorBytes, this.currentAssistantWallOffsetBytes());
     const copy = Uint8Array.from(audio);
-    this.assistantChunks.push({ byteOffset, data: copy });
+    this.assistantChunks.push({ byteOffset, data: copy, contextId: packet.contextId });
     this.assistantCursorBytes = byteOffset + copy.byteLength;
+  }
+
+  private recordPlayoutProgress(packet: TextToSpeechPlayoutProgressPacket): void {
+    // The first progress for a context fixes its playout-start: the wall-clock at
+    // which its audio began reaching the wire (timestamp minus what had played).
+    if (this.assistantPlayoutStartMs.has(packet.contextId)) return;
+    this.assistantPlayoutStartMs.set(packet.contextId, packet.timestampMs - packet.playedOutMs);
   }
 
   private truncateAssistantAudio(): void {
@@ -316,7 +333,7 @@ export class VoiceSessionRecorder implements VoicePlugin {
 
   private async flushAssistantAudio(): Promise<Buffer> {
     const stream = this.assistantAudio;
-    const { pcm, bytes, count } = renderChunks(this.assistantChunks);
+    const { pcm, bytes, count } = renderChunks(this.reanchorAssistantToPlayout());
     this.assistantAudioBytes = bytes;
     this.assistantAudioChunks = count;
     if (stream && pcm.byteLength > 0) {
@@ -400,6 +417,29 @@ export class VoiceSessionRecorder implements VoicePlugin {
     const elapsedMs = Math.max(0, Date.now() - this.startedAtMs);
     const bytes = Math.floor((elapsedMs * this.assistantSampleRateHz * 2) / 1000);
     return bytes - (bytes % 2);
+  }
+
+  // Shift each assistant turn so it begins at its real playout-start (when the
+  // transport reported audio reaching the wire) instead of TTS generation
+  // arrival. Within-turn spacing is preserved; turns without a playout signal
+  // keep their generation-arrival offset (the headless / no-pacer fallback).
+  private reanchorAssistantToPlayout(): AudioChunk[] {
+    if (this.assistantPlayoutStartMs.size === 0) return this.assistantChunks;
+    const firstOffsetByContext = new Map<string, number>();
+    for (const chunk of this.assistantChunks) {
+      if (chunk.contextId === undefined || firstOffsetByContext.has(chunk.contextId)) continue;
+      firstOffsetByContext.set(chunk.contextId, chunk.byteOffset);
+    }
+    const rate = this.assistantSampleRateHz;
+    const shifted = this.assistantChunks.map((chunk) => {
+      const startMs = chunk.contextId === undefined ? undefined : this.assistantPlayoutStartMs.get(chunk.contextId);
+      const firstOffset = chunk.contextId === undefined ? undefined : firstOffsetByContext.get(chunk.contextId);
+      if (startMs === undefined || firstOffset === undefined) return chunk;
+      const startBytesRaw = Math.max(0, Math.floor(((startMs - this.startedAtMs) * rate * 2) / 1000));
+      const startBytes = startBytesRaw - (startBytesRaw % 2);
+      return { byteOffset: startBytes + (chunk.byteOffset - firstOffset), data: chunk.data, contextId: chunk.contextId };
+    });
+    return shifted.sort((a, b) => a.byteOffset - b.byteOffset);
   }
 
   private writeStreamData(stream: WriteStream | null, data: Uint8Array): void {
