@@ -1105,6 +1105,63 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("fires the TTS stall watchdog when output goes silent mid-utterance", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, ttsStallMs: 30 });
+    const metrics: string[] = [];
+    const ttsErrors: Array<{ category: string }> = [];
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+    session.bus.on("tts.error", (pkt) => {
+      ttsErrors.push({ category: (pkt as unknown as { category: string }).category });
+    });
+
+    // TTS produces one chunk then goes silent — no further audio, no tts.end.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 90)); // > ttsStallMs
+
+    expect(metrics).toContain("tts.stall_detected");
+    expect(ttsErrors.some((e) => e.category === "network_timeout")).toBe(true);
+
+    await closeSession(session);
+  });
+
+  it("does not fire the TTS stall watchdog when tts.end arrives", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, ttsStallMs: 30 });
+    const metrics: string[] = [];
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+    } satisfies TextToSpeechEndPacket);
+    await new Promise((resolve) => setTimeout(resolve, 60)); // past ttsStallMs
+
+    expect(metrics).not.toContain("tts.stall_detected");
+
+    await closeSession(session);
+  });
+
   it("tells the recorder to truncate queued assistant audio on barge-in", async () => {
     const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
     const recorded: RecordAssistantAudioPacket[] = [];
