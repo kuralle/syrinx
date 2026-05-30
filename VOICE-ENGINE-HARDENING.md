@@ -1,3 +1,9 @@
+# Voice Engine Hardening Exit Condition
+
+The voice-engine hardening goal is complete only when browser websocket, recorder, live provider pipeline, telephony adapters, Fly synthetic carrier, and human handoff evidence all pass the conditions below with current reproducible artifacts. "Hardened" means the engine fails closed at transport/provider boundaries, preserves provider semantics, proves wire-level and decoded-audio delivery separately from transcript quality, and has green automated verification on `origin/v2`.
+
+Do not close this goal if any required behavior depends on fixture-specific transcript gates, TypeScript-only casts, assumed sample rates, missing recorder/event artifacts, unvalidated JSON/manifests, push-to-talk as the default turn boundary, or an emulated smoke that does not prove both the media transport and recorder evidence paths.
+
 # Voice Engine Hardening Notes
 
 Date: 2026-05-29
