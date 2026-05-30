@@ -363,13 +363,20 @@ async function validateEventsJsonl(path: string, label: string, failures: string
       return null;
     }
     const kinds = new Set<string>();
-    for (const line of lines) {
-      const event = parseJson(line, label);
-      if (!isRecord(event) || typeof event["kind"] !== "string") {
-        failures.push(`${label} contains an event without kind`);
+    for (const [index, line] of lines.entries()) {
+      const lineLabel = `${label} line ${String(index + 1)}`;
+      const event = parseJson(line, lineLabel);
+      if (!isRecord(event)) {
+        failures.push(`${lineLabel} must be an object`);
         return null;
       }
-      kinds.add(event["kind"]);
+      const kind = event["kind"];
+      if (typeof kind !== "string" || kind.length === 0) {
+        failures.push(`${lineLabel} contains an event without kind`);
+        return null;
+      }
+      validateRecorderEventShape(event, kind, lineLabel, failures);
+      kinds.add(kind);
     }
     for (const required of ["record.user_audio", "stt.result", "llm.delta", "tts.audio", "record.assistant_audio"]) {
       if (!kinds.has(required)) failures.push(`${label} missing ${required}`);
@@ -378,6 +385,65 @@ async function validateEventsJsonl(path: string, label: string, failures: string
   } catch (err) {
     failures.push(`${label} could not be read: ${err instanceof Error ? err.message : String(err)}`);
     return null;
+  }
+}
+
+function validateRecorderEventShape(
+  event: Record<string, unknown>,
+  kind: string,
+  label: string,
+  failures: string[],
+): void {
+  if (typeof event["route"] !== "string" || event["route"].length === 0) {
+    failures.push(`${label} route must be a non-empty string`);
+  }
+  if (typeof event["context_id"] !== "string") {
+    failures.push(`${label} context_id must be a string`);
+  }
+  if (!nonNegativeNumber(event["timestamp_ms"])) {
+    failures.push(`${label} timestamp_ms must be a non-negative number`);
+  }
+  const packet = event["packet"];
+  if (!isRecord(packet)) {
+    failures.push(`${label} packet must be an object`);
+    return;
+  }
+  if (packet["kind"] !== kind) {
+    failures.push(`${label} packet.kind ${String(packet["kind"])} did not match event kind ${kind}`);
+  }
+
+  if (kind === "record.user_audio") {
+    validateSanitizedAudio(packet["audio"], `${label} packet.audio`, failures);
+  } else if (kind === "record.assistant_audio") {
+    if (packet["truncate"] === true) return;
+    if (packet["truncate"] !== false) failures.push(`${label} packet.truncate must be false for assistant audio data`);
+    validateSanitizedAudio(packet["audio"], `${label} packet.audio`, failures);
+    if (!positiveInteger(packet["sampleRateHz"])) failures.push(`${label} packet.sampleRateHz must be positive`);
+  } else if (kind === "tts.audio") {
+    validateSanitizedAudio(packet["audio"], `${label} packet.audio`, failures);
+    if (!positiveInteger(packet["sampleRateHz"])) failures.push(`${label} packet.sampleRateHz must be positive`);
+  } else if (kind === "stt.result" || kind === "llm.delta") {
+    if (typeof packet["text"] !== "string" || packet["text"].length === 0) {
+      failures.push(`${label} packet.text must be a non-empty string`);
+    }
+  }
+}
+
+function validateSanitizedAudio(
+  value: unknown,
+  label: string,
+  failures: string[],
+): void {
+  if (!isRecord(value) || value["type"] !== "Uint8Array") {
+    failures.push(`${label} must be sanitized Uint8Array metadata`);
+    return;
+  }
+  if (!positiveInteger(value["byteLength"])) {
+    failures.push(`${label}.byteLength must be positive`);
+    return;
+  }
+  if (value["byteLength"] % 2 !== 0) {
+    failures.push(`${label}.byteLength must be even PCM16 bytes`);
   }
 }
 
