@@ -254,6 +254,17 @@ timers cleared on close. The synthetic carrier now gates the next user turn on p
 coherence smoke fails above 1500 ms of stereo overlap. Regression test at the barge-in seam (red→green); full suite green;
 live 3-turn re-run drove overlap **7.9 s → 0.0 s**.
 
+**Follow-up — full transport-grounded unification (2026-05-31).** The sample-duration estimate is provider-agnostic but is
+still a parallel clock, and the recorder reconstructed a *third* clock from generation arrival. Pipecat (and LiveKit) use
+**one** clock: the output transport's realtime playout. Adopted the same: new core packet `tts.playout_progress`, emitted
+by the paced-playout layer (`PacedPlayoutQueue.onFramePlayed` → `PlayoutProgressEmitter`) in telnyx/twilio/smartpbx. The
+session releases the assistant context on the transport's authoritative `complete` (estimate defers to it while real
+progress flows, and remains the fallback for the browser-WS and headless paths). The recorder re-anchors each assistant
+turn onto its real playout-start at finalize. All three timelines — turn-taking, transport, recorder — now share the
+playout clock. Unit-verified at each seam (session consumer, telnyx emission, recorder re-anchor); **end-to-end telephony
+(generation≠playout under queue backlog) still needs a Fly synthetic-carrier run** — the headless smoke exercises the
+estimate fallback (unchanged).
+
 ## 4. Sequencing for implementation (task #8)
 
 P0 first (G1, G2) — highest user-perceived damage, highest frequency, and they interact (false barge-in × dropped
