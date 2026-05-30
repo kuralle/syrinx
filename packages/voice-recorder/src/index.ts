@@ -419,27 +419,29 @@ export class VoiceSessionRecorder implements VoicePlugin {
     return bytes - (bytes % 2);
   }
 
-  // Shift each assistant turn so it begins at its real playout-start (when the
-  // transport reported audio reaching the wire) instead of TTS generation
-  // arrival. Within-turn spacing is preserved; turns without a playout signal
-  // keep their generation-arrival offset (the headless / no-pacer fallback).
+  // Re-lay each assistant turn contiguously from its real playout-start (when the
+  // transport reported audio reaching the wire) instead of TTS generation arrival.
+  // The generation byteOffsets are discarded for re-anchored turns: within one TTS
+  // context the audio plays back-to-back on the wire, so the recorder's own
+  // offsets — which start the first chunk at 0 and jump later chunks to bursty
+  // wall-clock positions — do not reflect what was heard. Turns without a playout
+  // signal keep their generation-arrival offset (the headless / no-pacer fallback).
   private reanchorAssistantToPlayout(): AudioChunk[] {
     if (this.assistantPlayoutStartMs.size === 0) return this.assistantChunks;
-    const firstOffsetByContext = new Map<string, number>();
-    for (const chunk of this.assistantChunks) {
-      if (chunk.contextId === undefined || firstOffsetByContext.has(chunk.contextId)) continue;
-      firstOffsetByContext.set(chunk.contextId, chunk.byteOffset);
-    }
     const rate = this.assistantSampleRateHz;
-    const shifted = this.assistantChunks.map((chunk) => {
+    const cursorByContext = new Map<string, number>();
+    const placed = this.assistantChunks.map((chunk) => {
       const startMs = chunk.contextId === undefined ? undefined : this.assistantPlayoutStartMs.get(chunk.contextId);
-      const firstOffset = chunk.contextId === undefined ? undefined : firstOffsetByContext.get(chunk.contextId);
-      if (startMs === undefined || firstOffset === undefined) return chunk;
-      const startBytesRaw = Math.max(0, Math.floor(((startMs - this.startedAtMs) * rate * 2) / 1000));
-      const startBytes = startBytesRaw - (startBytesRaw % 2);
-      return { byteOffset: startBytes + (chunk.byteOffset - firstOffset), data: chunk.data, contextId: chunk.contextId };
+      if (startMs === undefined || chunk.contextId === undefined) return chunk;
+      let cursor = cursorByContext.get(chunk.contextId);
+      if (cursor === undefined) {
+        const startBytesRaw = Math.max(0, Math.floor(((startMs - this.startedAtMs) * rate * 2) / 1000));
+        cursor = startBytesRaw - (startBytesRaw % 2);
+      }
+      cursorByContext.set(chunk.contextId, cursor + chunk.data.byteLength);
+      return { byteOffset: cursor, data: chunk.data, contextId: chunk.contextId };
     });
-    return shifted.sort((a, b) => a.byteOffset - b.byteOffset);
+    return placed.sort((a, b) => a.byteOffset - b.byteOffset);
   }
 
   private writeStreamData(stream: WriteStream | null, data: Uint8Array): void {
