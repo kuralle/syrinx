@@ -59,6 +59,24 @@ describe("Fly synthetic carrier artifact validation", () => {
     expect(failures).toContain("twilio bot events.jsonl missing record.user_audio");
   });
 
+  it("rejects recorder event streams whose packet kind drifts from the event kind", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "twilio", { mismatchedEventPacketKind: true });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("twilio bot events.jsonl line 1 packet.kind stt.result did not match event kind record.user_audio");
+  });
+
+  it("rejects recorder event streams with malformed audio packet evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
+    const summary = await writeProviderEvidence(root, "telnyx", { malformedEventAudio: true });
+
+    const failures = await validateDownloadedFlySyntheticCarrierArtifacts(summary, root);
+
+    expect(failures).toContain("telnyx bot events.jsonl line 1 packet.audio.byteLength must be positive");
+  });
+
   it("rejects recorder event streams that disagree with manifest packet counts", async () => {
     const root = await mkdtemp(join(tmpdir(), "syrinx-fly-artifacts-"));
     const summary = await writeProviderEvidence(root, "telnyx", { recorderEventPackets: 99 });
@@ -158,6 +176,8 @@ async function writeProviderEvidence(
     readonly carrierOutboundSampleCount?: number;
     readonly omitUserAudioEvent?: boolean;
     readonly recorderEventPackets?: number;
+    readonly mismatchedEventPacketKind?: boolean;
+    readonly malformedEventAudio?: boolean;
   } = {},
 ): Promise<FlySpikeSummary> {
   const session = `${provider}-session`;
@@ -216,7 +236,12 @@ async function writeProviderEvidence(
       jsonLine("tts.audio"),
       jsonLine("record.assistant_audio"),
     ];
-    if (!options.omitUserAudioEvent) events.unshift(jsonLine("record.user_audio"));
+    if (!options.omitUserAudioEvent) {
+      events.unshift(jsonLine("record.user_audio", {
+        packetKind: options.mismatchedEventPacketKind ? "stt.result" : undefined,
+        malformedAudio: options.malformedEventAudio,
+      }));
+    }
     await writeFile(join(botDir, "events.jsonl"), events.join(""));
   }
 
@@ -298,8 +323,31 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function jsonLine(kind: string): string {
-  return `${JSON.stringify({ kind, packet: { kind } })}\n`;
+function jsonLine(
+  kind: string,
+  options: { readonly packetKind?: string; readonly malformedAudio?: boolean } = {},
+): string {
+  const packetKind = options.packetKind ?? kind;
+  const packet: Record<string, unknown> = { kind: packetKind, contextId: "turn-test", timestampMs: 1000 };
+  if (kind === "record.user_audio") {
+    packet["audio"] = { type: "Uint8Array", byteLength: options.malformedAudio ? 0 : 320 };
+  } else if (kind === "record.assistant_audio") {
+    packet["audio"] = { type: "Uint8Array", byteLength: 640 };
+    packet["sampleRateHz"] = 16000;
+    packet["truncate"] = false;
+  } else if (kind === "tts.audio") {
+    packet["audio"] = { type: "Uint8Array", byteLength: 640 };
+    packet["sampleRateHz"] = 16000;
+  } else if (kind === "stt.result" || kind === "llm.delta") {
+    packet["text"] = kind === "stt.result" ? "I need help with my timetable." : "I can help with that.";
+  }
+  return `${JSON.stringify({
+    route: "Main",
+    kind,
+    context_id: "turn-test",
+    timestamp_ms: 1000,
+    packet,
+  })}\n`;
 }
 
 async function writePcm16Wav(path: string, sampleRateHz: number, sampleCount: number): Promise<void> {
