@@ -3,6 +3,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { VoiceAgentSession } from "./voice-agent-session.js";
 import { Route, type PipelineBus, type PluginConfig, type VoicePlugin } from "./index.js";
+import { ErrorCategory } from "./packets.js";
 import type {
   EndOfSpeechAudioPacket,
   RecordAssistantAudioPacket,
@@ -24,6 +25,8 @@ import type {
   ModeSwitchCompletedPacket,
   VadSpeechStartedPacket,
   VadSpeechActivityPacket,
+  LlmErrorPacket,
+  TtsErrorPacket,
 } from "./packets.js";
 
 class CapturingPlugin implements VoicePlugin {
@@ -1101,6 +1104,61 @@ describe("VoiceAgentSession", () => {
 
     expect(interrupts).toEqual([]);
     expect(metrics).toContain("interrupt.gate_resolved_after_tts_end");
+
+    await closeSession(session);
+  });
+
+  it("speaks a graceful fallback when the LLM fails a turn (never fail silently)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, errorFallbackText: "One moment please." });
+    const ttsTexts: string[] = [];
+    const metrics: string[] = [];
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsTexts.push((pkt as unknown as { text: string }).text);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Critical, {
+      kind: "llm.error",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      component: "llm",
+      category: ErrorCategory.NetworkTimeout,
+      cause: new Error("provider timeout"),
+      isRecoverable: true,
+    } satisfies LlmErrorPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(metrics).toContain("error.fallback_spoken");
+    expect(ttsTexts.join(" ")).toContain("One moment please.");
+
+    await closeSession(session);
+  });
+
+  it("does not speak an LLM fallback for a TTS failure (needs canned audio, not the broken TTS)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, errorFallbackText: "One moment please." });
+    const metrics: string[] = [];
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Critical, {
+      kind: "tts.error",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      component: "tts",
+      category: ErrorCategory.NetworkTimeout,
+      cause: new Error("tts down"),
+      isRecoverable: true,
+    } satisfies TtsErrorPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(metrics).not.toContain("error.fallback_spoken");
 
     await closeSession(session);
   });
