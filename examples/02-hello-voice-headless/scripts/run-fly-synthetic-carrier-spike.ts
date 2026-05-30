@@ -177,7 +177,7 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
     const label = (name: string) => `${provider} ${name}`;
 
     const manifest = await readRecorderManifest(bot.manifestJson, label("bot manifest"), failures);
-    await validateEventsJsonl(bot.eventsJsonl, label("bot events.jsonl"), failures);
+    const eventPackets = await validateEventsJsonl(bot.eventsJsonl, label("bot events.jsonl"), failures);
     if (manifest) {
       await validatePcmFile(bot.userPcm, label("bot user_audio.pcm"), manifest.audio?.user?.byteLength, failures);
       await validatePcmFile(bot.assistantPcm, label("bot assistant_audio.pcm"), manifest.audio?.assistant?.byteLength, failures);
@@ -203,6 +203,11 @@ export async function validateDownloadedFlySyntheticCarrierArtifacts(
         failures.push(`${provider} recorder assistant truncations expected 0, got ${String(manifest.audio?.assistant?.truncations)}`);
       }
       if (!positiveInteger(manifest.events?.packets)) failures.push(`${provider} recorder event packet count must be positive`);
+      if (eventPackets !== null && manifest.events?.packets !== eventPackets) {
+        failures.push(
+          `${provider} recorder event packet count ${String(eventPackets)} did not match manifest ${String(manifest.events?.packets)}`,
+        );
+      }
     }
 
     const downloadedCallResult = await validateCarrierCallResultArtifact(carrier.callResultJson, label("carrier call-result.json"), provider, callResult, failures);
@@ -345,32 +350,34 @@ async function validateJsonFile(path: string, label: string, failures: string[])
   }
 }
 
-async function validateEventsJsonl(path: string, label: string, failures: string[]): Promise<void> {
+async function validateEventsJsonl(path: string, label: string, failures: string[]): Promise<number | null> {
   if (!path) {
     failures.push(`${label} was not downloaded`);
-    return;
+    return null;
   }
   try {
     const text = await readFile(path, "utf8");
     const lines = text.trim().split("\n").filter(Boolean);
     if (lines.length === 0) {
       failures.push(`${label} is empty`);
-      return;
+      return null;
     }
     const kinds = new Set<string>();
     for (const line of lines) {
       const event = parseJson(line, label);
       if (!isRecord(event) || typeof event["kind"] !== "string") {
         failures.push(`${label} contains an event without kind`);
-        return;
+        return null;
       }
       kinds.add(event["kind"]);
     }
-    for (const required of ["stt.result", "llm.delta", "tts.audio", "record.assistant_audio"]) {
+    for (const required of ["record.user_audio", "stt.result", "llm.delta", "tts.audio", "record.assistant_audio"]) {
       if (!kinds.has(required)) failures.push(`${label} missing ${required}`);
     }
+    return lines.length;
   } catch (err) {
     failures.push(`${label} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
   }
 }
 
