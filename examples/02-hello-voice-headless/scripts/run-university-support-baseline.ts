@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { tool } from "ai";
 import { z } from "zod";
@@ -86,6 +86,11 @@ interface AudioStats {
   readonly bytes: number;
   readonly peak: number;
   readonly rms: number;
+}
+
+interface BaselineQualityEvaluation {
+  readonly failures: string[];
+  readonly diagnostics: string[];
 }
 
 async function synthesizeInputFixture(): Promise<void> {
@@ -177,21 +182,27 @@ function artifactPath(path: string): string {
   return relative(PKG_ROOT, path);
 }
 
-function evaluateQuality(finalTranscript: string, agentReply: string, toolCalls: number, audio: AudioStats): string[] {
+export function evaluateQuality(
+  finalTranscript: string,
+  agentReply: string,
+  toolCalls: number,
+  audio: AudioStats,
+): BaselineQualityEvaluation {
   const failures: string[] = [];
-  if (!includesAny(finalTranscript, ["maya", "chen"])) failures.push("STT missed the student name");
-  if (!includesAny(finalTranscript, ["biology", "bio"])) failures.push("STT missed the course");
-  if (!includesAny(finalTranscript, ["deadline", "dead line"])) failures.push("STT missed the deadline intent");
-  if (!includesAny(finalTranscript, ["form", "petition"])) failures.push("STT missed the form intent");
-  if (toolCalls < 1) failures.push(`expected at least 1 tool call, got ${toolCalls}`);
-  if (!includesAny(agentReply, ["late add", "petition"])) failures.push("agent reply did not mention the Late Add Petition");
+  const diagnostics: string[] = [];
+  if (!includesAny(finalTranscript, ["maya", "chen"])) diagnostics.push("STT missed fixture term: student name");
+  if (!includesAny(finalTranscript, ["biology", "bio"])) diagnostics.push("STT missed fixture term: course");
+  if (!includesAny(finalTranscript, ["deadline", "dead line"])) diagnostics.push("STT missed fixture term: deadline intent");
+  if (!includesAny(finalTranscript, ["form", "petition"])) diagnostics.push("STT missed fixture term: form intent");
+  if (toolCalls < 1) diagnostics.push(`expected at least 1 tool call, got ${toolCalls}`);
+  if (!includesAny(agentReply, ["late add", "petition"])) diagnostics.push("agent reply did not mention the Late Add Petition");
   if (!includesAny(agentReply, ["advisor", "registrar", "instructor"])) {
-    failures.push("agent reply did not mention required approvals");
+    diagnostics.push("agent reply did not mention required approvals");
   }
   if (audio.durationMs < 500 || audio.rms < 0.001 || audio.peak < 0.01) {
     failures.push("assistant audio output is missing or effectively silent");
   }
-  return failures;
+  return { failures, diagnostics };
 }
 
 async function main(): Promise<void> {
@@ -250,7 +261,8 @@ async function main(): Promise<void> {
 
   const inputAudio = readAudioStats(result.inputWavPath);
   const assistantAudio = readAudioStats(result.agentOutWavPath);
-  const failures = evaluateQuality(result.finalTranscript, result.agentReply, result.metrics.toolCalls, assistantAudio);
+  const evaluation = evaluateQuality(result.finalTranscript, result.agentReply, result.metrics.toolCalls, assistantAudio);
+  const { failures, diagnostics } = evaluation;
   const baseline = {
     scenario: "university_student_relations_late_add",
     generatedAt: new Date().toISOString(),
@@ -281,6 +293,7 @@ async function main(): Promise<void> {
       input: { path: artifactPath(result.inputWavPath), ...inputAudio },
       assistant: { path: artifactPath(result.agentOutWavPath), ...assistantAudio },
     },
+    diagnostics,
     artifacts: {
       sessionDir: artifactPath(result.sessionDir),
       eventsJsonlPath: artifactPath(result.eventsJsonlPath),
@@ -302,7 +315,9 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main().catch((err: unknown) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

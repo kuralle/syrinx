@@ -2,11 +2,41 @@
 
 import { describe, expect, it } from "vitest";
 
+import { evaluateQuality as evaluateUniversitySupportBaseline } from "../scripts/run-university-support-baseline.js";
 import { evaluateQuality as evaluateRecorderCoherence } from "../scripts/run-live-university-recorder-coherence.js";
 import { evaluateConversation as evaluateInteractiveConversation } from "../scripts/run-websocket-university-interactive.js";
 import { evaluateConversation as evaluateMultiturnConversation } from "../scripts/run-websocket-university-multiturn.js";
 
 describe("websocket smoke quality gates", () => {
+  it("keeps one-turn university transcript and agent checks diagnostic", () => {
+    const evaluation = evaluateUniversitySupportBaseline("", "", 0, {
+      durationMs: 1000,
+      bytes: 32000,
+      peak: 0.2,
+      rms: 0.02,
+    });
+
+    expect(evaluation.failures).toStrictEqual([]);
+    expect(evaluation.diagnostics).toContain("STT missed fixture term: student name");
+    expect(evaluation.diagnostics).toContain("STT missed fixture term: course");
+    expect(evaluation.diagnostics).toContain("STT missed fixture term: deadline intent");
+    expect(evaluation.diagnostics).toContain("STT missed fixture term: form intent");
+    expect(evaluation.diagnostics).toContain("expected at least 1 tool call, got 0");
+    expect(evaluation.diagnostics).toContain("agent reply did not mention the Late Add Petition");
+    expect(evaluation.diagnostics).toContain("agent reply did not mention required approvals");
+  });
+
+  it("keeps one-turn university silent assistant audio as a hard failure", () => {
+    const evaluation = evaluateUniversitySupportBaseline("Maya Biology deadline form", "Late Add Petition registrar.", 1, {
+      durationMs: 100,
+      bytes: 3200,
+      peak: 0,
+      rms: 0,
+    });
+
+    expect(evaluation.failures).toContain("assistant audio output is missing or effectively silent");
+  });
+
   it("keeps interactive fixture transcript and agent wording checks diagnostic", () => {
     const evaluation = evaluateInteractiveConversation([
       {
