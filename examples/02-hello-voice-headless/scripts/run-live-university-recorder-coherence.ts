@@ -8,7 +8,11 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { Route, type TextToSpeechAudioPacket, type TextToSpeechEndPacket } from "@asyncdot/voice";
-import { createVoiceSessionRecorder } from "@asyncdot/voice-recorder";
+import {
+  assertVoiceSessionRecorderManifest,
+  createVoiceSessionRecorder,
+  type VoiceSessionRecorderManifest,
+} from "@asyncdot/voice-recorder";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,
@@ -70,20 +74,6 @@ interface TurnRecordingArtifact {
   readonly assistantDurationMs: number;
 }
 
-interface RecorderManifest {
-  readonly audio: {
-    readonly user: { readonly byteLength: number; readonly durationMs: number; readonly chunks: number };
-    readonly assistant: {
-      readonly sampleRateHz?: number;
-      readonly byteLength: number;
-      readonly durationMs: number;
-      readonly chunks: number;
-      readonly truncations: number;
-    };
-  };
-  readonly events: { readonly packets: number };
-}
-
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -125,7 +115,7 @@ async function main(): Promise<void> {
   const recorderEventsPath = join(recorderDir, "three-turn-live", "events.jsonl");
   const recorderUserWav = join(runDir, "recorder-user.wav");
   const recorderAssistantWav = join(runDir, "recorder-assistant.wav");
-  const recorderManifest = JSON.parse(readFileSync(recorderManifestPath, "utf8")) as RecorderManifest;
+  const recorderManifest = readValidatedRecorderManifest(recorderManifestPath);
   const recorderAssistantSampleRateHz = readRecorderAssistantSampleRateHz(recorderManifest);
   await writePcmFileAsWav(recorderUserPcm, recorderUserWav, INPUT_SAMPLE_RATE_HZ);
   await writePcmFileAsWav(recorderAssistantPcm, recorderAssistantWav, recorderAssistantSampleRateHz);
@@ -385,7 +375,7 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
 
 function evaluateQuality(
   turns: readonly TurnCapture[],
-  recorderManifest: RecorderManifest,
+  recorderManifest: VoiceSessionRecorderManifest,
   recorderUserTranscript: string,
   recorderAssistantTranscript: string,
 ): string[] {
@@ -430,12 +420,24 @@ function evaluateQuality(
   return failures;
 }
 
-export function readRecorderAssistantSampleRateHz(manifest: RecorderManifest): number {
-  const sampleRateHz = manifest.audio.assistant.sampleRateHz;
+export function readValidatedRecorderManifest(path: string): VoiceSessionRecorderManifest {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  assertVoiceSessionRecorderManifest(parsed);
+  return parsed;
+}
+
+export function readRecorderAssistantSampleRateHz(manifest: unknown): number {
+  const audio = isRecord(manifest) ? manifest["audio"] : undefined;
+  const assistant = isRecord(audio) ? audio["assistant"] : undefined;
+  const sampleRateHz = isRecord(assistant) ? assistant["sampleRateHz"] : undefined;
   if (typeof sampleRateHz !== "number" || !Number.isInteger(sampleRateHz) || sampleRateHz <= 0) {
     throw new Error("recorder manifest audio.assistant.sampleRateHz must be a positive integer");
   }
   return sampleRateHz;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function writeTurnRecordings(options: {

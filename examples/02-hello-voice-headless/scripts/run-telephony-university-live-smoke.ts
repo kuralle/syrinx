@@ -9,7 +9,12 @@ import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 import { type TextToSpeechAudioPacket, type TextToSpeechEndPacket, type VoiceAgentSession } from "@asyncdot/voice";
-import { createVoiceSessionRecorder } from "@asyncdot/voice-recorder";
+import {
+  assertVoiceSessionRecorderManifest,
+  createVoiceSessionRecorder,
+  validateVoiceSessionRecorderManifest,
+  type VoiceSessionRecorderManifest,
+} from "@asyncdot/voice-recorder";
 import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
@@ -165,9 +170,7 @@ async function main(): Promise<void> {
   }
 
   const recorderManifestPath = join(recorderDir, provider, "manifest.json");
-  const recorderManifest = existsSync(recorderManifestPath)
-    ? JSON.parse(readFileSync(recorderManifestPath, "utf8")) as unknown
-    : null;
+  const recorderManifest = readRecorderManifestIfPresent(recorderManifestPath);
   const carrierInboundWavPath = join(runDir, "carrier-inbound.wav");
   const carrierOutboundWavPath = join(runDir, "carrier-outbound.wav");
   await Promise.all([
@@ -557,7 +560,7 @@ function expectedPcmuWireBytes(enginePcm16Bytes: number): number {
 function evaluateQuality(
   turn: TurnCapture,
   capture: CarrierCapture,
-  recorderManifest: unknown,
+  recorderManifest: VoiceSessionRecorderManifest | null,
   transcripts: {
     readonly carrierInboundWhisperText: string;
     readonly carrierOutboundWhisperText: string;
@@ -593,9 +596,22 @@ function evaluateQuality(
     failures.push("carrier outbound local Whisper transcript was empty");
   }
   if (recorderManifest === null) failures.push("recorder manifest was not written");
-  const recorderTruncations = readRecorderAssistantTruncations(recorderManifest);
-  if (recorderTruncations > 0) failures.push(`recorder assistant audio was truncated ${String(recorderTruncations)} time(s)`);
+  if (recorderManifest) {
+    const manifestFailures = validateVoiceSessionRecorderManifest(recorderManifest);
+    failures.push(...manifestFailures.map((failure) => `recorder manifest ${failure}`));
+    const recorderTruncations = recorderManifest.audio.assistant.truncations;
+    if (recorderTruncations > 0) {
+      failures.push(`recorder assistant audio was truncated ${String(recorderTruncations)} time(s)`);
+    }
+  }
   return failures;
+}
+
+function readRecorderManifestIfPresent(path: string): VoiceSessionRecorderManifest | null {
+  if (!existsSync(path)) return null;
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  assertVoiceSessionRecorderManifest(parsed);
+  return parsed;
 }
 
 function mergePcm16(chunks: readonly Int16Array[]): Int16Array {
@@ -676,16 +692,6 @@ function interFrameDelays(profile: NetworkProfile): readonly number[] {
 function basenameWithoutExt(path: string): string {
   const base = path.split("/").at(-1) ?? path;
   return base.replace(/\.[^.]+$/, "");
-}
-
-function readRecorderAssistantTruncations(recorderManifest: unknown): number {
-  if (!recorderManifest || typeof recorderManifest !== "object") return 0;
-  const audio = (recorderManifest as { audio?: unknown }).audio;
-  if (!audio || typeof audio !== "object") return 0;
-  const assistant = (audio as { assistant?: unknown }).assistant;
-  if (!assistant || typeof assistant !== "object") return 0;
-  const truncations = (assistant as { truncations?: unknown }).truncations;
-  return typeof truncations === "number" && Number.isFinite(truncations) ? truncations : 0;
 }
 
 function sendStart(provider: TelephonyProvider, socket: WebSocket): void {
