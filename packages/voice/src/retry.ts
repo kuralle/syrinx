@@ -25,8 +25,23 @@ export function retryDelayMs(attemptIndex: number, config: RetryConfig): number 
   return Math.min(config.maxDelayMs, exponential);
 }
 
+/**
+ * Equal-jitter backoff: half the deterministic exponential delay plus a random half.
+ * Spreads out retries so many sessions hitting the same provider rate/concurrency limit
+ * at once don't reconnect in lockstep (thundering herd). `rng` is injectable for tests.
+ */
+export function retryDelayWithJitterMs(
+  attemptIndex: number,
+  config: RetryConfig,
+  rng: () => number = Math.random,
+): number {
+  const base = retryDelayMs(attemptIndex, config);
+  const half = base / 2;
+  return Math.round(half + rng() * half);
+}
+
 export async function waitForRetryDelay(attemptIndex: number, config: RetryConfig, signal?: AbortSignal): Promise<void> {
-  const delayMs = retryDelayMs(attemptIndex, config);
+  const delayMs = retryDelayWithJitterMs(attemptIndex, config);
   await new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       reject(abortError());

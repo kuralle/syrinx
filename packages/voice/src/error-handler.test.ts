@@ -40,4 +40,17 @@ describe("LLM error handling", () => {
     expect(category).toBe(ErrorCategory.InvalidInput);
     expect(isRecoverable(category)).toBe(false);
   });
+
+  it("maps provider concurrency-limit errors to recoverable rate-limit (G8)", () => {
+    for (const message of [
+      "Cartesia TTS provider error: concurrency limit exceeded",
+      "Too many concurrent connections",
+      "max concurrency reached",
+      "concurrency_limit_exceeded",
+    ]) {
+      const category = categorizeTtsError(new Error(message));
+      expect(category, `message: ${message}`).toBe(ErrorCategory.RateLimit);
+      expect(isRecoverable(category)).toBe(true);
+    }
+  });
 });

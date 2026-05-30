@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { readRetryConfig, retryDelayMs, waitForRetryDelay } from "./retry.js";
+import { readRetryConfig, retryDelayMs, retryDelayWithJitterMs, waitForRetryDelay } from "./retry.js";
 
 describe("retry helpers", () => {
   it("reads bounded retry config from plugin config", () => {
@@ -28,6 +28,14 @@ describe("retry helpers", () => {
     expect(retryDelayMs(1, config)).toBe(100);
     expect(retryDelayMs(2, config)).toBe(200);
     expect(retryDelayMs(3, config)).toBe(250);
+  });
+
+  it("applies equal jitter: half the deterministic delay plus a random half", () => {
+    const config = { maxAttempts: 5, baseDelayMs: 100, maxDelayMs: 1000 };
+    // attempt 2 deterministic = 200 → equal-jitter range [100, 200].
+    expect(retryDelayWithJitterMs(2, config, () => 0)).toBe(100);
+    expect(retryDelayWithJitterMs(2, config, () => 1)).toBe(200);
+    expect(retryDelayWithJitterMs(2, config, () => 0.5)).toBe(150);
   });
 
   it("can be aborted while waiting", async () => {
