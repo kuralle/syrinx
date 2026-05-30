@@ -237,6 +237,23 @@ remove the timer entirely if it was a guard against a problem that no longer exi
 needed for numerical drift, defer it to the next silence boundary. **Tests:** feed >5 s of continuous speech frames and
 assert no mid-speech state reset and no spurious `speech_ended`; assert reset still happens during a silence gap.
 
+### G12 — Turn-taking keyed on TTS generation-end instead of playout-end  ·  ✅ SHIPPED  ·  core/turn-taking
+**Shipped (2026-05-31).** Found via the `conversation.wav` overlap the user heard ("when the agent speaks the user also
+speaks"). Deterministic loop: `scripts/analyze-overlap.mjs` (per-100 ms stereo RMS) measured **7.9 s of overlap, 28.5 % of
+agent speech**, in regions that landed exactly where each new user turn began. Byte math from `events.jsonl`: Cartesia TTS
+streams at **~2.2× realtime** — 12.9 s of speech arrives in a 5.7 s burst. `voice-agent-session.ts` cleared
+`activeTtsContextIds` in `handleTtsEnd` (the **generation** clock), but the streamed audio keeps playing ~7 s longer. In
+that gap the assistant is audible yet the engine believes it is silent, so user speech is **not** recognized as barge-in
+(`latestActiveTtsContextId()` returns "") → no truncation → both tracks overlap. First principles: in real telephony RTP is
+paced at realtime so generation-clock == playout-clock and the gap cannot open; our WS engine streams faster than realtime,
+decoupling them (cf. LiveKit `playback_position`, Pipecat playout-driven `BotStoppedSpeaking`; the WS transport's
+`paced-playout.ts` already paces the wire, but the engine's turn-taking *state* did not follow it). **Fix.** Track a
+per-context playout cursor advanced by each chunk's realtime duration (already computed for the idle timeout); on `tts.end`
+defer releasing the context until its playout estimate elapses; barge-in/interrupt/stall route through one release helper;
+timers cleared on close. The synthetic carrier now gates the next user turn on playout-end (polite turn-taking), and the
+coherence smoke fails above 1500 ms of stereo overlap. Regression test at the barge-in seam (red→green); full suite green;
+live 3-turn re-run drove overlap **7.9 s → 0.0 s**.
+
 ## 4. Sequencing for implementation (task #8)
 
 P0 first (G1, G2) — highest user-perceived damage, highest frequency, and they interact (false barge-in × dropped
