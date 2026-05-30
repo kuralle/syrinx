@@ -37,6 +37,10 @@ const FRAME_SAMPLES = 320;
 const TURN_COUNT = 3;
 const POST_TTS_DRAIN_MS = 500;
 const POST_USER_SILENCE_MS = 5000;
+// Stereo conversation.wav must play like a real call: with polite turn-taking the
+// user (L) and assistant (R) should not speak over each other. A regression in
+// playout-aware turn-taking shows up as large simultaneous-speech overlap.
+const MAX_CONVERSATION_OVERLAP_MS = 1500;
 
 interface TurnCapture {
   readonly id: string;
@@ -57,6 +61,7 @@ interface TurnCapture {
   toolCalls: string[];
   assistantAudioBytes: number;
   assistantAudioChunks: Uint8Array[];
+  assistantPlayoutEndMs: number;
   error: string;
 }
 
@@ -118,6 +123,7 @@ async function main(): Promise<void> {
   const recorderAssistantPcm = join(recorderDir, "three-turn-live", "assistant_audio.pcm");
   const recorderManifestPath = join(recorderDir, "three-turn-live", "manifest.json");
   const recorderEventsPath = join(recorderDir, "three-turn-live", "events.jsonl");
+  const recorderConversationWav = join(recorderDir, "three-turn-live", "conversation.wav");
   const recorderUserWav = join(runDir, "recorder-user.wav");
   const recorderAssistantWav = join(runDir, "recorder-assistant.wav");
   const recorderManifest = readValidatedRecorderManifest(recorderManifestPath);
@@ -137,7 +143,14 @@ async function main(): Promise<void> {
     transcribeWithLocalWhisper(recorderAssistantWav, whisperDir, "recorder-assistant"),
   ]);
 
-  const evaluation = evaluateQuality(turns, recorderManifest, whisperUser.text, whisperAssistant.text);
+  const conversationOverlapMs = measureStereoOverlapMs(recorderConversationWav);
+  const evaluation = evaluateQuality(
+    turns,
+    recorderManifest,
+    whisperUser.text,
+    whisperAssistant.text,
+    conversationOverlapMs,
+  );
   const { failures, diagnostics } = evaluation;
   const baseline = {
     scenario: "live_university_recorder_three_turn_coherence",
@@ -234,6 +247,7 @@ async function runThreeTurns(session: ReturnType<typeof createUniversitySupportS
       toolCalls: [],
       assistantAudioBytes: 0,
       assistantAudioChunks: [],
+      assistantPlayoutEndMs: 0,
       error: "",
     };
     const dispose = captureTurn(session, turn);
@@ -249,7 +263,10 @@ async function runThreeTurns(session: ReturnType<typeof createUniversitySupportS
     turn.audioEndedAtMs = Date.now();
     turn.userRecorderByteLength += await sendSilence(session, turn.id, POST_USER_SILENCE_MS);
     await waitForTurnComplete(turn);
-    await sleep(POST_TTS_DRAIN_MS);
+    // Wait for the assistant's audio to finish playing out (not just generating)
+    // before the next user turn, so we don't talk over the still-playing reply.
+    const remainingPlayoutMs = Math.max(0, turn.assistantPlayoutEndMs - Date.now());
+    await sleep(remainingPlayoutMs + POST_TTS_DRAIN_MS);
     dispose();
     console.log(`completed ${turn.id}: ${turn.sttTranscript.slice(0, 90)}`);
     turns.push(turn);
@@ -274,6 +291,12 @@ function captureTurn(session: ReturnType<typeof createUniversitySupportSession>,
     if (turn.firstAudioAtMs === 0) turn.firstAudioAtMs = pkt.timestampMs;
     turn.assistantAudioBytes += pkt.audio.byteLength;
     turn.assistantAudioChunks.push(Uint8Array.from(pkt.audio));
+    // Advance the realtime playout cursor: TTS streams faster than realtime, so
+    // generation ends well before the audio finishes playing. The next user turn
+    // must wait for this so the synthetic carrier models polite turn-taking.
+    const chunkMs = (pkt.audio.byteLength / 2 / pkt.sampleRateHz) * 1000;
+    const playoutBaseMs = Math.max(Date.now(), turn.assistantPlayoutEndMs);
+    turn.assistantPlayoutEndMs = playoutBaseMs + chunkMs;
   });
   const offTtsEnd = session.bus.on<TextToSpeechEndPacket>("tts.end", (pkt) => {
     if (pkt.contextId === turn.id) turn.ttsEndedAtMs = pkt.timestampMs;
@@ -380,14 +403,64 @@ async function waitForTurnComplete(turn: TurnCapture): Promise<void> {
   );
 }
 
+// Total time (ms) where BOTH channels of a stereo recording carry speech.
+// L = user, R = assistant. Window RMS over 100ms vs a low speech floor.
+function measureStereoOverlapMs(wavPath: string): number {
+  const buf = readFileSync(wavPath);
+  const channels = buf.readUInt16LE(22);
+  const sampleRate = buf.readUInt32LE(24);
+  const bits = buf.readUInt16LE(34);
+  let off = 12;
+  let dataOff = 44;
+  let dataLen = buf.length - 44;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString("ascii", off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === "data") {
+      dataOff = off + 8;
+      dataLen = size;
+      break;
+    }
+    off += 8 + size + (size % 2);
+  }
+  if (channels !== 2 || bits !== 16) {
+    throw new Error(`expected stereo s16 conversation.wav, got ${channels}ch ${bits}bit`);
+  }
+  const frames = Math.floor(dataLen / 4);
+  const winFrames = Math.floor((100 * sampleRate) / 1000);
+  const SPEECH_RMS = 300;
+  const winRms = (startFrame: number, ch: number): number => {
+    let sum = 0;
+    let n = 0;
+    for (let i = startFrame; i < Math.min(startFrame + winFrames, frames); i++) {
+      const s = buf.readInt16LE(dataOff + i * 4 + ch * 2);
+      sum += s * s;
+      n++;
+    }
+    return n ? Math.sqrt(sum / n) : 0;
+  };
+  let overlapMs = 0;
+  for (let f = 0; f < frames; f += winFrames) {
+    if (winRms(f, 0) > SPEECH_RMS && winRms(f, 1) > SPEECH_RMS) overlapMs += 100;
+  }
+  return overlapMs;
+}
+
 export function evaluateQuality(
   turns: readonly TurnCapture[],
   recorderManifest: VoiceSessionRecorderManifest,
   recorderUserTranscript: string,
   recorderAssistantTranscript: string,
+  conversationOverlapMs: number,
 ): RecorderCoherenceEvaluation {
   const failures: string[] = [];
   const diagnostics: string[] = [];
+  if (conversationOverlapMs > MAX_CONVERSATION_OVERLAP_MS) {
+    failures.push(
+      `conversation.wav has ${conversationOverlapMs}ms of user/assistant overlap ` +
+        `(> ${MAX_CONVERSATION_OVERLAP_MS}ms): turn-taking is not playout-aware`,
+    );
+  }
   if (turns.length !== TURN_COUNT) failures.push(`expected ${TURN_COUNT} turns, got ${turns.length}`);
   for (const turn of turns) {
     if (turn.toolCalls.length === 0) diagnostics.push(`${turn.id} did not call studentRelationsLookup`);
