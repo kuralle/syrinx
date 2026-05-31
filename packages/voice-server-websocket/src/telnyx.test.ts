@@ -19,6 +19,18 @@ async function openSocket(url: string): Promise<WebSocket> {
   return socket;
 }
 
+// Deterministic wait on a condition. The paced-playout drain runs on a real-time
+// clock; a fixed sleep can slip past its margin when the full suite loads the CPU
+// (e.g. the FIR resampler running on sibling tests), so poll the actual condition.
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
 async function readJsonMatching(socket: WebSocket, predicate: (message: any) => boolean): Promise<any> {
   return await new Promise((resolve) => {
     const onMessage = (data: WebSocket.RawData, isBinary: boolean) => {
@@ -846,8 +858,9 @@ describe("createTelnyxMediaStreamServer", () => {
       contextId: "telnyx-playout",
       timestampMs: Date.now(),
     });
-    // Wait for the ~200ms of realtime pacing to drain, plus margin.
-    await new Promise((resolve) => setTimeout(resolve, 340));
+    // Wait until the paced drain actually reports completion (deterministic under
+    // suite load) instead of a fixed sleep that can slip past its real-time margin.
+    await waitForCondition(() => progress.at(-1)?.complete === true);
 
     const last = progress.at(-1);
     expect(last?.complete).toBe(true);

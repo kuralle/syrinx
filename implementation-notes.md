@@ -128,3 +128,19 @@ is left to the existing `maxAttempts` cap; a genuinely stable connection resets 
 count. +1 unit test (`gives up after maxQuickFailures open-then-die flaps`). Existing
 24 reconnect tests unaffected (their reconnect sockets never dispatch `open`, so the
 quick-failure path doesn't engage). Client suite: 32 pass, typecheck clean.
+
+## WT-02 review fixes (reviewer: Opus 4.8)
+
+1. **FIR memoization (hot-path/scale).** `resamplePcm16` rebuilt the 127-tap sinc·Hann
+   kernel on every call, though the kernel depends only on the (source,target) cutoff
+   — constant per connection. The resampler runs per audio chunk, so this was wasted
+   CPU at scale and added enough suite-wide load to tip two latent timing-fragile
+   transport tests over. Added a bounded module-level FIR cache keyed by cutoff.
+   Spectral lock (87 voice tests) intact.
+2. **Determinized a flaky transport test.** `telnyx.test.ts > emits tts.playout_progress
+   … after the paced audio drains` waited a fixed 340 ms for a real-time paced drain,
+   then asserted `complete:true` — under suite load the drain slipped past the margin
+   (~1/3 flake). Replaced with a `waitForCondition` poll on the actual completion event
+   (mirrors the existing twilio.test helper). Transport suite now 8/8 green across runs
+   (was ~1/3 flaky). The smartpbx "buffers before startup" 5 s-timeout flake also cleared
+   once the FIR load was removed.

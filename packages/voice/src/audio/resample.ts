@@ -28,6 +28,22 @@ function buildLowPassFir(cutoffNormalized: number): Float64Array {
   return h;
 }
 
+// The FIR depends only on the (source,target) rate pair via its cutoff, which is
+// constant per connection. resamplePcm16 runs per audio chunk in the hot path, so
+// cache the kernel instead of rebuilding 127 sinc·Hann taps on every call. Bounded:
+// real deployments use a handful of distinct rate pairs (24k/16k→8k, 48k→16k, …).
+const firCache = new Map<number, Float64Array>();
+
+function getLowPassFir(cutoffNormalized: number): Float64Array {
+  const key = Math.round(cutoffNormalized * 1e6);
+  let fir = firCache.get(key);
+  if (fir === undefined) {
+    fir = buildLowPassFir(cutoffNormalized);
+    firCache.set(key, fir);
+  }
+  return fir;
+}
+
 // Evaluate the symmetric FIR centered at each decimated output position.
 // Using the symmetric (zero-delay) formula avoids a group-delay shift at the
 // cost of needing halfTaps future samples — which are available because we
@@ -86,6 +102,6 @@ export function resamplePcm16(
 
   // Downsample: apply anti-alias FIR at 0.45 × targetRate before decimation.
   const cutoffNormalized = (0.45 * targetSampleRateHz) / sourceSampleRateHz;
-  const fir = buildLowPassFir(cutoffNormalized);
+  const fir = getLowPassFir(cutoffNormalized);
   return firDecimate(input, outputLength, ratio, fir);
 }
