@@ -427,3 +427,21 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - `pnpm --filter @asyncdot/voice-client-browser test`: 46/46 pass
 - `pnpm -r typecheck`: exit 0
 - Live smoke artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-jitter-2026-05-31T15-35-29-161Z/baseline.json` (jittery uplink, metrics `e2eMs=598`, `minPlaybackLeadMs=0`, quality gate passed)
+
+## VE-01 — Semantic endpointing fused off STT partials (2026-05-31)
+
+**Approach (JAL-Turn direction, ~0 marginal latency):** reuse streaming STT partials already on the bus — no extra ONNX/LLM. A lightweight heuristic `scoreSemanticCompleteness()` inspects trailing conjunctions, exact mid-thought phrases (`I need to know`), comma continuations, sentence-final punctuation, and backchannels. `fuseEndpointDecision()` ANDs semantic completeness with Smart Turn approval; defers `stt.finalize` when acoustics approve but semantics are incomplete; shortcuts with `semantic_shortcut_delay_ms` (default 50 ms) when semantics are complete but Smart Turn is uncertain. Empty transcript falls back to acoustic-only (Smart Turn unchanged). Escape hatch: `semantic_endpointing_enabled: false`.
+
+**Implementation:**
+- `packages/voice-turn-pipecat/src/semantic-completeness.ts` — scorer + fusion
+- `packages/voice-turn-pipecat/src/semantic-fixtures.ts` — labeled FastTurn-style set (complete / mid-thought / backchannel)
+- `packages/voice-turn-pipecat/src/index.ts` — `PipecatEOSPlugin` tracks `latestInterim`, fuses on `vad.speech_ended`, semantic defer timer (`semantic_defer_fallback_ms`, default 4 s)
+
+**Verification:**
+- `semantic-completeness.test.ts` (10) + `index.test.ts` fusion cases (8): fused release earlier on complete utterances vs Smart-Turn-only; defer on mid-thought when Smart Turn approves
+- `pnpm --filter @asyncdot/voice-turn-pipecat test`: 18/18
+- `pnpm --filter @asyncdot/voice test`: 88/88
+- `pnpm --filter @asyncdot/voice-server-websocket test`: 147/147
+- Live recorder coherence: `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-31T15-52-47-698Z/baseline.json` — `qualityGate.passed:true`, 3 multi-clause turns, avg STT final after audio end **985–6812 ms** (turn 1 longform), avg speech-end→first assistant audio **4352–11755 ms**, zero truncations
+- Interactive smoke: 3 turns completed (`stt` 755–1093 ms per turn); manifest write failed on pre-existing `assistantAudio.byteLength` PCM16 validation (unrelated to endpointing)
+- `git diff --check`: clean on VE-01 files

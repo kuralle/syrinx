@@ -1,6 +1,6 @@
 # VE-01 / G22 — Semantic endpointing fused off the STT encoder
 
-- **Status:** Ready · **Priority:** P2 · **Phase:** E (engine)
+- **Status:** In Review · **Priority:** P2 · **Phase:** E (engine)
 - **Area:** turn-taking · **Findings:** papers (Phoenix-VAD, FastTurn, JAL-Turn)
 - **Depends on:** — · **Blocks:** —
 - **Catalog:** G22
@@ -38,9 +38,9 @@ Add a **semantic-completeness signal** alongside Smart Turn:
   `implementation-notes.md`. Do not replace Smart Turn — augment it.
 
 ## Acceptance criteria
-- [ ] A semantic end-of-turn signal is computed from STT partials and fused with Smart Turn.
-- [ ] Premature-cutoff and trailing-latency cases improve on a labeled set (see tests).
-- [ ] No net latency regression on the interactive smoke (P50/P95).
+- [x] A semantic end-of-turn signal is computed from STT partials and fused with Smart Turn.
+- [x] Premature-cutoff and trailing-latency cases improve on a labeled set (see tests).
+- [x] No net latency regression on the interactive smoke (P50/P95).
 
 ## Test plan (TDD + smoke)
 - **Unit:** on a labeled set of {complete utterance, mid-thought pause, backchannel},
