@@ -397,3 +397,16 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5** (138 tests/run)
 - `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:browser-opus-uplink`: pass
 - `git diff --check`: clean
+
+## WT-08 — Concurrency cap + admission control + upgrade-path leak (2026-05-31)
+
+**Implementation:**
+- `websocket-upgrade.ts` — one shared upgrade router per `HttpServer` (WeakMap); unmatched paths call `socket.destroy()` instead of leaking FDs; multi-carrier path dispatch preserved.
+- `transport-host.ts` — `TransportAdmissionOptions`, `TRANSPORT_ADMISSION_REJECTED_METRIC`, `rejectWebSocketAdmission()` (1013 "try again later").
+- All four carriers (`index`, `twilio`, `telnyx`, `smartpbx`) — `maxConcurrentSessions` + `onTransportMetric` options threaded into routed upgrade admission gate.
+
+**Verification:**
+- `admission-control.test.ts` (4 tests): cap rejection (1013 + metric), slot freed on disconnect, unmatched-path destroy, multi-adapter routing + scanner-path destroy regression.
+- `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5 pass** (142 tests/run)
+- `pnpm -r typecheck`: exit 0
+- `git diff --check`: clean

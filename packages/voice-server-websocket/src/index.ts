@@ -28,7 +28,7 @@ import {
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
-import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
 import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
 import { type PacedPlayoutFrame } from "./paced-playout.js";
 import {
@@ -86,6 +86,8 @@ export interface VoiceWebSocketServerOptions {
    */
   readonly browserOpusDownlink?: boolean;
   readonly sessionStore?: SessionStore;
+  readonly maxConcurrentSessions?: number;
+  readonly onTransportMetric?: (name: string) => void;
 }
 
 export type { GracefulCloseOptions } from "./transport-host.js";
@@ -129,7 +131,10 @@ export async function createVoiceWebSocketServer(
 ): Promise<VoiceWebSocketServer> {
   const ownsHttpServer = !options.server;
   const httpServer = options.server ?? createServer();
-  const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws");
+  const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws", {
+    maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
+  });
   const wsServer = routedWebSocket.wsServer;
   const sessionStore = options.sessionStore ?? new InMemorySessionStore();
   const sessionIdFn = options.sessionId ?? defaultSessionId;

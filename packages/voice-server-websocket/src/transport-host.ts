@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import type { IncomingMessage } from "node:http";
-import { WebSocket, type RawData } from "ws";
+import type { Socket } from "node:net";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { VoiceAgentSession } from "@asyncdot/voice";
 import {
   WebSocketStartupTimeoutError,
@@ -23,6 +24,24 @@ export interface TransportHostConfig {
   readonly maxSessionDurationMs: number;
   readonly maxBufferedAmountBytes: number;
   readonly maxInboundMessageBytes: number;
+}
+
+export interface TransportAdmissionOptions {
+  readonly maxConcurrentSessions?: number;
+  readonly onAdmissionRejected?: () => void;
+}
+
+export const TRANSPORT_ADMISSION_REJECTED_METRIC = "transport.admission_rejected";
+
+export function rejectWebSocketAdmission(
+  wsServer: WebSocketServer,
+  request: IncomingMessage,
+  socket: Socket,
+  head: Buffer,
+): void {
+  wsServer.handleUpgrade(request, socket, head, (websocket) => {
+    websocket.close(1013, "try again later");
+  });
 }
 
 export interface GracefulCloseOptions {

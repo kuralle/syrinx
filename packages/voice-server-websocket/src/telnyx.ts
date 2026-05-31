@@ -23,7 +23,7 @@ import {
   requiredString,
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
-import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
 import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
@@ -54,6 +54,8 @@ export interface TelnyxMediaStreamServerOptions {
   readonly maxSessionDurationMs?: number;
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
+  readonly maxConcurrentSessions?: number;
+  readonly onTransportMetric?: (name: string) => void;
 }
 
 export interface TelnyxMediaStreamServer {
@@ -131,7 +133,10 @@ export async function createTelnyxMediaStreamServer(
 ): Promise<TelnyxMediaStreamServer> {
   const ownsHttpServer = !options.server;
   const httpServer = options.server ?? createServer();
-  const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/telnyx");
+  const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/telnyx", {
+    maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
+  });
   const wsServer = routedWebSocket.wsServer;
   const sessions = new Set<VoiceAgentSession>();
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? DEFAULT_ENGINE_SAMPLE_RATE_HZ;

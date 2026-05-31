@@ -19,7 +19,6 @@ Legend: `WT` = WebSocket transport · `VE` = voice engine · `(Pn)` priority ·
 _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 
 ## 🟢 Ready (unblocked — transport track shipped sequentially, in order)
-- **WT-08** (P2) Concurrency cap + admission + upgrade-leak
 - **VE-01** (P2) Semantic endpointing off STT encoder _(engine track, after WT)_
 - **VE-02** (P2) Speaker-attribution barge-in _(engine track)_
 - **VE-03** (P3) Latency-hiding filler token _(engine track)_
@@ -32,9 +31,11 @@ _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 _(none)_
 
 ## 👀 In Review (tests green, awaiting diff review)
+- **WT-08** (P2) Concurrency cap + admission control + upgrade-path leak — cursor/auto. Shared per-HTTP-server upgrade router destroys unmatched paths; `maxConcurrentSessions` rejects N+1 with 1013 + `transport.admission_rejected` metric on all four carriers. **142 tests ×5 stable**; typecheck green.
 - **WT-07** (P2) `ClientTransport` seam + Opus browser leg — **In Review**. `ClientTransport` + `WebSocketClientTransport`; `SyrinxBrowserClient` on seam; Opus uplink/downlink at 48 kHz wire (16 kHz engine) via `ready.supportedInputCodecs`; PCM fallback. Smoke: **~102 kbps** vs **~256 kbps** PCM baseline (`browser-opus-uplink-2026-05-31T15-10-02-401Z`). **138 tests ×5 stable**; client 45/45; `pnpm -r typecheck` green.
 
 ## ✅ Done (diff reviewed + behavior observed)
+- **WT-07** (P2) `ClientTransport` seam + Opus browser leg — cursor/auto `2b03a35`. `ClientTransport` interface (`transport.ts`) + `WebSocketClientTransport`; client + server `browser-opus.ts` (dynamic `@evan/opus`), codec negotiated in `ready`, PCM fallback. **Live Opus smoke `qualityGate.passed:true`, REAL measured 256→102 kbps (2.5× win, ratio 0.399), server decodes end-to-end.** Client 45 tests + server 5/5×138; hygiene clean. _Follow-up: Opus is 48 kHz (~102 kbps); a 16-24 kHz voice profile would approach the ~32 kbps aspiration — tuning, not blocking._
 - **WT-06** (P2) Externalizable `SessionStore` — cursor/auto `bf416d6`. `SessionStore` interface + `InMemorySessionStore` default + injectable `options.sessionStore`; all session access (lease/release/listAll/clear) routed through it; zero behavior change. 167-line test incl. injected-fake seam proof. Suite 5/5 (135 tests). Git hygiene clean (name-only, notes append-only).
 - **WT-10** (P1) Test-suite flakiness hardening — cursor/auto worker `4ac8a4d`. From the delegated Gemini+GLM converged diagnosis: `afterEach` cleanup registry (`setupTransportTestCleanup`/`registerServer`) in all 4 test files + shared `test-helpers.ts` + `vitest.config.ts`; fixed the 2 named flaky tests. **Reviewer verified 10/10 suite runs** (128 tests; was ~1/3 flaky). NO retries / NO fake timers. Git hygiene clean (name-only commit; notes appended not clobbered — the hard-rule brief worked).
 - **WT-03** (P1) Browser pacing + playout clock + jitter buffer — cursor/Sonnet worker `05e92cc` + reviewer `42e59ee`. Diff read; browser adapter now routes outbound TTS through the shared `OutboundPlayoutPipeline` (paced + `PlayoutProgressEmitter` → G12 playout clock on the browser leg) + integrates WT-04 `drainAndClose`; new `AudioJitterBuffer` (AudioContext-scheduled, flush-on-clear). 41 client tests + 4 browser-pacing tests; headless smoke `qualityGate.passed:true`; suite 127/128 (1 = known pre-existing flake, fixed in WT-10). **Reviewer fix:** worker's broad `git add` clobbered `implementation-notes.md` (−178 lines) — restored from 88ce280.
@@ -47,7 +48,7 @@ _(none)_
 ---
 
 ### Burndown
-14 sprint issues + WT-10 (flakiness, from delegated diagnosis) · **7 done (WT-01..05, VE-04, WT-10)** + G27 bonus · 2 in review (WT-06, WT-07) · WT-08/09 + VE-01/02/03/05 queued.
+14 sprint issues + WT-10 (flakiness, from delegated diagnosis) · **7 done (WT-01..05, VE-04, WT-10)** + G27 bonus · 3 in review (WT-06, WT-07, WT-08) · WT-09 + VE-01/02/03/05 queued.
 External reviews: gemini-review w0/w1/w2 fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).
 Worker note: claude 1M-context credits exhausted → workers run on `cursor-agent --model auto` (fast) / sonnet-4.
 External review: `gemini-review-w0` + `gemini-review-w1` fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).
