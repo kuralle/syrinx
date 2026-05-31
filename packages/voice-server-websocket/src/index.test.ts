@@ -16,6 +16,21 @@ import {
   createTwilioMediaStreamServer,
   createVoiceWebSocketServer,
 } from "./index.js";
+import {
+  openBrowserClientAndReadReady,
+  openBrowserSocketReady,
+  openSocket,
+  readJson,
+  readJsonMatching,
+  registerHttpServer,
+  registerServer,
+  registerSocket,
+  setupTransportTestCleanup,
+  waitForClose,
+  waitForCondition,
+} from "./test-helpers.js";
+
+setupTransportTestCleanup();
 
 function websocketUrl(port: number): string {
   return `ws://127.0.0.1:${port}/ws`;
@@ -26,33 +41,6 @@ function websocketUrlWithSession(port: number, sessionId: string): string {
 }
 
 const BINARY_AUDIO_ENVELOPE_MAGIC = Buffer.from("SYRXA1\n", "ascii");
-
-async function openClientAndReadReady(url: string): Promise<[WebSocket, any]> {
-  const socket = new WebSocket(url);
-  const ready = readJson(socket);
-  await new Promise<void>((resolveOpen, reject) => {
-    socket.once("open", resolveOpen);
-    socket.once("error", reject);
-  });
-  return [socket, await ready];
-}
-
-async function openClient(url: string, options?: WebSocket.ClientOptions): Promise<WebSocket> {
-  const socket = new WebSocket(url, options);
-  await new Promise<void>((resolveOpen, reject) => {
-    socket.once("open", resolveOpen);
-    socket.once("error", reject);
-  });
-  return socket;
-}
-
-async function readJson(socket: WebSocket): Promise<any> {
-  return await new Promise((resolve) => {
-    socket.once("message", (data) => {
-      resolve(JSON.parse(data.toString()));
-    });
-  });
-}
 
 function encodeTestBinaryAudioEnvelope(header: Record<string, unknown>, audio: Uint8Array): Buffer {
   const headerBytes = Buffer.from(JSON.stringify(header), "utf8");
@@ -77,20 +65,20 @@ function decodeTestBinaryAudioEnvelope(data: Buffer): { readonly header: any; re
 
 describe("createVoiceWebSocketServer", () => {
   it("routes multiple provider websocket paths on a shared HTTP server without handshake cross-talk", async () => {
-    const httpServer = createServer();
+    const httpServer = registerHttpServer(createServer());
     const [twilio, telnyx, smartpbx] = await Promise.all([
-      createTwilioMediaStreamServer({
+      registerServer(await createTwilioMediaStreamServer({
         server: httpServer,
         createSession: () => new VoiceAgentSession({ plugins: {} }),
-      }),
-      createTelnyxMediaStreamServer({
+      })),
+      registerServer(await createTelnyxMediaStreamServer({
         server: httpServer,
         createSession: () => new VoiceAgentSession({ plugins: {} }),
-      }),
-      createSmartPbxMediaStreamServer({
+      })),
+      registerServer(await createSmartPbxMediaStreamServer({
         server: httpServer,
         createSession: () => new VoiceAgentSession({ plugins: {} }),
-      }),
+      })),
     ]);
     await new Promise<void>((resolveListen, reject) => {
       httpServer.once("error", reject);
@@ -103,9 +91,9 @@ describe("createVoiceWebSocketServer", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
     const clients = await Promise.all([
-      openClient(`ws://127.0.0.1:${String(address.port)}/twilio`, { perMessageDeflate: false }),
-      openClient(`ws://127.0.0.1:${String(address.port)}/telnyx`, { perMessageDeflate: false }),
-      openClient(`ws://127.0.0.1:${String(address.port)}/media-stream`, { perMessageDeflate: false }),
+      openSocket(`ws://127.0.0.1:${String(address.port)}/twilio`, { perMessageDeflate: false }),
+      openSocket(`ws://127.0.0.1:${String(address.port)}/telnyx`, { perMessageDeflate: false }),
+      openSocket(`ws://127.0.0.1:${String(address.port)}/media-stream`, { perMessageDeflate: false }),
     ]);
     expect(clients.map((client) => client.readyState)).toEqual([
       WebSocket.OPEN,
@@ -119,14 +107,14 @@ describe("createVoiceWebSocketServer", () => {
   });
 
   it("does not negotiate websocket compression for browser media sessions", async () => {
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => new VoiceAgentSession({ plugins: {} }),
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openClient(websocketUrl(address.port), { perMessageDeflate: true });
+    const client = await openSocket(websocketUrl(address.port), { perMessageDeflate: true });
     expect(client.extensions).toBe("");
 
     client.close();
@@ -140,15 +128,15 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
     expect(ready.audio.rawBinaryInput).toBe(false);
     const errorMessage = new Promise<any>((resolve) => {
@@ -180,16 +168,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       rawBinaryInput: true,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
     expect(ready.sessionId).toMatch(/^session-/);
     expect(ready.maxSessionDurationMs).toBe(30 * 60_000);
@@ -225,7 +213,7 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -233,11 +221,11 @@ describe("createVoiceWebSocketServer", () => {
       },
       rawBinaryInput: true,
       contextId: () => "turn-early",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = new WebSocket(websocketUrl(address.port));
+    const client = registerSocket(new WebSocket(websocketUrl(address.port)));
     const ready = readJson(client);
     await new Promise<void>((resolveOpen, reject) => {
       client.once("open", resolveOpen);
@@ -267,7 +255,7 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
@@ -275,11 +263,11 @@ describe("createVoiceWebSocketServer", () => {
       },
       rawBinaryInput: true,
       contextId: () => "turn-early",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = new WebSocket(websocketUrl(address.port));
+    const client = registerSocket(new WebSocket(websocketUrl(address.port)));
     const messages: any[] = [];
     const transportError = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
@@ -309,16 +297,16 @@ describe("createVoiceWebSocketServer", () => {
   });
 
   it("closes browser websocket connections when session startup exceeds startupTimeoutMs", async () => {
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       startupTimeoutMs: 10,
       createSession: () => new Promise<VoiceAgentSession>(() => undefined),
       contextId: () => "turn-startup-timeout",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openClient(websocketUrl(address.port));
+    const client = await openSocket(websocketUrl(address.port));
     const errorMessage = readJson(client);
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
@@ -347,7 +335,7 @@ describe("createVoiceWebSocketServer", () => {
       textPackets.push(pkt as UserTextReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       resumeWindowMs: 200,
       createSession: () => {
@@ -355,11 +343,11 @@ describe("createVoiceWebSocketServer", () => {
         return session;
       },
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [first, firstReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-test"));
+    const [first, firstReady] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-test"));
     expect(firstReady).toMatchObject({
       type: "ready",
       sessionId: "resume-test",
@@ -368,7 +356,7 @@ describe("createVoiceWebSocketServer", () => {
     first.close();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const [second, secondReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-test"));
+    const [second, secondReady] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-test"));
     expect(secondReady).toMatchObject({
       type: "ready",
       sessionId: "resume-test",
@@ -392,16 +380,16 @@ describe("createVoiceWebSocketServer", () => {
 
   it("keeps browser websocket audio format invariants across session resume", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       resumeWindowMs: 200,
       createSession: () => session,
       contextId: () => "turn-initial",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [first] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
+    const [first] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
     first.send(JSON.stringify({
       type: "audio",
       audio: Buffer.from([1, 0, 2, 0]).toString("base64"),
@@ -413,7 +401,7 @@ describe("createVoiceWebSocketServer", () => {
     first.close();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const [second, secondReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
+    const [second, secondReady] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-rate-test"));
     expect(secondReady).toMatchObject({
       type: "ready",
       sessionId: "resume-rate-test",
@@ -449,16 +437,16 @@ describe("createVoiceWebSocketServer", () => {
 
   it("keeps browser websocket audio sequence invariants across session resume", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       resumeWindowMs: 200,
       createSession: () => session,
       contextId: () => "turn-initial",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [first] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
+    const [first] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
     first.send(JSON.stringify({
       type: "audio",
       audio: Buffer.from([1, 0, 2, 0]).toString("base64"),
@@ -470,7 +458,7 @@ describe("createVoiceWebSocketServer", () => {
     first.close();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const [second, secondReady] = await openClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
+    const [second, secondReady] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "resume-sequence-test"));
     expect(secondReady).toMatchObject({
       type: "ready",
       sessionId: "resume-sequence-test",
@@ -508,15 +496,15 @@ describe("createVoiceWebSocketServer", () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const closeSpy = vi.spyOn(session, "close");
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       resumeWindowMs: 10,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrlWithSession(address.port, "expire-test"));
+    const [client] = await openBrowserClientAndReadReady(websocketUrlWithSession(address.port, "expire-test"));
     client.close();
     await new Promise((resolve) => setTimeout(resolve, 40));
 
@@ -533,15 +521,15 @@ describe("createVoiceWebSocketServer", () => {
       textPackets.push(pkt as UserTextReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
 
     const audioMessage = new Promise<Buffer>((resolve) => {
       client.on("message", (data, isBinary) => {
@@ -599,15 +587,15 @@ describe("createVoiceWebSocketServer", () => {
 
   it("forwards VAD-driven assistant interruption as audio clear events", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const clearMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -634,15 +622,15 @@ describe("createVoiceWebSocketServer", () => {
 
   it("does not send late browser audio chunks after a TTS interruption", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const messages: any[] = [];
     const binaries: Buffer[] = [];
     client.on("message", (data, isBinary) => {
@@ -683,15 +671,15 @@ describe("createVoiceWebSocketServer", () => {
 
   it("forwards VAD speech boundary events to websocket clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const messages: any[] = [];
     const speechMessages = new Promise<any[]>((resolve) => {
       client.on("message", (data, isBinary) => {
@@ -732,16 +720,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const samples48k = new Int16Array([0, 3000, 6000, 9000, 12000, 15000]);
 
     client.send(JSON.stringify({
@@ -776,15 +764,15 @@ describe("createVoiceWebSocketServer", () => {
       audioPackets.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -815,22 +803,16 @@ describe("createVoiceWebSocketServer", () => {
       textPackets.push(pkt as UserTextReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
-    const errorMessage = new Promise<any>((resolve) => {
-      client.on("message", (data, isBinary) => {
-        if (isBinary) return;
-        const message = JSON.parse(data.toString());
-        if (message.type === "error") resolve(message);
-      });
-    });
+    const client = await openBrowserSocketReady(websocketUrl(address.port));
+    const errorMessage = readJsonMatching(client, (message) => (message as { type?: string }).type === "error");
 
     client.send(JSON.stringify({ type: "text", text: 42, contextId: "turn-bad-text" }));
 
@@ -853,15 +835,15 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -896,16 +878,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -947,16 +929,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
 
     client.send(JSON.stringify({
       type: "audio",
@@ -989,16 +971,16 @@ describe("createVoiceWebSocketServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const audio = Buffer.from(new Int16Array([0, 1000]).buffer).toString("base64");
 
     client.send(JSON.stringify({
@@ -1036,16 +1018,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1090,16 +1072,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       rawBinaryInput: true,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1129,15 +1111,15 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1172,15 +1154,15 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1214,16 +1196,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       maxInboundMessageBytes: 4,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -1248,16 +1230,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const samples48k = new Int16Array([0, 3000, 6000, 9000, 12000, 15000]);
 
     client.send(encodeTestBinaryAudioEnvelope({
@@ -1291,16 +1273,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1346,16 +1328,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1404,16 +1386,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1449,16 +1431,16 @@ describe("createVoiceWebSocketServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
@@ -1491,16 +1473,16 @@ describe("createVoiceWebSocketServer", () => {
 
   it("wraps outgoing assistant audio in the binary audio envelope by default", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       outputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     expect(ready.audio).toMatchObject({ binaryEnvelope: "syrinx.audio.v1" });
 
     const binaryMessage = new Promise<Buffer>((resolve) => {
@@ -1535,17 +1517,17 @@ describe("createVoiceWebSocketServer", () => {
 
   it("can disable outgoing binary audio envelopes for raw PCM websocket clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       outputSampleRateHz: 16000,
       binaryAudioEnvelope: false,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client, ready] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     expect(ready.audio.binaryEnvelope).toBeUndefined();
 
     const binaryMessage = new Promise<Buffer>((resolve) => {
@@ -1570,16 +1552,16 @@ describe("createVoiceWebSocketServer", () => {
 
   it("sends heartbeat pings so idle websocket peers are probed", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       heartbeatIntervalMs: 10,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const ping = new Promise<void>((resolve) => {
       client.once("ping", () => resolve());
     });
@@ -1593,16 +1575,16 @@ describe("createVoiceWebSocketServer", () => {
   it("closes browser websocket sessions that exceed maxSessionDurationMs", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const closeSpy = vi.spyOn(session, "close");
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       maxSessionDurationMs: 10,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -1622,16 +1604,16 @@ describe("createVoiceWebSocketServer", () => {
 
   it("closes slow websocket consumers before assistant audio buffers grow unbounded", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       maxBufferedAmountBytes: 4096,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const serverSocket = [...server.wsServer.clients][0];
     if (!serverSocket) throw new Error("Expected server websocket");
     Object.defineProperty(serverSocket, "bufferedAmount", { configurable: true, value: 4097 });
@@ -1659,24 +1641,26 @@ describe("createVoiceWebSocketServer", () => {
 
   it("closes websocket consumers before sending one oversized assistant audio frame", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       maxBufferedAmountBytes: 4096,
+      outboundFrameDurationMs: 300,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const client = await openBrowserSocketReady(websocketUrl(address.port));
     let receivedBinary = false;
     client.on("message", (_data, isBinary) => {
       if (isBinary) receivedBinary = true;
     });
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      client.once("close", (code, reason) => {
-        resolve({ code, reason: reason.toString() });
-      });
+    let closeCode = -1;
+    let closeReason = "";
+    client.on("close", (code, reason) => {
+      closeCode = code;
+      closeReason = reason.toString();
     });
 
     session.bus.push(Route.Main, {
@@ -1687,7 +1671,8 @@ describe("createVoiceWebSocketServer", () => {
       sampleRateHz: 16000,
     });
 
-    await expect(closed).resolves.toEqual({
+    await waitForCondition(() => client.readyState === WebSocket.CLOSED);
+    expect({ code: closeCode, reason: closeReason }).toEqual({
       code: 1013,
       reason: "websocket send buffer exceeded",
     });
@@ -1703,15 +1688,15 @@ describe("createVoiceWebSocketServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = await createVoiceWebSocketServer({
+    const server = registerServer(await createVoiceWebSocketServer({
       port: 0,
       createSession: () => session,
       contextId: () => "turn-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const [client] = await openClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     const serverSocket = [...server.wsServer.clients][0]!;
 
     // terminate() sets readyState to CLOSING synchronously; the 'close' event (and disposer cleanup) fires asynchronously
