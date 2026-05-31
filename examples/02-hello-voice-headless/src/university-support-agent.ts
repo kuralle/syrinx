@@ -87,6 +87,7 @@ export interface UniversitySupportSessionOptions {
   readonly inputSampleRate: number;
   readonly profile: UniversitySupportProfile;
   readonly ttsProvider?: UniversitySupportTtsProvider;
+  readonly latencyFillerEnabled?: boolean;
 }
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
@@ -100,6 +101,7 @@ export function createUniversitySupportSession(options: UniversitySupportSession
       disconnectAfterMax: false,
     },
     sttForceFinalizeTimeoutMs: options.profile === "longform" ? 15_000 : 4_500,
+    latencyFillerEnabled: options.latencyFillerEnabled === true,
   });
 
   const plugins: Record<string, VoicePlugin> = {

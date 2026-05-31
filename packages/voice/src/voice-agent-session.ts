@@ -67,6 +67,7 @@ import {
   InitStage,
   ErrorCategory,
 } from "./packets.js";
+import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 
 // =============================================================================
@@ -106,6 +107,11 @@ export interface VoiceAgentSessionConfig {
    * profile is enrolled yet, falls back to G1-only behavior.
    */
   primarySpeakerBargeInEnabled?: boolean;
+  /**
+   * When true, emit a short discourse connective via TTS at endpoint (before LLM
+   * TTFB) and splice the real response in when it arrives. Off by default.
+   */
+  latencyFillerEnabled?: boolean;
   /**
    * Maximum ms after a user turn ends to wait for first assistant audio before
    * emitting a vaqi.missed_response metric (VAQI-M). 0 disables the check.
@@ -198,6 +204,8 @@ export class VoiceAgentSession {
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
+  private readonly latencyFiller: LatencyFillerController;
+  private firstLlmDeltaReceived = new Set<string>();
   private pendingInterruption: {
     userContextId: string;
     interruptedContextId: string;
@@ -222,6 +230,9 @@ export class VoiceAgentSession {
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
     this.primarySpeakerGate = new PrimarySpeakerGate({
       enabled: config.primarySpeakerBargeInEnabled !== false,
+    });
+    this.latencyFiller = new LatencyFillerController({
+      enabled: config.latencyFillerEnabled === true,
     });
     this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
     this.ttsStallMs = config.ttsStallMs ?? 15000;
@@ -334,6 +345,7 @@ export class VoiceAgentSession {
     this.fallbackInjectedContexts.clear();
     this.ttsTextBuffers.clear();
     this.interruptedGenerationContextIds.clear();
+    this.firstLlmDeltaReceived.clear();
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
@@ -577,6 +589,10 @@ export class VoiceAgentSession {
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
+    if (this.latencyFiller.isFillerOnly(this.currentTurnId)) {
+      this.cancelLatencyFillerTurn(this.currentTurnId, pkt.timestampMs);
+    }
+
     this.emit("user_started_speaking", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -802,6 +818,23 @@ export class VoiceAgentSession {
       resetCount: false,
     } as StopIdleTimeoutPacket);
 
+    const fillerText = this.latencyFiller.start(pkt.contextId, pkt.text, pkt.timestampMs);
+    if (fillerText) {
+      this.bus.push(Route.Main, {
+        kind: "tts.text",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        text: fillerText,
+      } as TextToSpeechTextPacket);
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        name: "filler.started",
+        value: fillerText,
+      });
+    }
+
     this.bus.push(Route.Main, {
       kind: "user.input",
       contextId: pkt.contextId,
@@ -832,19 +865,34 @@ export class VoiceAgentSession {
       return;
     }
 
+    let deltaText = pkt.text;
+    if (!this.firstLlmDeltaReceived.has(pkt.contextId)) {
+      this.firstLlmDeltaReceived.add(pkt.contextId);
+      if (this.latencyFiller.isActive(pkt.contextId)) {
+        deltaText = this.latencyFiller.spliceLlmDelta(pkt.contextId, deltaText);
+        this.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: pkt.contextId,
+          timestampMs: Date.now(),
+          name: "filler.spliced",
+          value: "1",
+        });
+      }
+    }
+
     this.emit("agent_text_delta", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
-      delta: pkt.text,
+      delta: deltaText,
     });
     this.debugPush({
       component: "llm",
       type: "delta",
-      data: { context_id: pkt.contextId, text: pkt.text },
+      data: { context_id: pkt.contextId, text: deltaText },
       timestampMs: pkt.timestampMs,
     });
 
-    this.bufferTtsText(pkt.contextId, pkt.text);
+    this.bufferTtsText(pkt.contextId, deltaText);
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
@@ -926,7 +974,22 @@ export class VoiceAgentSession {
       });
     }
     this.ttsTextBuffers.delete(contextId);
+    this.latencyFiller.clear(contextId);
+    this.firstLlmDeltaReceived.delete(contextId);
     return buffer.emitted.trim();
+  }
+
+  private cancelLatencyFillerTurn(contextId: string, timestampMs: number): void {
+    const cancelled = this.latencyFiller.cancel(contextId);
+    if (!cancelled) return;
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs,
+      name: "filler.cancelled",
+      value: cancelled.text,
+    });
+    this.emitInterruptDetected(contextId);
   }
 
   private handleLlmToolCall(pkt: LlmToolCallPacket): void {
@@ -1093,6 +1156,8 @@ export class VoiceAgentSession {
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.interruptedGenerationContextIds.add(pkt.contextId);
+    this.latencyFiller.cancel(pkt.contextId);
+    this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
     this.releaseTtsContext(pkt.contextId);
     this.clearTtsStallTimerFor(pkt.contextId);
