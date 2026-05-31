@@ -134,36 +134,47 @@ export class WebSocketConnection {
         }
       };
 
+      // settle() resolves THIS attempt's promise and is always safe to call (it
+      // is idempotent and owned by this socket). The shared connection state,
+      // however, must only be touched by the *current* socket: a socket replaced
+      // by a reconnect can emit a late close/message, and acting on it would
+      // clobber the healthy connection or trigger a spurious reconnect.
+      const isActive = (): boolean => ws === this.ws;
+
       ws.on("open", () => {
+        settle(resolve);
+        if (!isActive()) return;
         this.ready = true;
         this.lastConnectAtMs = Date.now();
         this.startKeepAlive();
         this.connResolver?.();
         this.connResolver = null;
         this.connRejecter = null;
-        settle(resolve);
       });
 
       ws.on("message", (data: RawData, isBinary: boolean) => {
+        if (!isActive()) return;
         this.opts.onMessage(data, isBinary);
       });
 
       ws.on("error", (err: Error) => {
+        settle(() => reject(err));
+        if (!isActive()) return;
         this.ready = false;
         this.connRejecter?.(err);
         this.connResolver = null;
         this.connRejecter = null;
-        settle(() => reject(err));
       });
 
       ws.on("close", (code, reason) => {
+        const closeErr = closeError(code, reason);
+        settle(() => reject(closeErr));
+        if (!isActive()) return;
         this.ready = false;
         this.stopKeepAlive();
-        const closeErr = closeError(code, reason);
         this.connRejecter?.(closeErr);
         this.connResolver = null;
         this.connRejecter = null;
-        settle(() => reject(closeErr));
         if (!this.closed && !this.reconnecting) {
           this.opts.onConnectionLost?.(closeErr);
           void this.tryReconnect();
