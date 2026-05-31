@@ -69,6 +69,8 @@ import {
 } from "./packets.js";
 import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
+import { TtsPlayoutClock } from "./tts-playout-clock.js";
 
 // =============================================================================
 // Types
@@ -160,10 +162,6 @@ interface TtsTextBuffer {
   emitted: string;
 }
 
-interface SentenceSegment {
-  segment: string;
-}
-
 /** Suffix marking a context created to speak an error fallback, so it never recurses. */
 const FALLBACK_CONTEXT_SUFFIX = ":error-fallback";
 
@@ -188,18 +186,9 @@ export class VoiceAgentSession {
   private closePromise: Promise<void> | null = null;
   private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSttContextId = "";
-  private activeTtsContextIds = new Set<string>();
-  // Wall-clock estimate of when each context's audio finishes playing out. TTS
-  // streams faster than realtime, so generation (tts.end) ends well before
-  // playout; turn-taking keys on these so the assistant stays interruptible
-  // until it is actually done being heard.
-  private ttsPlayoutEndMs = new Map<string, number>();
-  private ttsPlayoutReleaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Contexts for which the output transport has reported real playout progress.
-  // When present, the transport's `complete` signal is authoritative and the
-  // sample-duration estimate defers to it (it is only a fallback for transports
-  // without a paced-playout layer, e.g. headless).
-  private ttsRealPlayoutContexts = new Set<string>();
+  // Tracks which contexts are still playing out their TTS audio; turn-taking and
+  // the stall watchdog key on this. Pure state — see TtsPlayoutClock.
+  private readonly ttsPlayout = new TtsPlayoutClock();
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
@@ -334,12 +323,7 @@ export class VoiceAgentSession {
     this.clearSttForceFinalizeTimer();
     this.clearVaqiMissedResponseTimer();
     this.clearTtsStallTimer();
-    for (const contextId of [...this.ttsPlayoutReleaseTimers.keys()]) {
-      this.cancelTtsPlayoutRelease(contextId);
-    }
-    this.ttsPlayoutEndMs.clear();
-    this.ttsRealPlayoutContexts.clear();
-    this.activeTtsContextIds.clear();
+    this.ttsPlayout.clear();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
@@ -686,7 +670,7 @@ export class VoiceAgentSession {
     this.pendingInterruptionAwaitingAudio = false;
     this.primarySpeakerGate.resetBargeInWindow();
 
-    if (!this.activeTtsContextIds.has(pending.interruptedContextId)) {
+    if (!this.ttsPlayout.isActive(pending.interruptedContextId)) {
       this.bus.push(Route.Background, {
         kind: "metric.conversation",
         contextId: pending.interruptedContextId,
@@ -1062,8 +1046,6 @@ export class VoiceAgentSession {
       }
     }
 
-    this.cancelTtsPlayoutRelease(pkt.contextId);
-    this.activeTtsContextIds.add(pkt.contextId);
     this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.armTtsStallTimer(pkt.contextId);
@@ -1073,11 +1055,9 @@ export class VoiceAgentSession {
     const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
     this.idleTimeout.extend(audioDurationMs);
 
-    // Advance this context's playout cursor by the chunk's realtime duration,
-    // anchored to now if the previous estimate already lapsed (a gap in delivery).
-    const now = Date.now();
-    const playoutBaseMs = Math.max(now, this.ttsPlayoutEndMs.get(pkt.contextId) ?? now);
-    this.ttsPlayoutEndMs.set(pkt.contextId, playoutBaseMs + audioDurationMs);
+    // Mark active and advance this context's playout cursor by the chunk's
+    // realtime duration.
+    this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, Date.now());
 
     this.debugPush({
       component: "tts",
@@ -1102,7 +1082,7 @@ export class VoiceAgentSession {
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
-    this.scheduleTtsPlayoutRelease(pkt.contextId);
+    this.ttsPlayout.scheduleRelease(pkt.contextId, Date.now());
     this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
@@ -1112,46 +1092,8 @@ export class VoiceAgentSession {
     });
   }
 
-  private scheduleTtsPlayoutRelease(contextId: string): void {
-    const playoutEndMs = this.ttsPlayoutEndMs.get(contextId);
-    const remainingMs = playoutEndMs === undefined ? 0 : playoutEndMs - Date.now();
-    if (remainingMs <= 0) {
-      this.releaseTtsContext(contextId);
-      return;
-    }
-    this.cancelTtsPlayoutRelease(contextId);
-    this.ttsPlayoutReleaseTimers.set(
-      contextId,
-      setTimeout(() => {
-        this.ttsPlayoutReleaseTimers.delete(contextId);
-        // If a paced transport is reporting real playout for this context, it
-        // owns the release via tts.playout_progress{complete} — the estimate
-        // must not pre-empt it (real playout can run past the audio length
-        // under send-buffer backpressure). close() is the backstop.
-        if (this.ttsRealPlayoutContexts.has(contextId)) return;
-        this.releaseTtsContext(contextId);
-      }, remainingMs),
-    );
-  }
-
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
-    this.ttsRealPlayoutContexts.add(pkt.contextId);
-    if (pkt.complete) this.releaseTtsContext(pkt.contextId);
-  }
-
-  private cancelTtsPlayoutRelease(contextId: string): void {
-    const timer = this.ttsPlayoutReleaseTimers.get(contextId);
-    if (timer) {
-      clearTimeout(timer);
-      this.ttsPlayoutReleaseTimers.delete(contextId);
-    }
-  }
-
-  private releaseTtsContext(contextId: string): void {
-    this.cancelTtsPlayoutRelease(contextId);
-    this.activeTtsContextIds.delete(contextId);
-    this.ttsPlayoutEndMs.delete(contextId);
-    this.ttsRealPlayoutContexts.delete(contextId);
+    this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete);
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
@@ -1159,7 +1101,7 @@ export class VoiceAgentSession {
     this.latencyFiller.cancel(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
-    this.releaseTtsContext(pkt.contextId);
+    this.ttsPlayout.release(pkt.contextId);
     this.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "turn",
@@ -1428,8 +1370,8 @@ export class VoiceAgentSession {
       const cid = this.ttsStallContextId;
       this.ttsStallContextId = "";
       if (this.interruptedGenerationContextIds.has(cid)) return; // interrupted, not stalled
-      if (!this.activeTtsContextIds.has(cid)) return; // already ended
-      this.releaseTtsContext(cid);
+      if (!this.ttsPlayout.isActive(cid)) return; // already ended
+      this.ttsPlayout.release(cid);
       this.bus.push(Route.Background, {
         kind: "metric.conversation",
         contextId: cid,
@@ -1479,11 +1421,7 @@ export class VoiceAgentSession {
   }
 
   private latestActiveTtsContextId(): string {
-    let latest = "";
-    for (const contextId of this.activeTtsContextIds) {
-      latest = contextId;
-    }
-    return latest;
+    return this.ttsPlayout.latestActive();
   }
 }
 
@@ -1585,91 +1523,6 @@ function languageFromTranscripts(
     }
   }
   return "";
-}
-
-function takeCompleteVoiceText(text: string): { text: string; remaining: string } {
-  const segments = segmentSentences(text);
-  let emitted = "";
-  let remaining = "";
-  for (const segment of segments) {
-    if (remaining) {
-      remaining += segment;
-      continue;
-    }
-    if (isCompleteVoiceText(segment)) {
-      emitted += segment;
-    } else {
-      remaining = segment;
-    }
-  }
-  return { text: emitted.trimEnd(), remaining };
-}
-
-function isCompleteVoiceText(text: string): boolean {
-  const trimmed = text.trim();
-  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
-    const char = trimmed[index]!;
-    if (isClosingPunctuation(char)) continue;
-    return isTerminalPunctuation(char);
-  }
-  return false;
-}
-
-function isClosingPunctuation(char: string): boolean {
-  return char === ")" || char === "]" || char === "}" || char === "\"" || char === "'" || char === "”" || char === "’";
-}
-
-function isTerminalPunctuation(char: string): boolean {
-  return char === "." ||
-    char === "!" ||
-    char === "?" ||
-    char === "。" ||
-    char === "！" ||
-    char === "？" ||
-    char === "؟" ||
-    char === "।" ||
-    char === "॥";
-}
-
-function segmentSentences(text: string): string[] {
-  const segmenter = createSentenceSegmenter();
-  if (segmenter) {
-    return Array.from(segmenter.segment(text), (part) => part.segment);
-  }
-
-  const segments: string[] = [];
-  let start = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    if (!isTerminalPunctuation(text[index]!)) continue;
-    let end = index + 1;
-    while (end < text.length && isClosingPunctuation(text[end]!)) end += 1;
-    if (end < text.length && !/\s/.test(text[end]!)) continue;
-    segments.push(text.slice(start, end));
-    start = end;
-  }
-  if (start < text.length) segments.push(text.slice(start));
-  return segments;
-}
-
-function appendVoiceText(existing: string, next: string): string {
-  const normalizedNext = next.trim();
-  if (!existing) return normalizedNext;
-  if (!normalizedNext) return existing;
-  if (/\s$/.test(existing) || /^\s/.test(next)) return `${existing}${normalizedNext}`;
-  return `${existing} ${normalizedNext}`;
-}
-
-function createSentenceSegmenter(): { segment(text: string): Iterable<SentenceSegment> } | null {
-  const Segmenter = (Intl as unknown as { Segmenter?: new (
-    locale?: string | string[],
-    options?: { granularity: "sentence" },
-  ) => { segment(text: string): Iterable<SentenceSegment> } }).Segmenter;
-  if (!Segmenter) return null;
-  try {
-    return new Segmenter(undefined, { granularity: "sentence" });
-  } catch {
-    return null;
-  }
 }
 
 interface ForceFinalizableSttPlugin extends VoicePlugin {
