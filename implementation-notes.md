@@ -351,3 +351,27 @@ load this pegged CPU and cascaded into 5 s / 10 s timeouts in later tests (~1/3 
 - `npx vitest run --fileParallelism=false` ×10 from package dir: **10/10 pass** (128 tests/run)
 - `git diff --check`: clean on WT-10 files
 - NO test retries, NO fake timers, NO production code changes
+
+## WT-06 — Externalizable `SessionStore` interface (2026-05-31)
+
+**Implementation:** `packages/voice-server-websocket/src/session-store.ts` + `index.ts`
+
+**Interface:**
+- `SessionStore`: `lease(sessionId, create)` / `release(sessionId, retainMs)` / `get(sessionId)` / `listAll()` / `clear()`
+- `InMemorySessionStore`: default — exact prior `Map<string, ManagedSession>` behavior (zero deployment change)
+- Injectable via `VoiceWebSocketServerOptions.sessionStore`
+
+**Distributed-impl invariants (Redis / Durable Object):**
+1. **At-most-one active connection per sessionId:** `connectionCount` must be atomically incremented on lease and decremented on disconnect; `release` must no-op while `connectionCount > 0`.
+2. **Resume window is store-owned:** `release(sessionId, retainMs)` schedules eviction; a reconnect within the window calls `lease` which clears the pending timer and returns `resumed: true`.
+3. **Lease is get-or-create:** `create` factory runs only on cache miss; distributed impl must use compare-and-set or distributed lock to prevent double-create races.
+4. **Session state travels with the lease:** `ManagedSession` carries `currentContextId`, `contextSampleRates`, `inputSequence` — a distributed store must persist/restore these fields for resume invariants (sample-rate and sequence monotonicity) to hold.
+5. **Immediate close on max-session timeout:** host passes `retainMs: 0` when `maxSessionTimedOut` — store must delete and close synchronously.
+
+**Verification:**
+- 6 unit tests (`session-store.test.ts`) + 1 instrumented-fake integration test
+- Existing resume-window tests in `index.test.ts` unchanged and passing
+- `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5 pass** (135 tests/run)
+- `pnpm -r typecheck`: exit 0
+- `pnpm -r test`: green (3rd run; 1st/2nd had pre-existing telnyx/twilio flakes under monorepo parallel load)
+- `git diff --check`: clean

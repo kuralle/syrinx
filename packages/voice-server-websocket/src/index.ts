@@ -25,6 +25,12 @@ import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapte
 import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
 import { type PacedPlayoutFrame } from "./paced-playout.js";
 import {
+  InMemorySessionStore,
+  type AudioSequenceState,
+  type ManagedSession,
+  type SessionStore,
+} from "./session-store.js";
+import {
   decodeStrictBase64,
   nonNegativeInteger,
   positiveInteger,
@@ -34,6 +40,7 @@ import {
 export * from "./twilio.js";
 export * from "./telnyx.js";
 export * from "./smartpbx.js";
+export * from "./session-store.js";
 
 export interface VoiceWebSocketServerOptions {
   readonly server?: HttpServer;
@@ -66,6 +73,7 @@ export interface VoiceWebSocketServerOptions {
    * Inbound binary frames may use the envelope regardless.
    */
   readonly binaryAudioEnvelope?: boolean;
+  readonly sessionStore?: SessionStore;
 }
 
 export type { GracefulCloseOptions } from "./transport-host.js";
@@ -87,20 +95,6 @@ type ClientMessage =
       readonly sequence?: number;
     }
   | { readonly type: "ping" };
-
-interface ManagedSession {
-  readonly id: string;
-  readonly session: VoiceAgentSession;
-  currentContextId: string;
-  readonly contextSampleRates: Map<string, number>;
-  readonly inputSequence: AudioSequenceState;
-  closeTimer: ReturnType<typeof setTimeout> | null;
-  connectionCount: number;
-}
-
-interface AudioSequenceState {
-  lastSequence: number | null;
-}
 
 interface BrowserConnectionState {
   managed: ManagedSession | null;
@@ -124,7 +118,7 @@ export async function createVoiceWebSocketServer(
   const httpServer = options.server ?? createServer();
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws");
   const wsServer = routedWebSocket.wsServer;
-  const sessions = new Map<string, ManagedSession>();
+  const sessionStore = options.sessionStore ?? new InMemorySessionStore();
   const sessionIdFn = options.sessionId ?? defaultSessionId;
   const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
@@ -152,40 +146,30 @@ export async function createVoiceWebSocketServer(
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
       const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(request) ?? sessionIdFn(request));
-      const existing = sessions.get(requestedSessionId);
-      if (existing) {
-        const resumed = existing.connectionCount > 0 || existing.closeTimer !== null;
-        if (existing.closeTimer) {
-          clearTimeout(existing.closeTimer);
-          existing.closeTimer = null;
+      const leased = await sessionStore.lease(requestedSessionId, async () => {
+        const sess = await options.createSession(request);
+        onSessionCreated(sess);
+        if (shouldAbort()) {
+          await sess.close().catch(() => undefined);
+          throw new Error("websocket session startup aborted");
         }
-        existing.connectionCount += 1;
-        state.managed = existing;
-        return { session: existing.session, resumed };
-      }
-      const sess = await options.createSession(request);
-      onSessionCreated(sess);
-      if (shouldAbort()) {
-        await sess.close().catch(() => undefined);
-        throw new Error("websocket session startup aborted");
-      }
-      await sess.start();
-      if (shouldAbort()) {
-        await sess.close().catch(() => undefined);
-        throw new Error("websocket session startup aborted");
-      }
-      const managed: ManagedSession = {
-        id: requestedSessionId,
-        session: sess,
-        currentContextId: state.initialContextId,
-        contextSampleRates: new Map(),
-        inputSequence: { lastSequence: null },
-        closeTimer: null,
-        connectionCount: 1,
-      };
-      sessions.set(requestedSessionId, managed);
-      state.managed = managed;
-      return { session: sess, resumed: false };
+        await sess.start();
+        if (shouldAbort()) {
+          await sess.close().catch(() => undefined);
+          throw new Error("websocket session startup aborted");
+        }
+        return {
+          id: requestedSessionId,
+          session: sess,
+          currentContextId: state.initialContextId,
+          contextSampleRates: new Map(),
+          inputSequence: { lastSequence: null },
+          closeTimer: null,
+          connectionCount: 1,
+        };
+      });
+      state.managed = leased.managed;
+      return { session: leased.managed.session, resumed: leased.resumed };
     },
 
     wireSession(session, socket, state, disposers) {
@@ -235,7 +219,7 @@ export async function createVoiceWebSocketServer(
     onDisconnect(_session, state, { maxSessionTimedOut }) {
       if (state.managed) {
         state.managed.connectionCount = Math.max(0, state.managed.connectionCount - 1);
-        scheduleManagedSessionClose(state.managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
+        void sessionStore.release(state.managed.id, maxSessionTimedOut ? 0 : resumeWindowMs);
       }
     },
 
@@ -327,11 +311,11 @@ export async function createVoiceWebSocketServer(
         for (const client of wsServer.clients) client.terminate();
       }
       gracefulCloseRegistry.clear();
-      for (const managed of sessions.values()) {
+      for (const managed of await sessionStore.listAll()) {
         if (managed.closeTimer) clearTimeout(managed.closeTimer);
         await managed.session.close().catch(() => undefined);
       }
-      sessions.clear();
+      await sessionStore.clear();
       // Force-terminate any remaining sockets before wsServer.close() so the
       // close event fires promptly even if a graceful handshake stalled.
       for (const client of wsServer.clients) client.terminate();
@@ -345,25 +329,6 @@ export async function createVoiceWebSocketServer(
       }
     },
   };
-}
-
-function scheduleManagedSessionClose(
-  managed: ManagedSession,
-  sessions: Map<string, ManagedSession>,
-  resumeWindowMs: number,
-): void {
-  if (managed.connectionCount > 0 || managed.closeTimer) return;
-  if (resumeWindowMs <= 0) {
-    sessions.delete(managed.id);
-    void managed.session.close().catch(() => undefined);
-    return;
-  }
-  managed.closeTimer = setTimeout(() => {
-    managed.closeTimer = null;
-    if (managed.connectionCount > 0) return;
-    sessions.delete(managed.id);
-    void managed.session.close().catch(() => undefined);
-  }, resumeWindowMs);
 }
 
 function wireBrowserSessionEvents(

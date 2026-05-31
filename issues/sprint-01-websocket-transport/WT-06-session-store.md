@@ -1,6 +1,6 @@
 # WT-06 / G18 — Externalizable `SessionStore` interface
 
-- **Status:** Blocked (WT-01) · **Priority:** P2 · **Phase:** 2 (scale seam)
+- **Status:** In Review · **Priority:** P2 · **Phase:** 2 (scale seam)
 - **Area:** transport / scale · **Findings:** F7
 - **Depends on:** WT-01 · **Blocks:** —
 - **Catalog:** G18
@@ -43,11 +43,11 @@ interface SessionStore {
 > future *architecture*.
 
 ## Acceptance criteria
-- [ ] `SessionStore` interface + `InMemorySessionStore` default; behavior identical to today.
-- [ ] All `sessions` Map access in the host goes through the store.
-- [ ] Store is injectable; a test fake proves the seam (e.g. an instrumented store
+- [x] `SessionStore` interface + `InMemorySessionStore` default; behavior identical to today.
+- [x] All `sessions` Map access in the host goes through the store.
+- [x] Store is injectable; a test fake proves the seam (e.g. an instrumented store
       observing lease/release).
-- [ ] Existing resume-window tests pass unchanged.
+- [x] Existing resume-window tests pass unchanged.
 
 ## Test plan (TDD + smoke)
 - **Unit:** in-memory store lease/release/get; resume within window returns same

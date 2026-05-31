@@ -19,7 +19,6 @@ Legend: `WT` = WebSocket transport · `VE` = voice engine · `(Pn)` priority ·
 _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 
 ## 🟢 Ready (unblocked — transport track shipped sequentially, in order)
-- **WT-06** (P2) `SessionStore` interface
 - **WT-07** (P2) `ClientTransport` seam + Opus browser leg
 - **WT-08** (P2) Concurrency cap + admission + upgrade-leak
 - **VE-01** (P2) Semantic endpointing off STT encoder _(engine track, after WT)_
@@ -28,15 +27,17 @@ _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 - **VE-05** (P3) EVA-Bench CI gate
 
 ## ⛔ Blocked (waiting on a dependency)
-- **WT-09** (P2) Metrics + per-turn timestamps + loss/jitter smoke → deps: WT-03
+- **WT-09** (P2) Metrics + per-turn timestamps + loss/jitter smoke → deps: WT-03 ✅ (now ready)
 
 ## 🔨 In Progress
-- **WT-03** (P1) Browser pacing + playout clock + jitter buffer — cursor-agent/Sonnet worker `wt-03`
-
-## 👀 In Review (tests green, awaiting diff review)
 _(none)_
 
+## 👀 In Review (tests green, awaiting diff review)
+- **WT-06** (P2) `SessionStore` interface — cursor-agent/auto worker `wt-06`. Injectable `SessionStore` seam (`lease`/`release`/`get`/`listAll`/`clear`); `InMemorySessionStore` default (zero behavior change); instrumented fake proves injection; 7 new unit tests + existing resume-window tests unchanged. **135 tests ×5 stable**; `pnpm -r typecheck` green; `pnpm -r test` green (3rd run; 1st/2nd had pre-existing telnyx/twilio flakes under monorepo parallel load, unrelated to WT-06).
+
 ## ✅ Done (diff reviewed + behavior observed)
+- **WT-10** (P1) Test-suite flakiness hardening — cursor/auto worker `4ac8a4d`. From the delegated Gemini+GLM converged diagnosis: `afterEach` cleanup registry (`setupTransportTestCleanup`/`registerServer`) in all 4 test files + shared `test-helpers.ts` + `vitest.config.ts`; fixed the 2 named flaky tests. **Reviewer verified 10/10 suite runs** (128 tests; was ~1/3 flaky). NO retries / NO fake timers. Git hygiene clean (name-only commit; notes appended not clobbered — the hard-rule brief worked).
+- **WT-03** (P1) Browser pacing + playout clock + jitter buffer — cursor/Sonnet worker `05e92cc` + reviewer `42e59ee`. Diff read; browser adapter now routes outbound TTS through the shared `OutboundPlayoutPipeline` (paced + `PlayoutProgressEmitter` → G12 playout clock on the browser leg) + integrates WT-04 `drainAndClose`; new `AudioJitterBuffer` (AudioContext-scheduled, flush-on-clear). 41 client tests + 4 browser-pacing tests; headless smoke `qualityGate.passed:true`; suite 127/128 (1 = known pre-existing flake, fixed in WT-10). **Reviewer fix:** worker's broad `git add` clobbered `implementation-notes.md` (−178 lines) — restored from 88ce280.
 - **WT-04** (P1) Graceful drain on shutdown — worker (died on 1M-credit limit) + reviewer `88ce280`. `close({graceful,drainDeadlineMs})` host + per-carrier path (drain→1001→terminate at deadline); SIGTERM wired. 7 graceful-drain tests **12× stable**, full suite 124 green. **Reviewer took ownership** (worker out of credits) + root-caused the flaky browser tests to a `ready`-message race in the TEST (not close); reverted speculative close changes. _(Pre-existing unrelated `index.test.ts` malformed-JSON flake noted for a suite-health pass.)_
 - **WT-01** (P1) Extract `WebSocketTransportHost` — worker `40ea8be`. Diff read; lifecycle skeleton lives ONLY in `transport-host.ts` (+ `outbound-playout-pipeline.ts`, `transport-helpers.ts`); zero helper/lifecycle copies in the 4 carriers (twilio 942→522, telnyx 946→630, smartpbx 739→457, index 882→682); no file >1000 lines; **117 transport tests ×5 stable**; Telnyx-reorder/Twilio-reject/SmartPBX-passthrough preserved. **Live gate passed:** Fly synthetic-carrier (Deepgram TTS) E2E green on all 3 carriers (twilio/telnyx/smartpbx `gate=true`, 0 failures), both Fly apps destroyed, no leaks. Clean — no reviewer fixes needed.
 - **VE-04** (P1) Spoken-prefix context (closes G2) — worker `5b615b5`. Diff read; `tts.word_timestamps` (Cartesia cumulative offset) + bridge precision ladder; **deadlock regression test verified real** (barge-in mid-playout at 450 ms → history truncates to exactly the heard words). Tests green (voice 87 / bridge 8 / cartesia 11). G2+G25 SHIPPED. ✅ **Live debt CLOSED** with the new Cartesia key: recorder-coherence `qualityGate.passed:true` + `tts.word_timestamps` emitted live. _Investigating the original smoke exposed + fixed a real crash:_ **G27** (`b1950ad`) — `voice-ws` dispose-while-connecting killed the process via an unhandled `'error'` (regression test proven to fail without the fix); hardens every provider plugin.
@@ -46,8 +47,9 @@ _(none)_
 ---
 
 ### Burndown
-14 issues · **5 done (WT-01, WT-02, WT-04, WT-05, VE-04)** + 1 bonus reviewer fix (G27) · 1 in progress (WT-03) · 7 ready · 1 blocked.
-Worker note: claude 1M-context usage credits exhausted → remaining workers run on `cursor-agent --model sonnet-4` (Sonnet, Cursor billing).
+14 sprint issues + WT-10 (flakiness, from delegated diagnosis) · **7 done (WT-01..05, VE-04, WT-10)** + G27 bonus · 1 in review (WT-06) · WT-07/08/09 + VE-01/02/03/05 queued.
+External reviews: gemini-review w0/w1/w2 fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).
+Worker note: claude 1M-context credits exhausted → workers run on `cursor-agent --model auto` (fast) / sonnet-4.
 External review: `gemini-review-w0` + `gemini-review-w1` fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).
 Live-verification debt: none open (VE-04 closed via new Cartesia key).
 
