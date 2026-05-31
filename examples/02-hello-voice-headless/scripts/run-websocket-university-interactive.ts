@@ -67,6 +67,7 @@ interface InteractiveTurnCapture {
   agentReply: string;
   toolCalls: string[];
   audioBytes: number;
+  assistantAudioEncoding: "pcm_s16le" | "opus" | "unknown";
   metricsE2eMs: number;
   error: string;
 }
@@ -140,8 +141,9 @@ async function main(): Promise<void> {
         inputAudioMs: turn.inputAudioMs,
         vadSpeechStartedCount: turn.speechStartedCount,
         vadSpeechEndedCount: turn.speechEndedCount,
-        assistantAudioMs: Math.round((turn.audioBytes / 2 / OUTPUT_SAMPLE_RATE) * 1000),
+        assistantAudioMs: assistantAudioDurationMs(turn),
         audioBytes: turn.audioBytes,
+        assistantAudioEncoding: turn.assistantAudioEncoding,
         latencyMs: {
           sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
           vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
@@ -200,10 +202,10 @@ function buildSmokeManifest(args: {
       },
       assistantAudio: {
         sampleRateHz: OUTPUT_SAMPLE_RATE,
-        encoding: "pcm_s16le" as const,
+        encoding: turn.assistantAudioEncoding === "opus" ? "opus" as const : "pcm_s16le" as const,
         channels: 1 as const,
         byteLength: turn.audioBytes,
-        durationMs: pcm16DurationMs(turn.audioBytes, OUTPUT_SAMPLE_RATE),
+        durationMs: assistantAudioDurationMs(turn),
       },
       latencyMs: {
         sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
@@ -294,6 +296,7 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       agentReply: "",
       toolCalls: [],
       audioBytes: 0,
+      assistantAudioEncoding: "unknown",
       metricsE2eMs: 0,
       error: "",
     };
@@ -361,6 +364,9 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
       return;
     }
     if (msg["type"] === "tts_chunk") {
+      if (typeof msg["encoding"] === "string") {
+        turn.assistantAudioEncoding = msg["encoding"] === "opus" ? "opus" : "pcm_s16le";
+      }
       nextBinaryBelongsToTurn = true;
       return;
     }
@@ -495,7 +501,12 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
     for (const term of turn.requiredTerms) {
       if (!transcript.includes(term)) diagnostics.push(`${turn.id} STT transcript missed fixture term ${term}`);
     }
-    if (turn.audioBytes < 16_000) failures.push(`${turn.id} returned too little TTS audio`);
+    if (turn.assistantAudioEncoding === "pcm_s16le" && turn.audioBytes < 16_000) {
+      failures.push(`${turn.id} returned too little TTS audio`);
+    }
+    if (turn.assistantAudioEncoding === "opus" && turn.audioBytes < 1_000) {
+      failures.push(`${turn.id} returned too little Opus TTS audio`);
+    }
     if (turn.sttFinalAtMs < turn.audioEndedAtMs) failures.push(`${turn.id} STT finalized before input audio ended`);
     if (turn.firstAudioAtMs < turn.firstAgentAtMs) failures.push(`${turn.id} received TTS audio before agent text`);
     if (!/[.!?]\s*$/.test(turn.agentReply.trim())) diagnostics.push(`${turn.id} agent reply did not end cleanly`);
@@ -524,6 +535,18 @@ function rawBytes(data: RawData): Uint8Array {
   else throw new Error("Unsupported binary websocket payload");
   if (hasSyrinxAudioEnvelope(bytes)) return decodeSyrinxAudioEnvelope(bytes).audio;
   return bytes;
+}
+
+function assistantAudioDurationMs(
+  turn: Pick<InteractiveTurnCapture, "assistantAudioEncoding" | "audioBytes" | "firstAudioAtMs" | "ttsEndedAtMs">,
+): number {
+  if (turn.assistantAudioEncoding === "pcm_s16le") {
+    return pcm16DurationMs(turn.audioBytes, OUTPUT_SAMPLE_RATE);
+  }
+  if (turn.firstAudioAtMs > 0 && turn.ttsEndedAtMs >= turn.firstAudioAtMs) {
+    return turn.ttsEndedAtMs - turn.firstAudioAtMs;
+  }
+  return 0;
 }
 
 function requireEnv(name: string): void {

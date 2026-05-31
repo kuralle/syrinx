@@ -14,3 +14,13 @@ status. Fixes verified by the maintainer (full suite re-run independently).
   (parse/send/codec). See file for status.
 - `CR-05-wire-boundary-casts-in-voice-agent-session.md` — **fixed** (1b026c0):
   typed packet factories replace all `as <Packet>` casts at the session boundary.
+- `CR-06-opus-downlink-smoke-pcm-assumption.md` — **fixed** (working tree):
+  interactive websocket smoke is now codec-aware (Opus vs PCM) and avoids false
+  PCM-byte failures.
+- `CR-07-browser-runtime-smoke-fake-mic-beep.md` — **fixed** (working tree):
+  browser runtime smoke now injects a real speech WAV via Chrome fake mic.
+- `CR-08-broken-example-dev-fixture-path.md` — **fixed** (working tree):
+  example `dev` script now points to an existing fixture WAV.
+- `CR-09-oss-turn-state-machine-extraction.md` — **filed (not fixed)**:
+  interruption state-machine extraction remains deferred; includes OSS
+  cross-reference rationale (Pipecat/LiveKit).

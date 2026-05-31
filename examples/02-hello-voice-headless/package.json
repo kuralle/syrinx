@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx src/cli.ts public/fixtures/hello.wav",
+    "dev": "tsx src/cli.ts test/fixtures/university-support-add-drop.wav",
     "build": "tsc --noEmit -p tsconfig.json && mkdir -p dist && touch dist/.buildstamp",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "fixtures:gemini-university": "tsx scripts/generate-gemini-university-fixtures.ts",

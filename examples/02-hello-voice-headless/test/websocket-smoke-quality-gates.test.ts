@@ -60,6 +60,7 @@ describe("websocket smoke quality gates", () => {
         agentReply: "ok",
         toolCalls: [],
         audioBytes: 32000,
+        assistantAudioEncoding: "pcm_s16le",
         metricsE2eMs: 0,
         error: "",
       },
@@ -69,6 +70,38 @@ describe("websocket smoke quality gates", () => {
     expect(evaluation.diagnostics).toContain("turn-1 STT transcript missed fixture term biology");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply did not end cleanly");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply was short");
+  });
+
+  it("does not apply PCM byte-floor checks to Opus assistant downlink", () => {
+    const evaluation = evaluateInteractiveConversation([
+      {
+        id: "turn-opus",
+        fixtureId: "fixture-1",
+        inputText: "expected fixture text",
+        requiredTerms: ["biology"],
+        inputAudioMs: 1000,
+        startedAtMs: 0,
+        speechStartedAtMs: 10,
+        speechStartedCount: 1,
+        audioEndedAtMs: 1000,
+        speechEndedAtMs: 1200,
+        speechEndedCount: 1,
+        sttFinalAtMs: 1400,
+        firstAgentAtMs: 1600,
+        firstAudioAtMs: 1900,
+        agentEndedAtMs: 1800,
+        ttsEndedAtMs: 2200,
+        transcript: "biology late add",
+        agentReply: "Please submit a late add petition.",
+        toolCalls: ["studentRelationsLookup"],
+        audioBytes: 1400,
+        assistantAudioEncoding: "opus",
+        metricsE2eMs: 0,
+        error: "",
+      },
+    ]);
+
+    expect(evaluation.failures).toStrictEqual([]);
   });
 
   it("keeps multiturn tool and agent-content checks diagnostic", () => {
