@@ -9,6 +9,7 @@ import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { PipecatEOSPlugin } from "@asyncdot/voice-turn-pipecat";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { GeminiTTSPlugin } from "@asyncdot/voice-tts-gemini";
+import { DeepgramTTSPlugin } from "@asyncdot/voice-tts-deepgram";
 import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
@@ -80,7 +81,7 @@ export const studentRelationsTools = {
 };
 
 export type UniversitySupportProfile = "interactive" | "longform";
-export type UniversitySupportTtsProvider = "cartesia" | "gemini";
+export type UniversitySupportTtsProvider = "cartesia" | "gemini" | "deepgram";
 
 export interface UniversitySupportSessionOptions {
   readonly inputSampleRate: number;
@@ -106,7 +107,7 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     vad: new SileroVADPlugin(),
     eos: new PipecatEOSPlugin(),
     bridge: new AISDKBridgePlugin(),
-    tts: ttsProvider === "cartesia" ? new CartesiaTTSPlugin() : new GeminiTTSPlugin(),
+    tts: createTtsPlugin(ttsProvider),
   };
   for (const [name, plugin] of Object.entries(plugins)) {
     session.registerPlugin(name, plugin);
@@ -153,7 +154,32 @@ function createPluginConfig(
       max_history_turns: 20,
       timeout_ms: interactive ? 30_000 : 60_000,
     },
-    tts: ttsProvider === "cartesia" ? cartesiaTtsConfig() : geminiTtsConfig(interactive),
+    tts:
+      ttsProvider === "cartesia"
+        ? cartesiaTtsConfig()
+        : ttsProvider === "deepgram"
+          ? deepgramTtsConfig()
+          : geminiTtsConfig(interactive),
+  };
+}
+
+function createTtsPlugin(provider: UniversitySupportTtsProvider): VoicePlugin {
+  switch (provider) {
+    case "cartesia":
+      return new CartesiaTTSPlugin();
+    case "deepgram":
+      return new DeepgramTTSPlugin();
+    case "gemini":
+      return new GeminiTTSPlugin();
+  }
+}
+
+function deepgramTtsConfig(): PluginConfig {
+  return {
+    api_key: requireEnv("DEEPGRAM_API_KEY"),
+    model: process.env["SYRINX_DEEPGRAM_TTS_MODEL"]?.trim() || "aura-asteria-en",
+    sample_rate: 24000,
+    retry_max_attempts: 2,
   };
 }
 
@@ -182,7 +208,7 @@ function geminiTtsConfig(interactive: boolean): PluginConfig {
 
 function inferTtsProvider(): UniversitySupportTtsProvider {
   const requested = process.env["SYRINX_REVIEW_TTS"]?.trim().toLowerCase();
-  if (requested === "gemini" || requested === "cartesia") return requested;
+  if (requested === "gemini" || requested === "cartesia" || requested === "deepgram") return requested;
   return process.env["CARTESIA_API_KEY"]?.trim() ? "cartesia" : "gemini";
 }
 
