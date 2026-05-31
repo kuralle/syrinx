@@ -384,3 +384,14 @@ barge-in-during-playback scenario passes). G2 closed. → VE-04
 on conversational regression. **Fix.** Bot-to-bot examiner (EVA-X turn-taking-timing + overlap +
 accent/noise) wired as a CI gate (warn → block). **Tests:** known-good/bad fixture scoring + live
 end-to-end baseline. (EVA-Bench 2605.13841, Full-Duplex-Bench-v2 2510.07838) → VE-05
+
+### G27 — `voice-ws` dispose-while-connecting crashes the process  ·  P1  ·  transport/robustness  *(reviewer-found during VE-04 live smoke)*
+**Problem.** `createNodeWsSocket().dispose()` (`voice-ws/src/node.ts`) did `ws.removeAllListeners()` then
+`ws.close()`. Closing a socket still in `CONNECTING` makes `ws` emit an async `'error'` event ("WebSocket was
+closed before the connection was established"); the error sink was just removed, so it became an uncaught
+exception and killed the process. Triggered whenever a caller tears down while a provider socket is still
+handshaking (e.g. session close during a slow/failed Cartesia connect — surfaced live as a process crash).
+**Fix.** Re-attach a noop `'error'` sink after `removeAllListeners()` and abort a pending handshake with
+`terminate()` instead of `close()`. **Tests:** `node.test.ts` disposes a socket mid-handshake and asserts no
+`uncaughtException` (proven to fail without the fix). Every provider plugin uses this adapter, so the fix
+hardens STT + both TTS paths.
