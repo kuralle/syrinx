@@ -30,8 +30,8 @@ import {
   readRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
-import { WebSocketConnection } from "@asyncdot/voice-ws";
-import type { RawData } from "ws";
+import { WebSocketConnection, type SocketData } from "@asyncdot/voice-ws";
+import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const SPEAK = (text: string): string => JSON.stringify({ type: "Speak", text });
 const FLUSH_MSG = JSON.stringify({ type: "Flush" });
@@ -78,6 +78,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       },
       headers: { Authorization: `Token ${this.apiKey}` },
       retry: this.retryConfig,
+      socketFactory: createNodeWsSocket,
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data, isBinary) => this.handleProviderMessage(data, isBinary),
       onConnectionLost: (err) => this.failActiveContexts(err),
@@ -161,15 +162,16 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     }
   }
 
-  private handleProviderMessage(data: RawData, isBinary: boolean): void {
-    if (isBinary) {
+  private handleProviderMessage(data: SocketData, isBinary: boolean): void {
+    if (isBinary && typeof data !== "string") {
       this.handleAudio(data);
       return;
     }
+    if (typeof data !== "string") return;
 
     let msg: Record<string, unknown>;
     try {
-      msg = JSON.parse(data.toString()) as Record<string, unknown>;
+      msg = JSON.parse(data) as Record<string, unknown>;
     } catch {
       return; // non-JSON, non-binary control frame — ignore
     }
@@ -199,10 +201,9 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     }
   }
 
-  private handleAudio(data: RawData): void {
+  private handleAudio(frame: Uint8Array): void {
     const contextId = this.currentContextId;
     if (!contextId || this.cancelledContexts.has(contextId)) return;
-    const frame = toUint8(data);
     if (frame.byteLength === 0) return;
 
     const buf = this.carry.byteLength === 0 ? frame : concatBytes(this.carry, frame);
@@ -249,12 +250,6 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       timestampMs: Date.now(),
     } satisfies TextToSpeechEndPacket);
   }
-}
-
-function toUint8(data: RawData): Uint8Array {
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (Array.isArray(data)) return new Uint8Array(Buffer.concat(data));
-  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { RetryConfig } from "@asyncdot/voice";
 
 import { WebSocketConnection } from "./index.js";
+import { createNodeWsSocket } from "./node.js";
 
 let servers: WebSocketServer[] = [];
 
@@ -56,6 +57,7 @@ describe("WebSocketConnection", () => {
     const messages: string[] = [];
     const conn = new WebSocketConnection({
       url: () => url,
+      socketFactory: createNodeWsSocket,
       retry: FAST_RETRY,
       keepAliveIntervalMs: 30,
       keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
@@ -89,6 +91,7 @@ describe("WebSocketConnection", () => {
     let reconnected = 0;
     const conn = new WebSocketConnection({
       url: () => url,
+      socketFactory: createNodeWsSocket,
       retry: FAST_RETRY,
       minStableMs: 0, // don't treat the deliberate drop as a quick failure
       onMessage: () => undefined,
@@ -117,6 +120,7 @@ describe("WebSocketConnection", () => {
     let unrecoverable: Error | null = null;
     const conn = new WebSocketConnection({
       url: () => url,
+      socketFactory: createNodeWsSocket,
       retry: FAST_RETRY,
       maxReconnectAttempts: 2,
       minStableMs: 0,
@@ -152,6 +156,7 @@ describe("WebSocketConnection", () => {
     let reconnects = 0;
     const conn = new WebSocketConnection({
       url: () => url,
+      socketFactory: createNodeWsSocket,
       retry: FAST_RETRY,
       minStableMs: 200,
       maxQuickFailures: 2,
