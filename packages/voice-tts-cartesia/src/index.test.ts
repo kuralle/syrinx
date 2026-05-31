@@ -7,6 +7,7 @@ import {
   Route,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
+  type TextToSpeechWordTimestampsPacket,
   type TtsErrorPacket,
 } from "@asyncdot/voice";
 
@@ -594,6 +595,81 @@ describe("CartesiaTTSPlugin", () => {
       }),
     ]);
     expect(ends).toEqual([expect.objectContaining({ contextId: "turn-unsent" })]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits tts.word_timestamps with cumulative offsets when provider returns word_timestamps", async () => {
+    const audioChunk1 = new Uint8Array(3200); // 3200 bytes = 100ms at 16kHz PCM16
+    const audioChunk2 = new Uint8Array(1600); // 1600 bytes = 50ms at 16kHz PCM16
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.transcript === "Hello world.") {
+          // First chunk: word "Hello" at 0–0.4s, "world." at 0.5–0.9s
+          socket.send(JSON.stringify({
+            type: "chunk",
+            context_id: msg.context_id,
+            data: Buffer.from(audioChunk1).toString("base64"),
+            word_timestamps: {
+              words: [
+                { word: "Hello", start: 0.0, end: 0.4 },
+                { word: "world.", start: 0.5, end: 0.9 },
+              ],
+            },
+            done: false,
+            status_code: 206,
+          }));
+          // Second chunk: word "Goodbye." at 0.0–0.4s relative (= 150ms offset from context start)
+          socket.send(JSON.stringify({
+            type: "chunk",
+            context_id: msg.context_id,
+            data: Buffer.from(audioChunk2).toString("base64"),
+            word_timestamps: {
+              words: [
+                { word: "Goodbye.", start: 0.0, end: 0.4 },
+              ],
+            },
+            done: false,
+            status_code: 206,
+          }));
+        }
+        if (msg.continue === false) {
+          socket.send(JSON.stringify({ type: "done", context_id: msg.context_id, done: true, status_code: 200 }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const wordTsPackets: TextToSpeechWordTimestampsPacket[] = [];
+    bus.on("tts.word_timestamps", (pkt) => {
+      wordTsPackets.push(pkt as TextToSpeechWordTimestampsPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-ts", timestampMs: Date.now(), text: "Hello world." });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-ts", timestampMs: Date.now(), text: "Hello world." });
+    await waitForCondition(() => wordTsPackets.length >= 2);
+
+    // Chunk 1: timestamps start at 0 (no prior offset).
+    expect(wordTsPackets[0]!.words).toEqual([
+      { word: "Hello",  startMs: 0,   endMs: 400 },
+      { word: "world.", startMs: 500, endMs: 900 },
+    ]);
+    // Chunk 2: timestamps offset by chunk1 audio duration (3200 bytes / 2 / 16000 * 1000 = 100ms).
+    expect(wordTsPackets[1]!.words).toEqual([
+      { word: "Goodbye.", startMs: 100, endMs: 500 },
+    ]);
 
     await plugin.close();
     bus.stop();

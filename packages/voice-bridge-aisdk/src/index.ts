@@ -21,6 +21,7 @@ import {
   Route,
   type VoicePlugin,
   type PluginConfig,
+  type TtsWordTimestamp,
   requireStringConfig,
   categorizeLlmError,
   isRecoverable,
@@ -52,14 +53,24 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private abortController: AbortController | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
-  // G2: per-turn state so a barged-in turn is remembered as what the user HEARD (the
-  // text sent to TTS), not the full generated reply. `spokenByContext` accumulates
-  // tts.text; `assistantMsgByContext` holds the live history message object so it can
-  // be rewritten in place on interrupt; `turnUserText` lets a mid-generation interrupt
-  // (which has no committed assistant message yet) still record the turn.
+  // G2/G25: per-turn state so a barged-in turn is remembered as what the user HEARD,
+  // not the full generated reply. Precision ladder:
+  //   1. Word timestamps (tts.word_timestamps) + playout position (tts.playout_progress)
+  //      → exact spoken prefix at word boundaries.
+  //   2. Fallback: spokenByContext (text sent to TTS) — approximate; may include audio
+  //      that was queued but not yet played out (TTS streams faster than realtime).
+  // `spokenByContext` accumulates tts.text; `assistantMsgByContext` holds the live
+  // history message object so it can be rewritten in place; `turnUserText` lets a
+  // mid-generation interrupt still record the turn.
   private spokenByContext = new Map<string, string>();
   private turnUserText = new Map<string, string>();
   private assistantMsgByContext = new Map<string, { role: "assistant"; content: string }>();
+  // G25: word-level timestamps from TTS plugin (cumulative from context audio start).
+  private wordTimestampsByContext = new Map<string, TtsWordTimestamp[]>();
+  // G25: latest playout position (ms from context audio start) from the paced transport.
+  // Present only when a paced transport (telnyx/twilio/smartpbx) is wired; headless/
+  // browser paths have no tts.playout_progress and fall back to spokenByContext.
+  private playedOutMsByContext = new Map<string, number>();
 
   constructor(private readonly streamFactory?: AISDKStreamFactory) {}
 
@@ -90,15 +101,35 @@ export class AISDKBridgePlugin implements VoicePlugin {
         await this.processTurn(eos.text, eos.contextId);
       }, { concurrent: true }),
 
-      // Track what was actually sent to TTS (the spoken approximation), per turn.
+      // Track what was actually sent to TTS (fallback spoken approximation), per turn.
       bus.on("tts.text", (pkt: unknown) => {
         const t = pkt as { contextId: string; text: string };
         this.spokenByContext.set(t.contextId, (this.spokenByContext.get(t.contextId) ?? "") + t.text);
       }),
 
+      // G25: accumulate word-level timestamps from the TTS plugin (Cartesia etc.).
+      // These arrive as cumulative offsets from the context audio start and enable
+      // word-boundary precision when computing the spoken prefix on barge-in.
+      bus.on("tts.word_timestamps", (pkt: unknown) => {
+        const t = pkt as { contextId: string; words: TtsWordTimestamp[] };
+        const existing = this.wordTimestampsByContext.get(t.contextId);
+        if (existing) {
+          for (const w of t.words) existing.push(w);
+        } else {
+          this.wordTimestampsByContext.set(t.contextId, [...t.words]);
+        }
+      }),
+
+      // G25: track realtime playout position from the paced transport. Absent on
+      // headless/browser paths; in that case we fall back to spokenByContext.
+      bus.on("tts.playout_progress", (pkt: unknown) => {
+        const p = pkt as { contextId: string; playedOutMs: number };
+        this.playedOutMsByContext.set(p.contextId, p.playedOutMs);
+      }),
+
       // Listen for LLM interrupts. Abort generation AND rewrite the interrupted turn's
-      // history to the spoken prefix (G2), so the model isn't left believing it said
-      // words the user never heard (nor amnesiac about the exchange).
+      // history to the spoken prefix (G2/G25), so the model isn't left believing it
+      // said words the user never heard (nor amnesiac about the exchange).
       bus.on("interrupt.llm", (pkt: unknown) => {
         this.abortController?.abort();
         this.abortController = null;
@@ -262,6 +293,8 @@ export class AISDKBridgePlugin implements VoicePlugin {
     this.spokenByContext.clear();
     this.turnUserText.clear();
     this.assistantMsgByContext.clear();
+    this.wordTimestampsByContext.clear();
+    this.playedOutMsByContext.clear();
     this.bus = null;
   }
 
@@ -273,14 +306,32 @@ export class AISDKBridgePlugin implements VoicePlugin {
   }
 
   /**
-   * Barge-in: rewrite the interrupted turn's history to what the user actually HEARD
-   * (the text sent to TTS), not the full generated reply. If the turn was already
-   * committed (generation completed before barge-in), truncate its assistant message;
-   * if it was interrupted mid-generation (never committed), record the spoken prefix now.
-   * Either way the user utterance is preserved, so the model is neither divergent nor amnesiac.
+   * G25: compute the spoken prefix — the assistant text the user actually heard before
+   * the barge-in. Uses word timestamps + playout position when available (exact at word
+   * boundaries), otherwise falls back to the accumulated text sent to TTS (approximate).
+   */
+  private computeSpokenPrefix(contextId: string): string {
+    const words = this.wordTimestampsByContext.get(contextId);
+    const playedOutMs = this.playedOutMsByContext.get(contextId);
+    if (words && words.length > 0 && playedOutMs !== undefined && playedOutMs > 0) {
+      const heard = words.filter((w) => w.endMs <= playedOutMs);
+      return heard.map((w) => w.word).join(" ");
+    }
+    return (this.spokenByContext.get(contextId) ?? "").trim();
+  }
+
+  /**
+   * Barge-in: rewrite the interrupted turn's history to what the user actually HEARD,
+   * not the full generated reply. Precision ladder (G25):
+   *   1. Word timestamps + playout position → exact word-boundary prefix.
+   *   2. Fallback: text sent to TTS — approximate (may include unplayed audio since
+   *      TTS streams faster than realtime; headless/browser paths have no playout clock).
+   * If the turn was committed (generation done before barge-in), truncates in place.
+   * If mid-generation (not yet committed), records what was sent. Either way the user
+   * utterance is preserved: neither divergent nor amnesiac.
    */
   private commitInterruptedHistory(contextId: string): void {
-    const spoken = (this.spokenByContext.get(contextId) ?? "").trim();
+    const spoken = this.computeSpokenPrefix(contextId);
     const existing = this.assistantMsgByContext.get(contextId);
     if (existing) {
       if (spoken) {
@@ -322,6 +373,8 @@ export class AISDKBridgePlugin implements VoicePlugin {
     this.spokenByContext.delete(contextId);
     this.turnUserText.delete(contextId);
     this.assistantMsgByContext.delete(contextId);
+    this.wordTimestampsByContext.delete(contextId);
+    this.playedOutMsByContext.delete(contextId);
   }
 }
 

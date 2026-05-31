@@ -97,31 +97,15 @@ rewritten to the gated semantics. That's the correct break.
 **Tests:** sustained-speech → commits; 200 ms blip → suppressed + playback resumes; backchannel "yeah" mid-reply →
 suppressed; existing genuine-barge-in smokes still cut within budget.
 
-### G2 — Interrupted-turn history divergence  ·  P0  ·  reasoning  ·  *(corrected analysis — investigated, not yet shipped)*
-**Corrected understanding (from an empirical investigation this session — see RELIABILITY-HARDENING-NOTES).** I first
-read this as "the interrupted turn is *dropped* (amnesia)" because the bridge `return`s on abort before
-`rememberTurn` (`:154`). I implemented that fix and wrote a test — the test **deadlocked**, which exposed the real
-mechanism: the **PipelineBus drain loop awaits sync handlers serially** (`pipeline-bus.ts:191-194,309-312`). An
-`eos.turn_complete` handler runs the *entire* LLM generation while parking the loop, so `interrupt.llm` (Critical) is
-generally **not dispatched until generation finishes** — i.e. barge-in is processed during **TTS playback**, after
-`rememberTurn(fullText)` already ran. Therefore:
-- **Common case (barge-in during playback):** generation completed → history holds the **FULL** generated text, but the
-  user only heard the spoken prefix → **divergence** (model believes it said words never heard). *This* is the real,
-  frequent G2 — and the mid-generation-abort fix does **not** touch it (that path calls `rememberTurn` normally at `:154`).
-- **Rare case (abort genuinely lands mid-generation):** turn dropped (amnesia). Real but uncommon given the blocking loop.
+### G2 — Interrupted-turn history divergence  ·  ✅ SHIPPED (full precision via G25/VE-04)  ·  reasoning
 
-I **reverted** the partial mid-abort fix rather than ship an incomplete change with a deadlocking test (no workarounds,
-never claim done without proof).
+**Shipped in two stages:**
 
-**Real fix (the honest one, breaking changes OK):** retroactively truncate the **last** assistant history message to the
-spoken prefix when `interrupt.detected` fires during playback. Needs the spoken boundary, which the session already
-knows (it tracks TTS-sent text — `flushTtsText`/`ttsTextBuffers`, and the recorder's wall-clock played-ms). Plumb a
-"truncate last assistant turn to N spoken chars/words" signal from session → bridge on interrupt. Precision ladder:
-(1) TTS word timestamps → exact last-word-≤-played-ms; (2) else proportional clock-time, flagged approximate. This is a
-**cross-component** change (session owns the spoken boundary; bridge owns history) — scoped as its own focused effort,
-not a drive-by. **Tests** must account for the bus blocking model (drive a real playback-then-barge-in sequence, not a
-hung generation). *(G2 also interacts with **G10** — if the bus loop didn't block, mid-generation abort would be common
-and both sub-cases would need handling.)*
+**Stage 1 (G2 base — text approximation):** `AISDKBridgePlugin` (`voice-bridge-aisdk/src/index.ts`) now tracks `spokenByContext` (accumulated `tts.text` per turn) and `assistantMsgByContext` (in-place reference to the history entry). On `interrupt.llm`, `commitInterruptedHistory()` rewrites the turn's history entry to the spoken approximation. Both sub-cases handled: committed turn (generation done before barge-in → truncate in place) and mid-generation abort (never committed → record what was sent). Non-deadlocking: G10's concurrent producer means the bus drain loop is free when interrupt fires; `commitInterruptedHistory` is a pure sync map-mutation, no bus awaits, no re-entrant dispatch risk.
+
+**Stage 2 (G25/VE-04 — word-level precision):** Cartesia TTS plugin now emits `tts.word_timestamps` packets with cumulative offsets from the context audio start (`add_timestamps: true`). The bridge accumulates word timestamps and tracks `tts.playout_progress` per context. `computeSpokenPrefix()` uses precision ladder: (1) word timestamps + playout position → exact spoken prefix at word boundaries; (2) fallback to `spokenByContext` (approximate, headless/browser paths without paced transport). Regression test: barge-in-during-playback scenario drives the previously-deadlocking sequence through the live bus loop and asserts it completes; prior deadlock was caused by blocking bus drain inside a handler — the G10 concurrent producer + sync commitInterruptedHistory prevents it.
+
+**Tests:** `voice-bridge-aisdk/src/index.test.ts` — 8 tests covering exact word-boundary prefix (G25), fallback paths, deadlock regression, mid-generation interrupt.
 
 ### G3 — Mid-turn STT/TTS stall watchdog  ·  P1  ·  transcription/synthesis
 **Problem.** `withStreamIdleTimeout` guards only the LLM stream (`bridge-aisdk:100`). If Deepgram stops emitting
@@ -298,3 +282,105 @@ paths (verifiable), verify the Deepgram line basis before acting.*
   TTS; product/feature scope (and must respect the "no language-specific transcript reconstruction" rule).
 - **Security baseline** — short-lived tokens vs static keys; PII redaction/profanity middleware on the bus / recordings.
 - **Automated WER/latency eval harness** over recorded sessions — extends G7/VAQI for regression baselining.
+
+---
+
+## 7. Sprint 01 — WebSocket transport hardening + scale (G13–G26)
+
+From a thermo-nuclear review of `voice-server-websocket` / `voice-ws` /
+`voice-client-browser` cross-checked against the Deepgram guide, the LiveKit /
+Cloudflare / Level-Up / dev.to / Deepgram transport articles, Kwindla's Pipecat
+gist+talk, and 2025–26 papers. Full specs + acceptance tests + TDD/smoke plans:
+`issues/sprint-01-websocket-transport/`. Strategic premise check: WebSocket is
+right for server↔provider (`voice-ws` ✅) and server↔carrier ✅; the browser
+last-mile leg is the one every source flags — harden it and make it swappable.
+
+### G13 — Four WS transports are one host copy-pasted  ·  P1  ·  transport/structure
+**Problem.** `index/twilio/telnyx/smartpbx.ts` redeclare ~10 helpers ×4, the ~130-line
+connect/pending-buffer/startup/close skeleton ×4, and `wire*SessionEvents` ×3 (browser a
+divergent 4th lacking pacing). >50% of ~3,500 lines is dup. **Fix.** Extract
+`WebSocketTransportHost` + `OutboundPlayoutPipeline` + `InboundFramePipeline`; carriers become
+~150-line codec/control adapters (same code-judo already done on the provider side with
+`voice-ws`). **Tests:** all 109 tests green unchanged + Fly synthetic-carrier green. → WT-01
+
+### G14 — Carrier-file codec module + no anti-aliasing  ·  P1  ·  audio/correctness
+**Problem.** μ-law/resample/PCM exported from `twilio.ts` and imported by telnyx+smartpbx;
+`index.ts` re-rolls its own. `resamplePcm16`/`normalizePcm16` are linear-interp with NO
+low-pass-before-decimation → aliasing degrades STT on fricatives/sibilants (Level-Up). **Fix.**
+Canonical `voice/src/audio/` (pcm/mulaw/resample) with anti-aliased down-sample. **Tests:**
+spectral anti-alias test (≥40 dB image rejection) + telephony/recorder live smoke. → WT-02
+
+### G15 — Browser leg bursts TTS unpaced, no playout clock, no client jitter buffer  ·  P1  ·  transport/browser
+**Problem.** `index.ts:515` sends TTS straight to the wire (PacedPlayoutQueue used 0×);
+no `PlayoutProgressEmitter` → browser excluded from G12 playout-clock; client has no jitter
+buffer. **Fix.** Route browser through the shared outbound pipeline + AudioContext jitter buffer
+(~100 ms, Deepgram). **Tests:** headless-Chrome scheduled-playout + clean barge-in flush. → WT-03
+
+### G16 — `close()` hard-kills all live calls on deploy  ·  P1  ·  transport/scale
+**Problem.** All 4 servers do `client.terminate()` in `close()` — immediate RST, no drain.
+Every deploy guillotines in-flight calls. **Fix.** Graceful drain in the host (stop accept →
+drain paced queues to deadline → 1001 via `closeWebSocketWithFallback` → terminate stragglers);
+wire SIGTERM. **Tests:** drain-on-close unit + mid-utterance graceful-close live smoke. → WT-04
+
+### G17 — Shipped browser client can't reconnect/resume/keepalive  ·  P1  ·  client/availability
+**Problem.** `SyrinxBrowserClient.connect()` has no reconnect, no `sessionId` capture/resume,
+no keepalive — the server's 15 s resume window is unusable by the official client. **Fix.**
+Backoff reconnect re-dialing `?sessionId=`, keepalive ping, reconnecting/resumed events,
+storm-cap. **Tests:** fake-socket reconnect/resume unit + drop-mid-session headless smoke. → WT-05
+
+### G18 — Session state in-memory only (no horizontal scale)  ·  P2  ·  transport/scale
+**Problem.** `sessions` is a bare process Map; dies on redeploy, forces sticky routing. **Fix.**
+`SessionStore` interface + `InMemorySessionStore` default (zero behavior change) + injection
+point, shaped for a drop-in Redis/DO impl. **Tests:** injected-fake store lease/release ordering
++ resume smoke through the seam. → WT-06
+
+### G19 — Raw PCM browser uplink; transport not swappable  ·  P2  ·  transport/scale
+**Problem.** Browser uplink is 16 kHz PCM16 ≈ 256 kbps (Kwindla: avoid raw PCM); WebSocket is
+hard-wired on the leg every source flags. **Fix.** `ClientTransport` seam (mirror Cloudflare
+`VoiceTransport`) + Opus on the browser leg negotiated in `ready`; WebRTC/QUIC become drop-ins.
+**Tests:** transport-conformance + Opus round-trip + bandwidth-measured headless smoke. → WT-07
+
+### G20 — No concurrency cap; unmatched upgrade leaks sockets  ·  P2  ·  transport/scale
+**Problem.** Unbounded session acceptance (Deepgram: WS concurrency limits); `websocket-upgrade.ts`
+leaves unmatched-path sockets dangling. **Fix.** `maxConcurrentSessions` admission (reject 1013 +
+metric) + destroy sockets on unmatched upgrade paths. **Tests:** cap-rejection + bad-path-destroy
+unit + multi-adapter routing regression. → WT-08
+
+### G21 — No real per-turn metrics; browser leg untested under impairment  ·  P2  ·  observability
+**Problem.** `metrics` message defined but server never emits it; no four-timestamp per-turn
+instrumentation; browser leg has no loss/jitter smoke (telephony does). **Fix.** Emit per-turn
+metrics (4 timestamps + stage latencies + correlation id from the playout clock); add browser
+loss/jitter smoke; assert ~800 ms voice-to-voice SLO band. **Tests:** metric-compute unit +
+impaired-browser smoke. → WT-09
+
+### G22 — Endpointing is silence/Smart-Turn only (no semantic signal)  ·  P2  ·  turn-taking
+**Problem.** Smart Turn is a separate model blind to STT semantics → premature cuts + trailing
+latency. **Fix.** Fuse a semantic-completeness signal off STT partials with Smart Turn (JAL-Turn
+direction: reuse the encoder, ~0 added latency). **Tests:** labeled complete/mid-thought/backchannel
+set + no-latency-regression live smoke. (JAL-Turn 2603.26515, Phoenix-VAD 2509.20410, FastTurn 2604.01897) → VE-01
+
+### G23 — Barge-in is a time gate, not speaker attribution  ·  P2  ·  barge-in
+**Problem.** G1's `minInterruptionMs` commits on any sustained speech incl. bystander/TV/echo.
+**Fix.** Primary-speaker (pVAD) gate composed with G1; suppress non-primary; graceful G1 fallback.
+**Tests:** mixed-speaker + echo unit + injected-background live smoke. (FireRedChat 2509.06502) → VE-02
+
+### G24 — Unfilled dead air over LLM TTFB  ·  P3  ·  perceived latency
+**Problem.** No audio between endpoint and first LLM token (~350 ms TTFB dominates). **Fix.**
+Optional, interruptible dual-track filler connective started at endpoint, spliced into the real
+response. **Tests:** filler-before-token + cancel-on-continue unit + A/B perceived-latency smoke.
+(DDTSR 2602.23266, Moshi 2410.00037) → VE-03
+
+### G25 — Post-barge-in context records generated, not heard, text (closes G2)  ·  ✅ SHIPPED  ·  context-integrity
+**Shipped (2026-05-31).** Cartesia TTS plugin enables `add_timestamps: true`, emits `tts.word_timestamps`
+packets with cumulative-offset timestamps. Bridge accumulates them per context, tracks
+`tts.playout_progress` for realtime playout position. `computeSpokenPrefix()` on `interrupt.llm`:
+words with `endMs ≤ playedOutMs` → exact spoken prefix at word granularity; fallback to `spokenByContext`
+(text-level) when playout clock absent (headless/browser). Full test suite: word-boundary exactness,
+fallback paths (no timestamps, no playout), deadlock-regression (previously-deadlocking
+barge-in-during-playback scenario passes). G2 closed. → VE-04
+
+### G26 — No conversational-quality CI gate  ·  P3  ·  evaluation
+**Problem.** Smokes assert transport invariants, not turn-taking timing/overlap; nothing fails CI
+on conversational regression. **Fix.** Bot-to-bot examiner (EVA-X turn-taking-timing + overlap +
+accent/noise) wired as a CI gate (warn → block). **Tests:** known-good/bad fixture scoring + live
+end-to-end baseline. (EVA-Bench 2605.13841, Full-Duplex-Bench-v2 2510.07838) → VE-05

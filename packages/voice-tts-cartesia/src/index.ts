@@ -11,6 +11,8 @@ import {
   type RetryConfig,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
+  type TextToSpeechWordTimestampsPacket,
+  type TtsWordTimestamp,
   type TtsErrorPacket,
   type VoicePlugin,
   categorizeTtsError,
@@ -41,6 +43,10 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private retryConfig: RetryConfig = readRetryConfig({});
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
+  // Cumulative audio duration (ms) already received for each context before the
+  // current chunk. Cartesia's word_timestamps start at 0 per each response
+  // message; we add this offset to make them absolute from context start.
+  private contextAudioOffsetMs = new Map<string, number>();
   private disposers: Array<() => void> = [];
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -108,7 +114,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         language: this.language,
         context_id: contextId || randomUUID(),
         continue: true,
-        add_timestamps: false,
+        add_timestamps: true,
       }),
       contextId,
     );
@@ -142,7 +148,6 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         context_id: contextId,
         continue: false,
         flush: true,
-        add_timestamps: false,
       }),
       contextId,
     );
@@ -155,6 +160,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
+    this.contextAudioOffsetMs.clear();
     await this.conn?.close();
     this.conn = null;
     this.bus = null;
@@ -183,6 +189,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (!contextId) return;
     this.cancelledContexts.add(contextId);
     this.activeContexts.delete(contextId);
+    this.contextAudioOffsetMs.delete(contextId);
     await this.trySend(
       JSON.stringify({
         context_id: contextId,
@@ -223,21 +230,64 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (typeof msg["data"] === "string" && msg["data"].length > 0) {
       try {
         const audioBytes = decodeStrictBase64(msg["data"], "Cartesia TTS provider audio data");
-        const packet: TextToSpeechAudioPacket = {
+        const audioPacket: TextToSpeechAudioPacket = {
           kind: "tts.audio",
           contextId,
           timestampMs: Date.now(),
           audio: new Uint8Array(audioBytes),
           sampleRateHz: this.sampleRate,
         };
-        this.bus?.push(Route.Main, packet);
+        this.bus?.push(Route.Main, audioPacket);
+
+        // Emit word timestamps for this chunk, offset to be cumulative from the
+        // start of the context's audio. Cartesia timestamps start at 0 per response
+        // message (per-chunk relative); we add the pre-existing context offset to
+        // make them absolute so callers can compare against a playout position.
+        const chunkOffsetMs = this.contextAudioOffsetMs.get(contextId) ?? 0;
+        const wtRaw = msg["word_timestamps"];
+        if (wtRaw !== null && typeof wtRaw === "object") {
+          const wt = wtRaw as { words?: unknown };
+          const rawWords = Array.isArray(wt["words"]) ? wt["words"] : [];
+          const words: TtsWordTimestamp[] = [];
+          for (const w of rawWords) {
+            if (
+              typeof w === "object" && w !== null &&
+              typeof (w as Record<string, unknown>)["word"] === "string" &&
+              typeof (w as Record<string, unknown>)["start"] === "number" &&
+              typeof (w as Record<string, unknown>)["end"] === "number"
+            ) {
+              const entry = w as { word: string; start: number; end: number };
+              words.push({
+                word: entry.word,
+                startMs: Math.round(entry.start * 1000) + chunkOffsetMs,
+                endMs: Math.round(entry.end * 1000) + chunkOffsetMs,
+              });
+            }
+          }
+          if (words.length > 0) {
+            const tsPacket: TextToSpeechWordTimestampsPacket = {
+              kind: "tts.word_timestamps",
+              contextId,
+              timestampMs: Date.now(),
+              words,
+            };
+            this.bus?.push(Route.Main, tsPacket);
+          }
+        }
+
+        // Advance the offset by this chunk's audio duration so the next chunk's
+        // timestamps are offset correctly (each sample is 2 bytes, mono).
+        const chunkDurationMs = Math.round((audioBytes.length / 2 / this.sampleRate) * 1000);
+        this.contextAudioOffsetMs.set(contextId, chunkOffsetMs + chunkDurationMs);
       } catch (err) {
         this.activeContexts.delete(contextId);
+        this.contextAudioOffsetMs.delete(contextId);
         this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
       }
     }
     if (msg["done"] === true) {
       this.activeContexts.delete(contextId);
+      this.contextAudioOffsetMs.delete(contextId);
       this.emitEnd(contextId);
     }
   }
@@ -259,6 +309,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private failActiveContexts(err: Error): void {
     const contextIds = [...this.activeContexts];
     this.activeContexts.clear();
+    this.contextAudioOffsetMs.clear();
     if (contextIds.length === 0) {
       this.emitError("", err);
       return;

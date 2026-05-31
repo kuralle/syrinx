@@ -291,6 +291,26 @@ export interface TextToSpeechEndPacket extends VoicePacket {
   readonly kind: "tts.end";
 }
 
+export interface TtsWordTimestamp {
+  readonly word: string;
+  /** Milliseconds from the start of audio for this TTS context. */
+  readonly startMs: number;
+  /** Milliseconds from the start of audio for this TTS context. */
+  readonly endMs: number;
+}
+
+/**
+ * Word-level timestamps for a TTS audio chunk, emitted by TTS plugins that
+ * support them (Cartesia, ElevenLabs). Enables the bridge to compute the spoken
+ * prefix (G2/G25): the subset of assistant text the user actually heard, used to
+ * rewrite history on barge-in at word granularity instead of text granularity.
+ * Times are cumulative from the start of the context's audio stream.
+ */
+export interface TextToSpeechWordTimestampsPacket extends VoicePacket {
+  readonly kind: "tts.word_timestamps";
+  readonly words: readonly TtsWordTimestamp[];
+}
+
 export interface TtsErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly kind: "tts.error";
   readonly component: "tts";
@@ -446,6 +466,7 @@ export type TtsPacket =
   | TextToSpeechAudioPacket
   | TextToSpeechEndPacket
   | TextToSpeechPlayoutProgressPacket
+  | TextToSpeechWordTimestampsPacket
   | TtsErrorPacket;
 
 /** All error packets (any component). */

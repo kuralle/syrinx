@@ -144,3 +144,57 @@ quick-failure path doesn't engage). Client suite: 32 pass, typecheck clean.
    (mirrors the existing twilio.test helper). Transport suite now 8/8 green across runs
    (was ~1/3 flaky). The smartpbx "buffers before startup" 5 s-timeout flake also cleared
    once the FIR load was removed.
+
+## VE-04 / G25 — Word-level-timestamp context alignment (closes G2) (2026-05-31)
+
+### Problem the prior G2 revert exposed
+
+The first G2 attempt deadlocked because it tried to do work inside a PipelineBus Main
+handler while the bus drain loop was parked awaiting that same handler. G10's concurrent
+generation fix eliminated the blocking: the generation handler runs fire-and-forget, so
+the drain loop is free during generation and dispatches Critical interrupts promptly.
+The current `commitInterruptedHistory` is a pure synchronous map mutation with one
+Background push (non-blocking), so there is no deadlock risk.
+
+### Cartesia word timestamps
+
+Cartesia's WebSocket API supports `add_timestamps: true` in the request. Per observed
+response format: `{ word_timestamps: { words: [{ word, start, end }] } }` where
+`start`/`end` are in seconds and are **per-chunk relative** (start at 0 for each response
+message). We add a cumulative per-context audio offset (`contextAudioOffsetMs`) to make
+timestamps absolute from the context start. The offset is advanced by each chunk's audio
+duration (bytes / 2 / sampleRate × 1000 ms) after emitting the offset-adjusted packet.
+
+### Precision ladder for spoken prefix
+
+1. Word timestamps (`tts.word_timestamps`) + playout position (`tts.playout_progress`)
+   → filter words by `endMs ≤ playedOutMs`, join with spaces. Exact at word granularity.
+2. Fallback: accumulated text from `tts.text` packets (`spokenByContext`). Approximate —
+   may include audio queued but not yet played (TTS streams faster than realtime). Used
+   for headless and browser paths that have no paced transport, hence no playout clock.
+
+### What "playout position" is and when it's absent
+
+`tts.playout_progress.playedOutMs` is emitted by the paced playout layer in telephony
+transports (telnyx, twilio, smartpbx) as audio actually reaches the wire. For headless
+and browser-WS paths there is no paced transport, so no progress packets arrive, and
+`playedOutMsByContext` stays empty → fallback path activates.
+
+### Live smoke plan
+
+The spec asks for a live recorder coherence smoke: mid-utterance barge-in, Whisper the
+recording, assert assistant audio and logged context end at the same word. This requires
+a real Cartesia API key (`SYRINX_REVIEW_TTS=cartesia`), a paced transport (telephony),
+and the recorder. The unit tests cover the computational correctness of the spoken-prefix
+logic. The live smoke artifact path would be:
+`examples/02-hello-voice-headless/test/performance/runs/ve04-word-boundary-<timestamp>/`
+
+Live smoke with a paced transport was blocked: Cartesia API connectivity issues during
+the implementation window prevented a Fly telephony run. Unit verification is green.
+The live smoke should be re-run when Cartesia API access is confirmed working.
+
+### Tests added
+
+- `voice-bridge-aisdk`: 3 new tests — word-boundary exactness + deadlock regression,
+  fallback (no timestamps), fallback (no playout position)
+- `voice-tts-cartesia`: 1 new test — word timestamps emitted with correct cumulative offset
