@@ -3,16 +3,8 @@
 import type { IncomingMessage } from "node:http";
 import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import {
-  Route,
-  type InterruptTtsPacket,
-  type TextToSpeechAudioPacket,
-  type TextToSpeechEndPacket,
-  type VoiceAgentSession,
-} from "@asyncdot/voice";
+import { Route, type VoiceAgentSession } from "@asyncdot/voice";
 import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
-import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
-import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import {
   optionalRecord,
@@ -21,13 +13,18 @@ import {
   parseJsonRecord,
   requiredString,
 } from "./json-message.js";
-import {
-  WebSocketStartupTimeoutError,
-  startWebSocketHeartbeat,
-  startWebSocketMaxSessionDuration,
-  withWebSocketStartupTimeout,
-} from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
+import { runWebSocketConnection, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
+import {
+  decodeStrictBase64,
+  nonNegativeInteger,
+  numberFromString,
+  optionalNonNegativeIntegerString,
+  optionalPositiveIntegerString,
+  positiveInteger,
+  rawDataToText,
+} from "./transport-helpers.js";
 
 export interface TwilioMediaStreamServerOptions {
   readonly server?: HttpServer;
@@ -76,9 +73,7 @@ interface TwilioMediaMessage {
     readonly chunk?: string;
     readonly timestamp?: string;
   };
-  readonly mark?: {
-    readonly name?: string;
-  };
+  readonly mark?: { readonly name?: string };
 }
 
 interface TwilioConnectionState {
@@ -93,15 +88,8 @@ interface TwilioConnectionState {
   pendingMarks: Set<string>;
   pendingEndMarkName: string;
   onPlaybackMarkReceived?: () => void;
+  clearPlayout: (reason: string) => void;
 }
-
-interface PendingTwilioMessage {
-  readonly data: RawData;
-  readonly isBinary: boolean;
-  readonly byteLength: number;
-}
-
-type TwilioPlayoutTerminationReason = "stop" | "disconnect" | "overflow" | "send_buffer";
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
 const DEFAULT_TWILIO_SAMPLE_RATE_HZ = 8000;
@@ -112,6 +100,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
+
 export async function createTwilioMediaStreamServer(
   options: TwilioMediaStreamServerOptions,
 ): Promise<TwilioMediaStreamServer> {
@@ -121,34 +110,235 @@ export async function createTwilioMediaStreamServer(
   const wsServer = routedWebSocket.wsServer;
   const sessions = new Set<VoiceAgentSession>();
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? DEFAULT_ENGINE_SAMPLE_RATE_HZ;
-  const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? DEFAULT_ENGINE_SAMPLE_RATE_HZ;
   const twilioSampleRateHz = positiveInteger(options.twilioSampleRateHz) ?? DEFAULT_TWILIO_SAMPLE_RATE_HZ;
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
-  const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  const startupTimeoutMs = nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS;
-  const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
-  const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
-  const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
+  const frameBytes = Math.max(1, Math.round((twilioSampleRateHz * outboundFrameDurationMs) / 1000));
+  const hostConfig: TransportHostConfig = {
+    heartbeatIntervalMs: nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    startupTimeoutMs: nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS,
+    maxSessionDurationMs: nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS,
+    maxBufferedAmountBytes: positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES,
+    maxInboundMessageBytes: positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES,
+  };
+  const contextIdFn = options.contextId ?? defaultTwilioContextId;
+
+  const adapter: TransportAdapter<TwilioConnectionState> = {
+    createState: () => ({
+      streamSid: "",
+      contextId: "",
+      started: false,
+      stopped: false,
+      lastInboundSequenceNumber: null,
+      lastInboundMediaChunk: null,
+      lastInboundMediaTimestampMs: null,
+      outboundSequence: 0,
+      pendingMarks: new Set(),
+      pendingEndMarkName: "",
+      clearPlayout: () => undefined,
+    }),
+
+    async acquireSession({ request, shouldAbort, onSessionCreated }) {
+      const sess = await options.createSession(request);
+      onSessionCreated(sess);
+      if (shouldAbort()) {
+        await sess.close().catch(() => undefined);
+        throw new Error("Twilio websocket session startup aborted");
+      }
+      sessions.add(sess);
+      await sess.start();
+      if (shouldAbort()) {
+        sessions.delete(sess);
+        await sess.close().catch(() => undefined);
+        throw new Error("Twilio websocket session startup aborted");
+      }
+      return { session: sess, resumed: false };
+    },
+
+    wireSession(session, socket, state, disposers) {
+      const sendPendingEndMark = (): void => {
+        if (state.stopped || !state.streamSid || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
+        const markName = state.pendingEndMarkName;
+        const sent = sendTwilioJson(socket, {
+          event: "mark",
+          streamSid: state.streamSid,
+          mark: { name: markName },
+        }, hostConfig.maxBufferedAmountBytes);
+        if (sent) state.pendingEndMarkName = "";
+      };
+      state.onPlaybackMarkReceived = sendPendingEndMark;
+
+      state.clearPlayout = wireTelephonyOutboundPipeline({
+        session,
+        socket,
+        disposers,
+        outboundFrameDurationMs,
+        maxQueuedOutputAudioMs,
+        callbacks: {
+          carrierLabel: "twilio",
+          getContextId: () => state.contextId,
+          isActive: () => !state.stopped && !!state.streamSid,
+          encodeFrames: (audio, sourceSampleRateHz, contextId) => {
+            const samples = pcm16BytesToSamples(audio);
+            const resampled = resamplePcm16(samples, sourceSampleRateHz, twilioSampleRateHz);
+            const encoded = encodePcm16ToMuLaw(resampled);
+            const frames = [];
+            for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
+              const frame = encoded.subarray(offset, Math.min(encoded.byteLength, offset + frameBytes));
+              frames.push({
+                contextId,
+                send: () => {
+                  if (state.stopped) return false;
+                  return sendTwilioJson(socket, {
+                    event: "media",
+                    streamSid: state.streamSid,
+                    media: { payload: Buffer.from(frame).toString("base64") },
+                  }, hostConfig.maxBufferedAmountBytes);
+                },
+              });
+            }
+            state.outboundSequence += 1;
+            const markName = `${contextId}:${String(state.outboundSequence)}`;
+            const finalFrame = frames.at(-1);
+            if (finalFrame) {
+              frames[frames.length - 1] = {
+                contextId,
+                send: finalFrame.send,
+                afterSend: () => {
+                  if (state.stopped) return;
+                  const sent = sendTwilioJson(socket, {
+                    event: "mark",
+                    streamSid: state.streamSid,
+                    mark: { name: markName },
+                  }, hostConfig.maxBufferedAmountBytes);
+                  if (sent) {
+                    state.pendingMarks.add(markName);
+                    session.bus.push(Route.Background, {
+                      kind: "metric.conversation",
+                      contextId,
+                      timestampMs: Date.now(),
+                      name: "twilio.mark_sent",
+                      value: markName,
+                    });
+                  }
+                },
+              };
+            }
+            return frames;
+          },
+          onInterrupt: (contextId) => {
+            state.pendingMarks.clear();
+            state.pendingEndMarkName = "";
+            const sent = !state.stopped && !!state.streamSid && sendTwilioJson(socket, {
+              event: "clear",
+              streamSid: state.streamSid,
+            }, hostConfig.maxBufferedAmountBytes);
+            if (sent) {
+              session.bus.push(Route.Background, {
+                kind: "metric.conversation",
+                contextId,
+                timestampMs: Date.now(),
+                name: "twilio.clear_sent",
+                value: "1",
+              });
+            }
+          },
+          onDrain: (contextId, playout, progress) => {
+            playout.enqueueControl(() => {
+              if (state.stopped || !state.streamSid) return;
+              progress.complete(contextId);
+              state.pendingEndMarkName = `${contextId}:end`;
+              sendPendingEndMark();
+            });
+          },
+          onStop: () => { state.stopped = true; },
+        },
+      });
+      return (reason) => state.clearPlayout(reason);
+    },
+
+    processMessage(data, isBinary, session, state) {
+      if (isBinary) throw new Error("Twilio Media Streams messages must be JSON text frames");
+      const message = parseTwilioMessage(parseJsonRecord(rawDataToText(data), "Twilio Media Streams message"));
+      const event = message.event;
+      rememberTwilioSequenceNumber(session, state, message.sequenceNumber);
+
+      if (event === "connected") return;
+      if (event === "start") {
+        if (state.stopped) throw new Error("Twilio start event received after stream stop");
+        const start = message.start ?? {};
+        validateTwilioStart(start, twilioSampleRateHz);
+        state.streamSid = start.streamSid ?? message.streamSid ?? "";
+        if (!state.streamSid) throw new Error("Twilio start event is missing streamSid");
+        state.contextId = contextIdFn(start);
+        state.started = true;
+        return;
+      }
+      if (event === "media") {
+        if (state.stopped) return;
+        if (!state.started || !state.contextId) throw new Error("Twilio media event received before a valid start event");
+        const payload = message.media?.payload;
+        if (!payload) throw new Error("Twilio media event is missing media.payload");
+        rememberTwilioMediaChunk(session, state, message.media?.chunk);
+        const ulaw = decodeStrictBase64(payload, "media.payload");
+        const pcm8k = decodeMuLawToPcm16(ulaw);
+        rememberTwilioMediaTimestamp(session, state, message.media?.timestamp, pcm8k.length, twilioSampleRateHz);
+        const pcm16k = resamplePcm16(pcm8k, twilioSampleRateHz, inputSampleRateHz);
+        session.bus.push(Route.Main, {
+          kind: "user.audio_received",
+          contextId: state.contextId,
+          timestampMs: Date.now(),
+          audio: pcm16SamplesToBytes(pcm16k),
+        });
+        return;
+      }
+      if (event === "stop") {
+        state.stopped = true;
+        state.started = false;
+        state.pendingMarks.clear();
+        state.clearPlayout("stop");
+        session.close().catch(() => undefined);
+        return;
+      }
+      if (event === "mark") {
+        if (state.stopped) return;
+        const markName = message.mark?.name ?? "";
+        if (markName) state.pendingMarks.delete(markName);
+        state.onPlaybackMarkReceived?.();
+        session.bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: state.contextId,
+          timestampMs: Date.now(),
+          name: "twilio.mark_received",
+          value: markName,
+        });
+        return;
+      }
+      if (event === "dtmf") return;
+      throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
+    },
+
+    onDisconnect(session) {
+      sessions.delete(session);
+      void session.close().catch(() => undefined);
+    },
+
+    onStartupTimeout(_state, session) {
+      sessions.delete(session);
+      void session.close().catch(() => undefined);
+    },
+
+    sendError(socket, state, message) {
+      sendTwilioError(socket, state.streamSid, message, hostConfig.maxBufferedAmountBytes);
+    },
+
+    sendStartupError(socket, state, err) {
+      sendTwilioError(socket, state.streamSid, err instanceof Error ? err.message : String(err), hostConfig.maxBufferedAmountBytes);
+    },
+  };
 
   wsServer.on("connection", (socket, request) => {
-    void handleTwilioConnection({
-      socket,
-      request,
-      createSession: options.createSession,
-      contextId: options.contextId ?? defaultTwilioContextId,
-      sessions,
-      inputSampleRateHz,
-      outputSampleRateHz,
-      twilioSampleRateHz,
-      outboundFrameDurationMs,
-      maxQueuedOutputAudioMs,
-      heartbeatIntervalMs,
-      startupTimeoutMs,
-      maxSessionDurationMs,
-      maxBufferedAmountBytes,
-      maxInboundMessageBytes,
-    });
+    void runWebSocketConnection(socket, request, hostConfig, adapter);
   });
 
   if (ownsHttpServer || typeof options.port === "number") {
@@ -166,450 +356,15 @@ export async function createTwilioMediaStreamServer(
     wsServer,
     address: () => httpServer.address(),
     close: async () => {
-      for (const client of wsServer.clients) {
-        client.terminate();
-      }
-      for (const session of sessions) {
-        await session.close().catch(() => undefined);
-      }
-      await new Promise<void>((resolveClose) => {
-        wsServer.close(() => resolveClose());
-      });
+      for (const client of wsServer.clients) client.terminate();
+      for (const session of sessions) await session.close().catch(() => undefined);
+      await new Promise<void>((resolveClose) => { wsServer.close(() => resolveClose()); });
       routedWebSocket.detach();
       if (ownsHttpServer || typeof options.port === "number") {
-        await new Promise<void>((resolveClose) => {
-          httpServer.close(() => resolveClose());
-        });
+        await new Promise<void>((resolveClose) => { httpServer.close(() => resolveClose()); });
       }
     },
   };
-}
-
-async function handleTwilioConnection(args: {
-  readonly socket: WebSocket;
-  readonly request: IncomingMessage;
-  readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
-  readonly contextId: (start: TwilioStartPayload) => string;
-  readonly sessions: Set<VoiceAgentSession>;
-  readonly inputSampleRateHz: number;
-  readonly outputSampleRateHz: number;
-  readonly twilioSampleRateHz: number;
-  readonly outboundFrameDurationMs: number;
-  readonly maxQueuedOutputAudioMs: number;
-  readonly heartbeatIntervalMs: number;
-  readonly startupTimeoutMs: number;
-  readonly maxSessionDurationMs: number;
-  readonly maxBufferedAmountBytes: number;
-  readonly maxInboundMessageBytes: number;
-}): Promise<void> {
-  const {
-    socket,
-    request,
-    createSession,
-    contextId,
-    sessions,
-    inputSampleRateHz,
-    outputSampleRateHz,
-    twilioSampleRateHz,
-    outboundFrameDurationMs,
-    maxQueuedOutputAudioMs,
-    heartbeatIntervalMs,
-    startupTimeoutMs,
-    maxSessionDurationMs,
-    maxBufferedAmountBytes,
-    maxInboundMessageBytes,
-  } = args;
-  const state: TwilioConnectionState = {
-    streamSid: "",
-    contextId: "",
-    started: false,
-    stopped: false,
-    lastInboundSequenceNumber: null,
-    lastInboundMediaChunk: null,
-    lastInboundMediaTimestampMs: null,
-    outboundSequence: 0,
-    pendingMarks: new Set(),
-    pendingEndMarkName: "",
-  };
-  const disposers: Array<() => void> = [];
-  const pendingMessages: PendingTwilioMessage[] = [];
-  let pendingMessageBytes = 0;
-  let ready = false;
-  let socketClosed = false;
-  let startupTimedOut = false;
-  let clearPendingPlayout: (reason: TwilioPlayoutTerminationReason) => void = () => undefined;
-  let session: VoiceAgentSession | null = null;
-
-  const processMessage = (data: RawData, isBinary: boolean): void => {
-    if (!session) return;
-    if (isBinary) throw new Error("Twilio Media Streams messages must be JSON text frames");
-    handleTwilioMessage({
-      session,
-      data,
-      state,
-      contextId,
-      inputSampleRateHz,
-      twilioSampleRateHz,
-      onStop: () => clearPendingPlayout("stop"),
-    });
-  };
-
-  const handleMessage = (data: RawData, isBinary: boolean): void => {
-    try {
-      const byteLength = rawDataByteLength(data);
-      if (byteLength > maxInboundMessageBytes) {
-        sendTwilioError(
-          socket,
-          state.streamSid,
-          `Twilio websocket message exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)})`,
-          maxBufferedAmountBytes,
-        );
-        socket.close(1009, "websocket message too large");
-        return;
-      }
-      if (!ready) {
-        pendingMessageBytes += byteLength;
-        if (pendingMessageBytes > maxInboundMessageBytes) {
-          sendTwilioError(
-            socket,
-            state.streamSid,
-            `Pending Twilio websocket input exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)}) before session ready`,
-            maxBufferedAmountBytes,
-          );
-          socket.close(1009, "websocket pending input too large");
-          return;
-        }
-        pendingMessages.push({ data: cloneRawData(data), isBinary, byteLength });
-        return;
-      }
-      processMessage(data, isBinary);
-    } catch (err) {
-      sendTwilioError(socket, state.streamSid, err instanceof Error ? err.message : String(err), maxBufferedAmountBytes);
-    }
-  };
-
-  socket.on("message", handleMessage);
-
-  socket.on("close", () => {
-    socketClosed = true;
-    clearPendingPlayout("disconnect");
-    for (const dispose of disposers.splice(0)) {
-      dispose();
-    }
-    if (session) {
-      sessions.delete(session);
-      void session.close().catch(() => undefined);
-    }
-  });
-
-  try {
-    const startup = (async () => {
-      const createdSession = await createSession(request);
-      if (socketClosed || startupTimedOut) {
-        await createdSession.close().catch(() => undefined);
-        throw new Error("Twilio websocket session startup aborted");
-      }
-      session = createdSession;
-      sessions.add(createdSession);
-      await createdSession.start();
-      if (socketClosed || startupTimedOut) {
-        sessions.delete(createdSession);
-        await createdSession.close().catch(() => undefined);
-        throw new Error("Twilio websocket session startup aborted");
-      }
-      return createdSession;
-    })();
-    startup.catch(() => undefined);
-    session = await withWebSocketStartupTimeout(startup, startupTimeoutMs);
-    if (socketClosed) {
-      sessions.delete(session);
-      await session.close().catch(() => undefined);
-      return;
-    }
-    startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers);
-    startWebSocketMaxSessionDuration(socket, maxSessionDurationMs, disposers);
-    clearPendingPlayout = wireTwilioSessionEvents({
-      session,
-      socket,
-      state,
-      disposers,
-      outputSampleRateHz,
-      twilioSampleRateHz,
-      outboundFrameDurationMs,
-      maxQueuedOutputAudioMs,
-      maxBufferedAmountBytes,
-    });
-    ready = true;
-    for (const pending of pendingMessages.splice(0)) {
-      pendingMessageBytes -= pending.byteLength;
-      try {
-        processMessage(pending.data, pending.isBinary);
-      } catch (err) {
-        sendTwilioError(socket, state.streamSid, err instanceof Error ? err.message : String(err), maxBufferedAmountBytes);
-      }
-    }
-    pendingMessageBytes = 0;
-  } catch (err) {
-    if (err instanceof WebSocketStartupTimeoutError) {
-      startupTimedOut = true;
-      if (session) {
-        sessions.delete(session);
-        void session.close().catch(() => undefined);
-      }
-    }
-    sendTwilioError(socket, state.streamSid, err instanceof Error ? err.message : String(err), maxBufferedAmountBytes);
-    socket.close(1011, "session initialization failed");
-    return;
-  }
-}
-
-function wireTwilioSessionEvents(args: {
-  readonly session: VoiceAgentSession;
-  readonly socket: WebSocket;
-  readonly state: TwilioConnectionState;
-  readonly disposers: Array<() => void>;
-  readonly outputSampleRateHz: number;
-  readonly twilioSampleRateHz: number;
-  readonly outboundFrameDurationMs: number;
-  readonly maxQueuedOutputAudioMs: number;
-  readonly maxBufferedAmountBytes: number;
-}): (reason: TwilioPlayoutTerminationReason) => void {
-  const {
-    session,
-    socket,
-    state,
-    disposers,
-    outputSampleRateHz,
-    twilioSampleRateHz,
-    outboundFrameDurationMs,
-    maxQueuedOutputAudioMs,
-    maxBufferedAmountBytes,
-  } = args;
-  const frameBytes = Math.max(1, Math.round((twilioSampleRateHz * outboundFrameDurationMs) / 1000));
-  const recordDiscardedPlayout = (discardedMs: number, reason: TwilioPlayoutTerminationReason): void => {
-    if (discardedMs <= 0) return;
-    session.bus.push(Route.Critical, {
-      kind: "record.assistant_audio",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      audio: new Uint8Array(0),
-      truncate: true,
-    });
-    session.bus.push(Route.Critical, {
-      kind: "metric.conversation",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      name: `twilio.${reason}_playout_cleared_ms`,
-      value: String(discardedMs),
-    });
-  };
-  const playoutProgress = new PlayoutProgressEmitter(session.bus);
-  const playout = new PacedPlayoutQueue(outboundFrameDurationMs, maxQueuedOutputAudioMs, (discardedMs) => {
-    state.stopped = true;
-    recordDiscardedPlayout(discardedMs, "overflow");
-    closeWebSocketWithFallback(socket, 1013, "outbound audio queue exceeded");
-  }, (discardedMs) => {
-    state.stopped = true;
-    recordDiscardedPlayout(discardedMs, "send_buffer");
-  }, (lateMs) => {
-    session.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      name: "twilio.pacer_deadline_miss",
-      value: String(lateMs),
-    });
-  }, playoutProgress.onFramePlayed);
-  const sendPendingEndMark = (): void => {
-    if (state.stopped || !state.streamSid || !state.pendingEndMarkName || state.pendingMarks.size > 0) return;
-    const markName = state.pendingEndMarkName;
-    const sent = sendTwilioJson(socket, {
-      event: "mark",
-      streamSid: state.streamSid,
-      mark: {
-        name: markName,
-      },
-    }, maxBufferedAmountBytes);
-    if (sent) state.pendingEndMarkName = "";
-  };
-  state.onPlaybackMarkReceived = sendPendingEndMark;
-  const interruptedContextIds = new Set<string>();
-
-  disposers.push(
-    () => playout.close(),
-    session.bus.on("interrupt.tts", (pkt) => {
-      const interrupt = pkt as InterruptTtsPacket;
-      interruptedContextIds.add(interrupt.contextId);
-      playoutProgress.discard(interrupt.contextId);
-      playout.clear();
-      state.pendingMarks.clear();
-      state.pendingEndMarkName = "";
-      const sent = !state.stopped
-        && state.streamSid
-        && sendTwilioJson(socket, { event: "clear", streamSid: state.streamSid }, maxBufferedAmountBytes);
-      if (sent) {
-        session.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: interrupt.contextId,
-          timestampMs: Date.now(),
-          name: "twilio.clear_sent",
-          value: "1",
-        });
-      }
-    }),
-    session.bus.on("tts.audio", (pkt) => {
-      const audioPacket = pkt as TextToSpeechAudioPacket;
-      if (interruptedContextIds.has(audioPacket.contextId)) return;
-      if (state.stopped || !state.streamSid) return;
-      if (socket.readyState !== WebSocket.OPEN) {
-        session.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: audioPacket.contextId,
-          timestampMs: Date.now(),
-          name: "websocket.send_after_close",
-          value: "1",
-        });
-        return;
-      }
-      const samples = pcm16BytesToSamples(audioPacket.audio);
-      const resampled = resamplePcm16(samples, requireTtsAudioSampleRate(audioPacket.sampleRateHz), twilioSampleRateHz);
-      const encoded = encodePcm16ToMuLaw(resampled);
-      const frames: PacedPlayoutFrame[] = [];
-      for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
-        const frame = encoded.subarray(offset, Math.min(encoded.byteLength, offset + frameBytes));
-        frames.push({
-          contextId: audioPacket.contextId,
-          send: () => {
-            if (state.stopped) return false;
-            return sendTwilioJson(socket, {
-              event: "media",
-              streamSid: state.streamSid,
-              media: {
-                payload: Buffer.from(frame).toString("base64"),
-              },
-            }, maxBufferedAmountBytes);
-          },
-        });
-      }
-      state.outboundSequence += 1;
-      const markName = `${audioPacket.contextId}:${String(state.outboundSequence)}`;
-      const finalFrame = frames.at(-1);
-      if (finalFrame) {
-        frames[frames.length - 1] = {
-          contextId: audioPacket.contextId,
-          send: finalFrame.send,
-          afterSend: () => {
-            if (state.stopped) return;
-            const sent = sendTwilioJson(socket, {
-              event: "mark",
-              streamSid: state.streamSid,
-              mark: {
-                name: markName,
-              },
-            }, maxBufferedAmountBytes);
-            if (sent) {
-              state.pendingMarks.add(markName);
-              session.bus.push(Route.Background, {
-                kind: "metric.conversation",
-                contextId: audioPacket.contextId,
-                timestampMs: Date.now(),
-                name: "twilio.mark_sent",
-                value: markName,
-              });
-            }
-          },
-        };
-        playout.enqueue(frames);
-      }
-    }),
-    session.bus.on("tts.end", (pkt) => {
-      const end = pkt as TextToSpeechEndPacket;
-      if (interruptedContextIds.has(end.contextId)) return;
-      if (state.stopped || !state.streamSid) return;
-      playout.enqueueControl(() => {
-        if (state.stopped || !state.streamSid) return;
-        playoutProgress.complete(end.contextId);
-        state.pendingEndMarkName = `${end.contextId}:end`;
-        sendPendingEndMark();
-      });
-    }),
-  );
-
-  return (reason) => {
-    recordDiscardedPlayout(playout.clear(), reason);
-  };
-}
-
-function handleTwilioMessage(args: {
-  readonly session: VoiceAgentSession;
-  readonly data: RawData;
-  readonly state: TwilioConnectionState;
-  readonly contextId: (start: TwilioStartPayload) => string;
-  readonly inputSampleRateHz: number;
-  readonly twilioSampleRateHz: number;
-  readonly onStop: () => void;
-}): void {
-  const { session, data, state, contextId, inputSampleRateHz, twilioSampleRateHz, onStop } = args;
-  const message = parseTwilioMessage(parseJsonRecord(rawDataToText(data), "Twilio Media Streams message"));
-  const event = message.event;
-  rememberTwilioSequenceNumber(session, state, message.sequenceNumber);
-
-  if (event === "connected") return;
-  if (event === "start") {
-    if (state.stopped) throw new Error("Twilio start event received after stream stop");
-    const start = message.start ?? {};
-    validateTwilioStart(start, twilioSampleRateHz);
-    state.streamSid = start.streamSid ?? message.streamSid ?? "";
-    if (!state.streamSid) throw new Error("Twilio start event is missing streamSid");
-    state.contextId = contextId(start);
-    state.started = true;
-    return;
-  }
-  if (event === "media") {
-    if (state.stopped) return;
-    if (!state.started || !state.contextId) {
-      throw new Error("Twilio media event received before a valid start event");
-    }
-    const payload = message.media?.payload;
-    if (!payload) throw new Error("Twilio media event is missing media.payload");
-    rememberTwilioMediaChunk(session, state, message.media?.chunk);
-    const ulaw = decodeStrictBase64(payload, "media.payload");
-    const pcm8k = decodeMuLawToPcm16(ulaw);
-    rememberTwilioMediaTimestamp(session, state, message.media?.timestamp, pcm8k.length, twilioSampleRateHz);
-    const pcm16k = resamplePcm16(pcm8k, twilioSampleRateHz, inputSampleRateHz);
-    session.bus.push(Route.Main, {
-      kind: "user.audio_received",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      audio: pcm16SamplesToBytes(pcm16k),
-    });
-    return;
-  }
-  if (event === "stop") {
-    state.stopped = true;
-    state.started = false;
-    state.pendingMarks.clear();
-    onStop();
-    session.close().catch(() => undefined);
-    return;
-  }
-  if (event === "mark") {
-    if (state.stopped) return;
-    const markName = message.mark?.name ?? "";
-    if (markName) state.pendingMarks.delete(markName);
-    state.onPlaybackMarkReceived?.();
-    session.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: state.contextId,
-      timestampMs: Date.now(),
-      name: "twilio.mark_received",
-      value: markName,
-    });
-    return;
-  }
-  if (event === "dtmf") return;
-
-  throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
 }
 
 function parseTwilioMessage(value: Record<string, unknown>): TwilioMediaMessage {
@@ -642,11 +397,7 @@ function parseTwilioMessage(value: Record<string, unknown>): TwilioMediaMessage 
           timestamp: optionalString(media.timestamp, "Twilio media.timestamp"),
         }
       : undefined,
-    mark: mark
-      ? {
-          name: optionalString(mark.name, "Twilio mark.name"),
-        }
-      : undefined,
+    mark: mark ? { name: optionalString(mark.name, "Twilio mark.name") } : undefined,
   };
 }
 
@@ -732,28 +483,15 @@ function rememberTwilioMediaTimestamp(
 function validateTwilioStart(start: TwilioStartPayload, expectedSampleRateHz: number): void {
   const format = start.mediaFormat;
   if (!format) throw new Error("Twilio start event is missing mediaFormat");
-
   const encoding = format.encoding?.trim().toLowerCase();
-  const validEncoding = encoding === "audio/x-mulaw"
-    || encoding === "audio/mulaw"
-    || encoding === "mulaw"
-    || encoding === "mu-law"
-    || encoding === "ulaw"
-    || encoding === "pcmu"
-    || encoding === "g711_ulaw";
-  if (!validEncoding) {
-    throw new Error(`Unsupported Twilio media encoding: ${format.encoding ?? "unknown"}`);
-  }
-
+  const validEncoding = encoding === "audio/x-mulaw" || encoding === "audio/mulaw"
+    || encoding === "mulaw" || encoding === "mu-law" || encoding === "ulaw"
+    || encoding === "pcmu" || encoding === "g711_ulaw";
+  if (!validEncoding) throw new Error(`Unsupported Twilio media encoding: ${format.encoding ?? "unknown"}`);
   const sampleRate = numberFromString(format.sampleRate);
-  if (sampleRate !== expectedSampleRateHz) {
-    throw new Error(`Unsupported Twilio sample rate: ${String(format.sampleRate)}`);
-  }
-
+  if (sampleRate !== expectedSampleRateHz) throw new Error(`Unsupported Twilio sample rate: ${String(format.sampleRate)}`);
   const channels = numberFromString(format.channels);
-  if (channels !== 1) {
-    throw new Error(`Unsupported Twilio channel count: ${String(format.channels)}`);
-  }
+  if (channels !== 1) throw new Error(`Unsupported Twilio channel count: ${String(format.channels)}`);
 }
 
 function defaultTwilioContextId(start: TwilioStartPayload): string {
@@ -764,90 +502,11 @@ function defaultTwilioContextId(start: TwilioStartPayload): string {
   return `twilio-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function numberFromString(value: number | string | undefined): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function positiveInteger(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
-  return value;
-}
-
-function requireTtsAudioSampleRate(value: unknown): number {
-  const sampleRateHz = positiveInteger(value);
-  if (sampleRateHz === null) throw new Error("tts.audio sampleRateHz must be a positive integer");
-  return sampleRateHz;
-}
-
-function nonNegativeInteger(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
-  return value;
-}
-
-function optionalPositiveIntegerString(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a positive integer string`);
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer string`);
-  return parsed;
-}
-
-function optionalNonNegativeIntegerString(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must be a non-negative integer string`);
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be a non-negative integer string`);
-  return parsed;
-}
-
-function rawDataToText(data: RawData): string {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return data.toString("utf8");
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
-  throw new Error("Unsupported text message payload");
-}
-
-function rawDataByteLength(data: RawData): number {
-  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
-  if (Buffer.isBuffer(data)) return data.byteLength;
-  if (data instanceof ArrayBuffer) return data.byteLength;
-  if (Array.isArray(data)) return data.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  return 0;
-}
-
-function cloneRawData(data: RawData): RawData {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return Buffer.from(data);
-  if (data instanceof ArrayBuffer) return data.slice(0);
-  if (Array.isArray(data)) return data.map((chunk) => Buffer.from(chunk));
-  throw new Error("Unsupported websocket message payload");
-}
-
-function decodeStrictBase64(value: string, fieldName: string): Uint8Array {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${fieldName} must be a non-empty base64 string`);
-  }
-  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
-    throw new Error(`${fieldName} must be valid base64`);
-  }
-  return Uint8Array.from(Buffer.from(value, "base64"));
-}
-
 function sendTwilioError(socket: WebSocket, streamSid: string, message: string, maxBufferedAmountBytes: number): void {
   sendTwilioJson(socket, {
     event: "syrinx_error",
     streamSid: streamSid || undefined,
-    error: {
-      component: "transport",
-      category: "invalid_input",
-      message,
-    },
+    error: { component: "transport", category: "invalid_input", message },
   }, maxBufferedAmountBytes);
 }
 
