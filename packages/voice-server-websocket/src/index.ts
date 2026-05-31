@@ -21,7 +21,7 @@ import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncd
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
-import { runWebSocketConnection, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
 import {
   decodeStrictBase64,
   nonNegativeInteger,
@@ -64,11 +64,13 @@ export interface VoiceWebSocketServerOptions {
   readonly binaryAudioEnvelope?: boolean;
 }
 
+export type { GracefulCloseOptions } from "./transport-host.js";
+
 export interface VoiceWebSocketServer {
   readonly httpServer: HttpServer;
   readonly wsServer: WebSocketServer;
   address(): ReturnType<HttpServer["address"]>;
-  close(): Promise<void>;
+  close(opts?: GracefulCloseOptions): Promise<void>;
 }
 
 type ClientMessage =
@@ -130,6 +132,7 @@ export async function createVoiceWebSocketServer(
     maxBufferedAmountBytes: positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES,
     maxInboundMessageBytes: positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES,
   };
+  const gracefulCloseRegistry = new Map<WebSocket, (deadlineMs: number) => Promise<void>>();
 
   const adapter: TransportAdapter<BrowserConnectionState> = {
     createState: () => ({
@@ -177,6 +180,26 @@ export async function createVoiceWebSocketServer(
 
     wireSession(session, socket, state, disposers) {
       wireBrowserSessionEvents(session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, hostConfig.maxBufferedAmountBytes);
+      gracefulCloseRegistry.set(socket, (deadlineMs) => {
+        if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+          return Promise.resolve();
+        }
+        return new Promise<void>((resolve) => {
+          let settled = false;
+          const settle = () => { if (!settled) { settled = true; resolve(); } };
+          const deadlineTimer = setTimeout(() => {
+            if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+              socket.terminate();
+            }
+            settle();
+          }, Math.max(0, deadlineMs - Date.now()));
+          (deadlineTimer as NodeJS.Timeout).unref?.();
+          // Resolve after close handshake so wsServer.close() sees an empty clients set.
+          socket.once("close", () => { clearTimeout(deadlineTimer); settle(); });
+          closeWebSocketWithFallback(socket, 1001, "server going away");
+        });
+      });
+      disposers.push(() => gracefulCloseRegistry.delete(socket));
       return () => undefined;
     },
 
@@ -272,17 +295,37 @@ export async function createVoiceWebSocketServer(
     });
   }
 
+  let closing = false;
   return {
     httpServer,
     wsServer,
     address: () => httpServer.address(),
-    close: async () => {
-      for (const client of wsServer.clients) client.terminate();
+    close: async (opts) => {
+      if (closing) return;
+      closing = true;
+      if (opts?.graceful === true && gracefulCloseRegistry.size > 0) {
+        const deadline = Date.now() + (opts.drainDeadlineMs ?? 10_000);
+        await Promise.allSettled(
+          [...gracefulCloseRegistry.values()].map((fn) => fn(deadline)),
+        );
+        for (const client of wsServer.clients) {
+          if (client.readyState === WebSocket.OPEN) client.terminate();
+        }
+      } else {
+        for (const client of wsServer.clients) client.terminate();
+      }
+      gracefulCloseRegistry.clear();
       for (const managed of sessions.values()) {
         if (managed.closeTimer) clearTimeout(managed.closeTimer);
         await managed.session.close().catch(() => undefined);
       }
       sessions.clear();
+      // Force-terminate any remaining sockets before wsServer.close() so the
+      // close event fires promptly even if a graceful handshake stalled.
+      for (const client of wsServer.clients) client.terminate();
+      // Yield one macrotask tick so pending net.Socket close events (from terminate()
+      // or WS close handshake) are processed before wsServer.close() checks clients.
+      await new Promise<void>((res) => setTimeout(res, 0));
       await new Promise<void>((resolveClose) => { wsServer.close(() => resolveClose()); });
       routedWebSocket.detach();
       if (ownsHttpServer || typeof options.port === "number") {

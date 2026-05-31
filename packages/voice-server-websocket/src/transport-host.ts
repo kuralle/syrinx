@@ -25,6 +25,11 @@ export interface TransportHostConfig {
   readonly maxInboundMessageBytes: number;
 }
 
+export interface GracefulCloseOptions {
+  readonly graceful?: boolean;
+  readonly drainDeadlineMs?: number;
+}
+
 export interface TransportAdapter<TState> {
   createState(): TState;
 

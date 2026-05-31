@@ -31,7 +31,7 @@ const ASSISTANT_SAMPLE_RATE_HZ = 16000;
 type Carrier = "twilio" | "telnyx" | "smartpbx";
 
 interface TelephonyReviewServer {
-  readonly close: () => Promise<void>;
+  readonly close: (opts?: { graceful?: boolean; drainDeadlineMs?: number }) => Promise<void>;
 }
 
 export async function main(): Promise<void> {
@@ -107,11 +107,11 @@ export async function main(): Promise<void> {
   }
 
   const reviewServer: TelephonyReviewServer = {
-    close: async () => {
+    close: async (opts) => {
       await Promise.all([
-        twilio.close().catch(() => undefined),
-        telnyx.close().catch(() => undefined),
-        smartpbx.close().catch(() => undefined),
+        twilio.close(opts).catch(() => undefined),
+        telnyx.close(opts).catch(() => undefined),
+        smartpbx.close(opts).catch(() => undefined),
       ]);
       await new Promise<void>((resolveClose) => {
         httpServer.close(() => resolveClose());
@@ -120,10 +120,10 @@ export async function main(): Promise<void> {
   };
 
   process.once("SIGINT", () => {
-    void reviewServer.close().finally(() => process.exit(0));
+    void reviewServer.close({ graceful: true, drainDeadlineMs: 10_000 }).finally(() => process.exit(0));
   });
   process.once("SIGTERM", () => {
-    void reviewServer.close().finally(() => process.exit(0));
+    void reviewServer.close({ graceful: true, drainDeadlineMs: 10_000 }).finally(() => process.exit(0));
   });
 }
 

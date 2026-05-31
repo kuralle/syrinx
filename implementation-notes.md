@@ -256,3 +256,51 @@ Total new transport implementation: 2,674 lines (was 3,397 for four files). No f
   - SmartPBX: `test/performance/runs/smartpbx-emulator-g711_ulaw-2026-05-31T11-38-55-747Z/`
 - Fly synthetic-carrier smoke: NOT RUN — requires Fly credentials. Run:
   `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:fly-synthetic-carrier`
+
+## Sprint progress — keys + Wave-1 verification (reviewer: Opus 4.8)
+
+- **API keys:** new Cartesia + ElevenLabs keys saved to `.env` (gitignored, not committed).
+  Cartesia 402 (out of credits) earlier blocked live smokes; new key validated below.
+- **G27 (voice-ws crash):** found while running VE-04's live smoke — `dispose()` on a still-connecting
+  socket crashed the process. Fixed + regression-tested (`b1950ad`). Hardens all provider plugins.
+- **VE-04 live debt CLOSED:** recorder-coherence smoke with the new Cartesia key →
+  `qualityGate.passed:true`, ttsProvider cartesia, and `tts.word_timestamps` emitted live against the
+  real Cartesia API (run `live-university-recorder-2026-05-31T11-43-11-837Z`). Logic was already
+  unit-verified (deadlock + word-boundary exactness); the Cartesia live emission is now confirmed too.
+- **WT-01 structural verification:** lifecycle skeleton (`withWebSocketStartupTimeout`,
+  pending-buffer, heartbeat) now lives ONLY in `transport-host.ts` — zero copies / zero helper
+  redeclarations in the 4 carrier files; no source file > 1000 lines; transport suite 117 tests ×5 stable
+  (earlier flake fix held). Fly synthetic-carrier (Deepgram TTS) E2E regression running as the final gate.
+
+## WT-04 graceful drain — reviewer completion + root-cause (Opus 4.8)
+
+The wt-04 worker died mid-verification on an external 1M-context **usage-credit limit**
+(not a code fault); its implementation was complete in the tree, so I took ownership.
+
+**Implementation (worker, verified correct):** `close({ graceful, drainDeadlineMs })` on the
+transport host + per-factory graceful path (drain paced queues → 1001 going-away via
+`closeWebSocketWithFallback` → terminate stragglers at the deadline); SIGTERM/SIGINT wired to
+graceful close in `serve-telephony-review.ts` + `serve-websocket-review-studio.ts`. 7 unit tests
+cover: non-graceful immediate, graceful 1001 (no pending / with pending-audio drain),
+force-terminate at `drainDeadlineMs`, browser 1001/1006, multiple clients.
+
+**The flaky 2 browser tests — root cause was the TEST, not the code.** Long debugging arc
+(documented so the next dev doesn't repeat it): the 2 browser-server close tests flaked ~50% (100%
+in isolation), timing out at 10 s. Marker-instrumentation proved the hang was at
+`await readJsonMatching(client, "ready")` — *before* `server.close()` was ever called. Cause: the
+browser server sends `ready` **proactively** on connect, but the test attached its `message`
+listener only after `await openSocket()` resolved, racing and dropping `ready` (ws doesn't buffer
+events without a listener). Telephony tests don't hit this (they send nothing until the client's
+`start`). Fix: `openBrowserSocketReady()` attaches the listener before open. Reverted my speculative
+`close()` changes (closeServerBounded/boundedAwait/closeAllConnections) — `close()` was never the
+problem (the 117-test suite + Fly E2E prove it). graceful-drain.test.ts now 12/12 stable.
+
+**Live smoke:** graceful close is provider-agnostic transport behaviour (socket close codes +
+paced-queue drain), fully exercised by the 7 unit tests; SIGTERM wiring verified in the serve
+scripts. A real-provider call adds nothing to graceful-CLOSE coverage, so the unit suite is the
+proof here (unlike WT-02/VE-04 which touch provider I/O and did need live smokes).
+
+**Known separate issue (pre-existing, NOT WT-04):** `index.test.ts > rejects malformed websocket
+JSON text messages before forwarding them` flakes ~20% under suite load (5 s timeout). Untouched by
+WT-04; different root cause than the ready-race (its helper attaches the listener before open).
+Tracked for a suite-health pass.

@@ -14,6 +14,36 @@
 > Active reliability work: see `VOICE-ENGINE-FAILURE-MODES.md` (grounded gap catalog) and
 > `RELIABILITY-HARDENING-NOTES.md` (research trail).
 
+> **Sprint 01 — WebSocket transport hardening + scale (2026-05-31) — operating directive:**
+> Take an autonomous stand, and deliver the work. Do not ask for permissions, do not ask
+> questions (take all the well-researched recommendations into account). You have the right
+> tools to find your answers. Fend for yourself and deliver results. Let's begin. Do the whole
+> thing. Do it right. Time is not an excuse. Fatigue is not an excuse. Complexity is not an
+> excuse. Boil the ocean.
+>
+> **NO shortcuts, NO DEFERRING, NO "I'll do this for later"** — all of these are excuses. If
+> something needs time, take your time. Never stop tasks early due to token-budget concerns;
+> always complete tasks fully even as the budget runs low. Even if a task seems to need genuine
+> follow-up scope, DON'T DEFER.
+>
+> Don't fight errors: when you hit one, research the web and/or use your tools to find 3–5
+> possible fixes, choose the most efficient, and implement it. While you do, keep a running
+> `implementation-notes.md` with decisions not in the spec, things you had to change, tradeoffs,
+> and anything the reviewer should know.
+>
+> Do it with tests. Do it with documentation. Do it so well the reviewer is genuinely impressed —
+> not politely satisfied, actually impressed. Never "table this for later" when the permanent
+> solve is in reach. Never leave a dangling thread when tying it off takes five more minutes.
+> Never present a workaround when the real fix exists. The standard isn't "good enough" — it's
+> "holy shit, that's done." Root out the cause. Embrace breaking changes over back-compat for the
+> best outcome. Search before building. Test before shipping. Ship the complete thing. When asked
+> for something, the answer is the finished product, not a plan to build it.
+>
+> Sprint board + issues: `issues/sprint-01-websocket-transport/` (README + KANBAN + WT-01..09 +
+> VE-01..05). Catalog: `VOICE-ENGINE-FAILURE-MODES.md` §7 (G13–G26). This is a long sprint that
+> needs proper TDD and smoke testing with live API keys. Every issue: failing test → fix → green,
+> a live-API/transport smoke where a boundary is touched, docs, and a regression assertion.
+
 **Date:** 2026-05-29
 **Working dir:** `/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx`
 **Current focus:** v2 websocket-first speech engine reliability, browser transport hardening, then sequential telephony websocket adapters.
@@ -344,6 +374,31 @@ A grounded reliability investigation (Deepgram "Definitive Guide to Voice AI Age
 Documented-but-not-yet-shipped (precisely specified in `VOICE-ENGINE-FAILURE-MODES.md`): G2 (interrupted-turn history divergence — needs cross-component spoken-prefix truncation; a partial fix was investigated and reverted after a deadlocking test exposed the real mechanism), G3 (mid-turn STT/TTS stall watchdog), G4 (graceful degradation / provider fallback), G5 (telephony comfort-frame pacer + deadline metric), G6 (function-call interruption contract), G7 (live VAQI/SLO telemetry), G8 (provider concurrency/rate-limit backoff), G9 (long-call WS write-after-close soak), G10 (bus head-of-line blocking on long sync handlers — found during the G2 investigation).
 
 Latest reliability-pass verification on 2026-05-30: `pnpm -r typecheck` (exit 0, all 13 projects), `pnpm -r test` (exit 0, 253 passed / 1 skipped), `git diff --check` clean, and the live Fly synthetic-carrier run passed for all three carriers with both apps destroyed.
+
+## Connection-Portability Pass (2026-05-31)
+
+All three provider websocket plugins (Deepgram STT, Cartesia TTS, Deepgram Aura TTS) now share one connection manager instead of three bespoke connect/reconnect/keepalive implementations. The manager is grounded in Pipecat's `WebsocketService` pattern and is runtime-portable across Node, the browser, and Cloudflare Workers.
+
+- **New package `@asyncdot/voice-ws`.** `WebSocketConnection` is the shared base: `connect()`/`ensureReady()`/`send()`/`close()`/`reset()` plus private `openSocket()`, `tryReconnect()` (quick-failure guard via `_MIN_STABLE_CONNECTION_DURATION`/`_MAX_CONSECUTIVE_QUICK_FAILURES` + exponential backoff), `giveUp()`, and `startKeepAlive()`. Provider plugins supply only a `socketFactory`, a `keepAliveMessage`, and message/connection-lost handlers; the backoff/verify/quick-failure/keepalive machinery lives once in the base. 6 package tests (messages+keepalive, verified reconnect, give-up, quick-failure, plus the `/web` and `/workers` full-manager adapters) all green.
+- **Runtime portability via a `ManagedSocket` adapter.** `SocketFactory = (url, headers) => ManagedSocket | Promise<ManagedSocket>` decouples the manager from the socket implementation. Three adapters ship behind subpath exports: `./node` (`createNodeWsSocket`, the `ws` EventEmitter with real ping/pong verify+keepalive and constructor headers), `./web` (`wrapWebSocket`/`createWebSocketAdapter` over the standard built-in `WebSocket` — no ping frame, so `verify()` falls back to `readyState` and keepalive uses `keepAliveMessage`), and `./workers` (`createWorkersSocket`, the Cloudflare fetch-upgrade route: `fetch(url,{headers:{...,Upgrade:"websocket"}})` -> `resp.webSocket` -> `accept()`, because the Workers/browser `WebSocket` constructor cannot set auth headers). An already-open Workers socket connects without an `open` event because `onOpen` fires immediately when `readyState === OPEN`.
+- **Plugins refactored onto the base.** `@asyncdot/voice-stt-deepgram`, `@asyncdot/voice-tts-cartesia`, and `@asyncdot/voice-tts-deepgram` each dropped their private connection fields/methods and now hold one `WebSocketConnection`, injecting `createNodeWsSocket` by default but accepting any `socketFactory` for non-Node runtimes. `ws` moved to devDependencies in all three. The STT finalize-timeout recovery uses the base's `reset()` (dispose + reconnect) so unconfirmed provider state is discarded before the replacement socket opens.
+- **`@asyncdot/voice-tts-deepgram`** is the streaming Deepgram Aura plugin added this pass (commit `98fca36`): `wss://api.deepgram.com/v1/speak?...&encoding=linear16&container=none`, `Authorization: Token`, send `{type:"Speak"|"Flush"|"Clear"|"Close"}`, receive raw linear16 PCM + JSON control. ~329 ms TTFB vs Gemini chunked ~7.6 s, so it is the preferred Fly/longform TTS when its key has credits.
+- **Stale-socket guard** (`1c613e6`, found by `/thermo-nuclear-code-quality-review`): a replaced socket's late `close` could clobber a healthy reconnection. `openSocket()` handlers now check `socket === this.socket` (`isActive()`) before mutating shared state, while `settle()` stays unguarded so a close mid-reconnect can't hang.
+- **Naming** (`d694c11`): the non-standard `Whatwg*` socket types were renamed to the stdlib-mirroring `WebSocketLike`/`WebSocketEventLike` (confirmed Cloudflare's own package and PartySocket use the standard `WebSocket`/`MessageEvent`, not "WHATWG").
+
+Session commits: `98fca36` (Aura TTS), `e68df5e` (shared base + both TTS), `1c613e6` (stale-socket guard), `b67276a` (runtime-portable adapter), `d694c11` (rename), `5b2aaf6` (STT onto base + Workers socket), `d86f926` (Fly bot `SYRINX_REVIEW_TTS` secret).
+
+### Regression verification (`/diagnose`)
+
+The refactor touches the provider hot path, so it was verified end-to-end on Fly, not just on the headless smoke. The full two-host synthetic-carrier deployment (`SYRINX_REVIEW_TTS=deepgram`, run dir `fly-synthetic-carrier-2026-05-31T08-57-54-100Z`, `sin`, `shared-cpu-1x:1024MB`, jittery) passed for all three carriers — **no regression**:
+
+| Provider | Inbound frames | Outbound frames | Completion evidence | Quality gate |
+|---|---:|---:|---|---|
+| Twilio | 1,263 | 780 | `outboundEndMarks: 1` | Passed |
+| Telnyx | 1,263 | 806 | `outboundEndMarks: 1` | Passed |
+| SmartPBX | 1,263 | 937 | `outboundQuietDrains: 1` | Passed |
+
+`cleanup` confirmed `botDestroyed: true` / `carrierDestroyed: true`. Each downloaded telephony `conversation.wav` measured **0.0 s overlap** via `scripts/analyze-overlap.mjs`, STT transcribed, and `qualityGate.failures` was empty for every provider. Lesson recorded: changes to the provider-connection layer need the Fly telephony E2E as the definitive check — the headless smoke does not exercise the carrier transports.
 
 ## Operational Follow-Up
 
