@@ -10,6 +10,7 @@ import {
   type TextToSpeechEndPacket,
   type VoiceAgentSession,
 } from "@asyncdot/voice";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
@@ -111,9 +112,6 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 256 * 1024;
-const MULAW_BIAS = 0x84;
-const MULAW_CLIP = 32635;
-
 export async function createTwilioMediaStreamServer(
   options: TwilioMediaStreamServerOptions,
 ): Promise<TwilioMediaStreamServer> {
@@ -756,83 +754,6 @@ function validateTwilioStart(start: TwilioStartPayload, expectedSampleRateHz: nu
   if (channels !== 1) {
     throw new Error(`Unsupported Twilio channel count: ${String(format.channels)}`);
   }
-}
-
-export function decodeMuLawToPcm16(input: Uint8Array): Int16Array {
-  const output = new Int16Array(input.byteLength);
-  for (let i = 0; i < input.byteLength; i += 1) {
-    const ulaw = (~input[i]!) & 0xff;
-    const sign = ulaw & 0x80;
-    const exponent = (ulaw >> 4) & 0x07;
-    const mantissa = ulaw & 0x0f;
-    let sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
-    sample -= MULAW_BIAS;
-    output[i] = sign ? -sample : sample;
-  }
-  return output;
-}
-
-export function encodePcm16ToMuLaw(input: Int16Array): Uint8Array {
-  const output = new Uint8Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = encodePcm16SampleToMuLaw(input[i]!);
-  }
-  return output;
-}
-
-export function resamplePcm16(input: Int16Array, sourceSampleRateHz: number, targetSampleRateHz: number): Int16Array {
-  if (input.length === 0) return new Int16Array(0);
-  if (sourceSampleRateHz === targetSampleRateHz) return input;
-
-  const outputSampleCount = Math.max(1, Math.round((input.length * targetSampleRateHz) / sourceSampleRateHz));
-  const output = new Int16Array(outputSampleCount);
-  const ratio = sourceSampleRateHz / targetSampleRateHz;
-  for (let i = 0; i < output.length; i += 1) {
-    const sourceIndex = i * ratio;
-    const lo = Math.floor(sourceIndex);
-    const hi = Math.min(input.length - 1, lo + 1);
-    const frac = sourceIndex - lo;
-    output[i] = Math.round(input[lo]! * (1 - frac) + input[hi]! * frac);
-  }
-  return output;
-}
-
-export function pcm16SamplesToBytes(samples: Int16Array): Uint8Array {
-  const bytes = new Uint8Array(samples.byteLength);
-  const view = new DataView(bytes.buffer);
-  for (let i = 0; i < samples.length; i += 1) {
-    view.setInt16(i * 2, samples[i]!, true);
-  }
-  return bytes;
-}
-
-export function pcm16BytesToSamples(audio: Uint8Array): Int16Array {
-  if (audio.byteLength % 2 !== 0) {
-    throw new Error("PCM16 audio payload must contain an even number of bytes");
-  }
-  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
-  const samples = new Int16Array(audio.byteLength / 2);
-  for (let i = 0; i < samples.length; i += 1) {
-    samples[i] = view.getInt16(i * 2, true);
-  }
-  return samples;
-}
-
-function encodePcm16SampleToMuLaw(sample: number): number {
-  let sign = 0;
-  let magnitude = sample;
-  if (magnitude < 0) {
-    sign = 0x80;
-    magnitude = -magnitude;
-  }
-  magnitude = Math.min(magnitude, MULAW_CLIP) + MULAW_BIAS;
-
-  let exponent = 7;
-  for (let mask = 0x4000; (magnitude & mask) === 0 && exponent > 0; mask >>= 1) {
-    exponent -= 1;
-  }
-  const mantissa = (magnitude >> (exponent + 3)) & 0x0f;
-  return (~(sign | (exponent << 4) | mantissa)) & 0xff;
 }
 
 function defaultTwilioContextId(start: TwilioStartPayload): string {

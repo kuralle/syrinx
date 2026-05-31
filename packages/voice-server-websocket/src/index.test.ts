@@ -758,7 +758,8 @@ describe("createVoiceWebSocketServer", () => {
         contextId: "turn-resample",
       }),
     ]);
-    expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([0, 9000]).buffer));
+    // FIR-resampled output: 48k→16k on a 6-sample ramp gives these weighted sums.
+    expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([476, 10050]).buffer));
 
     client.close();
     await server.close();
@@ -1276,7 +1277,8 @@ describe("createVoiceWebSocketServer", () => {
         contextId: "turn-envelope",
       }),
     ]);
-    expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([0, 9000]).buffer));
+    // FIR-resampled output: same algorithm as JSON path gives the same weighted sums.
+    expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([476, 10050]).buffer));
 
     client.close();
     await server.close();

@@ -3,15 +3,8 @@
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type TextToSpeechPlayoutProgressPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import {
-  createTelnyxMediaStreamServer,
-} from "./telnyx.js";
-import {
-  decodeMuLawToPcm16,
-  encodePcm16ToMuLaw,
-  pcm16SamplesToBytes,
-  resamplePcm16,
-} from "./twilio.js";
+import { createTelnyxMediaStreamServer } from "./telnyx.js";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 
 function telnyxUrl(port: number): string {
   return `ws://127.0.0.1:${port}/telnyx`;

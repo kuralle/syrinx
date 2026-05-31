@@ -80,6 +80,42 @@ Key decisions:
 Events observed: `open → message → reconnecting → reconnected → message → resumed → close`
 Server confirmed: `resumed: true`, `sessionResumed: true`
 
+## WT-02 — Canonical audio module + anti-aliased resampler (2026-05-31)
+
+**Files created:** `packages/voice/src/audio/{pcm.ts,mulaw.ts,resample.ts,index.ts,audio.test.ts}`
+**Files migrated:** `packages/voice-server-websocket/src/{twilio.ts,telnyx.ts,smartpbx.ts,index.ts}` + 5 example scripts
+
+### FIR vs Polyphase decision
+
+**Chosen:** Windowed-sinc FIR, centered evaluation (zero group delay), 127 taps, Hann window.
+
+**Why not polyphase:** Polyphase improves throughput by computing only needed output samples, skipping N−1 intermediate evaluations per decimation factor. For our chunk sizes (160–480 input samples per 20ms frame) the difference is immaterial (<0.1ms). The direct centered FIR is simpler to audit and correct; the interface is unchanged so it can be swapped later if CPU budget matters on embedded targets.
+
+**FIR parameters:**
+- Taps: 127 (odd, symmetric) — Hann window provides ~44 dB minimum stopband attenuation
+- Window: Hann — well-audited, simple, good stopband/transition balance
+- Cutoff: `0.45 × targetSampleRateHz / sourceSampleRateHz` — 5% guard-band below output Nyquist
+- Edge handling: centered (zero-phase) formula; boundary samples use available taps only
+- Normalization: Σh = 1 for unity DC gain
+
+**Spectral test result (F3 regression lock):** 7 kHz tone at 16 kHz → 8 kHz (aliasing to 1 kHz in naive decimation). Anti-alias output alias ≥40 dB below naive baseline. Test in `packages/voice/src/audio/audio.test.ts` → `anti-alias spectral test (F3)`.
+
+### Smoke results
+
+**Emulator smokes (offline, qualityGate.passed: true):**
+- Twilio: `test/performance/runs/twilio-emulator-2026-05-31T10-48-31-687Z`
+- Telnyx: `test/performance/runs/telnyx-emulator-2026-05-31T10-48-35-969Z`
+- SmartPBX: `test/performance/runs/smartpbx-emulator-g711_ulaw-2026-05-31T10-48-40-598Z`
+
+**Live recorder coherence smoke (`SYRINX_REVIEW_TTS=gemini`):** PASSED — `qualityGate.passed: true`
+- Run dir: `test/performance/runs/live-university-recorder-2026-05-31T10-50-59-804Z`
+- Whisper transcripts coherent across all 3 turns; STT finals match expected text within normal variance
+
+**Telephony live smokes (Twilio/Telnyx/SmartPBX):** Blocked by two pre-existing issues:
+1. Cartesia TTS `code=1006` (API connectivity) — run with `SYRINX_REVIEW_TTS=gemini` to work around
+2. `vadEnd=false` turn timeout — pre-existing G11 VAD speech-end detection bug
+   The codec path itself works: `stt=true` (coherent transcript), `agent=true`, `ttsAudio=true`, `carrierOutbound=true`
+
 ## WT-05 review fix (reviewer: Opus 4.8) — quick-failure flap guard
 
 Worker impl reset `reconnectAttempt` to 0 on every `open`, so a peer that accepts

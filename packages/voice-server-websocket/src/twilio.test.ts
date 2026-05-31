@@ -3,13 +3,8 @@
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import {
-  createTwilioMediaStreamServer,
-  decodeMuLawToPcm16,
-  encodePcm16ToMuLaw,
-  pcm16SamplesToBytes,
-  resamplePcm16,
-} from "./twilio.js";
+import { createTwilioMediaStreamServer } from "./twilio.js";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 
 function twilioUrl(port: number): string {
   return `ws://127.0.0.1:${port}/twilio`;

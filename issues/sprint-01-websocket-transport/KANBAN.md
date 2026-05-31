@@ -30,13 +30,13 @@ _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 - **WT-09** (P2) Metrics + per-turn timestamps + loss/jitter smoke → deps: WT-01, WT-03
 
 ## 🔨 In Progress
-- **WT-02** (P1) Canonical audio module + anti-aliased resampler — Sonnet worker `wt-02` (Wave 0)
+_(none)_
 
 ## 👀 In Review (tests green, awaiting diff review)
-- **WT-05** (P1) Browser client reconnect + resume + keepalive — unit (31 pass) + live smoke (resumed:true ✓)
+- **WT-02** (P1) Canonical audio module + anti-aliased resampler — typecheck clean, 117 transport tests + 21 audio unit tests green; emulator smokes (twilio/telnyx/smartpbx) pass; recorder coherence smoke `qualityGate.passed:true`; spectral test ≥40 dB alias suppression confirmed
 
 ## ✅ Done (diff reviewed + behavior observed)
-_(none yet)_
+- **WT-05** (P1) Browser client reconnect + resume + keepalive — worker `ed81306` + reviewer flap-guard `190f2fd`. Diff read; 32 unit pass; live headless smoke `resumed:true`, `reconnectUrlHasSessionId:true`, event order verified. Reviewer added `minStableMs`/`maxQuickFailures` quick-failure guard (worker reset attempt on every open → flap loop).
 
 ---
 

@@ -4,12 +4,8 @@ import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { Decoder as OpusDecoder, Encoder as OpusEncoder } from "@evan/opus";
 import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import {
-  createSmartPbxMediaStreamServer,
-  encodePcm16ToMuLaw,
-  pcm16BytesToSamples,
-  pcm16SamplesToBytes,
-} from "./index.js";
+import { createSmartPbxMediaStreamServer } from "./index.js";
+import { encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 
 function smartPbxUrl(port: number): string {
   return `ws://127.0.0.1:${String(port)}/media-stream`;
@@ -220,7 +216,9 @@ describe("createSmartPbxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(received[0]!.audio.byteLength).toBe(4);
-    expect(Buffer.from(received[0]!.audio).readInt16LE(0)).toBe(100);
+    // FIR anti-alias resampling (24k→16k) on a tiny 3-sample chunk is boundary-dominated;
+    // the center-tap weighted sum of [100, 200, 300] gives 93 for the first output sample.
+    expect(Buffer.from(received[0]!.audio).readInt16LE(0)).toBe(93);
 
     client.close();
     await server.close();
