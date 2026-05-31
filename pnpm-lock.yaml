@@ -31,6 +31,9 @@ importers:
       '@asyncdot/voice-bridge-aisdk':
         specifier: workspace:*
         version: link:../../packages/voice-bridge-aisdk
+      '@asyncdot/voice-client-browser':
+        specifier: workspace:*
+        version: link:../../packages/voice-client-browser
       '@asyncdot/voice-recorder':
         specifier: workspace:*
         version: link:../../packages/voice-recorder
