@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: MIT
+//
+// Node/Bun socket adapter for WebSocketConnection, backed by the `ws` library.
+// Kept in its own entry point so a Cloudflare Workers build (which uses
+// createWhatwgSocket) never bundles `ws`.
+
+import WebSocket, { type RawData } from "ws";
+import type { ManagedSocket, SocketData, SocketFactory } from "./index.js";
+
+export const createNodeWsSocket: SocketFactory = (url, headers): ManagedSocket => {
+  const ws = new WebSocket(url, Object.keys(headers).length > 0 ? { headers } : undefined);
+  return {
+    get isOpen(): boolean {
+      return ws.readyState === ws.OPEN;
+    },
+    send: (data: SocketData) => ws.send(data),
+    keepAlivePing: () => {
+      try {
+        ws.ping();
+      } catch {
+        // socket not open — keepalive is best-effort
+      }
+    },
+    verify: (timeoutMs: number) =>
+      new Promise<boolean>((resolve) => {
+        if (ws.readyState !== ws.OPEN) {
+          resolve(false);
+          return;
+        }
+        const onPong = (): void => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        const timer = setTimeout(() => {
+          ws.off("pong", onPong);
+          resolve(false);
+        }, timeoutMs);
+        ws.once("pong", onPong);
+        try {
+          ws.ping();
+        } catch {
+          clearTimeout(timer);
+          ws.off("pong", onPong);
+          resolve(false);
+        }
+      }),
+    dispose: () => {
+      ws.removeAllListeners();
+      try {
+        ws.close();
+      } catch {
+        // best effort
+      }
+    },
+    onOpen: (handler) => ws.on("open", handler),
+    onMessage: (handler) =>
+      ws.on("message", (data: RawData, isBinary: boolean) =>
+        handler(isBinary ? toUint8(data) : data.toString(), isBinary),
+      ),
+    onClose: (handler) => ws.on("close", (code: number, reason: Buffer) => handler(code, reason.toString("utf8"))),
+    onError: (handler) => ws.on("error", handler),
+  };
+};
+
+function toUint8(data: RawData): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (Array.isArray(data)) return new Uint8Array(Buffer.concat(data));
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+}

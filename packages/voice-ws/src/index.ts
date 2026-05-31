@@ -3,36 +3,70 @@
 // Shared persistent-WebSocket connection manager for provider plugins.
 //
 // One long-lived socket per session that auto-reconnects with exponential
-// backoff, verifies the link with a ping before trusting a reconnect, guards
-// against concurrent reconnects, gives up fast when the socket keeps dying
-// immediately after connecting (bad key / policy rejection — backoff can't fix
-// that), and holds the connection open through idle with a KeepAlive.
+// backoff, verifies the link before trusting a reconnect, guards against
+// concurrent reconnects, gives up fast when the socket keeps dying immediately
+// after connecting (bad key / policy rejection — backoff can't fix that), and
+// holds the connection open through idle with a KeepAlive.
 //
-// Ported from Pipecat's WebsocketService (services/websocket_service.py):
-// _try_reconnect / _verify_connection / quick-failure detection / disconnecting
-// guard. Backoff reuses our equal-jitter waitForRetryDelay.
+// Runtime-agnostic: it drives a ManagedSocket adapter, not a concrete library.
+// Inject createNodeWsSocket (Node/Bun, via `ws`) or createWhatwgSocket
+// (Cloudflare Workers / browser, via the platform WebSocket). The reconnection
+// logic is identical everywhere; only the socket primitive differs.
+//
+// Reconnection model ported from Pipecat's WebsocketService
+// (services/websocket_service.py): _try_reconnect / _verify_connection /
+// quick-failure detection / disconnecting guard. Backoff reuses our equal-jitter
+// waitForRetryDelay.
 
 import { type RetryConfig, waitForRetryDelay } from "@asyncdot/voice";
-import WebSocket, { type RawData } from "ws";
+
+/** A WebSocket text or binary frame, normalized across runtimes. */
+export type SocketData = string | Uint8Array;
+
+/**
+ * The minimal socket the connection manager drives. Implemented over Node `ws`
+ * (createNodeWsSocket) or the WHATWG WebSocket (createWhatwgSocket). Keeping the
+ * manager behind this seam is what makes it portable to Cloudflare Workers,
+ * where `ws` does not run and there are no ping frames.
+ */
+export interface ManagedSocket {
+  readonly isOpen: boolean;
+  send(data: SocketData): void;
+  /** Fire-and-forget liveness ping (Node WS ping frame). No-op where unsupported. */
+  keepAlivePing(): void;
+  /** Probe liveness: Node pings and awaits a pong; WHATWG just reports readyState. */
+  verify(timeoutMs: number): Promise<boolean>;
+  /** Remove listeners and close — used when replacing or tearing down. */
+  dispose(): void;
+  onOpen(handler: () => void): void;
+  onMessage(handler: (data: SocketData, isBinary: boolean) => void): void;
+  onClose(handler: (code: number, reason: string) => void): void;
+  onError(handler: (err: Error) => void): void;
+}
+
+export type SocketFactory = (url: string, headers: Record<string, string>) => ManagedSocket;
 
 export interface WebSocketConnectionOptions {
   /** Build the connection URL fresh on every (re)connect. */
   readonly url: () => string;
   readonly headers?: Record<string, string>;
+  /** Creates the underlying socket for the host runtime (Node, Bun, Workers, browser). */
+  readonly socketFactory: SocketFactory;
   /** Backoff schedule for reconnect attempts (reused from the plugin's retry config). */
   readonly retry: RetryConfig;
   /** Max reconnect attempts per disconnect burst before giving up. Defaults to retry.maxAttempts. */
   readonly maxReconnectAttempts?: number;
   /** Periodic KeepAlive to stop idle providers from closing the socket. 0 disables. */
   readonly keepAliveIntervalMs?: number;
-  /** App-level KeepAlive payload (e.g. Deepgram `{"type":"KeepAlive"}`). When omitted a WS ping frame is used. */
-  readonly keepAliveMessage?: () => string | Uint8Array;
+  /** App-level KeepAlive payload (e.g. Deepgram `{"type":"KeepAlive"}`). When omitted a WS ping is used
+   *  (which is a no-op on WHATWG sockets — provide a message for KeepAlive on Workers/browser). */
+  readonly keepAliveMessage?: () => SocketData;
   /** A reconnect that re-opens then dies within this window counts as a quick failure. */
   readonly minStableMs?: number;
   /** Consecutive quick failures before giving up (backoff can't fix an instantly-closing socket). */
   readonly maxQuickFailures?: number;
   readonly connectTimeoutMs?: number;
-  readonly onMessage: (data: RawData, isBinary: boolean) => void;
+  readonly onMessage: (data: SocketData, isBinary: boolean) => void;
   /** Called once when a live connection drops unexpectedly, with the close cause — for
    * failing in-flight work and dropping stale provider state before reconnecting. */
   readonly onConnectionLost?: (err: Error) => void;
@@ -49,7 +83,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const VERIFY_TIMEOUT_MS = 2000;
 
 export class WebSocketConnection {
-  private ws: WebSocket | null = null;
+  private socket: ManagedSocket | null = null;
   private ready = false;
   private closed = false;
   private reconnecting = false;
@@ -72,12 +106,11 @@ export class WebSocketConnection {
   }
 
   /** Send a frame, throwing if the socket is not open (caller decides how to retry/report). */
-  send(payload: string | Uint8Array): void {
-    const ws = this.ws;
-    if (!ws || ws.readyState !== ws.OPEN) {
+  send(payload: SocketData): void {
+    if (!this.socket || !this.socket.isOpen) {
       throw new Error("WebSocket is not open");
     }
-    ws.send(payload);
+    this.socket.send(payload);
   }
 
   async ensureReady(): Promise<void> {
@@ -101,10 +134,8 @@ export class WebSocketConnection {
     this.connResolver = null;
     this.connRejecter = null;
     this.ready = false;
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.socket?.dispose();
+    this.socket = null;
   }
 
   private get connectTimeoutMs(): number {
@@ -112,18 +143,11 @@ export class WebSocketConnection {
   }
 
   private openSocket(): Promise<void> {
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {
-        // best effort
-      }
-      this.ws = null;
-    }
+    this.socket?.dispose();
     this.ready = false;
 
-    const ws = new WebSocket(this.opts.url(), this.opts.headers ? { headers: this.opts.headers } : undefined);
-    this.ws = ws;
+    const socket = this.opts.socketFactory(this.opts.url(), this.opts.headers ?? {});
+    this.socket = socket;
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -139,9 +163,9 @@ export class WebSocketConnection {
       // however, must only be touched by the *current* socket: a socket replaced
       // by a reconnect can emit a late close/message, and acting on it would
       // clobber the healthy connection or trigger a spurious reconnect.
-      const isActive = (): boolean => ws === this.ws;
+      const isActive = (): boolean => socket === this.socket;
 
-      ws.on("open", () => {
+      socket.onOpen(() => {
         settle(resolve);
         if (!isActive()) return;
         this.ready = true;
@@ -152,12 +176,12 @@ export class WebSocketConnection {
         this.connRejecter = null;
       });
 
-      ws.on("message", (data: RawData, isBinary: boolean) => {
+      socket.onMessage((data, isBinary) => {
         if (!isActive()) return;
         this.opts.onMessage(data, isBinary);
       });
 
-      ws.on("error", (err: Error) => {
+      socket.onError((err) => {
         settle(() => reject(err));
         if (!isActive()) return;
         this.ready = false;
@@ -166,7 +190,7 @@ export class WebSocketConnection {
         this.connRejecter = null;
       });
 
-      ws.on("close", (code, reason) => {
+      socket.onClose((code, reason) => {
         const closeErr = closeError(code, reason);
         settle(() => reject(closeErr));
         if (!isActive()) return;
@@ -211,7 +235,7 @@ export class WebSocketConnection {
         this.opts.onReconnecting?.();
         try {
           await this.openSocket();
-          if (await this.verify()) {
+          if (this.socket && (await this.socket.verify(VERIFY_TIMEOUT_MS))) {
             this.opts.onReconnected?.();
             return;
           }
@@ -227,41 +251,11 @@ export class WebSocketConnection {
     }
   }
 
-  /** Ping/pong probe: a re-opened socket isn't trusted until it answers a ping. */
-  private async verify(): Promise<boolean> {
-    const ws = this.ws;
-    if (!ws || ws.readyState !== ws.OPEN) return false;
-    return await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => {
-        ws.off("pong", onPong);
-        resolve(false);
-      }, VERIFY_TIMEOUT_MS);
-      const onPong = (): void => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      ws.once("pong", onPong);
-      try {
-        ws.ping();
-      } catch {
-        clearTimeout(timer);
-        ws.off("pong", onPong);
-        resolve(false);
-      }
-    });
-  }
-
   private giveUp(err: Error): void {
     this.closed = true;
     this.stopKeepAlive();
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {
-        // best effort
-      }
-      this.ws = null;
-    }
+    this.socket?.dispose();
+    this.socket = null;
     this.opts.onUnrecoverable?.(err);
   }
 
@@ -270,12 +264,12 @@ export class WebSocketConnection {
     const intervalMs = this.opts.keepAliveIntervalMs ?? 0;
     if (intervalMs <= 0) return;
     this.keepAliveTimer = setInterval(() => {
-      const ws = this.ws;
-      if (this.closed || !ws || ws.readyState !== ws.OPEN) return;
+      const socket = this.socket;
+      if (this.closed || !socket || !socket.isOpen) return;
       if (this.opts.keepAliveMessage) {
-        ws.send(this.opts.keepAliveMessage());
+        socket.send(this.opts.keepAliveMessage());
       } else {
-        ws.ping();
+        socket.keepAlivePing();
       }
     }, intervalMs);
   }
@@ -295,8 +289,8 @@ export class WebSocketConnection {
   }
 }
 
-function closeError(code: number, reason: Buffer): Error {
-  const reasonText = reason.toString("utf8").trim();
+function closeError(code: number, reason: string): Error {
+  const reasonText = reason.trim();
   return new Error(
     reasonText
       ? `WebSocket closed unexpectedly: code=${code} reason=${reasonText}`

@@ -19,8 +19,8 @@ import {
   readRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
-import { WebSocketConnection } from "@asyncdot/voice-ws";
-import type { RawData } from "ws";
+import { WebSocketConnection, type SocketData } from "@asyncdot/voice-ws";
+import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
@@ -57,6 +57,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
       headers: { "X-API-Key": this.apiKey },
+      socketFactory: createNodeWsSocket,
       retry: this.retryConfig,
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data) => this.handleProviderMessage(data),
@@ -187,10 +188,11 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     );
   }
 
-  private handleProviderMessage(data: RawData): void {
+  private handleProviderMessage(data: SocketData): void {
+    if (typeof data !== "string") return; // Cartesia frames are JSON text
     let msg: Record<string, unknown>;
     try {
-      msg = JSON.parse(data.toString()) as Record<string, unknown>;
+      msg = JSON.parse(data) as Record<string, unknown>;
     } catch (err) {
       this.failActiveContexts(err instanceof Error ? err : new Error(String(err)));
       return;
