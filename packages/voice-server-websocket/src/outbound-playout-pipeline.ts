@@ -19,6 +19,11 @@ export interface TelephonyOutboundCallbacks {
   onClear?(): void;
 }
 
+export interface TelephonyOutboundHandle {
+  clearPlayout(reason: string): void;
+  drainAndClose(socket: WebSocket, deadlineMs: number): Promise<void>;
+}
+
 export function wireTelephonyOutboundPipeline(args: {
   readonly session: VoiceAgentSession;
   readonly socket: WebSocket;
@@ -26,7 +31,7 @@ export function wireTelephonyOutboundPipeline(args: {
   readonly outboundFrameDurationMs: number;
   readonly maxQueuedOutputAudioMs: number;
   readonly callbacks: TelephonyOutboundCallbacks;
-}): (reason: string) => void {
+}): TelephonyOutboundHandle {
   const { session, socket, disposers, outboundFrameDurationMs, maxQueuedOutputAudioMs, callbacks } = args;
 
   const recordDiscardedPlayout = (discardedMs: number, reason: string): void => {
@@ -112,8 +117,39 @@ export function wireTelephonyOutboundPipeline(args: {
     }),
   );
 
-  return (reason: string) => {
-    callbacks.onClear?.();
-    recordDiscardedPlayout(playout.clear(), reason);
+  return {
+    clearPlayout: (reason: string) => {
+      callbacks.onClear?.();
+      recordDiscardedPlayout(playout.clear(), reason);
+    },
+    drainAndClose: (socket: WebSocket, deadlineMs: number): Promise<void> => {
+      if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        let settled = false;
+        const settle = () => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+
+        const deadlineTimer = setTimeout(() => {
+          if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+            socket.terminate();
+          }
+          settle();
+        }, Math.max(0, deadlineMs - Date.now()));
+        (deadlineTimer as NodeJS.Timeout).unref?.();
+
+        // enqueueControl fires synchronously if queue is idle, or after all
+        // queued audio frames if not — either way closes with 1001 before terminate.
+        playout.enqueueControl(() => {
+          clearTimeout(deadlineTimer);
+          closeWebSocketWithFallback(socket, 1001, "server going away");
+          settle();
+        });
+      });
+    },
   };
 }

@@ -22,6 +22,8 @@ import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
+import { type PacedPlayoutFrame } from "./paced-playout.js";
 import {
   decodeStrictBase64,
   nonNegativeInteger,
@@ -49,6 +51,8 @@ export interface VoiceWebSocketServerOptions {
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
   readonly resumeWindowMs?: number;
+  readonly outboundFrameDurationMs?: number;
+  readonly maxQueuedOutputAudioMs?: number;
   /**
    * Raw binary inbound PCM16 lacks turn, sample-rate, sequence, and duration
    * metadata. Keep disabled for production clients; use JSON audio frames or
@@ -101,6 +105,7 @@ interface AudioSequenceState {
 interface BrowserConnectionState {
   managed: ManagedSession | null;
   readonly initialContextId: string;
+  outboundHandle: TelephonyOutboundHandle | null;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -109,6 +114,8 @@ const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
+const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
+const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
 
 export async function createVoiceWebSocketServer(
   options: VoiceWebSocketServerOptions,
@@ -125,6 +132,8 @@ export async function createVoiceWebSocketServer(
   const rawBinaryInput = options.rawBinaryInput ?? false;
   const binaryAudioEnvelope = options.binaryAudioEnvelope ?? true;
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
+  const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
+  const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
   const hostConfig: TransportHostConfig = {
     heartbeatIntervalMs: nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
     startupTimeoutMs: nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS,
@@ -138,6 +147,7 @@ export async function createVoiceWebSocketServer(
     createState: () => ({
       managed: null,
       initialContextId: contextIdFn(),
+      outboundHandle: null,
     }),
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
@@ -179,10 +189,13 @@ export async function createVoiceWebSocketServer(
     },
 
     wireSession(session, socket, state, disposers) {
-      wireBrowserSessionEvents(session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, hostConfig.maxBufferedAmountBytes);
+      state.outboundHandle = wireBrowserSessionEvents(session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, hostConfig.maxBufferedAmountBytes, outboundFrameDurationMs, maxQueuedOutputAudioMs);
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
           return Promise.resolve();
+        }
+        if (state.outboundHandle) {
+          return state.outboundHandle.drainAndClose(socket, deadlineMs);
         }
         return new Promise<void>((resolve) => {
           let settled = false;
@@ -194,7 +207,6 @@ export async function createVoiceWebSocketServer(
             settle();
           }, Math.max(0, deadlineMs - Date.now()));
           (deadlineTimer as NodeJS.Timeout).unref?.();
-          // Resolve after close handshake so wsServer.close() sees an empty clients set.
           socket.once("close", () => { clearTimeout(deadlineTimer); settle(); });
           closeWebSocketWithFallback(socket, 1001, "server going away");
         });
@@ -361,9 +373,11 @@ function wireBrowserSessionEvents(
   outputSampleRateHz: number,
   binaryAudioEnvelope: boolean,
   maxBufferedAmountBytes: number,
-): void {
+  outboundFrameDurationMs: number,
+  maxQueuedOutputAudioMs: number,
+): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
-  const interruptedContextIds = new Set<string>();
+  let currentContextId = "";
 
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
@@ -406,71 +420,107 @@ function wireBrowserSessionEvents(
     }, maxBufferedAmountBytes);
   });
 
+  const callbacks: TelephonyOutboundCallbacks = {
+    carrierLabel: "browser",
+    getContextId: () => currentContextId,
+    isActive: () => true, // Always active for metrics and processing, socket state is checked in encodeFrames
+    
+    encodeFrames: (audio, sourceSampleRateHz, contextId) => {
+      const resampled = resampleAudioBytes(audio, sourceSampleRateHz, outputSampleRateHz);
+      const frames: PacedPlayoutFrame[] = [];
+      
+      // Split audio into fixed-duration frames
+      const frameSampleCount = Math.max(1, Math.round((outputSampleRateHz * outboundFrameDurationMs) / 1000));
+      const frameBytesCount = frameSampleCount * 2; // PCM16 = 2 bytes per sample
+      
+      for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
+        const frameAudio = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
+        const sequence = (ttsSequences.get(contextId) ?? 0) + 1;
+        ttsSequences.set(contextId, sequence);
+        
+        frames.push({
+          contextId,
+          send: () => {
+            if (socket.readyState !== WebSocket.OPEN) return false;
+            
+            const jsonSuccess = sendJsonWithResult(socket, {
+              type: "tts_chunk",
+              turnId: contextId,
+              sequence,
+              sampleRateHz: outputSampleRateHz,
+              encoding: "pcm_s16le",
+              channels: 1,
+              byteLength: frameAudio.byteLength,
+              durationMs: pcm16DurationMs(frameAudio, outputSampleRateHz),
+            }, maxBufferedAmountBytes);
+            
+            if (!jsonSuccess) return false;
+            
+            const binaryData = binaryAudioEnvelope
+              ? Buffer.from(encodeSyrinxAudioEnvelope({
+                  type: "audio",
+                  contextId,
+                  sequence,
+                  sampleRateHz: outputSampleRateHz,
+                  encoding: "pcm_s16le",
+                  channels: 1,
+                  byteLength: frameAudio.byteLength,
+                  durationMs: pcm16DurationMs(frameAudio, outputSampleRateHz),
+                }, frameAudio))
+              : Buffer.from(frameAudio);
+            
+            return sendSocketDataWithResult(socket, binaryData, maxBufferedAmountBytes);
+          },
+        });
+      }
+      
+      return frames;
+    },
+
+    onInterrupt: (contextId) => {
+      ttsSequences.delete(contextId);
+      sendJson(socket, { type: "audio_clear", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
+      sendJson(socket, { type: "agent_interrupted", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
+    },
+
+    onDrain: (contextId, playout, progress) => {
+      playout.enqueueControl(() => {
+        ttsSequences.delete(contextId);
+        progress.complete(contextId);
+        sendJson(socket, { type: "tts_end", turnId: contextId }, maxBufferedAmountBytes);
+      });
+    },
+
+    onStop: (reason) => {
+      session.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: currentContextId,
+        timestampMs: Date.now(),
+        name: `browser.${reason}_playout_stopped`,
+        value: "1",
+      });
+    },
+
+    onClear: () => {
+      ttsSequences.clear();
+    },
+  };
+
+  // Track context changes for metrics
   disposers.push(
-    session.bus.on("interrupt.tts", (pkt) => {
-      const interrupt = pkt as InterruptTtsPacket;
-      interruptedContextIds.add(interrupt.contextId);
-      ttsSequences.delete(interrupt.contextId);
-      sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
-      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" }, maxBufferedAmountBytes);
-    }),
-    session.bus.on("tts.audio", (pkt) => {
-      const audioPacket = pkt as TextToSpeechAudioPacket;
-      if (interruptedContextIds.has(audioPacket.contextId)) return;
-      const sourceSampleRateHz = requireTtsAudioSampleRate(audioPacket.sampleRateHz);
-      const audio = resampleAudioBytes(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
-      if (socket.readyState !== WebSocket.OPEN) {
-        session.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: audioPacket.contextId,
-          timestampMs: Date.now(),
-          name: "websocket.send_after_close",
-          value: "1",
-        });
-        return;
-      }
-      const sequence = (ttsSequences.get(audioPacket.contextId) ?? 0) + 1;
-      ttsSequences.set(audioPacket.contextId, sequence);
-      sendJson(socket, {
-        type: "tts_chunk",
-        turnId: audioPacket.contextId,
-        sequence,
-        sampleRateHz: outputSampleRateHz,
-        encoding: "pcm_s16le",
-        channels: 1,
-        byteLength: audio.byteLength,
-        durationMs: pcm16DurationMs(audio, outputSampleRateHz),
-      }, maxBufferedAmountBytes);
-      sendSocketData(socket, binaryAudioEnvelope
-        ? Buffer.from(encodeSyrinxAudioEnvelope({
-            type: "audio",
-            contextId: audioPacket.contextId,
-            sequence,
-            sampleRateHz: outputSampleRateHz,
-            encoding: "pcm_s16le",
-            channels: 1,
-            byteLength: audio.byteLength,
-            durationMs: pcm16DurationMs(audio, outputSampleRateHz),
-          }, audio))
-        : Buffer.from(audio), maxBufferedAmountBytes);
-    }),
-    session.bus.on("tts.end", (pkt) => {
-      const end = pkt as TextToSpeechEndPacket;
-      if (interruptedContextIds.has(end.contextId)) return;
-      ttsSequences.delete(end.contextId);
-      if (socket.readyState !== WebSocket.OPEN) {
-        session.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: end.contextId,
-          timestampMs: Date.now(),
-          name: "websocket.send_after_close",
-          value: "1",
-        });
-        return;
-      }
-      sendJson(socket, { type: "tts_end", turnId: end.contextId }, maxBufferedAmountBytes);
+    session.bus.on("turn.change", (pkt) => {
+      currentContextId = (pkt as any).contextId;
     }),
   );
+
+  return wireTelephonyOutboundPipeline({
+    session,
+    socket,
+    disposers,
+    outboundFrameDurationMs,
+    maxQueuedOutputAudioMs,
+    callbacks,
+  });
 }
 
 function handleClientMessage(
@@ -703,13 +753,22 @@ function sendJson(socket: WebSocket, value: unknown, maxBufferedAmountBytes: num
   sendSocketData(socket, JSON.stringify(value), maxBufferedAmountBytes);
 }
 
+function sendJsonWithResult(socket: WebSocket, value: unknown, maxBufferedAmountBytes: number): boolean {
+  return sendSocketDataWithResult(socket, JSON.stringify(value), maxBufferedAmountBytes);
+}
+
 function sendSocketData(socket: WebSocket, data: string | Buffer, maxBufferedAmountBytes: number): void {
-  if (socket.readyState !== WebSocket.OPEN) return;
+  sendSocketDataWithResult(socket, data, maxBufferedAmountBytes);
+}
+
+function sendSocketDataWithResult(socket: WebSocket, data: string | Buffer, maxBufferedAmountBytes: number): boolean {
+  if (socket.readyState !== WebSocket.OPEN) return false;
   if (socket.bufferedAmount + outboundMessageByteLength(data) > maxBufferedAmountBytes) {
     closeWebSocketWithFallback(socket, 1013, "websocket send buffer exceeded");
-    return;
+    return false;
   }
   socket.send(data);
+  return true;
 }
 
 function outboundMessageByteLength(data: string | Buffer): number {
