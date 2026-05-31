@@ -25,25 +25,17 @@ import { ModeSwitcher } from "./mode-switcher.js";
 import { createConversationEventStream, type ConversationEvent } from "./conversation-event.js";
 import { isRecoverable } from "./error-handler.js";
 import type {
-  VoicePacket,
   VoiceErrorPacket,
   UserAudioReceivedPacket,
   UserTextReceivedPacket,
   InterruptionDetectedPacket,
-  InterruptTtsPacket,
-  InterruptLlmPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   LlmToolCallPacket,
   LlmToolResultPacket,
   TextToSpeechAudioPacket,
-  TextToSpeechTextPacket,
-  TextToSpeechDonePacket,
   TextToSpeechEndPacket,
   TextToSpeechPlayoutProgressPacket,
-  TtsErrorPacket,
-  RecordAssistantAudioPacket,
-  RecordUserAudioPacket,
   SpeechToTextAudioPacket,
   SttResultPacket,
   SttInterimPacket,
@@ -51,10 +43,8 @@ import type {
   VadSpeechStartedPacket,
   VadSpeechActivityPacket,
   VadSpeechEndedPacket,
-  EndOfSpeechAudioPacket,
   EndOfSpeechPacket,
   InterimEndOfSpeechPacket,
-  UserInputPacket,
   InjectMessagePacket,
   DisconnectRequestedPacket,
   InitializationFailedPacket,
@@ -71,6 +61,7 @@ import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
+import * as make from "./packet-factories.js";
 
 // =============================================================================
 // Types
@@ -346,13 +337,7 @@ export class VoiceAgentSession {
 
   /** Switch between text and audio mode. */
   async switchMode(mode: "text" | "audio"): Promise<void> {
-    const pkt: ModeSwitchRequestedPacket = {
-      kind: "mode.switch_requested",
-      contextId: this.currentTurnId,
-      timestampMs: Date.now(),
-      mode,
-    };
-    this.bus.push(Route.Main, pkt);
+    this.bus.push(Route.Main, make.modeSwitchRequested(this.currentTurnId, Date.now(), mode));
   }
 
   // =========================================================================
@@ -440,11 +425,11 @@ export class VoiceAgentSession {
     this.bus.on("init.failed", this.handleInitFailed.bind(this));
 
     // Behavior
-    this.bus.on("behavior.idle_timeout_start", (pkt: unknown) => {
-      this.idleTimeout.handleStart(pkt as StartIdleTimeoutPacket);
+    this.bus.on<StartIdleTimeoutPacket>("behavior.idle_timeout_start", (pkt) => {
+      this.idleTimeout.handleStart(pkt);
     });
-    this.bus.on("behavior.idle_timeout_stop", (pkt: unknown) => {
-      this.idleTimeout.handleStop(pkt as StopIdleTimeoutPacket);
+    this.bus.on<StopIdleTimeoutPacket>("behavior.idle_timeout_stop", (pkt) => {
+      this.idleTimeout.handleStop(pkt);
     });
 
     // Injected messages — push through LLM path for natural TTS
@@ -454,8 +439,8 @@ export class VoiceAgentSession {
     this.bus.on("session.disconnect", this.handleDisconnect.bind(this));
 
     // Mode switching
-    this.bus.on("mode.switch_requested", async (pkt: unknown) => {
-      await this.modeSwitcher.handleSwitchRequested(pkt as ModeSwitchRequestedPacket);
+    this.bus.on<ModeSwitchRequestedPacket>("mode.switch_requested", async (pkt) => {
+      await this.modeSwitcher.handleSwitchRequested(pkt);
     });
   }
 
@@ -469,30 +454,10 @@ export class VoiceAgentSession {
     }
     this.bus.push(
       Route.Main,
-      {
-        kind: "record.user_audio",
-        contextId: pkt.contextId,
-        timestampMs: pkt.timestampMs,
-        audio: pkt.audio,
-      } as RecordUserAudioPacket,
-      {
-        kind: "vad.audio",
-        contextId: pkt.contextId,
-        timestampMs: pkt.timestampMs,
-        audio: pkt.audio,
-      } as VadAudioPacket,
-      {
-        kind: "stt.audio",
-        contextId: pkt.contextId,
-        timestampMs: pkt.timestampMs,
-        audio: pkt.audio,
-      } as SpeechToTextAudioPacket,
-      {
-        kind: "eos.audio",
-        contextId: pkt.contextId,
-        timestampMs: pkt.timestampMs,
-        audio: pkt.audio,
-      } as EndOfSpeechAudioPacket,
+      make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+      make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+      make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+      make.eosAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
     );
 
     this.debugPush({
@@ -509,13 +474,7 @@ export class VoiceAgentSession {
 
   private handleUserText(pkt: UserTextReceivedPacket): void {
     // Treat text input as an immediate EOS turn complete
-    this.bus.push(Route.Main, {
-      kind: "eos.turn_complete",
-      contextId: pkt.contextId,
-      timestampMs: pkt.timestampMs,
-      text: pkt.text,
-      transcripts: [] as readonly SttResultPacket[],
-    } as EndOfSpeechPacket);
+    this.bus.push(Route.Main, make.eosTurnComplete(pkt.contextId, pkt.timestampMs, pkt.text, []));
   }
 
   private handleSttInterim(pkt: SttInterimPacket): void {
@@ -600,13 +559,7 @@ export class VoiceAgentSession {
         this.pendingInterruptionAwaitingAudio = true;
         return;
       }
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: interruptedContextId,
-        timestampMs: Date.now(),
-        name: "vaqi.interruption",
-        value: "1",
-      });
+      this.bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
       this.emitInterruptDetected(interruptedContextId);
       return;
     }
@@ -671,37 +624,22 @@ export class VoiceAgentSession {
     this.primarySpeakerGate.resetBargeInWindow();
 
     if (!this.ttsPlayout.isActive(pending.interruptedContextId)) {
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pending.interruptedContextId,
-        timestampMs: Date.now(),
-        name: "interrupt.gate_resolved_after_tts_end",
-        value: String(sustainedMs),
-      });
+      this.bus.push(
+        Route.Background,
+        make.metric(pending.interruptedContextId, "interrupt.gate_resolved_after_tts_end", String(sustainedMs)),
+      );
       return;
     }
 
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: pending.interruptedContextId,
-      timestampMs: Date.now(),
-      name: "interrupt.committed_after_ms",
-      value: String(sustainedMs),
-    });
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: pending.interruptedContextId,
-      timestampMs: Date.now(),
-      name: "vaqi.interruption",
-      value: "1",
-    });
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: pending.interruptedContextId,
-      timestampMs: Date.now(),
-      name: "interrupt.latency_ms",
-      value: String(sustainedMs),
-    });
+    this.bus.push(
+      Route.Background,
+      make.metric(pending.interruptedContextId, "interrupt.committed_after_ms", String(sustainedMs)),
+    );
+    this.bus.push(Route.Background, make.metric(pending.interruptedContextId, "vaqi.interruption", "1"));
+    this.bus.push(
+      Route.Background,
+      make.metric(pending.interruptedContextId, "interrupt.latency_ms", String(sustainedMs)),
+    );
     this.emitInterruptDetected(pending.interruptedContextId);
   }
 
@@ -713,22 +651,11 @@ export class VoiceAgentSession {
     this.pendingInterruption = null;
     this.pendingInterruptionAwaitingAudio = false;
     this.primarySpeakerGate.resetBargeInWindow();
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId: pending.interruptedContextId,
-      timestampMs: Date.now(),
-      name: metricName,
-      value: String(durationMs),
-    });
+    this.bus.push(Route.Background, make.metric(pending.interruptedContextId, metricName, String(durationMs)));
   }
 
   private emitInterruptDetected(interruptedContextId: string): void {
-    this.bus.push(Route.Critical, {
-      kind: "interrupt.detected",
-      contextId: interruptedContextId,
-      timestampMs: Date.now(),
-      source: "vad",
-    } as InterruptionDetectedPacket);
+    this.bus.push(Route.Critical, make.interruptDetected(interruptedContextId, Date.now(), "vad"));
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
@@ -795,37 +722,18 @@ export class VoiceAgentSession {
     });
 
     // Stop idle timeout while LLM is processing
-    this.bus.push(Route.Main, {
-      kind: "behavior.idle_timeout_stop",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      resetCount: false,
-    } as StopIdleTimeoutPacket);
+    this.bus.push(Route.Main, make.stopIdleTimeout(pkt.contextId, Date.now(), false));
 
     const fillerText = this.latencyFiller.start(pkt.contextId, pkt.text, pkt.timestampMs);
     if (fillerText) {
-      this.bus.push(Route.Main, {
-        kind: "tts.text",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        text: fillerText,
-      } as TextToSpeechTextPacket);
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        name: "filler.started",
-        value: fillerText,
-      });
+      this.bus.push(Route.Main, make.ttsText(pkt.contextId, Date.now(), fillerText));
+      this.bus.push(Route.Background, make.metric(pkt.contextId, "filler.started", fillerText));
     }
 
-    this.bus.push(Route.Main, {
-      kind: "user.input",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      text: pkt.text,
-      language: languageFromTranscripts(pkt.transcripts),
-    } as UserInputPacket);
+    this.bus.push(
+      Route.Main,
+      make.userInput(pkt.contextId, Date.now(), pkt.text, languageFromTranscripts(pkt.transcripts)),
+    );
   }
 
   private handleEosInterim(pkt: InterimEndOfSpeechPacket): void {
@@ -839,13 +747,10 @@ export class VoiceAgentSession {
 
   private handleLlmDelta(pkt: LlmDeltaPacket): void {
     if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        name: "llm.delta_ignored_after_interrupt",
-        value: String(pkt.text.length),
-      });
+      this.bus.push(
+        Route.Background,
+        make.metric(pkt.contextId, "llm.delta_ignored_after_interrupt", String(pkt.text.length)),
+      );
       return;
     }
 
@@ -854,13 +759,7 @@ export class VoiceAgentSession {
       this.firstLlmDeltaReceived.add(pkt.contextId);
       if (this.latencyFiller.isActive(pkt.contextId)) {
         deltaText = this.latencyFiller.spliceLlmDelta(pkt.contextId, deltaText);
-        this.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: pkt.contextId,
-          timestampMs: Date.now(),
-          name: "filler.spliced",
-          value: "1",
-        });
+        this.bus.push(Route.Background, make.metric(pkt.contextId, "filler.spliced", "1"));
       }
     }
 
@@ -882,13 +781,7 @@ export class VoiceAgentSession {
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
     if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
       this.ttsTextBuffers.delete(pkt.contextId);
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        name: "llm.done_ignored_after_interrupt",
-        value: "1",
-      });
+      this.bus.push(Route.Background, make.metric(pkt.contextId, "llm.done_ignored_after_interrupt", "1"));
       return;
     }
 
@@ -905,18 +798,9 @@ export class VoiceAgentSession {
     });
 
     // Start idle timeout after agent finishes
-    this.bus.push(Route.Main, {
-      kind: "behavior.idle_timeout_start",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-    } as StartIdleTimeoutPacket);
+    this.bus.push(Route.Main, make.startIdleTimeout(pkt.contextId, Date.now()));
 
-    this.bus.push(Route.Main, {
-      kind: "tts.done",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      text: spokenText,
-    } as TextToSpeechDonePacket);
+    this.bus.push(Route.Main, make.ttsDone(pkt.contextId, Date.now(), spokenText));
   }
 
   private bufferTtsText(contextId: string, text: string): void {
@@ -924,12 +808,7 @@ export class VoiceAgentSession {
     buffer.pending += text;
     const complete = takeCompleteVoiceText(buffer.pending);
     if (complete.text) {
-      this.bus.push(Route.Main, {
-        kind: "tts.text",
-        contextId,
-        timestampMs: Date.now(),
-        text: complete.text,
-      } as TextToSpeechTextPacket);
+      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), complete.text));
       buffer.emitted = appendVoiceText(buffer.emitted, complete.text);
     }
     buffer.pending = complete.remaining;
@@ -941,21 +820,13 @@ export class VoiceAgentSession {
     if (!buffer) return "";
     const tail = buffer.pending.trim();
     if (tail) {
-      this.bus.push(Route.Main, {
-        kind: "tts.text",
-        contextId,
-        timestampMs: Date.now(),
-        text: tail,
-      } as TextToSpeechTextPacket);
+      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), tail));
       buffer.emitted = appendVoiceText(buffer.emitted, tail);
       buffer.pending = "";
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId,
-        timestampMs: Date.now(),
-        name: isCompleteVoiceText(tail) ? "tts.final_text_flushed" : "tts.final_tail_flushed",
-        value: tail,
-      });
+      this.bus.push(
+        Route.Background,
+        make.metric(contextId, isCompleteVoiceText(tail) ? "tts.final_text_flushed" : "tts.final_tail_flushed", tail),
+      );
     }
     this.ttsTextBuffers.delete(contextId);
     this.latencyFiller.clear(contextId);
@@ -966,13 +837,7 @@ export class VoiceAgentSession {
   private cancelLatencyFillerTurn(contextId: string, timestampMs: number): void {
     const cancelled = this.latencyFiller.cancel(contextId);
     if (!cancelled) return;
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId,
-      timestampMs,
-      name: "filler.cancelled",
-      value: cancelled.text,
-    });
+    this.bus.push(Route.Background, make.metric(contextId, "filler.cancelled", cancelled.text, timestampMs));
     this.emitInterruptDetected(contextId);
   }
 
@@ -1018,13 +883,10 @@ export class VoiceAgentSession {
 
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
     if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        name: "tts.audio_ignored_after_interrupt",
-        value: String(pkt.audio.byteLength),
-      });
+      this.bus.push(
+        Route.Background,
+        make.metric(pkt.contextId, "tts.audio_ignored_after_interrupt", String(pkt.audio.byteLength)),
+      );
       return;
     }
 
@@ -1035,13 +897,10 @@ export class VoiceAgentSession {
       }
       const userStoppedMs = this.turnUserStoppedAtMs.get(pkt.contextId);
       if (userStoppedMs !== undefined) {
-        this.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: pkt.contextId,
-          timestampMs: Date.now(),
-          name: "vaqi.latency_ms",
-          value: String(pkt.timestampMs - userStoppedMs),
-        });
+        this.bus.push(
+          Route.Background,
+          make.metric(pkt.contextId, "vaqi.latency_ms", String(pkt.timestampMs - userStoppedMs)),
+        );
         this.turnUserStoppedAtMs.delete(pkt.contextId);
       }
     }
@@ -1069,14 +928,7 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    this.bus.push(Route.Main, {
-      kind: "record.assistant_audio",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      audio: pkt.audio,
-      sampleRateHz,
-      truncate: false,
-    } as RecordAssistantAudioPacket);
+    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), pkt.audio, sampleRateHz));
   }
 
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
@@ -1114,36 +966,13 @@ export class VoiceAgentSession {
     });
 
     // Stop idle timeout
-    this.bus.push(Route.Critical, {
-      kind: "behavior.idle_timeout_stop",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      resetCount: true,
-    } as StopIdleTimeoutPacket);
+    this.bus.push(Route.Critical, make.stopIdleTimeout(pkt.contextId, Date.now(), true));
 
-    this.bus.push(Route.Critical, {
-      kind: "record.assistant_audio",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      audio: new Uint8Array(0),
-      truncate: true,
-    } as RecordAssistantAudioPacket);
+    this.bus.push(Route.Critical, make.recordAssistantTruncate(pkt.contextId, Date.now()));
 
-    // Interrupt TTS
-    const interruptTts: InterruptTtsPacket = {
-      kind: "interrupt.tts",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-    };
-    this.bus.push(Route.Critical, interruptTts);
-
-    // Interrupt LLM
-    const interruptLlm: InterruptLlmPacket = {
-      kind: "interrupt.llm",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-    };
-    this.bus.push(Route.Critical, interruptLlm);
+    // Interrupt TTS, then LLM
+    this.bus.push(Route.Critical, make.interruptTts(pkt.contextId, Date.now()));
+    this.bus.push(Route.Critical, make.interruptLlm(pkt.contextId, Date.now()));
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {
@@ -1187,19 +1016,11 @@ export class VoiceAgentSession {
     if (contextId.endsWith(FALLBACK_CONTEXT_SUFFIX)) return; // never fall back for a fallback
     if (this.fallbackInjectedContexts.has(contextId)) return; // at most once per turn
     this.fallbackInjectedContexts.add(contextId);
-    this.bus.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId,
-      timestampMs: Date.now(),
-      name: "error.fallback_spoken",
-      value: pkt.component,
-    });
-    this.bus.push(Route.Main, {
-      kind: "inject.message",
-      contextId: `${contextId}${FALLBACK_CONTEXT_SUFFIX}`,
-      timestampMs: Date.now(),
-      text: this.errorFallbackText,
-    } as InjectMessagePacket);
+    this.bus.push(Route.Background, make.metric(contextId, "error.fallback_spoken", pkt.component));
+    this.bus.push(
+      Route.Main,
+      make.injectMessage(`${contextId}${FALLBACK_CONTEXT_SUFFIX}`, Date.now(), this.errorFallbackText),
+    );
   }
 
   private handleInitFailed(pkt: InitializationFailedPacket): void {
@@ -1213,18 +1034,8 @@ export class VoiceAgentSession {
 
   private handleInjectMessage(pkt: InjectMessagePacket): void {
     // Inject as synthetic LLM output — goes through normal TTS path
-    this.bus.push(Route.Main, {
-      kind: "llm.delta",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      text: pkt.text,
-    } as LlmDeltaPacket);
-    this.bus.push(Route.Main, {
-      kind: "llm.done",
-      contextId: pkt.contextId,
-      timestampMs: Date.now(),
-      text: pkt.text,
-    } as LlmResponseDonePacket);
+    this.bus.push(Route.Main, make.llmDelta(pkt.contextId, Date.now(), pkt.text));
+    this.bus.push(Route.Main, make.llmDone(pkt.contextId, Date.now(), pkt.text));
   }
 
   private handleDisconnect(pkt: DisconnectRequestedPacket): void {
@@ -1337,13 +1148,7 @@ export class VoiceAgentSession {
       this.vaqiMissedResponseContextId = "";
       this.vaqiMissedResponseStartMs = 0;
       this.turnUserStoppedAtMs.delete(cid);
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: cid,
-        timestampMs: Date.now(),
-        name: "vaqi.missed_response",
-        value: String(elapsedMs),
-      });
+      this.bus.push(Route.Background, make.metric(cid, "vaqi.missed_response", String(elapsedMs)));
     }, this.vaqiMissedResponseMs);
   }
 
@@ -1372,22 +1177,17 @@ export class VoiceAgentSession {
       if (this.interruptedGenerationContextIds.has(cid)) return; // interrupted, not stalled
       if (!this.ttsPlayout.isActive(cid)) return; // already ended
       this.ttsPlayout.release(cid);
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: cid,
-        timestampMs: Date.now(),
-        name: "tts.stall_detected",
-        value: String(this.ttsStallMs),
-      });
-      this.bus.push(Route.Critical, {
-        kind: "tts.error",
-        contextId: cid,
-        timestampMs: Date.now(),
-        component: "tts",
-        category: ErrorCategory.NetworkTimeout,
-        cause: new Error(`TTS output stalled: no audio or tts.end for ${String(this.ttsStallMs)}ms`),
-        isRecoverable: true,
-      } as TtsErrorPacket);
+      this.bus.push(Route.Background, make.metric(cid, "tts.stall_detected", String(this.ttsStallMs)));
+      this.bus.push(
+        Route.Critical,
+        make.ttsError(
+          cid,
+          Date.now(),
+          new Error(`TTS output stalled: no audio or tts.end for ${String(this.ttsStallMs)}ms`),
+          ErrorCategory.NetworkTimeout,
+          true,
+        ),
+      );
     }, this.ttsStallMs);
   }
 
