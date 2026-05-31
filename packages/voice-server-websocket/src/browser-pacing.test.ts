@@ -160,7 +160,7 @@ describe("WT-03 Browser outbound pacing", () => {
       expect(c.turnId).toBe("test-turn");
       expect(c.sequence).toBeGreaterThan(0);
       expect(c.sampleRateHz).toBe(16000);
-      expect(c.encoding).toBe("pcm_s16le");
+      expect(c.encoding).toBe("opus");
       expect(c.channels).toBe(1);
       expect(c.byteLength).toBeGreaterThan(0);
       expect(c.durationMs).toBeGreaterThan(0);

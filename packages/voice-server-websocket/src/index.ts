@@ -18,6 +18,13 @@ import {
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
 import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
+import {
+  BROWSER_OPUS_FRAME_DURATION_MS,
+  BROWSER_OPUS_SAMPLE_RATE_HZ,
+  createBrowserOpusCodec,
+  decodeBrowserOpusToPcm16Bytes,
+  type BrowserOpusCodec,
+} from "./browser-opus.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
@@ -73,6 +80,11 @@ export interface VoiceWebSocketServerOptions {
    * Inbound binary frames may use the envelope regardless.
    */
   readonly binaryAudioEnvelope?: boolean;
+  /**
+   * When true (default), outbound browser assistant audio is Opus inside the Syrinx
+   * envelope. Set false only for tests or legacy clients that require PCM envelopes.
+   */
+  readonly browserOpusDownlink?: boolean;
   readonly sessionStore?: SessionStore;
 }
 
@@ -100,6 +112,7 @@ interface BrowserConnectionState {
   managed: ManagedSession | null;
   readonly initialContextId: string;
   outboundHandle: TelephonyOutboundHandle | null;
+  opusCodec: BrowserOpusCodec | null;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -125,6 +138,7 @@ export async function createVoiceWebSocketServer(
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
   const rawBinaryInput = options.rawBinaryInput ?? false;
   const binaryAudioEnvelope = options.binaryAudioEnvelope ?? true;
+  const browserOpusDownlink = options.browserOpusDownlink ?? true;
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
@@ -142,6 +156,7 @@ export async function createVoiceWebSocketServer(
       managed: null,
       initialContextId: contextIdFn(),
       outboundHandle: null,
+      opusCodec: null,
     }),
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
@@ -173,7 +188,20 @@ export async function createVoiceWebSocketServer(
     },
 
     wireSession(session, socket, state, disposers) {
-      state.outboundHandle = wireBrowserSessionEvents(session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, hostConfig.maxBufferedAmountBytes, outboundFrameDurationMs, maxQueuedOutputAudioMs);
+      state.opusCodec = createBrowserOpusCodec(BROWSER_OPUS_SAMPLE_RATE_HZ);
+      state.outboundHandle = wireBrowserSessionEvents(
+        session,
+        socket,
+        disposers,
+        outputSampleRateHz,
+        binaryAudioEnvelope,
+        hostConfig.maxBufferedAmountBytes,
+        outboundFrameDurationMs,
+        maxQueuedOutputAudioMs,
+        state.opusCodec,
+        inputSampleRateHz,
+        browserOpusDownlink,
+      );
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
           return Promise.resolve();
@@ -212,6 +240,8 @@ export async function createVoiceWebSocketServer(
         rawBinaryInput,
         managed.contextSampleRates,
         managed.inputSequence,
+        state.opusCodec,
+        inputSampleRateHz,
       );
       managed.currentContextId = nextContextId;
     },
@@ -240,7 +270,8 @@ export async function createVoiceWebSocketServer(
         audio: {
           inputSampleRateHz,
           outputSampleRateHz,
-          encoding: "pcm_s16le",
+          encoding: "opus",
+          supportedInputCodecs: ["pcm_s16le", "opus"],
           channels: 1,
           binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
           rawBinaryInput,
@@ -340,6 +371,9 @@ function wireBrowserSessionEvents(
   maxBufferedAmountBytes: number,
   outboundFrameDurationMs: number,
   maxQueuedOutputAudioMs: number,
+  opusCodec: BrowserOpusCodec | null,
+  engineInputSampleRateHz: number,
+  browserOpusDownlink: boolean,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
   let currentContextId = "";
@@ -393,52 +427,67 @@ function wireBrowserSessionEvents(
     encodeFrames: (audio, sourceSampleRateHz, contextId) => {
       const resampled = resampleAudioBytes(audio, sourceSampleRateHz, outputSampleRateHz);
       const frames: PacedPlayoutFrame[] = [];
-      
-      // Split audio into fixed-duration frames
       const frameSampleCount = Math.max(1, Math.round((outputSampleRateHz * outboundFrameDurationMs) / 1000));
-      const frameBytesCount = frameSampleCount * 2; // PCM16 = 2 bytes per sample
-      
-      for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
-        const frameAudio = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
+      const frameBytesCount = frameSampleCount * 2;
+
+      const pushWireFrame = (
+        wireAudio: Uint8Array,
+        wireEncoding: "pcm_s16le" | "opus",
+        durationMs: number,
+      ): void => {
         const sequence = (ttsSequences.get(contextId) ?? 0) + 1;
         ttsSequences.set(contextId, sequence);
-        
         frames.push({
           contextId,
           send: () => {
             if (socket.readyState !== WebSocket.OPEN) return false;
-            
             const jsonSuccess = sendJsonWithResult(socket, {
               type: "tts_chunk",
               turnId: contextId,
               sequence,
               sampleRateHz: outputSampleRateHz,
-              encoding: "pcm_s16le",
+              encoding: wireEncoding,
               channels: 1,
-              byteLength: frameAudio.byteLength,
-              durationMs: pcm16DurationMs(frameAudio, outputSampleRateHz),
+              byteLength: wireAudio.byteLength,
+              durationMs,
             }, maxBufferedAmountBytes);
-            
             if (!jsonSuccess) return false;
-            
             const binaryData = binaryAudioEnvelope
               ? Buffer.from(encodeSyrinxAudioEnvelope({
                   type: "audio",
                   contextId,
                   sequence,
                   sampleRateHz: outputSampleRateHz,
-                  encoding: "pcm_s16le",
+                  encoding: wireEncoding,
                   channels: 1,
-                  byteLength: frameAudio.byteLength,
-                  durationMs: pcm16DurationMs(frameAudio, outputSampleRateHz),
-                }, frameAudio))
-              : Buffer.from(frameAudio);
-            
+                  byteLength: wireAudio.byteLength,
+                  durationMs,
+                }, wireAudio))
+              : Buffer.from(wireAudio);
             return sendSocketDataWithResult(socket, binaryData, maxBufferedAmountBytes);
           },
         });
+      };
+
+      if (binaryAudioEnvelope && opusCodec && browserOpusDownlink) {
+        for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
+          const framePcm = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
+          let samples = pcm16BytesToSamples(framePcm);
+          if (outputSampleRateHz !== opusCodec.sampleRateHz) {
+            samples = resamplePcm16(samples, outputSampleRateHz, opusCodec.sampleRateHz);
+          }
+          const flush = offset + frameBytesCount >= resampled.byteLength;
+          for (const opus of opusCodec.encodePcm16Frame(samples, flush)) {
+            pushWireFrame(opus, "opus", BROWSER_OPUS_FRAME_DURATION_MS);
+          }
+        }
+        return frames;
       }
-      
+
+      for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
+        const frameAudio = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
+        pushWireFrame(frameAudio, "pcm_s16le", pcm16DurationMs(frameAudio, outputSampleRateHz));
+      }
       return frames;
     },
 
@@ -498,9 +547,17 @@ function handleClientMessage(
   rawBinaryInput: boolean,
   contextSampleRates: Map<string, number>,
   inputSequence: AudioSequenceState,
+  opusCodec: BrowserOpusCodec | null,
+  engineInputSampleRateHz: number,
 ): string {
   if (isBinary) {
-    const binaryAudio = decodeBinaryAudioMessage(rawDataToBytes(data), inputSampleRateHz, rawBinaryInput);
+    const binaryAudio = decodeBinaryAudioMessage(
+      rawDataToBytes(data),
+      inputSampleRateHz,
+      rawBinaryInput,
+      opusCodec,
+      engineInputSampleRateHz,
+    );
     const nextContextId = binaryAudio.contextId ?? currentContextId;
     if (nextContextId !== currentContextId) {
       pushTurnChange(session, nextContextId, currentContextId, "websocket_binary_audio_turn");
@@ -639,6 +696,8 @@ function decodeBinaryAudioMessage(
   data: Uint8Array,
   defaultSampleRateHz: number,
   rawBinaryInput: boolean,
+  opusCodec: BrowserOpusCodec | null,
+  engineInputSampleRateHz: number,
 ): { readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number; readonly audio: Uint8Array } {
   if (!hasSyrinxAudioEnvelope(data)) {
     if (!rawBinaryInput) {
@@ -647,12 +706,32 @@ function decodeBinaryAudioMessage(
     return { sampleRateHz: defaultSampleRateHz, audio: data };
   }
   const { header, audio } = decodeSyrinxAudioEnvelope(data);
+  const sampleRateHz = requirePositiveIntegerFromHeader(header.sampleRateHz) ?? defaultSampleRateHz;
+  const wireAudio = header.encoding === "opus"
+    ? decodeBrowserOpusIngress(audio, sampleRateHz, opusCodec, engineInputSampleRateHz)
+    : audio;
   return {
     contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
-    sampleRateHz: requirePositiveIntegerFromHeader(header.sampleRateHz) ?? defaultSampleRateHz,
+    sampleRateHz,
     sequence: header.sequence,
-    audio,
+    audio: wireAudio,
   };
+}
+
+function decodeBrowserOpusIngress(
+  wire: Uint8Array,
+  sampleRateHz: number,
+  opusCodec: BrowserOpusCodec | null,
+  engineInputSampleRateHz: number,
+): Uint8Array {
+  if (!opusCodec) throw new Error("Browser websocket opus ingress is not initialized");
+  if (opusCodec.sampleRateHz !== sampleRateHz) {
+    throw new Error(`Browser websocket opus sample rate mismatch: ${sampleRateHz} != ${opusCodec.sampleRateHz}`);
+  }
+  const pcm = decodeBrowserOpusToPcm16Bytes(wire, opusCodec);
+  if (sampleRateHz === engineInputSampleRateHz) return pcm;
+  const samples = pcm16BytesToSamples(pcm);
+  return pcm16SamplesToBytes(resamplePcm16(samples, sampleRateHz, engineInputSampleRateHz));
 }
 
 function requirePositiveIntegerFromHeader(value: unknown): number | null {

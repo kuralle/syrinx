@@ -98,6 +98,21 @@ describe("Syrinx binary audio envelope", () => {
     expect(() => decodeSyrinxAudioEnvelope(invalidDuration)).toThrow(/durationMs/);
   });
 
+  it("round-trips opus-encoded envelopes without PCM16 byte alignment", () => {
+    const encoded = encodeSyrinxAudioEnvelope({
+      type: "audio",
+      contextId: "turn-opus",
+      sampleRateHz: 16000,
+      sequence: 1,
+      encoding: "opus",
+      channels: 1,
+      byteLength: 37,
+      durationMs: 20,
+    }, new Uint8Array(37));
+
+    expect(decodeSyrinxAudioEnvelope(encoded).header.encoding).toBe("opus");
+  });
+
   it("rejects invalid envelopes before encoding them", () => {
     expect(() => encodeSyrinxAudioEnvelope({
       type: "audio",

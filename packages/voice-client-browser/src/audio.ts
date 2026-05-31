@@ -6,6 +6,8 @@ import {
   hasSyrinxAudioEnvelope,
   type SyrinxAudioEnvelopeHeader,
 } from "@asyncdot/voice";
+import { pcm16SamplesToBytes } from "@asyncdot/voice/audio";
+import type { BrowserOpusCodec } from "./browser-opus.js";
 
 export interface ResampleFloat32Options {
   readonly fromSampleRateHz: number;
@@ -109,7 +111,10 @@ export function pcm16FrameSampleCount(sampleRateHz: number, frameDurationMs = 20
   return Math.max(1, Math.round(sampleRate * (frameDurationMs / 1000)));
 }
 
-export function decodeBrowserAssistantAudio(input: ArrayBuffer | ArrayBufferView): BrowserAssistantAudio {
+export function decodeBrowserAssistantAudio(
+  input: ArrayBuffer | ArrayBufferView,
+  opusCodec: BrowserOpusCodec | null = null,
+): BrowserAssistantAudio {
   const bytes = ArrayBuffer.isView(input)
     ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
     : new Uint8Array(input);
@@ -117,6 +122,21 @@ export function decodeBrowserAssistantAudio(input: ArrayBuffer | ArrayBufferView
     return { data: copyArrayBuffer(bytes) };
   }
   const envelope = decodeSyrinxAudioEnvelope(bytes);
+  if (envelope.header.encoding === "opus") {
+    if (!opusCodec) throw new Error("Opus downlink requires a loaded browser Opus codec");
+    const wireRate = envelope.header.sampleRateHz;
+    const decoded = opusCodec.decodeOpusFrame(envelope.audio);
+    const pcm = pcm16SamplesToBytes(decoded);
+    return {
+      data: copyArrayBuffer(pcm),
+      metadata: {
+        ...envelope.header,
+        encoding: "pcm_s16le",
+        sampleRateHz: wireRate,
+        byteLength: pcm.byteLength,
+      },
+    };
+  }
   return {
     data: copyArrayBuffer(envelope.audio),
     metadata: envelope.header,

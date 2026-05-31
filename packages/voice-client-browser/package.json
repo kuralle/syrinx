@@ -14,7 +14,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@asyncdot/voice": "workspace:*"
+    "@asyncdot/voice": "workspace:*",
+    "@evan/opus": "1.0.3"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

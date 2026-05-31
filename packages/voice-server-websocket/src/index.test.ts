@@ -10,12 +10,15 @@ import {
   type UserAudioReceivedPacket,
   type UserTextReceivedPacket,
 } from "@asyncdot/voice";
+import { Decoder as OpusDecoder, Encoder as OpusEncoder } from "@evan/opus";
+import { pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
   createTwilioMediaStreamServer,
   createVoiceWebSocketServer,
 } from "./index.js";
+import { BROWSER_OPUS_FRAME_DURATION_MS } from "./browser-opus.js";
 import {
   openBrowserClientAndReadReady,
   openBrowserSocketReady,
@@ -184,7 +187,8 @@ describe("createVoiceWebSocketServer", () => {
     expect(ready.audio).toMatchObject({
       inputSampleRateHz: 16000,
       outputSampleRateHz: 16000,
-      encoding: "pcm_s16le",
+      encoding: "opus",
+      supportedInputCodecs: ["pcm_s16le", "opus"],
       channels: 1,
       binaryEnvelope: "syrinx.audio.v1",
       rawBinaryInput: true,
@@ -561,15 +565,13 @@ describe("createVoiceWebSocketServer", () => {
         text: "hello",
       }),
     ]);
-    await expect(metadataMessage).resolves.toEqual({
+    await expect(metadataMessage).resolves.toMatchObject({
       type: "tts_chunk",
       turnId: "turn-2",
       sequence: 1,
       sampleRateHz: 16000,
-      encoding: "pcm_s16le",
+      encoding: "opus",
       channels: 1,
-      byteLength: 4,
-      durationMs: 0,
     });
     const envelope = decodeTestBinaryAudioEnvelope(await audioMessage);
     expect(envelope.header).toMatchObject({
@@ -577,9 +579,9 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-2",
       sequence: 1,
       sampleRateHz: 16000,
-      byteLength: 4,
+      encoding: "opus",
     });
-    expect(envelope.audio).toEqual(Buffer.from([8, 9, 10, 11]));
+    expect(envelope.audio.byteLength).toBeGreaterThan(0);
 
     client.close();
     await server.close();
@@ -1491,11 +1493,13 @@ describe("createVoiceWebSocketServer", () => {
       });
     });
 
+    const pcmFrame = new Uint8Array(640);
+    pcmFrame.set([1, 2, 3, 4]);
     session.bus.push(Route.Main, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
-      audio: new Uint8Array([1, 2, 3, 4]),
+      audio: pcmFrame,
       sampleRateHz: 16000,
     });
 
@@ -1505,11 +1509,11 @@ describe("createVoiceWebSocketServer", () => {
       contextId: "turn-tts",
       sequence: 1,
       sampleRateHz: 16000,
-      encoding: "pcm_s16le",
+      encoding: "opus",
       channels: 1,
-      byteLength: 4,
     });
-    expect(envelope.audio).toEqual(Buffer.from([1, 2, 3, 4]));
+    expect(envelope.audio.byteLength).toBeGreaterThan(0);
+    expect(envelope.header.byteLength).toBe(envelope.audio.byteLength);
 
     client.close();
     await server.close();
@@ -1645,6 +1649,7 @@ describe("createVoiceWebSocketServer", () => {
       port: 0,
       maxBufferedAmountBytes: 4096,
       outboundFrameDurationMs: 300,
+      browserOpusDownlink: false,
       createSession: () => session,
       contextId: () => "turn-test",
     }));
@@ -1716,6 +1721,52 @@ describe("createVoiceWebSocketServer", () => {
 
     expect(metrics.some((m) => m.name === "websocket.send_after_close")).toBe(true);
 
+    await server.close();
+  });
+
+  it("decodes browser opus ingress into engine PCM16 and advertises supported codecs in ready", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-opus",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    expect(ready.audio).toMatchObject({
+      encoding: "opus",
+      supportedInputCodecs: ["pcm_s16le", "opus"],
+    });
+
+    const pcm = new Int16Array(960);
+    pcm[0] = 1000;
+    pcm[3] = -1000;
+    const encoder = new OpusEncoder({ channels: 1, sample_rate: 48000, application: "voip" });
+    const opus = encoder.encode(pcm16SamplesToBytes(pcm));
+
+    client.send(encodeTestBinaryAudioEnvelope({
+      type: "audio",
+      contextId: "turn-opus",
+      sampleRateHz: 48000,
+      sequence: 1,
+      encoding: "opus",
+      channels: 1,
+      byteLength: opus.byteLength,
+      durationMs: BROWSER_OPUS_FRAME_DURATION_MS,
+    }, opus));
+
+    await waitForCondition(() => received.length > 0, 2_000);
+    expect(received[0]!.audio.byteLength).toBeGreaterThan(0);
+    expect(received[0]!.audio.byteLength % 2).toBe(0);
+
+    client.close();
     await server.close();
   });
 });
