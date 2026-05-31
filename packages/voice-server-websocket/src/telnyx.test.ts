@@ -1191,30 +1191,43 @@ describe("createTelnyxMediaStreamServer", () => {
 
     const client = await openSocket(telnyxUrl(address.port));
     client.send(JSON.stringify(telnyxStart()));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => server.wsServer.clients.size > 0);
 
     const serverSocket = [...server.wsServer.clients][0];
     if (!serverSocket) throw new Error("Expected server websocket");
     Object.defineProperty(serverSocket, "bufferedAmount", { configurable: true, value: 2 });
 
+    let isClosed = false;
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
+        isClosed = true;
         resolve({ code, reason: reason.toString() });
       });
     });
-    session.bus.push(Route.Main, {
-      kind: "tts.audio",
-      contextId: "telnyx-call-control-test",
-      timestampMs: Date.now(),
-      audio: pcm16SamplesToBytes(new Int16Array(320)),
-      sampleRateHz: 16000,
+    // Re-push until the outbound pipeline (which finishes wiring a few async ticks
+    // after connect — slower under full-suite CPU load) trips backpressure. Pushes
+    // before wiring are dropped (no streamId yet); the first that lands trips the
+    // 1013 close; pushes after the close are no-ops on the closed socket — so there
+    // is still exactly one backpressure event and the discarded-ms metric stays "20".
+    await waitForCondition(() => {
+      if (isClosed) return true;
+      session.bus.push(Route.Main, {
+        kind: "tts.audio",
+        contextId: "telnyx-call-control-test",
+        timestampMs: Date.now(),
+        audio: pcm16SamplesToBytes(new Int16Array(320)),
+        sampleRateHz: 16000,
+      });
+      return false;
     });
 
     await expect(closed).resolves.toEqual({
       code: 1013,
       reason: "websocket send buffer exceeded",
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() =>
+      metrics.some((m) => (m as ConversationMetricPacket).name === "telnyx.send_buffer_playout_cleared_ms"),
+    );
     expect(metrics).not.toContainEqual(expect.objectContaining({
       name: "telnyx.mark_sent",
     }));
