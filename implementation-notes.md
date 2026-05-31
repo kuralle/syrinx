@@ -79,3 +79,16 @@ Key decisions:
 
 Events observed: `open → message → reconnecting → reconnected → message → resumed → close`
 Server confirmed: `resumed: true`, `sessionResumed: true`
+
+## WT-05 review fix (reviewer: Opus 4.8) — quick-failure flap guard
+
+Worker impl reset `reconnectAttempt` to 0 on every `open`, so a peer that accepts
+the socket then drops it immediately (half-broken server mid-deploy, or a token
+accepted-then-rejected) would reconnect forever at attempt-1 delay, never tripping
+the storm cap. Added a `minStableMs` (5 s) / `maxQuickFailures` (3) guard mirroring
+`@asyncdot/voice-ws`'s `WebSocketConnection`: a socket that opens then dies within
+`minStableMs` is a "quick failure"; N consecutive ones give up. A never-opening peer
+is left to the existing `maxAttempts` cap; a genuinely stable connection resets the
+count. +1 unit test (`gives up after maxQuickFailures open-then-die flaps`). Existing
+24 reconnect tests unaffected (their reconnect sockets never dispatch `open`, so the
+quick-failure path doesn't engage). Client suite: 32 pass, typecheck clean.

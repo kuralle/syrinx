@@ -450,6 +450,29 @@ describe("SyrinxBrowserClient — reconnect", () => {
     expect(reconnectingEvents[0]!.attempt).toBe(1);
     expect(reconnectingEvents[1]!.attempt).toBe(1);
   });
+
+  it("gives up after maxQuickFailures open-then-die flaps even when maxAttempts is high", async () => {
+    // A peer that accepts the socket then drops it immediately (half-broken mid-deploy,
+    // or a token accepted-then-rejected) must not loop forever: backoff can't fix it.
+    const client = makeClient({
+      reconnect: { maxAttempts: 100, baseDelayMs: 10, minStableMs: 5_000, maxQuickFailures: 3 },
+      keepaliveIntervalMs: false,
+    });
+    const events = collectEvents(client);
+    client.connect();
+
+    for (let i = 0; i < 3; i += 1) {
+      sockets[i]!.dispatch("open", {}); // opens...
+      sockets[i]!.readyState = FakeWebSocket.CLOSED;
+      sockets[i]!.dispatch("close", { code: 1006, reason: "" }); // ...then dies < minStableMs
+      await vi.advanceTimersByTimeAsync(50);
+    }
+
+    const types = events.map((e) => e.type);
+    // 3rd flap hits maxQuickFailures → give up despite maxAttempts=100; no 4th socket.
+    expect(types.filter((t) => t === "close")).toHaveLength(1);
+    expect(sockets).toHaveLength(3);
+  });
 });
 
 describe("SyrinxBrowserClient — keepalive", () => {

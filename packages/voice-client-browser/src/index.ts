@@ -90,6 +90,10 @@ export interface SyrinxBrowserClientOptions {
     readonly maxAttempts?: number;
     readonly baseDelayMs?: number;
     readonly maxDelayMs?: number;
+    /** A reconnect that opens then dies within this window counts as a quick failure. Default 5000 ms. */
+    readonly minStableMs?: number;
+    /** Consecutive quick failures (open-then-die) before giving up — backoff can't fix a flapping peer. Default 3. */
+    readonly maxQuickFailures?: number;
   };
   /**
    * Interval (ms) for periodic {type:"ping"} keepalives. Set false to disable.
@@ -101,6 +105,8 @@ export interface SyrinxBrowserClientOptions {
 const RECONNECT_MAX_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_MIN_STABLE_MS = 5_000;
+const RECONNECT_MAX_QUICK_FAILURES = 3;
 const KEEPALIVE_INTERVAL_MS = 10_000;
 
 export class SyrinxBrowserClient {
@@ -110,6 +116,8 @@ export class SyrinxBrowserClient {
   private currentSessionId: string | null = null;
   private cleanClose = false;
   private reconnectAttempt = 0;
+  private quickFailures = 0;
+  private openedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -199,6 +207,7 @@ export class SyrinxBrowserClient {
     this.socket = socket;
 
     socket.addEventListener("open", () => {
+      this.openedAt = Date.now();
       if (this.reconnectAttempt > 0) {
         const attempt = this.reconnectAttempt;
         this.reconnectAttempt = 0;
@@ -237,6 +246,26 @@ export class SyrinxBrowserClient {
     const maxAttempts = opts?.maxAttempts ?? RECONNECT_MAX_ATTEMPTS;
     const baseDelayMs = opts?.baseDelayMs ?? RECONNECT_BASE_DELAY_MS;
     const maxDelayMs = opts?.maxDelayMs ?? RECONNECT_MAX_DELAY_MS;
+    const minStableMs = opts?.minStableMs ?? RECONNECT_MIN_STABLE_MS;
+    const maxQuickFailures = opts?.maxQuickFailures ?? RECONNECT_MAX_QUICK_FAILURES;
+
+    // Quick-failure guard: a socket that opens then dies within minStableMs,
+    // repeatedly, won't be fixed by backoff (a flapping/half-broken peer mid-deploy,
+    // a bad token accepted-then-rejected). Distinct from a never-opening peer, which
+    // the maxAttempts cap handles. A genuinely stable connection resets the count.
+    const opened = this.openedAt > 0;
+    const stable = opened && Date.now() - this.openedAt >= minStableMs;
+    this.openedAt = 0;
+    if (stable) {
+      this.quickFailures = 0;
+    } else if (opened) {
+      this.quickFailures += 1;
+      if (this.quickFailures >= maxQuickFailures) {
+        this.quickFailures = 0;
+        this.emit({ type: "close", code, reason });
+        return;
+      }
+    }
 
     this.reconnectAttempt += 1;
 
@@ -264,6 +293,8 @@ export class SyrinxBrowserClient {
       this.reconnectTimer = null;
     }
     this.reconnectAttempt = 0;
+    this.quickFailures = 0;
+    this.openedAt = 0;
   }
 
   private startKeepalive(socket: WebSocket): void {
