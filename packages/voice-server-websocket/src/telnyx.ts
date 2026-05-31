@@ -55,6 +55,7 @@ export interface TelnyxMediaStreamServerOptions {
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
   readonly maxConcurrentSessions?: number;
+  readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
 }
 
@@ -135,6 +136,7 @@ export async function createTelnyxMediaStreamServer(
   const httpServer = options.server ?? createServer();
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/telnyx", {
     maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    maxConcurrentSessionsScope: options.maxConcurrentSessionsScope,
     onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
   });
   const wsServer = routedWebSocket.wsServer;

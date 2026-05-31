@@ -21,6 +21,7 @@ type UpgradeHandler = (
 
 interface HttpUpgradeRouter {
   readonly handlers: Map<string, UpgradeHandler>;
+  readonly servers: Set<WebSocketServer>;
   readonly listener: (request: IncomingMessage, socket: Socket, head: Buffer) => void;
 }
 
@@ -41,7 +42,7 @@ function getOrCreateRouter(httpServer: HttpServer): HttpUpgradeRouter {
     socket.destroy();
   };
   httpServer.on("upgrade", listener);
-  const router: HttpUpgradeRouter = { handlers, listener };
+  const router: HttpUpgradeRouter = { handlers, servers: new Set(), listener };
   routers.set(httpServer, router);
   return router;
 }
@@ -66,9 +67,13 @@ export function createRoutedWebSocketServer(
   const router = getOrCreateRouter(httpServer);
   const handler: UpgradeHandler = (request, socket, head) => {
     const maxConcurrentSessions = admission?.maxConcurrentSessions;
+    const scope = admission?.maxConcurrentSessionsScope ?? "path";
+    const activeSessions = scope === "server"
+      ? [...router.servers].reduce((sum, server) => sum + server.clients.size, 0)
+      : wsServer.clients.size;
     if (
       maxConcurrentSessions !== undefined
-      && wsServer.clients.size >= maxConcurrentSessions
+      && activeSessions >= maxConcurrentSessions
     ) {
       admission?.onAdmissionRejected?.();
       rejectWebSocketAdmission(wsServer, request, socket, head);
@@ -79,10 +84,12 @@ export function createRoutedWebSocketServer(
     });
   };
   router.handlers.set(path, handler);
+  router.servers.add(wsServer);
   return {
     wsServer,
     detach: () => {
       router.handlers.delete(path);
+      router.servers.delete(wsServer);
       if (router.handlers.size === 0) {
         httpServer.off("upgrade", router.listener);
         routers.delete(httpServer);

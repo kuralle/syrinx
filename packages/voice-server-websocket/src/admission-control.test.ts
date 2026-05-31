@@ -155,4 +155,50 @@ describe("WT-08 admission control and upgrade routing", () => {
     await Promise.all([twilio.close(), telnyx.close(), smartpbx.close()]);
     await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
   });
+
+  it("enforces a global shared-server cap when maxConcurrentSessionsScope is server", async () => {
+    const httpServer = registerHttpServer(createServer());
+    const metrics: string[] = [];
+    const [twilio, telnyx] = await Promise.all([
+      registerServer(await createTwilioMediaStreamServer({
+        server: httpServer,
+        maxConcurrentSessions: 1,
+        maxConcurrentSessionsScope: "server",
+        onTransportMetric: (name) => metrics.push(name),
+        createSession: () => new VoiceAgentSession({ plugins: {} }),
+      })),
+      registerServer(await createTelnyxMediaStreamServer({
+        server: httpServer,
+        maxConcurrentSessions: 1,
+        maxConcurrentSessionsScope: "server",
+        onTransportMetric: (name) => metrics.push(name),
+        createSession: () => new VoiceAgentSession({ plugins: {} }),
+      })),
+    ]);
+    await new Promise<void>((resolveListen, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(0, "127.0.0.1", () => {
+        httpServer.off("error", reject);
+        resolveListen();
+      });
+    });
+    const address = httpServer.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const first = await openSocket(`ws://127.0.0.1:${String(address.port)}/twilio`, { perMessageDeflate: false });
+    expect(first.readyState).toBe(WebSocket.OPEN);
+
+    const second = registerSocket(new WebSocket(`ws://127.0.0.1:${String(address.port)}/telnyx`));
+    await new Promise<void>((resolveOpen, reject) => {
+      second.once("open", resolveOpen);
+      second.once("error", reject);
+    });
+    const closeCode = await waitForClose(second);
+    expect(closeCode).toBe(1013);
+    expect(metrics).toContain(TRANSPORT_ADMISSION_REJECTED_METRIC);
+
+    first.close();
+    await Promise.all([twilio.close(), telnyx.close()]);
+    await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
+  });
 });

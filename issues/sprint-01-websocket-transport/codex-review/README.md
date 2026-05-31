@@ -1,4 +1,5 @@
-# Codex Sprint 01 Deep Review Findings
+# Codex Round-2 Review Index
 
-- [CR-01 keepalive-send-race-unhandled-error](./CR-01-keepalive-send-race-unhandled-error.md) - Fixed
-- [CR-02-voice-agent-session-god-file](./CR-02-voice-agent-session-god-file.md) - Filed (not fixed in this run)
+- `CR-03-global-admission-cap-scope.md` — fixed: shared-server global admission cap scope + tests.
+- `CR-04-wt01-duplication-not-actually-collapsed.md` — filed: WT-01 duplication still substantial in carrier adapters.
+- `CR-05-wire-boundary-casts-in-voice-agent-session.md` — filed: unchecked packet casts at session wire boundary.

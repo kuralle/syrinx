@@ -44,6 +44,7 @@ export interface TwilioMediaStreamServerOptions {
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
   readonly maxConcurrentSessions?: number;
+  readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
 }
 
@@ -110,6 +111,7 @@ export async function createTwilioMediaStreamServer(
   const httpServer = options.server ?? createServer();
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/twilio", {
     maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    maxConcurrentSessionsScope: options.maxConcurrentSessionsScope,
     onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
   });
   const wsServer = routedWebSocket.wsServer;

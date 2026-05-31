@@ -48,6 +48,7 @@ export interface SmartPbxMediaStreamServerOptions {
   readonly maxBufferedAmountBytes?: number;
   readonly maxInboundMessageBytes?: number;
   readonly maxConcurrentSessions?: number;
+  readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
 }
 
@@ -108,6 +109,7 @@ export async function createSmartPbxMediaStreamServer(
   const httpServer = options.server ?? createServer();
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/media-stream", {
     maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    maxConcurrentSessionsScope: options.maxConcurrentSessionsScope,
     onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
   });
   const wsServer = routedWebSocket.wsServer;
