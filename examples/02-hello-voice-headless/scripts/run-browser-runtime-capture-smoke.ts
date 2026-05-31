@@ -25,6 +25,7 @@ const PKG_ROOT = resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../..");
 const REVIEW_HTML = join(REPO_ROOT, "packages", "voice-client-browser", "index.html");
 const RUNS_DIR = join(PKG_ROOT, "test", "performance", "runs");
+const DEFAULT_FAKE_MIC_WAV = join(PKG_ROOT, "test", "fixtures", "university-support-add-drop.wav");
 
 export interface BrowserSmokeResult {
   readonly ok: boolean;
@@ -176,17 +177,7 @@ function startPageServer(): Promise<HttpServer> {
 function launchChrome(pageUrl: string, port: number, userDataDir: string): ChildProcess {
   const chromePath = CHROME_PATHS[0];
   if (!chromePath) throw new Error("No Chrome/Chromium path configured");
-  const chrome = spawn(chromePath, [
-    "--headless=new",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--use-fake-device-for-media-stream",
-    "--use-fake-ui-for-media-stream",
-    "--autoplay-policy=no-user-gesture-required",
-    `--remote-debugging-port=${String(port)}`,
-    `--user-data-dir=${userDataDir}`,
-    pageUrl,
-  ], {
+  const chrome = spawn(chromePath, chromeLaunchArgs(pageUrl, port, userDataDir), {
     stdio: ["ignore", "pipe", "pipe"],
   });
   chrome.stderr?.setEncoding("utf8");
@@ -195,6 +186,22 @@ function launchChrome(pageUrl: string, port: number, userDataDir: string): Child
     if (process.env["SYRINX_BROWSER_SMOKE_DEBUG"] === "1") process.stderr.write(text);
   });
   return chrome;
+}
+
+export function chromeLaunchArgs(pageUrl: string, port: number, userDataDir: string): string[] {
+  const fakeMicWav = process.env["SYRINX_FAKE_MIC_WAV"]?.trim() || DEFAULT_FAKE_MIC_WAV;
+  return [
+    "--headless=new",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--use-fake-device-for-media-stream",
+    `--use-file-for-fake-audio-capture=${fakeMicWav}`,
+    "--use-fake-ui-for-media-stream",
+    "--autoplay-policy=no-user-gesture-required",
+    `--remote-debugging-port=${String(port)}`,
+    `--user-data-dir=${userDataDir}`,
+    pageUrl,
+  ];
 }
 
 async function terminateChrome(chrome: ChildProcess | null): Promise<void> {
