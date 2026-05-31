@@ -38,6 +38,7 @@
     "@asyncdot/voice-stt-deepgram": "workspace:*",
     "@asyncdot/voice-test": "workspace:*",
     "@asyncdot/voice-tts-cartesia": "workspace:*",
+    "@asyncdot/voice-tts-deepgram": "workspace:*",
     "@asyncdot/voice-tts-gemini": "workspace:*",
     "@asyncdot/voice-turn-pipecat": "workspace:*",
     "@asyncdot/voice-vad-silero": "workspace:*",

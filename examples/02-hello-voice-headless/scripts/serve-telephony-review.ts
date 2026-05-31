@@ -319,7 +319,7 @@ function createLiveTelephonySession(
 
 function inferTtsProvider(): UniversitySupportTtsProvider {
   const requested = process.env["SYRINX_REVIEW_TTS"]?.trim().toLowerCase();
-  if (requested === "gemini" || requested === "cartesia") return requested;
+  if (requested === "gemini" || requested === "cartesia" || requested === "deepgram") return requested;
   return process.env["CARTESIA_API_KEY"]?.trim() ? "cartesia" : "gemini";
 }
 

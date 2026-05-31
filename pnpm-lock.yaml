@@ -46,6 +46,9 @@ importers:
       '@asyncdot/voice-tts-cartesia':
         specifier: workspace:*
         version: link:../../packages/voice-tts-cartesia
+      '@asyncdot/voice-tts-deepgram':
+        specifier: workspace:*
+        version: link:../../packages/voice-tts-deepgram
       '@asyncdot/voice-tts-gemini':
         specifier: workspace:*
         version: link:../../packages/voice-tts-gemini
@@ -239,6 +242,25 @@ importers:
         version: 2.1.9(@types/node@22.19.19)
 
   packages/voice-tts-cartesia:
+    dependencies:
+      '@asyncdot/voice':
+        specifier: workspace:*
+        version: link:../voice
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/voice-tts-deepgram:
     dependencies:
       '@asyncdot/voice':
         specifier: workspace:*
