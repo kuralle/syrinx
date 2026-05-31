@@ -31,6 +31,7 @@
     "smoke:browser-opus-uplink": "tsx scripts/run-browser-opus-uplink-smoke.ts",
     "smoke:browser-jitter": "tsx scripts/run-browser-jitter-smoke.ts",
     "smoke:latency-filler": "tsx scripts/run-latency-filler-smoke.ts",
+    "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
     "test": "vitest run"
   },
   "dependencies": {
