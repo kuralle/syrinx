@@ -6,62 +6,18 @@ import { Decoder as OpusDecoder, Encoder as OpusEncoder } from "@evan/opus";
 import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type UserAudioReceivedPacket } from "@asyncdot/voice";
 import { createSmartPbxMediaStreamServer } from "./index.js";
 import { encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
+import {
+  openSmartPbxSocket,
+  readJsonMatching,
+  registerServer,
+  setupTransportTestCleanup,
+  waitForCondition,
+} from "./test-helpers.js";
+
+setupTransportTestCleanup();
 
 function smartPbxUrl(port: number): string {
   return `ws://127.0.0.1:${String(port)}/media-stream`;
-}
-
-async function openSocket(url: string): Promise<WebSocket> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  while (Date.now() - startedAt < 5000) {
-    const socket = new WebSocket(url);
-    try {
-      await new Promise<void>((resolveOpen, reject) => {
-        const cleanup = () => {
-          socket.off("open", onOpen);
-          socket.off("error", onError);
-          socket.off("unexpected-response", onUnexpectedResponse);
-        };
-        const onOpen = () => {
-          cleanup();
-          resolveOpen();
-        };
-        const onError = (err: Error) => {
-          cleanup();
-          reject(err);
-        };
-        const onUnexpectedResponse = (_request: unknown, response: { statusCode?: number; resume: () => void }) => {
-          cleanup();
-          response.resume();
-          reject(new Error(`Unexpected server response: ${String(response.statusCode)}`));
-        };
-        socket.once("open", onOpen);
-        socket.once("error", onError);
-        socket.once("unexpected-response", onUnexpectedResponse);
-      });
-      return socket;
-    } catch (err) {
-      socket.terminate();
-      lastError = err;
-      if (!(err instanceof Error) || !err.message.includes("Unexpected server response: 404")) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
-
-async function readJsonMatching(socket: WebSocket, predicate: (message: any) => boolean): Promise<any> {
-  return await new Promise((resolve) => {
-    const onMessage = (data: WebSocket.RawData, isBinary: boolean) => {
-      if (isBinary) return;
-      const message = JSON.parse(data.toString());
-      if (!predicate(message)) return;
-      socket.off("message", onMessage);
-      resolve(message);
-    };
-    socket.on("message", onMessage);
-  });
 }
 
 async function readNthJsonMatching(socket: WebSocket, predicate: (message: any) => boolean, count: number): Promise<any> {
@@ -104,15 +60,15 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "smartpbx-call-test",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart()));
     client.send(JSON.stringify({
@@ -136,7 +92,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: async () => {
@@ -144,10 +100,10 @@ describe("createSmartPbxMediaStreamServer", () => {
         return session;
       },
       contextId: () => "smartpbx-delayed-session",
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart()));
     client.send(JSON.stringify({
@@ -165,14 +121,14 @@ describe("createSmartPbxMediaStreamServer", () => {
   });
 
   it("closes SmartPBX websocket connections when session startup exceeds startupTimeoutMs", async () => {
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       startupTimeoutMs: 10,
       createSession: () => new Promise<VoiceAgentSession>(() => undefined),
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
@@ -199,14 +155,14 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("pcm16", 24000)));
     client.send(JSON.stringify({
@@ -226,14 +182,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("emits assistant media with call identity in the selected SmartPBX wire codec", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -260,14 +216,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("emits pcm16 assistant media at SmartPBX 24 kHz when negotiated", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("pcm16", 24000)));
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -295,14 +251,14 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       inputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const encoder = new OpusEncoder({ channels: 1, sample_rate: 48000, application: "voip" });
     const samples48k = new Int16Array(960);
     samples48k[0] = 1000;
@@ -328,14 +284,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("emits opus assistant media at SmartPBX 48 kHz when negotiated", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("opus", 48000)));
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -361,14 +317,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("flushes a partial SmartPBX opus assistant frame at TTS end", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("opus", 48000)));
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -403,10 +359,10 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session });
+    const server = registerServer(await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
 
     client.send(JSON.stringify(smartPbxStart("opus", 16000)));
@@ -422,10 +378,10 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("rejects malformed SmartPBX base64 media payloads", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session });
+    const server = registerServer(await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
 
     client.send(JSON.stringify(smartPbxStart()));
@@ -446,10 +402,10 @@ describe("createSmartPbxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session });
+    const server = registerServer(await createSmartPbxMediaStreamServer({ port: 0, createSession: () => session }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
 
     client.send(JSON.stringify(smartPbxStart()));
@@ -470,13 +426,13 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", (pkt) => {
       received.push(pkt as UserAudioReceivedPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -528,15 +484,15 @@ describe("createSmartPbxMediaStreamServer", () => {
       notifyMainBlocked();
       await mainReleased;
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const messages: any[] = [];
     client.on("message", (data) => messages.push(JSON.parse(data.toString())));
 
@@ -591,15 +547,15 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("record.assistant_audio", (pkt) => {
       recording.push(pkt as RecordAssistantAudioPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -629,15 +585,15 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -676,15 +632,15 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const sent: any[] = [];
     client.on("message", (data) => sent.push(JSON.parse(data.toString())));
 
@@ -738,14 +694,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("sends heartbeat pings to SmartPBX websocket peers", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       heartbeatIntervalMs: 5,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     let pinged = false;
     client.once("ping", () => {
       pinged = true;
@@ -759,14 +715,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("closes SmartPBX websocket sessions that exceed maxSessionDurationMs", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       maxSessionDurationMs: 10,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -782,14 +738,14 @@ describe("createSmartPbxMediaStreamServer", () => {
 
   it("closes oversized SmartPBX inbound messages before parsing", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       maxInboundMessageBytes: 64,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     const closed = new Promise<number>((resolve) => client.once("close", (code) => resolve(code)));
     client.send(JSON.stringify(smartPbxStart()));
     await expect(closed).resolves.toBe(1009);
@@ -802,14 +758,14 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
-    const server = await createSmartPbxMediaStreamServer({
+    const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       maxBufferedAmountBytes: 1,
       createSession: () => session,
-    });
+    }));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(smartPbxUrl(address.port));
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 10));
     const serverSocket = [...server.wsServer.clients][0]!;

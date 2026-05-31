@@ -326,3 +326,28 @@ in `voice-client-browser` schedules decoded PCM on `AudioContext.currentTime + b
 clear. 41 voice-client-browser tests + new browser-pacing.test.ts. **Reviewer note:** the worker did a
 broad `git add` that swept in unrelated files AND overwrote this notes file (−178 lines) — restored from
 88ce280. Watch this worker's git hygiene.
+
+## WT-10 — test-suite flakiness hardening (cursor/Auto)
+
+**Root cause (confirmed):** the four transport integration test files leaked real `ws` servers, client
+sockets, heartbeat timers, and `PacedPlayoutQueue` real-time timers when a test failed or timed out
+before explicit teardown — only `graceful-drain.test.ts` had an `afterEach` cleanup registry. Under suite
+load this pegged CPU and cascaded into 5 s / 10 s timeouts in later tests (~1/3 flake rate before fix).
+
+**Changes:**
+- Added shared `src/test-helpers.ts`: `setupTransportTestCleanup()` (registers servers, HTTP servers,
+  sockets; force-terminates on `afterEach`), `openSocket`, `openSmartPbxSocket`, `openBrowserSocketReady`,
+  `openBrowserClientAndReadReady`, `readJson`/`readJsonMatching`, `waitForCondition` (5 s canonical
+  timeout), `waitForClose`.
+- Migrated all four transport test files (`index`, `twilio`, `telnyx`, `smartpbx`) to shared helpers +
+  cleanup registry; every server created via `registerServer()`.
+- Fixed the two index.test.ts flakes: malformed JSON text (listener attached via `readJsonMatching` after
+  `openBrowserSocketReady`) and oversized assistant audio frame (poll `client.readyState === CLOSED` via
+  `waitForCondition` instead of racing `bufferedAmount`/fixed sleep).
+- Added package `vitest.config.ts` with `fileParallelism: false` (matches package.json script).
+
+**Verification:**
+- `pnpm --filter @asyncdot/voice-server-websocket typecheck`: exit 0
+- `npx vitest run --fileParallelism=false` ×10 from package dir: **10/10 pass** (128 tests/run)
+- `git diff --check`: clean on WT-10 files
+- NO test retries, NO fake timers, NO production code changes
