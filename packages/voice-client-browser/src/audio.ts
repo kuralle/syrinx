@@ -30,6 +30,18 @@ export interface BrowserAssistantAudio {
   readonly metadata?: SyrinxAudioEnvelopeHeader;
 }
 
+export interface AudioJitterBufferOptions {
+  readonly targetBufferMs?: number;
+  readonly sampleRateHz: number;
+}
+
+interface ScheduledAudioFrame {
+  readonly buffer: AudioBuffer;
+  readonly scheduledTime: number;
+  readonly contextId?: string;
+  source: AudioBufferSourceNode | null;
+}
+
 export function resampleFloat32Linear(input: Float32Array, options: ResampleFloat32Options): Float32Array {
   const fromRate = readPositiveSampleRate(options.fromSampleRateHz, "fromSampleRateHz");
   const toRate = readPositiveSampleRate(options.toSampleRateHz, "toSampleRateHz");
@@ -128,4 +140,120 @@ function copyArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
+}
+
+export class AudioJitterBuffer {
+  private readonly context: AudioContext;
+  private readonly scheduledFrames = new Set<ScheduledAudioFrame>();
+  private nextScheduledTime = 0;
+  private readonly targetBufferMs: number;
+  private readonly sampleRateHz: number;
+  private readonly contextIds = new Set<string>();
+
+  constructor(context: AudioContext, options: AudioJitterBufferOptions) {
+    this.context = context;
+    this.sampleRateHz = options.sampleRateHz;
+    this.targetBufferMs = options.targetBufferMs ?? 100;
+  }
+
+  enqueue(pcm16Data: ArrayBuffer, contextId?: string): void {
+    try {
+      const pcm16Array = new Int16Array(pcm16Data);
+      
+      // Skip empty or invalid audio data
+      if (pcm16Array.length === 0) {
+        return;
+      }
+      
+      const float32Array = new Float32Array(pcm16Array.length);
+      
+      // Convert PCM16 to Float32
+      for (let i = 0; i < pcm16Array.length; i++) {
+        float32Array[i] = pcm16Array[i]! / (pcm16Array[i]! < 0 ? 32768 : 32767);
+      }
+
+      const audioBuffer = this.context.createBuffer(1, float32Array.length, this.sampleRateHz);
+      audioBuffer.copyToChannel(float32Array, 0);
+
+      const now = this.context.currentTime;
+      
+      // If this is the first frame or we've fallen behind, establish baseline
+      if (this.nextScheduledTime === 0 || this.nextScheduledTime < now) {
+        this.nextScheduledTime = now + (this.targetBufferMs / 1000);
+      }
+
+      const frame: ScheduledAudioFrame = {
+        buffer: audioBuffer,
+        scheduledTime: this.nextScheduledTime,
+        contextId,
+        source: null,
+      };
+
+      this.scheduledFrames.add(frame);
+      if (contextId) {
+        this.contextIds.add(contextId);
+      }
+
+      // Schedule the audio
+      const source = this.context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.context.destination);
+      
+      frame.source = source;
+      source.start(frame.scheduledTime);
+      
+      // Clean up when done
+      source.onended = () => {
+        this.scheduledFrames.delete(frame);
+        frame.source = null;
+      };
+
+      this.nextScheduledTime += audioBuffer.duration;
+    } catch (error) {
+      console.warn("AudioJitterBuffer: Failed to enqueue audio frame:", error);
+    }
+  }
+
+  clear(contextId?: string): void {
+    if (contextId) {
+      // Clear only frames for the specific context
+      for (const frame of this.scheduledFrames) {
+        if (frame.contextId === contextId) {
+          if (frame.source) {
+            try {
+              frame.source.stop();
+            } catch {
+              // Ignore if already stopped
+            }
+          }
+          this.scheduledFrames.delete(frame);
+        }
+      }
+      this.contextIds.delete(contextId);
+    } else {
+      // Clear all frames
+      for (const frame of this.scheduledFrames) {
+        if (frame.source) {
+          try {
+            frame.source.stop();
+          } catch {
+            // Ignore if already stopped
+          }
+        }
+      }
+      this.scheduledFrames.clear();
+      this.contextIds.clear();
+      this.nextScheduledTime = 0;
+    }
+  }
+
+  get bufferedDurationMs(): number {
+    if (this.scheduledFrames.size === 0) return 0;
+    const now = this.context.currentTime;
+    return Math.max(0, (this.nextScheduledTime - now) * 1000);
+  }
+
+  get activeContextIds(): readonly string[] {
+    return [...this.contextIds];
+  }
 }

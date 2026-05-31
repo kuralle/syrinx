@@ -16,8 +16,10 @@ import { encodeSyrinxAudioEnvelope } from "@asyncdot/voice";
 import {
   decodeBrowserAssistantAudio,
   encodeBrowserAudioEnvelopeFrame,
+  AudioJitterBuffer,
   type BrowserAssistantAudio,
   type EncodeBrowserAudioOptions,
+  type AudioJitterBufferOptions,
 } from "./audio.js";
 
 export type SyrinxStudioMessage =
@@ -100,6 +102,15 @@ export interface SyrinxBrowserClientOptions {
    * Default: 10 000 ms — below typical proxy idle-kill thresholds.
    */
   readonly keepaliveIntervalMs?: number | false;
+  /**
+   * AudioContext for audio playback scheduling. If provided, enables jitter buffering.
+   * If not provided, audio events are emitted directly without buffering.
+   */
+  readonly audioContext?: AudioContext;
+  /**
+   * Jitter buffer configuration. Only used when audioContext is provided.
+   */
+  readonly jitterBuffer?: Omit<AudioJitterBufferOptions, "sampleRateHz">;
 }
 
 const RECONNECT_MAX_ATTEMPTS = 10;
@@ -120,8 +131,17 @@ export class SyrinxBrowserClient {
   private openedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private jitterBuffer: AudioJitterBuffer | null = null;
+  private outputSampleRateHz = 16000;
 
-  constructor(private readonly options: SyrinxBrowserClientOptions) {}
+  constructor(private readonly options: SyrinxBrowserClientOptions) {
+    if (options.audioContext) {
+      this.jitterBuffer = new AudioJitterBuffer(options.audioContext, {
+        sampleRateHz: this.outputSampleRateHz,
+        ...options.jitterBuffer,
+      });
+    }
+  }
 
   get connected(): boolean {
     return this.socket?.readyState === WebSocket.OPEN;
@@ -152,6 +172,7 @@ export class SyrinxBrowserClient {
     this.cleanClose = true;
     this.cancelReconnect();
     this.stopKeepalive();
+    this.jitterBuffer?.clear();
     this.socket?.close(code, reason);
   }
 
@@ -324,7 +345,22 @@ export class SyrinxBrowserClient {
         const message = parseStudioMessage(JSON.parse(data) as unknown);
         if (message.type === "ready" && message.sessionId !== undefined) {
           this.currentSessionId = message.sessionId;
+          // Update output sample rate and recreate jitter buffer if needed
+          if (message.audio?.outputSampleRateHz && message.audio.outputSampleRateHz !== this.outputSampleRateHz) {
+            this.outputSampleRateHz = message.audio.outputSampleRateHz;
+            if (this.options.audioContext) {
+              this.jitterBuffer = new AudioJitterBuffer(this.options.audioContext, {
+                sampleRateHz: this.outputSampleRateHz,
+                ...this.options.jitterBuffer,
+              });
+            }
+          }
         }
+        // Handle jitter buffer clearing on interrupts
+        if ((message.type === "audio_clear" || message.type === "agent_interrupted") && this.jitterBuffer) {
+          this.jitterBuffer.clear(message.turnId);
+        }
+        
         this.emit({ type: "message", message });
         if (message.type === "ready" && message.resumed === true) {
           this.emit({ type: "resumed" });
@@ -337,7 +373,7 @@ export class SyrinxBrowserClient {
     if (data instanceof Blob) {
       void data.arrayBuffer().then((buffer) => {
         const audio = decodeBrowserAssistantAudio(buffer);
-        this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+        this.handleAudioData(audio.data, audio.metadata);
       }).catch((err: unknown) => {
         this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
       });
@@ -346,7 +382,7 @@ export class SyrinxBrowserClient {
     if (data instanceof ArrayBuffer) {
       try {
         const audio = decodeBrowserAssistantAudio(data);
-        this.emit({ type: "audio", data: audio.data, metadata: audio.metadata });
+        this.handleAudioData(audio.data, audio.metadata);
       } catch (err) {
         this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
       }
@@ -371,6 +407,15 @@ export class SyrinxBrowserClient {
     }
     this.audioSequence += 1;
     return this.audioSequence;
+  }
+
+  private handleAudioData(data: ArrayBuffer, metadata?: BrowserAssistantAudio["metadata"]): void {
+    if (this.jitterBuffer) {
+      // Use jitter buffer for scheduled playback
+      this.jitterBuffer.enqueue(data, metadata?.contextId);
+    }
+    // Always emit the audio event for applications that want raw access
+    this.emit({ type: "audio", data, metadata });
   }
 
   private emit(event: SyrinxBrowserClientEvent): void {
