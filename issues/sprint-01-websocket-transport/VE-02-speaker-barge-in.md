@@ -33,9 +33,9 @@ Add a **primary-speaker gate** on the barge-in path:
   degrade gracefully where no speaker model is available (fall back to G1).
 
 ## Acceptance criteria
-- [ ] Barge-in gated on primary-speaker presence, composed with the G1 time gate.
-- [ ] Bystander/TV/echo speech is suppressed (`interrupt.suppressed_non_primary`).
-- [ ] Graceful fallback to G1 when speaker attribution is unavailable.
+- [x] Barge-in gated on primary-speaker presence, composed with the G1 time gate.
+- [x] Bystander/TV/echo speech is suppressed (`interrupt.suppressed_non_primary`).
+- [x] Graceful fallback to G1 when speaker attribution is unavailable.
 
 ## Test plan (TDD + smoke)
 - **Unit:** mixed audio (primary + bystander) → only primary commits; echo of the

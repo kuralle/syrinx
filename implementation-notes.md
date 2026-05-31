@@ -445,3 +445,20 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - Live recorder coherence: `examples/02-hello-voice-headless/test/performance/runs/live-university-recorder-2026-05-31T15-52-47-698Z/baseline.json` — `qualityGate.passed:true`, 3 multi-clause turns, avg STT final after audio end **985–6812 ms** (turn 1 longform), avg speech-end→first assistant audio **4352–11755 ms**, zero truncations
 - Interactive smoke: 3 turns completed (`stt` 755–1093 ms per turn); manifest write failed on pre-existing `assistantAudio.byteLength` PCM16 validation (unrelated to endpointing)
 - `git diff --check`: clean on VE-01 files
+
+## VE-02 — Speaker-attribution barge-in gate (2026-05-31)
+
+**Approach (FireRedChat pVAD direction, no heavy speaker-ID model):** lock a 6-band Goertzel spectral fingerprint + RMS/ZCR timbre cues from the first user turn (`user.audio_received` enrollment, profile locked on `vad.speech_ended` when the assistant is silent). During a pending G1 barge-in window, `vad.audio` frames are scored against the profile; assistant playout fingerprints reject echo (`interrupt.suppressed_non_primary` when sustained non-primary speech crosses `minInterruptionMs`). No profile → G1-only fallback (`primarySpeakerBargeInEnabled: false` escape hatch).
+
+**Implementation:**
+- `packages/voice/src/primary-speaker-gate.ts` — `PrimarySpeakerGate`, `extractSpeakerFingerprint`, `fingerprintSimilarity`
+- `packages/voice/src/primary-speaker-fixtures.ts` — synthetic PCM tones for unit/fixture tests
+- `packages/voice/src/voice-agent-session.ts` — composes gate with G1 pending interruption + `minInterruptionMs: 0` deferral when profile exists
+- `examples/02-hello-voice-headless/scripts/run-primary-speaker-barge-in-smoke.ts` — Silero enroll on real WAV + bystander injection during assistant playout
+
+**Verification:**
+- `primary-speaker-gate.test.ts` (6) + session integration (3): primary commits, bystander/echo suppressed, G1 fallback without profile
+- `pnpm --filter @asyncdot/voice test`: 97/97
+- `pnpm -r typecheck`: exit 0
+- Live smoke: `test/performance/runs/primary-speaker-barge-in-2026-05-31T16-03-22-762Z/baseline.json` — `qualityGate.passed:true`, `interrupts:0`, `interrupt.suppressed_non_primary` observed
+- `git diff --check`: clean on VE-02 files

@@ -130,3 +130,19 @@ export {
 
 // VoiceAgentSession
 export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";
+
+// Primary-speaker barge-in gate (VE-02)
+export {
+  PrimarySpeakerGate,
+  extractSpeakerFingerprint,
+  fingerprintSimilarity,
+  type SpeakerFingerprint,
+  type PrimarySpeakerGateConfig,
+} from "./primary-speaker-gate.js";
+export {
+  synthesizeTonePcm16,
+  mixPcm16,
+  PRIMARY_SPEAKER_TONE_HZ,
+  BYSTANDER_SPEAKER_TONE_HZ,
+  ASSISTANT_ECHO_TONE_HZ,
+} from "./primary-speaker-fixtures.js";

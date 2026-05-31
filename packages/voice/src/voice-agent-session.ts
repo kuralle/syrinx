@@ -67,6 +67,7 @@ import {
   InitStage,
   ErrorCategory,
 } from "./packets.js";
+import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 
 // =============================================================================
 // Types
@@ -98,6 +99,13 @@ export interface VoiceAgentSessionConfig {
    * frame (legacy behavior). Default: 280 ms.
    */
   minInterruptionMs?: number;
+  /**
+   * When true (default), barge-in requires sustained speech from the enrolled
+   * primary speaker (first user turn fingerprint) in addition to G1's time gate.
+   * Non-primary / echo speech emits `interrupt.suppressed_non_primary`. When no
+   * profile is enrolled yet, falls back to G1-only behavior.
+   */
+  primarySpeakerBargeInEnabled?: boolean;
   /**
    * Maximum ms after a user turn ends to wait for first assistant audio before
    * emitting a vaqi.missed_response metric (VAQI-M). 0 disables the check.
@@ -189,11 +197,13 @@ export class VoiceAgentSession {
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
+  private readonly primarySpeakerGate: PrimarySpeakerGate;
   private pendingInterruption: {
     userContextId: string;
     interruptedContextId: string;
     firstSpeechMs: number;
   } | null = null;
+  private pendingInterruptionAwaitingAudio = false;
   private readonly vaqiMissedResponseMs: number;
   private turnUserStoppedAtMs = new Map<string, number>();
   private firstTtsAudioFired = new Set<string>();
@@ -210,6 +220,9 @@ export class VoiceAgentSession {
     this.config = config;
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
+    this.primarySpeakerGate = new PrimarySpeakerGate({
+      enabled: config.primarySpeakerBargeInEnabled !== false,
+    });
     this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
     this.ttsStallMs = config.ttsStallMs ?? 15000;
     this.errorFallbackText = config.errorFallbackText ?? "Sorry, I'm having trouble right now. Could you try again?";
@@ -400,6 +413,7 @@ export class VoiceAgentSession {
     this.bus.on("vad.speech_started", this.handleVadSpeechStarted.bind(this));
     this.bus.on("vad.speech_activity", this.handleVadSpeechActivity.bind(this));
     this.bus.on("vad.speech_ended", this.handleVadSpeechEnded.bind(this));
+    this.bus.on("vad.audio", this.handleVadAudioForSpeakerGate.bind(this));
 
     // EOS
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
@@ -454,6 +468,9 @@ export class VoiceAgentSession {
   // =========================================================================
 
   private handleUserAudio(pkt: UserAudioReceivedPacket): void {
+    if (!this.latestActiveTtsContextId()) {
+      this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
+    }
     this.bus.push(
       Route.Main,
       {
@@ -543,6 +560,22 @@ export class VoiceAgentSession {
     });
   }
 
+  private handleVadAudioForSpeakerGate(pkt: VadAudioPacket): void {
+    const pending = this.pendingInterruption;
+    if (pending && pending.userContextId === pkt.contextId) {
+      this.primarySpeakerGate.observeBargeInChunk(pkt.audio);
+      if (this.pendingInterruptionAwaitingAudio) {
+        this.pendingInterruptionAwaitingAudio = false;
+        this.tryCommitPendingInterruption(pkt.timestampMs);
+      }
+      return;
+    }
+
+    if (!this.latestActiveTtsContextId()) {
+      this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
+    }
+  }
+
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
     this.emit("user_started_speaking", {
       tsMs: pkt.timestampMs,
@@ -562,7 +595,11 @@ export class VoiceAgentSession {
     if (!interruptedContextId) return;
 
     if (this.minInterruptionMs <= 0) {
-      // Gate disabled — interrupt on the first VAD speech frame (legacy behavior).
+      if (this.shouldDeferImmediateBargeInForSpeakerGate()) {
+        this.beginPendingInterruption(pkt, interruptedContextId);
+        this.pendingInterruptionAwaitingAudio = true;
+        return;
+      }
       this.bus.push(Route.Background, {
         kind: "metric.conversation",
         contextId: interruptedContextId,
@@ -580,6 +617,15 @@ export class VoiceAgentSession {
     // frames and then `vad.speech_ended` — which cancels this pending interruption
     // instead of cutting off the agent. Sustained speech keeps emitting activity and
     // crosses the threshold in handleVadSpeechActivity.
+    this.beginPendingInterruption(pkt, interruptedContextId);
+  }
+
+  private beginPendingInterruption(
+    pkt: VadSpeechStartedPacket,
+    interruptedContextId: string,
+  ): void {
+    this.primarySpeakerGate.beginBargeInWindow();
+    this.pendingInterruptionAwaitingAudio = false;
     this.pendingInterruption = {
       userContextId: pkt.contextId,
       interruptedContextId,
@@ -587,18 +633,44 @@ export class VoiceAgentSession {
     };
   }
 
+  private shouldDeferImmediateBargeInForSpeakerGate(): boolean {
+    return (
+      this.primarySpeakerGate.isEnabled() &&
+      this.primarySpeakerGate.hasProfile()
+    );
+  }
+
   private handleVadSpeechActivity(pkt: VadSpeechActivityPacket): void {
     const pending = this.pendingInterruption;
     if (!pending || pending.userContextId !== pkt.contextId) return;
     if (pkt.timestampMs - pending.firstSpeechMs < this.minInterruptionMs) return;
+    this.tryCommitPendingInterruption(pkt.timestampMs);
+  }
 
-    // Sustained speech — resolve the pending interruption.
+  private tryCommitPendingInterruption(nowMs: number): void {
+    const pending = this.pendingInterruption;
+    if (!pending) return;
+    if (nowMs - pending.firstSpeechMs < this.minInterruptionMs) return;
+
+    if (
+      this.primarySpeakerGate.isEnabled() &&
+      this.primarySpeakerGate.hasProfile() &&
+      !this.primarySpeakerGate.shouldCommitBargeIn()
+    ) {
+      this.suppressPendingInterruption(
+        pending,
+        "interrupt.suppressed_non_primary",
+        nowMs - pending.firstSpeechMs,
+      );
+      return;
+    }
+
+    const sustainedMs = nowMs - pending.firstSpeechMs;
     this.pendingInterruption = null;
-    const sustainedMs = pkt.timestampMs - pending.firstSpeechMs;
+    this.pendingInterruptionAwaitingAudio = false;
+    this.primarySpeakerGate.resetBargeInWindow();
 
     if (!this.activeTtsContextIds.has(pending.interruptedContextId)) {
-      // The assistant finished speaking on its own during the gate window; there is
-      // nothing left to interrupt. Record it rather than firing a stale barge-in.
       this.bus.push(Route.Background, {
         kind: "metric.conversation",
         contextId: pending.interruptedContextId,
@@ -633,6 +705,23 @@ export class VoiceAgentSession {
     this.emitInterruptDetected(pending.interruptedContextId);
   }
 
+  private suppressPendingInterruption(
+    pending: NonNullable<typeof this.pendingInterruption>,
+    metricName: string,
+    durationMs: number,
+  ): void {
+    this.pendingInterruption = null;
+    this.pendingInterruptionAwaitingAudio = false;
+    this.primarySpeakerGate.resetBargeInWindow();
+    this.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: pending.interruptedContextId,
+      timestampMs: Date.now(),
+      name: metricName,
+      value: String(durationMs),
+    });
+  }
+
   private emitInterruptDetected(interruptedContextId: string): void {
     this.bus.push(Route.Critical, {
       kind: "interrupt.detected",
@@ -656,16 +745,30 @@ export class VoiceAgentSession {
 
     const pending = this.pendingInterruption;
     if (pending && pending.userContextId === pkt.contextId) {
-      // Speech ended before sustaining past the gate: a non-interrupting blip
-      // (transient noise / very short backchannel). Leave assistant playback running.
-      this.pendingInterruption = null;
-      this.bus.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: pending.interruptedContextId,
-        timestampMs: Date.now(),
-        name: "interrupt.suppressed_short_speech",
-        value: String(pkt.timestampMs - pending.firstSpeechMs),
-      });
+      const durationMs = pkt.timestampMs - pending.firstSpeechMs;
+      if (durationMs >= this.minInterruptionMs) {
+        if (
+          this.primarySpeakerGate.isEnabled() &&
+          this.primarySpeakerGate.hasProfile() &&
+          !this.primarySpeakerGate.shouldCommitBargeIn()
+        ) {
+          this.suppressPendingInterruption(
+            pending,
+            "interrupt.suppressed_non_primary",
+            durationMs,
+          );
+        } else {
+          this.tryCommitPendingInterruption(pkt.timestampMs);
+        }
+      } else {
+        this.suppressPendingInterruption(
+          pending,
+          "interrupt.suppressed_short_speech",
+          durationMs,
+        );
+      }
+    } else if (!this.latestActiveTtsContextId()) {
+      this.primarySpeakerGate.lockProfileFromFirstTurn();
     }
 
     this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
@@ -898,6 +1001,7 @@ export class VoiceAgentSession {
 
     this.cancelTtsPlayoutRelease(pkt.contextId);
     this.activeTtsContextIds.add(pkt.contextId);
+    this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.armTtsStallTimer(pkt.contextId);
 

@@ -29,6 +29,12 @@ import type {
   LlmErrorPacket,
   TtsErrorPacket,
 } from "./packets.js";
+import {
+  BYSTANDER_SPEAKER_TONE_HZ,
+  PRIMARY_SPEAKER_TONE_HZ,
+  ASSISTANT_ECHO_TONE_HZ,
+  synthesizeTonePcm16,
+} from "./primary-speaker-fixtures.js";
 
 class CapturingPlugin implements VoicePlugin {
   config: PluginConfig | null = null;
@@ -135,6 +141,30 @@ async function closeSession(session: VoiceAgentSession): Promise<void> {
   if (session.state !== "closed") {
     await session.close();
   }
+}
+
+async function enrollPrimarySpeaker(
+  session: VoiceAgentSession,
+  contextId = "user-enroll",
+): Promise<void> {
+  const chunk = synthesizeTonePcm16({
+    frequencyHz: PRIMARY_SPEAKER_TONE_HZ,
+    durationMs: 32,
+  });
+  for (let i = 0; i < 12; i += 1) {
+    session.bus.push(Route.Main, {
+      kind: "user.audio_received",
+      contextId,
+      timestampMs: Date.now(),
+      audio: chunk,
+    } satisfies UserAudioReceivedPacket);
+  }
+  session.bus.push(Route.Main, {
+    kind: "vad.speech_ended",
+    contextId,
+    timestampMs: Date.now(),
+  } satisfies VadSpeechEndedPacket);
+  await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 describe("VoiceAgentSession", () => {
@@ -1518,6 +1548,165 @@ describe("VoiceAgentSession", () => {
     expect(metrics).toContain("llm.delta_ignored_after_interrupt");
     expect(metrics).toContain("llm.done_ignored_after_interrupt");
     expect(metrics).toContain("tts.audio_ignored_after_interrupt");
+
+    await closeSession(session);
+  });
+
+  it("suppresses sustained bystander barge-in when a primary speaker profile is enrolled", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    await enrollPrimarySpeaker(session);
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: synthesizeTonePcm16({
+        frequencyHz: ASSISTANT_ECHO_TONE_HZ,
+        durationMs: 32,
+      }),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const bystander = synthesizeTonePcm16({
+      frequencyHz: BYSTANDER_SPEAKER_TONE_HZ,
+      durationMs: 32,
+    });
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    for (let i = 0; i < 10; i += 1) {
+      session.bus.push(Route.Main, {
+        kind: "vad.audio",
+        contextId: "user-barge",
+        timestampMs: t0 + 20 + i * 30,
+        audio: bystander,
+      } satisfies VadAudioPacket);
+    }
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user-barge",
+      timestampMs: t0 + 320,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_non_primary");
+
+    await closeSession(session);
+  });
+
+  it("commits a primary-speaker barge-in composed with the G1 time gate", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    await enrollPrimarySpeaker(session);
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const primary = synthesizeTonePcm16({
+      frequencyHz: PRIMARY_SPEAKER_TONE_HZ,
+      durationMs: 32,
+    });
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user-barge",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    for (let i = 0; i < 10; i += 1) {
+      session.bus.push(Route.Main, {
+        kind: "vad.audio",
+        contextId: "user-barge",
+        timestampMs: t0 + 20 + i * 30,
+        audio: primary,
+      } satisfies VadAudioPacket);
+    }
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user-barge",
+      timestampMs: t0 + 320,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("preserves G1-only barge-in when no primary speaker profile is enrolled", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+    expect(metrics).not.toContain("interrupt.suppressed_non_primary");
 
     await closeSession(session);
   });
