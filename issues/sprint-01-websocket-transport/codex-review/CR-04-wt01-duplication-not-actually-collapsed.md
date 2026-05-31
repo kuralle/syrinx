@@ -1,8 +1,23 @@
 # CR-04 — WT-01 Left Large Carrier-Duplicate Wire Logic In Place
 
-- **Status:** Filed (not fixed in this pass)
+- **Status:** Partially fixed — identical send helper canonicalized; carrier-specific parse kept by design
 - **Severity:** medium
 - **Area:** transport / architecture / WT-01
+
+> **Fixed (the genuine duplication):** the three byte-identical
+> `send{Twilio,Telnyx,SmartPbx}Json` functions (safe JSON downlink with
+> send-buffer cap + 1013 close fallback) are replaced by one canonical
+> `sendJsonCapped` in `websocket-close.ts`, used by all three carriers (+ a
+> focused test). `@asyncdot/voice-server-websocket` 152 green.
+>
+> **Deliberately not merged:** the parse/envelope extraction below. Twilio
+> (`streamSid`/`event`), Telnyx (`stream_id`/`payload`), and SmartPBX
+> (`callId`/`accountId`) have genuinely different wire envelopes; folding them
+> behind a shared "parse primitive" would be a leaky abstraction coupling three
+> independent carrier contracts. The shared field-validators already live in
+> `json-message.ts` (`requiredString`, `optionalRecord`, …) and are used by all
+> three. The remaining per-carrier parse code is carrier vocabulary, not
+> duplicated infrastructure — keeping it separate is the correct boundary.
 
 ## Problem
 WT-01 extracted host lifecycle, but substantial wire-bound logic is still triplicated across Twilio/Telnyx/SmartPBX. This is partial consolidation, not true collapse, and creates drift risk for future race/leak fixes.
