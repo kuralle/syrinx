@@ -19,12 +19,16 @@ import {
   readRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
-import { WebSocketConnection, type SocketData } from "@asyncdot/voice-ws";
+import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
 import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
 export class CartesiaTTSPlugin implements VoicePlugin {
+  // socketFactory is injectable so the same plugin runs on Node (default) or
+  // Cloudflare Workers (pass createWorkersSocket).
+  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
   private apiKey = "";
@@ -57,7 +61,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
       headers: { "X-API-Key": this.apiKey },
-      socketFactory: createNodeWsSocket,
+      socketFactory: this.socketFactory,
       retry: this.retryConfig,
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data) => this.handleProviderMessage(data),

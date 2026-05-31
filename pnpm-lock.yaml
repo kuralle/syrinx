@@ -195,9 +195,9 @@ importers:
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.0
+      '@asyncdot/voice-ws':
+        specifier: workspace:*
+        version: link:../voice-ws
     devDependencies:
       '@types/ws':
         specifier: ^8.5.0
@@ -208,6 +208,9 @@ importers:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
 
   packages/voice-stt-google:
     dependencies:

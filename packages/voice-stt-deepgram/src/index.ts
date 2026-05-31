@@ -25,9 +25,12 @@ import {
   type SttErrorPacket,
   requireStringConfig,
   optionalStringConfig,
+  readRetryConfig,
   categorizeSttError,
   isRecoverable,
 } from "@asyncdot/voice";
+import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
+import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 export class DeepgramSTTPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -45,17 +48,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private providerFinalizeTimeoutMs: number = 1200;
   private keepAliveIntervalMs: number = 3000;
 
-  // Session-long WebSocket
-  private ws: import("ws").WebSocket | null = null;
-  private ready = false;
-  private connResolver: (() => void) | null = null;
-  private connRejecter: ((err: Error) => void) | null = null;
+  // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
+  private conn: WebSocketConnection | null = null;
   private currentContextId = "";
   private streamStartTime = 0;
-  private closed = false;
-  private reconnecting = false;
   private disposers: Array<() => void> = [];
-  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
 
   // Track provider text for display/debug only; final output requires provider confirmation.
   private lastInterimTranscript = "";
@@ -90,10 +89,38 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
     this.providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
-    this.closed = false;
 
-    // Open session-long WebSocket (Rapida pattern)
-    await this.connect();
+    // One session-long socket, managed (reconnect + KeepAlive) by WebSocketConnection.
+    this.conn = new WebSocketConnection({
+      url: () => {
+        const params = new URLSearchParams({
+          encoding: "linear16",
+          sample_rate: String(this.sampleRate),
+          interim_results: String(this.interimResults),
+          endpointing: String(this.endpointing),
+          smart_format: String(this.smartFormat),
+          model: this.model,
+          language: this.language,
+          channels: "1",
+          no_delay: "true",
+        });
+        const separator = this.endpointUrl.includes("?") ? "&" : "?";
+        return `${this.endpointUrl}${separator}${params.toString()}`;
+      },
+      headers: { Authorization: `Token ${this.apiKey}` },
+      socketFactory: this.socketFactory,
+      retry: readRetryConfig(config),
+      keepAliveIntervalMs: this.keepAliveIntervalMs,
+      keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
+      onMessage: (data) => {
+        if (typeof data === "string") this.handleProviderMessage(data);
+      },
+      onConnectionLost: (err) => {
+        this.discardProviderStateForReconnect();
+        this.emitError(this.currentContextId, err);
+      },
+    });
+    await this.conn.connect();
 
     // Listen for audio packets — stream immediately
     this.disposers.push(
@@ -138,67 +165,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     );
   }
 
-  private async connect(): Promise<void> {
-    const { default: WebSocket } = await import("ws");
-    const params = new URLSearchParams({
-      encoding: "linear16",
-      sample_rate: String(this.sampleRate),
-      interim_results: String(this.interimResults),
-      endpointing: String(this.endpointing),
-      smart_format: String(this.smartFormat),
-      model: this.model,
-      language: this.language,
-      channels: "1",
-      no_delay: "true",
-    });
-
-    const separator = this.endpointUrl.includes("?") ? "&" : "?";
-    const url = `${this.endpointUrl}${separator}${params.toString()}`;
-    this.ws = new WebSocket(url, {
-      headers: { Authorization: `Token ${this.apiKey}` },
-    });
-
-    this.ws.on("open", () => {
-      this.ready = true;
-      this.startKeepAlive();
-      this.connResolver?.();
-      this.connResolver = null;
-      this.connRejecter = null;
-    });
-
-    this.ws.on("message", (data: import("ws").RawData) => {
-      this.handleProviderMessage(data);
-    });
-
-    this.ws.on("error", (err: Error) => {
-      this.ready = false;
-      this.connRejecter?.(err);
-      this.connResolver = null;
-      this.connRejecter = null;
-      this.emitError(this.currentContextId, err);
-      const category = categorizeSttError(err);
-      if (isRecoverable(category)) {
-        void this.reconnect();
-      }
-    });
-
-    this.ws.on("close", (code, reason) => {
-      this.ready = false;
-      this.stopKeepAlive();
-      this.connRejecter?.(new Error("Deepgram STT WebSocket closed before ready"));
-      this.connResolver = null;
-      this.connRejecter = null;
-      if (!this.closed && !this.reconnecting) {
-        this.emitError(this.currentContextId, deepgramCloseError(code, reason));
-        void this.reconnect();
-      }
-    });
-  }
-
-  private handleProviderMessage(data: import("ws").RawData): void {
+  private handleProviderMessage(data: string): void {
     let msg: Record<string, unknown>;
     try {
-      msg = JSON.parse(data.toString()) as Record<string, unknown>;
+      msg = JSON.parse(data) as Record<string, unknown>;
     } catch (err) {
       this.emitError(
         this.currentContextId,
@@ -267,14 +237,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
   /** Stream audio to Deepgram immediately. No batching, no CloseStream. */
   async sendAudio(audio: Uint8Array, contextId = this.currentContextId): Promise<boolean> {
+    if (audio.byteLength === 0) return true;
     try {
-      await this.waitUntilReady();
-      const ws = this.ws;
-      if (!ws || ws.readyState !== ws.OPEN) {
-        throw new Error("Deepgram STT WebSocket is not open");
-      }
-      if (audio.byteLength === 0) return true;
-      ws.send(audio);
+      if (!this.conn) throw new Error("Deepgram STT is not connected");
+      await this.conn.ensureReady();
+      this.conn.send(audio);
       return true;
     } catch (err) {
       this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
@@ -293,8 +260,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     if (this.finalizedContextIds.has(contextId)) return;
     this.finalizeRequestedContextIds.add(contextId);
     this.pushMetric(contextId, "stt_provider_finalize_requested", this.audioStats(contextId));
-    if (this.ws?.readyState === (this.ws as import("ws").WebSocket).OPEN) {
-      this.ws.send(JSON.stringify({ type: "Finalize" }));
+    if (this.conn?.isReady) {
+      this.conn.send(JSON.stringify({ type: "Finalize" }));
     }
     if (!this.emitEosOnFinal && this.speechFinalContextIds.has(contextId) && this.pushBufferedProviderFinal(contextId)) {
       return;
@@ -317,7 +284,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       contextId,
       new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"),
     );
-    void this.reconnect();
+    this.conn?.reset();
   }
 
   private discardUnconfirmedTurn(contextId: string): void {
@@ -483,26 +450,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.bus?.push(Route.Critical, packet);
   }
 
-  private async waitUntilReady(): Promise<void> {
-    if (this.ready) return;
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Deepgram STT WebSocket connect timeout"));
-      }, 10_000);
-      this.connResolver = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      this.connRejecter = (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      };
-    });
-  }
-
   async close(): Promise<void> {
-    this.closed = true;
-    this.stopKeepAlive();
     for (const dispose of this.disposers.splice(0)) dispose();
     if (this.lastInterimTranscript || this.finalTranscriptParts.length > 0) {
       this.pushMetric(this.currentContextId, "stt_pending_transcript_discarded_on_close", this.audioStats(this.currentContextId));
@@ -515,12 +463,19 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.ignoreNextProviderFinalContextIds.clear();
     this.audioStatsByContextId.clear();
 
-    if (this.ws) {
-      await this.closeProviderStream();
-      this.ws = null;
+    if (this.conn) {
+      // Graceful end-of-stream so Deepgram flushes and closes cleanly.
+      if (this.conn.isReady) {
+        try {
+          this.conn.send(JSON.stringify({ type: "CloseStream" }));
+        } catch {
+          // best effort
+        }
+      }
+      await this.conn.close();
+      this.conn = null;
     }
     this.bus = null;
-    this.ready = false;
   }
 
   private clearProviderFinalizeTimer(contextId: string): void {
@@ -528,23 +483,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     if (!timer) return;
     clearTimeout(timer);
     this.providerFinalizeTimers.delete(contextId);
-  }
-
-  private async reconnect(): Promise<void> {
-    if (this.closed || this.reconnecting) return;
-    this.reconnecting = true;
-    this.discardProviderStateForReconnect();
-    this.stopKeepAlive();
-    try {
-      this.ws?.close();
-    } catch {
-      // best effort
-    }
-    try {
-      await this.connect();
-    } finally {
-      this.reconnecting = false;
-    }
   }
 
   private discardProviderStateForReconnect(): void {
@@ -566,39 +504,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
   }
 
-  private startKeepAlive(): void {
-    this.stopKeepAlive();
-    if (this.keepAliveIntervalMs <= 0) return;
-    this.keepAliveTimer = setInterval(() => {
-      if (this.closed) return;
-      const ws = this.ws;
-      if (!ws || ws.readyState !== ws.OPEN) return;
-      ws.send(JSON.stringify({ type: "KeepAlive" }));
-    }, this.keepAliveIntervalMs);
-  }
-
-  private stopKeepAlive(): void {
-    if (!this.keepAliveTimer) return;
-    clearInterval(this.keepAliveTimer);
-    this.keepAliveTimer = null;
-  }
-
-  private async closeProviderStream(): Promise<void> {
-    this.stopKeepAlive();
-    const ws = this.ws;
-    if (!ws || ws.readyState !== ws.OPEN) {
-      ws?.close();
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, 250);
-      ws.send(JSON.stringify({ type: "CloseStream" }), () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-    ws.close();
-  }
 }
 
 function providerAlternative(msg: Record<string, unknown>): Record<string, unknown> | null {
@@ -625,15 +530,6 @@ function deepgramProviderError(msg: Record<string, unknown>): Error {
     requestId ? `request_id=${requestId}` : "",
   ].filter((part) => part.length > 0).join(" ");
   return new Error(details ? `Deepgram STT provider error: ${details}` : "Deepgram STT provider error");
-}
-
-function deepgramCloseError(code: number, reason: Buffer): Error {
-  const reasonText = reason.toString("utf8").trim();
-  return new Error(
-    reasonText
-      ? `Deepgram STT WebSocket closed unexpectedly: code=${code} reason=${reasonText}`
-      : `Deepgram STT WebSocket closed unexpectedly: code=${code}`,
-  );
 }
 
 function firstString(...values: unknown[]): string {
