@@ -2,7 +2,7 @@
 //
 // Node/Bun socket adapter for WebSocketConnection, backed by the `ws` library.
 // Kept in its own entry point so a Cloudflare Workers build (which uses
-// createWhatwgSocket) never bundles `ws`.
+// createWebSocketAdapter) never bundles `ws`.
 
 import WebSocket, { type RawData } from "ws";
 import type { ManagedSocket, SocketData, SocketFactory } from "./index.js";
