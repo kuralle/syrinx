@@ -60,6 +60,7 @@ describe("websocket smoke quality gates", () => {
         agentReply: "ok",
         toolCalls: [],
         audioBytes: 32000,
+        metricsE2eMs: 0,
         error: "",
       },
     ]);

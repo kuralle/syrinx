@@ -1769,4 +1769,71 @@ describe("createVoiceWebSocketServer", () => {
     client.close();
     await server.close();
   });
+
+  it("emits populated metrics after paced TTS playout completes", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      outboundFrameDurationMs: 20,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const metricsMessage = readJsonMatching(client, (message) =>
+      (message as { type?: string }).type === "metrics",
+    );
+
+    const speechEndMs = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs,
+    });
+    session.bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 200,
+      text: "hello",
+      confidence: 0.95,
+    });
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 500,
+      text: "hi there",
+    });
+
+    const pcmFrame = pcm16SamplesToBytes(new Int16Array(640).fill(1000));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 700,
+      audio: pcmFrame,
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 710,
+    });
+
+    await expect(metricsMessage).resolves.toMatchObject({
+      type: "metrics",
+      turnId: "metrics-turn",
+      correlationId: "metrics-turn",
+      sttMs: 200,
+      llmTTFTMs: 300,
+      ttsTTFBMs: 200,
+    });
+    const metrics = await metricsMessage;
+    expect(typeof (metrics as { e2eMs?: number }).e2eMs).toBe("number");
+    expect((metrics as { firstAudioPlayedMs?: number }).firstAudioPlayedMs).toBeGreaterThan(0);
+    expect((metrics as { lastAudioPlayedMs?: number }).lastAudioPlayedMs).toBeGreaterThan(0);
+
+    client.close();
+    await server.close();
+  });
 });

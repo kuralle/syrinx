@@ -30,6 +30,7 @@ import { isRecord, parseJsonRecord, optionalString, requiredString } from "./jso
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
 import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
+import { TurnMetricsTracker } from "./turn-metrics.js";
 import { type PacedPlayoutFrame } from "./paced-playout.js";
 import {
   InMemorySessionStore,
@@ -525,12 +526,16 @@ function wireBrowserSessionEvents(
     },
   };
 
-  // Track context changes for metrics
   disposers.push(
     session.bus.on("turn.change", (pkt) => {
-      currentContextId = (pkt as any).contextId;
+      currentContextId = (pkt as { contextId: string }).contextId;
     }),
   );
+
+  const turnMetrics = new TurnMetricsTracker(session.bus, (message) => {
+    sendJson(socket, message, maxBufferedAmountBytes);
+  });
+  turnMetrics.wire(disposers);
 
   return wireTelephonyOutboundPipeline({
     session,

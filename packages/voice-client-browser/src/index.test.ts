@@ -551,3 +551,52 @@ describe("SyrinxBrowserClient — keepalive", () => {
     expect(sockets[0]!.sent).toContain(JSON.stringify({ type: "ping" }));
   });
 });
+
+describe("SyrinxBrowserClient — metrics", () => {
+  beforeEach(() => {
+    sockets = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+  });
+
+  it("surfaces populated server metrics messages", () => {
+    const client = makeClient();
+    const events = collectEvents(client);
+    client.connect();
+    const socket = sockets[0]!;
+    socket.dispatch("open", {});
+
+    socket.dispatch("message", {
+      data: JSON.stringify({
+        type: "metrics",
+        turnId: "turn-1",
+        correlationId: "turn-1",
+        speechEndMs: 1000,
+        textReadyMs: 1500,
+        firstAudioByteMs: 1700,
+        firstAudioPlayedMs: 1900,
+        lastAudioPlayedMs: 2500,
+        sttMs: 200,
+        llmTTFTMs: 300,
+        ttsTTFBMs: 200,
+        e2eMs: 900,
+      }),
+    });
+
+    const metricsEvent = events.find((event) =>
+      event.type === "message" && event.message.type === "metrics",
+    );
+    expect(metricsEvent).toMatchObject({
+      type: "message",
+      message: {
+        type: "metrics",
+        turnId: "turn-1",
+        correlationId: "turn-1",
+        e2eMs: 900,
+      },
+    });
+  });
+});

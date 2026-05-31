@@ -477,6 +477,9 @@
         assistantSampleRateHz: 0,
         audioClearEvents: 0,
         audioPlaybackErrors: 0,
+        metricsEvents: 0,
+        lastMetrics: null,
+        minPlaybackLeadMs: 0,
       };
 
       function setStatus(kind, text) {
@@ -670,6 +673,9 @@
           turn.state.textContent = "done";
           updateLatency(turn);
           if (recording && activeTurn?.id === turn.id) activeTurn = null;
+        } else if (message.type === "metrics") {
+          window.__syrinxReviewState.metricsEvents += 1;
+          window.__syrinxReviewState.lastMetrics = message;
         }
       }
 
@@ -902,6 +908,11 @@
         });
         outputSources.add(source);
         playbackAt = Math.max(playbackAt, outputContext.currentTime + 0.02);
+        const leadMs = (playbackAt - outputContext.currentTime) * 1000;
+        window.__syrinxReviewState.minPlaybackLeadMs = Math.min(
+          window.__syrinxReviewState.minPlaybackLeadMs ?? leadMs,
+          leadMs,
+        );
         source.start(playbackAt);
         playbackAt += buffer.duration;
       }
