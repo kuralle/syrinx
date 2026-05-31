@@ -214,7 +214,7 @@ describe("PipecatEOSPlugin", () => {
       completions.push(pkt as EndOfSpeechPacket);
     });
 
-    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 100, incomplete_fallback_ms: 10 });
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 100, incomplete_fallback_ms: 10, semantic_shortcut_delay_ms: 5 });
     bus.push(Route.Main, {
       kind: "stt.result",
       contextId: "turn-4",
@@ -259,6 +259,113 @@ describe("PipecatEOSPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(requests).toEqual(["turn-5"]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("defers semantic mid-thought pauses even when smart turn approves the boundary", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9, 0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    const finalizeRequests: string[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+    bus.on("stt.finalize", (pkt) => {
+      finalizeRequests.push(pkt.contextId);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 5,
+      semantic_defer_fallback_ms: 100,
+      incomplete_fallback_ms: 100,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-6",
+      timestampMs: Date.now(),
+      text: "I need to know",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-6",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(completions).toEqual([]);
+    expect(finalizeRequests).toEqual([]);
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-6",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-6",
+      timestampMs: Date.now(),
+      text: "whether the petition is approved",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-6",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        contextId: "turn-6",
+        text: "I need to know whether the petition is approved",
+      }),
+    ]);
+    expect(finalizeRequests).toEqual(["turn-6"]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("shortcuts complete utterances when smart turn is uncertain", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.1]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 100,
+      semantic_shortcut_delay_ms: 5,
+      incomplete_fallback_ms: 100,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-7",
+      timestampMs: Date.now(),
+      text: "What are your office hours?",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-7",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        contextId: "turn-7",
+        text: "What are your office hours?",
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();

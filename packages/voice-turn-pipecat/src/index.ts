@@ -10,6 +10,12 @@ import { fileURLToPath } from "node:url";
 
 import { WhisperFeatureExtractor } from "@huggingface/transformers";
 import {
+  fuseEndpointDecision,
+  latestTranscript,
+  scoreSemanticCompleteness,
+  type SemanticEndpointFusionConfig,
+} from "./semantic-completeness.js";
+import {
   Route,
   type EndOfSpeechPacket,
   type FinalizeSttPacket,
@@ -37,12 +43,15 @@ interface TurnState {
   audio: number[];
   finalPackets: SttResultPacket[];
   finalSegments: string[];
+  latestInterim: string;
   boundaryAnalyzed: boolean;
   smartTurnComplete: boolean;
+  semanticComplete: boolean;
   finalized: boolean;
   analysisSequence: number;
   finalizeTimer: ReturnType<typeof setTimeout> | null;
   maxTimer: ReturnType<typeof setTimeout> | null;
+  deferTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface SmartTurnPredictor {
@@ -104,6 +113,9 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private finalizeDelayMs = 250;
   private maxDelayMs = 2000;
   private incompleteFallbackMs = 2000;
+  private semanticShortcutDelayMs = 50;
+  private semanticDeferFallbackMs = 4000;
+  private semanticEndpointingEnabled = true;
   private probabilityThreshold = 0.5;
 
   constructor(private readonly predictor: SmartTurnPredictor = new LocalSmartTurnV3Predictor()) {}
@@ -113,6 +125,9 @@ export class PipecatEOSPlugin implements VoicePlugin {
     this.finalizeDelayMs = readNonNegativeNumber(config["finalize_delay_ms"], 250);
     this.maxDelayMs = readNonNegativeNumber(config["max_delay_ms"], 2000);
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
+    this.semanticShortcutDelayMs = readNonNegativeNumber(config["semantic_shortcut_delay_ms"], 50);
+    this.semanticDeferFallbackMs = readNonNegativeNumber(config["semantic_defer_fallback_ms"], 4000);
+    this.semanticEndpointingEnabled = readBooleanConfig(config["semantic_endpointing_enabled"], true);
     this.probabilityThreshold = readProbability(config["probability_threshold"], 0.5);
     await this.predictor.initialize(config);
 
@@ -161,6 +176,8 @@ export class PipecatEOSPlugin implements VoicePlugin {
 
   private handleInterim(pkt: SttInterimPacket): void {
     if (!pkt.text.trim()) return;
+    const state = this.stateFor(pkt.contextId);
+    state.latestInterim = pkt.text.trim();
     this.bus?.push(Route.Main, {
       kind: "eos.interim",
       contextId: pkt.contextId,
@@ -173,9 +190,25 @@ export class PipecatEOSPlugin implements VoicePlugin {
     if (!pkt.text.trim()) return;
     const state = this.stateFor(pkt.contextId);
     appendFinalPacket(state, pkt);
+    state.latestInterim = "";
 
-    if (state.smartTurnComplete) {
+    const transcript = latestTranscript(state.finalSegments, state.latestInterim);
+    const semantic = scoreSemanticCompleteness(transcript);
+    state.semanticComplete = semantic.complete;
+
+    if (state.boundaryAnalyzed && state.smartTurnComplete && state.semanticComplete) {
       this.scheduleFinalize(state, this.finalizeDelayMs);
+      return;
+    }
+    if (state.smartTurnComplete && state.semanticComplete) {
+      this.scheduleFinalize(state, this.finalizeDelayMs);
+      return;
+    }
+    if (state.boundaryAnalyzed && state.smartTurnComplete && !state.semanticComplete) {
+      return;
+    }
+    if (state.boundaryAnalyzed && !state.smartTurnComplete && state.semanticComplete) {
+      this.scheduleSemanticShortcut(state);
       return;
     }
     if (state.boundaryAnalyzed) {
@@ -189,6 +222,8 @@ export class PipecatEOSPlugin implements VoicePlugin {
     const state = this.stateFor(pkt.contextId);
     state.boundaryAnalyzed = false;
     state.smartTurnComplete = false;
+    state.semanticComplete = false;
+    state.latestInterim = "";
     state.analysisSequence += 1;
     clearTurnTimers(state);
   }
@@ -201,19 +236,42 @@ export class PipecatEOSPlugin implements VoicePlugin {
 
     state.boundaryAnalyzed = true;
     state.smartTurnComplete = probability > this.probabilityThreshold;
-    if (!state.smartTurnComplete) {
-      if (state.maxTimer) {
-        clearTimeout(state.maxTimer);
-        state.maxTimer = null;
-      }
+
+    const transcript = latestTranscript(state.finalSegments, state.latestInterim);
+    const semantic = transcript.trim()
+      ? scoreSemanticCompleteness(transcript)
+      : { complete: state.smartTurnComplete, label: "complete" as const, confidence: 0 };
+    state.semanticComplete = semantic.complete;
+
+    const fusion = transcript.trim()
+      ? fuseEndpointDecision(state.smartTurnComplete, semantic, this.fusionConfig())
+      : {
+          release: state.smartTurnComplete,
+          requestFinalize: state.smartTurnComplete,
+          finalizeDelayMs: this.finalizeDelayMs,
+        };
+
+    if (state.maxTimer) {
+      clearTimeout(state.maxTimer);
+      state.maxTimer = null;
+    }
+
+    if (fusion.deferReason) {
+      this.scheduleSemanticDefer(state);
+      return;
+    }
+
+    if (!fusion.release) {
       this.scheduleIncompleteFallback(state);
       return;
     }
 
-    this.requestSttFinalize(state.contextId);
+    state.smartTurnComplete = true;
+    if (fusion.requestFinalize) {
+      this.requestSttFinalize(state.contextId);
+    }
     if (state.finalPackets.length > 0) {
-      this.scheduleFinalize(state, this.finalizeDelayMs);
-      return;
+      this.scheduleFinalize(state, fusion.finalizeDelayMs);
     }
   }
 
@@ -226,12 +284,15 @@ export class PipecatEOSPlugin implements VoicePlugin {
       audio: [],
       finalPackets: [],
       finalSegments: [],
+      latestInterim: "",
       boundaryAnalyzed: false,
       smartTurnComplete: false,
+      semanticComplete: false,
       finalized: false,
       analysisSequence: 0,
       finalizeTimer: null,
       maxTimer: null,
+      deferTimer: null,
     };
     this.turns.set(contextId, state);
     return state;
@@ -256,6 +317,47 @@ export class PipecatEOSPlugin implements VoicePlugin {
       }
       this.requestSttFinalize(state.contextId);
     }, this.incompleteFallbackMs);
+  }
+
+  private scheduleSemanticShortcut(state: TurnState): void {
+    if (state.finalized || state.finalizeTimer) return;
+    state.finalizeTimer = setTimeout(() => {
+      state.finalizeTimer = null;
+      state.smartTurnComplete = true;
+      this.requestSttFinalize(state.contextId);
+      if (state.finalPackets.length > 0) {
+        this.finalize(state);
+      }
+    }, this.semanticShortcutDelayMs);
+  }
+
+  private scheduleSemanticDefer(state: TurnState): void {
+    if (state.finalized || state.deferTimer) return;
+    state.deferTimer = setTimeout(() => {
+      state.deferTimer = null;
+      if (state.finalized) return;
+      const transcript = latestTranscript(state.finalSegments, state.latestInterim);
+      const semantic = scoreSemanticCompleteness(transcript);
+      if (!semantic.complete) {
+        this.scheduleIncompleteFallback(state);
+        return;
+      }
+      state.semanticComplete = true;
+      state.smartTurnComplete = true;
+      this.requestSttFinalize(state.contextId);
+      if (state.finalPackets.length > 0) {
+        this.scheduleFinalize(state, this.finalizeDelayMs);
+      }
+    }, this.semanticDeferFallbackMs);
+  }
+
+  private fusionConfig(): SemanticEndpointFusionConfig {
+    return {
+      enabled: this.semanticEndpointingEnabled,
+      finalizeDelayMs: this.finalizeDelayMs,
+      semanticShortcutDelayMs: this.semanticShortcutDelayMs,
+      incompleteFallbackMs: this.incompleteFallbackMs,
+    };
   }
 
   private scheduleMaxFinalize(state: TurnState): void {
@@ -300,9 +402,27 @@ function appendFinalPacket(state: TurnState, packet: SttResultPacket): void {
 function clearTurnTimers(state: TurnState): void {
   if (state.finalizeTimer) clearTimeout(state.finalizeTimer);
   if (state.maxTimer) clearTimeout(state.maxTimer);
+  if (state.deferTimer) clearTimeout(state.deferTimer);
   state.finalizeTimer = null;
   state.maxTimer = null;
+  state.deferTimer = null;
 }
+
+function readBooleanConfig(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  return fallback;
+}
+
+export {
+  fuseEndpointDecision,
+  latestTranscript,
+  scoreSemanticCompleteness,
+  type EndpointFusionDecision,
+  type SemanticCompletenessLabel,
+  type SemanticCompletenessScore,
+  type SemanticEndpointFusionConfig,
+} from "./semantic-completeness.js";
+export { SEMANTIC_LABELED_UTTERANCES, type SemanticLabeledUtterance } from "./semantic-fixtures.js";
 
 function readNonNegativeNumber(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
