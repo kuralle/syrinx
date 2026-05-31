@@ -246,6 +246,9 @@ importers:
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice
+      '@asyncdot/voice-ws':
+        specifier: workspace:*
+        version: link:../voice-ws
       ws:
         specifier: ^8.18.0
         version: 8.21.0
@@ -265,6 +268,9 @@ importers:
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice
+      '@asyncdot/voice-ws':
+        specifier: workspace:*
+        version: link:../voice-ws
       ws:
         specifier: ^8.18.0
         version: 8.21.0
@@ -323,6 +329,25 @@ importers:
         specifier: 1.24.3
         version: 1.24.3
     devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/voice-ws:
+    dependencies:
+      '@asyncdot/voice':
+        specifier: workspace:*
+        version: link:../voice
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

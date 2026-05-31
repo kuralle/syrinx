@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@asyncdot/voice": "workspace:*",
+    "@asyncdot/voice-ws": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -529,7 +529,7 @@ describe("CartesiaTTSPlugin", () => {
         contextId: "turn-close",
         component: "tts",
         cause: expect.objectContaining({
-          message: expect.stringContaining("Cartesia TTS WebSocket closed unexpectedly"),
+          message: expect.stringContaining("WebSocket closed unexpectedly"),
         }),
       }),
     ]));
@@ -559,10 +559,12 @@ describe("CartesiaTTSPlugin", () => {
       voice_id: "voice-test",
       model_id: "sonic-test",
     });
-    const send = vi.fn();
-    Object.assign(plugin as unknown as { ready: boolean; ws: { readyState: number; OPEN: number; send: typeof send; close: () => void } }, {
-      ready: true,
-      ws: { readyState: 3, OPEN: 1, send, close: vi.fn() },
+    // Simulate a closed socket: the managed connection's send throws.
+    const send = vi.fn(() => {
+      throw new Error("WebSocket is not open");
+    });
+    Object.assign(plugin as unknown as { conn: { ensureReady: () => Promise<void>; send: typeof send; close: () => Promise<void> } }, {
+      conn: { ensureReady: async () => undefined, send, close: async () => undefined },
     });
     bus.push(Route.Main, {
       kind: "tts.text",
@@ -578,14 +580,16 @@ describe("CartesiaTTSPlugin", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(send).not.toHaveBeenCalled();
+    // The send was attempted but failed; the context must not stay active —
+    // an error fires and the turn ends instead of hanging.
+    expect(send).toHaveBeenCalled();
     expect(errors).toEqual([
       expect.objectContaining({
         kind: "tts.error",
         contextId: "turn-unsent",
         component: "tts",
         cause: expect.objectContaining({
-          message: "Cartesia TTS WebSocket is not open",
+          message: "WebSocket is not open",
         }),
       }),
     ]);
@@ -612,11 +616,13 @@ describe("CartesiaTTSPlugin", () => {
       voice_id: "voice-test",
       model_id: "sonic-test",
     });
-    const send = vi.fn();
-    const fakeWs = { readyState: 1, OPEN: 1, send, close: vi.fn() };
-    Object.assign(plugin as unknown as { ready: boolean; ws: typeof fakeWs }, {
-      ready: true,
-      ws: fakeWs,
+    // The first send (the transcript) succeeds; the terminal flush send fails.
+    let failNext = false;
+    const send = vi.fn(() => {
+      if (failNext) throw new Error("WebSocket is not open");
+    });
+    Object.assign(plugin as unknown as { conn: { ensureReady: () => Promise<void>; send: typeof send; close: () => Promise<void> } }, {
+      conn: { ensureReady: async () => undefined, send, close: async () => undefined },
     });
     bus.push(Route.Main, {
       kind: "tts.text",
@@ -627,7 +633,7 @@ describe("CartesiaTTSPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(send).toHaveBeenCalledTimes(1);
 
-    fakeWs.readyState = 3;
+    failNext = true;
     bus.push(Route.Main, {
       kind: "tts.done",
       contextId: "turn-terminal-unsent",
@@ -640,20 +646,21 @@ describe("CartesiaTTSPlugin", () => {
         contextId: "turn-terminal-unsent",
         component: "tts",
         cause: expect.objectContaining({
-          message: "Cartesia TTS WebSocket is not open",
+          message: "WebSocket is not open",
         }),
       }),
     ]);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
 
-    fakeWs.readyState = 1;
+    failNext = false;
     bus.push(Route.Critical, {
       kind: "interrupt.tts",
       contextId: "turn-terminal-unsent",
       timestampMs: Date.now(),
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(send).toHaveBeenCalledTimes(1);
+    // The context was already removed, so the interrupt sends no Cancel.
+    expect(send).toHaveBeenCalledTimes(2);
 
     await plugin.close();
     bus.stop();

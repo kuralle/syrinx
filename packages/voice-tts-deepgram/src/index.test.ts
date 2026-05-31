@@ -30,7 +30,8 @@ async function createLocalServer(
   onConnection: (socket: WebSocket, requestUrl: string, authHeader: string) => void,
 ): Promise<string> {
   const server = await new Promise<WebSocketServer>((resolve) => {
-    const next = new WebSocketServer({ port: 0 }, () => resolve(next));
+    let next: WebSocketServer;
+    next = new WebSocketServer({ port: 0 }, () => resolve(next));
   });
   servers.push(server);
   server.on("connection", (socket, request) => {
@@ -76,8 +77,8 @@ describe("DeepgramTTSPlugin", () => {
     const plugin = new DeepgramTTSPlugin();
     const audio: TextToSpeechAudioPacket[] = [];
     const ends: TextToSpeechEndPacket[] = [];
-    bus.on("tts.audio", (pkt) => audio.push(pkt as TextToSpeechAudioPacket));
-    bus.on("tts.end", (pkt) => ends.push(pkt as TextToSpeechEndPacket));
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+    bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
 
     await plugin.initialize(bus, {
       api_key: "test-deepgram-key",
@@ -117,7 +118,7 @@ describe("DeepgramTTSPlugin", () => {
     const started = bus.start();
     const plugin = new DeepgramTTSPlugin();
     const audio: TextToSpeechAudioPacket[] = [];
-    bus.on("tts.audio", (pkt) => audio.push(pkt as TextToSpeechAudioPacket));
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
 
     await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
     bus.push(Route.Main, { kind: "tts.text", contextId: "turn-x", timestampMs: Date.now(), text: "Interrupt me." });
@@ -154,7 +155,7 @@ describe("DeepgramTTSPlugin", () => {
     const started = bus.start();
     const plugin = new DeepgramTTSPlugin();
     const errors: TtsErrorPacket[] = [];
-    bus.on("tts.error", (pkt) => errors.push(pkt as TtsErrorPacket));
+    bus.on("tts.error", (pkt) => { errors.push(pkt as TtsErrorPacket); });
 
     await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
     bus.push(Route.Main, { kind: "tts.text", contextId: "turn-err", timestampMs: Date.now(), text: "Fail please." });
@@ -189,8 +190,8 @@ describe("DeepgramTTSPlugin", () => {
     const plugin = new DeepgramTTSPlugin();
     const audio: TextToSpeechAudioPacket[] = [];
     const ends: TextToSpeechEndPacket[] = [];
-    bus.on("tts.audio", (pkt) => audio.push(pkt as TextToSpeechAudioPacket));
-    bus.on("tts.end", (pkt) => ends.push(pkt as TextToSpeechEndPacket));
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+    bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
 
     await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
     bus.push(Route.Main, { kind: "tts.text", contextId: "turn-a", timestampMs: Date.now(), text: "Align me." });
