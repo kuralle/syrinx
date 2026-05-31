@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
-    "./web": "./src/web-socket.ts"
+    "./web": "./src/web-socket.ts",
+    "./workers": "./src/workers.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

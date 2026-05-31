@@ -44,7 +44,8 @@ export interface ManagedSocket {
   onError(handler: (err: Error) => void): void;
 }
 
-export type SocketFactory = (url: string, headers: Record<string, string>) => ManagedSocket;
+// May be async: a Cloudflare Workers socket is opened via a `fetch` upgrade.
+export type SocketFactory = (url: string, headers: Record<string, string>) => ManagedSocket | Promise<ManagedSocket>;
 
 export interface WebSocketConnectionOptions {
   /** Build the connection URL fresh on every (re)connect. */
@@ -138,15 +139,29 @@ export class WebSocketConnection {
     this.socket = null;
   }
 
+  /**
+   * Force a reconnect now — for when the provider stream is wedged but the socket
+   * still looks open (e.g. an unanswered Finalize). Safe no-op if closed or a
+   * reconnect is already running.
+   */
+  reset(): void {
+    if (this.closed || this.reconnecting) return;
+    this.socket?.dispose();
+    this.socket = null;
+    this.ready = false;
+    this.stopKeepAlive();
+    void this.tryReconnect();
+  }
+
   private get connectTimeoutMs(): number {
     return this.opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   }
 
-  private openSocket(): Promise<void> {
+  private async openSocket(): Promise<void> {
     this.socket?.dispose();
     this.ready = false;
 
-    const socket = this.opts.socketFactory(this.opts.url(), this.opts.headers ?? {});
+    const socket = await this.opts.socketFactory(this.opts.url(), this.opts.headers ?? {});
     this.socket = socket;
 
     return new Promise<void>((resolve, reject) => {

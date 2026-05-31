@@ -30,7 +30,7 @@ import {
   readRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
-import { WebSocketConnection, type SocketData } from "@asyncdot/voice-ws";
+import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
 import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const SPEAK = (text: string): string => JSON.stringify({ type: "Speak", text });
@@ -40,6 +40,10 @@ const EMPTY = new Uint8Array(0);
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
 export class DeepgramTTSPlugin implements VoicePlugin {
+  // socketFactory is injectable so the same plugin runs on Node (default) or
+  // Cloudflare Workers (pass createWorkersSocket).
+  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
   private apiKey = "";
@@ -78,7 +82,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       },
       headers: { Authorization: `Token ${this.apiKey}` },
       retry: this.retryConfig,
-      socketFactory: createNodeWsSocket,
+      socketFactory: this.socketFactory,
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data, isBinary) => this.handleProviderMessage(data, isBinary),
       onConnectionLost: (err) => this.failActiveContexts(err),

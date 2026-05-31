@@ -475,10 +475,12 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    const send = vi.fn();
-    Object.assign(plugin as unknown as { ready: boolean; ws: { readyState: number; OPEN: number; send: typeof send; close: () => void } }, {
-      ready: true,
-      ws: { readyState: 3, OPEN: 1, send, close: vi.fn() },
+    // Simulate a closed socket: the managed connection's send throws.
+    const send = vi.fn(() => {
+      throw new Error("WebSocket is not open");
+    });
+    Object.assign(plugin as unknown as { conn: { ensureReady: () => Promise<void>; send: typeof send; isReady: boolean; close: () => Promise<void> } }, {
+      conn: { ensureReady: async () => undefined, send, isReady: false, close: async () => undefined },
     });
     bus.push(Route.Main, {
       kind: "stt.audio",
@@ -488,14 +490,14 @@ describe("DeepgramSTTPlugin", () => {
     });
 
     await waitFor(errors);
-    expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalled();
     expect(errors).toEqual([
       expect.objectContaining({
         kind: "stt.error",
         contextId: "turn-unsent",
         component: "stt",
         cause: expect.objectContaining({
-          message: "Deepgram STT WebSocket is not open",
+          message: "WebSocket is not open",
         }),
       }),
     ]);

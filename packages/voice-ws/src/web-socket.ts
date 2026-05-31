@@ -54,7 +54,15 @@ export function wrapWebSocket(ws: WebSocketLike): ManagedSocket {
         // best effort
       }
     },
-    onOpen: (handler) => ws.addEventListener("open", () => handler()),
+    onOpen: (handler) => {
+      // A Workers fetch-upgrade socket is already open by the time we attach, so
+      // it never fires "open" — call the handler on the next tick instead.
+      if (ws.readyState === WEBSOCKET_OPEN) {
+        queueMicrotask(handler);
+        return;
+      }
+      ws.addEventListener("open", () => handler());
+    },
     onMessage: (handler) =>
       ws.addEventListener("message", (event) => {
         const payload = event.data;
