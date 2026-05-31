@@ -46,8 +46,19 @@ export const createNodeWsSocket: SocketFactory = (url, headers): ManagedSocket =
       }),
     dispose: () => {
       ws.removeAllListeners();
+      // Closing a socket that is still CONNECTING makes `ws` emit an asynchronous
+      // 'error' event ("WebSocket was closed before the connection was established").
+      // removeAllListeners() just stripped the error handler, so without re-attaching
+      // a sink that event becomes an uncaught exception and crashes the process — the
+      // exact thing that happens when a caller hangs up during a slow provider connect.
+      // Swallow stray close-time errors, and abort a pending handshake with terminate().
+      ws.on("error", () => {});
       try {
-        ws.close();
+        if (ws.readyState === ws.CONNECTING) {
+          ws.terminate();
+        } else {
+          ws.close();
+        }
       } catch {
         // best effort
       }
