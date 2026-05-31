@@ -66,7 +66,7 @@ async function main(): Promise<void> {
   console.log(`TTS provider: ${ttsProvider}; input PCM: ${String(INPUT_SAMPLE_RATE)} Hz mono s16le`);
 
   const close = async (): Promise<void> => {
-    await voiceServer.close();
+    await voiceServer.close({ graceful: true, drainDeadlineMs: 10_000 });
     process.exit(0);
   };
   process.once("SIGINT", () => {

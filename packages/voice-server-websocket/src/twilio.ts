@@ -14,7 +14,7 @@ import {
   requiredString,
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
-import { runWebSocketConnection, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
 import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
@@ -49,7 +49,7 @@ export interface TwilioMediaStreamServer {
   readonly httpServer: HttpServer;
   readonly wsServer: WebSocketServer;
   address(): ReturnType<HttpServer["address"]>;
-  close(): Promise<void>;
+  close(opts?: GracefulCloseOptions): Promise<void>;
 }
 
 export interface TwilioStartPayload {
@@ -122,6 +122,7 @@ export async function createTwilioMediaStreamServer(
     maxInboundMessageBytes: positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES,
   };
   const contextIdFn = options.contextId ?? defaultTwilioContextId;
+  const gracefulCloseRegistry = new Map<WebSocket, (deadlineMs: number) => Promise<void>>();
 
   const adapter: TransportAdapter<TwilioConnectionState> = {
     createState: () => ({
@@ -168,7 +169,7 @@ export async function createTwilioMediaStreamServer(
       };
       state.onPlaybackMarkReceived = sendPendingEndMark;
 
-      state.clearPlayout = wireTelephonyOutboundPipeline({
+      const outbound = wireTelephonyOutboundPipeline({
         session,
         socket,
         disposers,
@@ -254,6 +255,9 @@ export async function createTwilioMediaStreamServer(
           onStop: () => { state.stopped = true; },
         },
       });
+      state.clearPlayout = outbound.clearPlayout;
+      gracefulCloseRegistry.set(socket, (deadlineMs) => outbound.drainAndClose(socket, deadlineMs));
+      disposers.push(() => gracefulCloseRegistry.delete(socket));
       return (reason) => state.clearPlayout(reason);
     },
 
@@ -351,12 +355,26 @@ export async function createTwilioMediaStreamServer(
     });
   }
 
+  let closing = false;
   return {
     httpServer,
     wsServer,
     address: () => httpServer.address(),
-    close: async () => {
-      for (const client of wsServer.clients) client.terminate();
+    close: async (opts) => {
+      if (closing) return;
+      closing = true;
+      if (opts?.graceful === true && gracefulCloseRegistry.size > 0) {
+        const deadline = Date.now() + (opts.drainDeadlineMs ?? 10_000);
+        await Promise.allSettled(
+          [...gracefulCloseRegistry.values()].map((fn) => fn(deadline)),
+        );
+        for (const client of wsServer.clients) {
+          if (client.readyState === WebSocket.OPEN) client.terminate();
+        }
+      } else {
+        for (const client of wsServer.clients) client.terminate();
+      }
+      gracefulCloseRegistry.clear();
       for (const session of sessions) await session.close().catch(() => undefined);
       await new Promise<void>((resolveClose) => { wsServer.close(() => resolveClose()); });
       routedWebSocket.detach();
