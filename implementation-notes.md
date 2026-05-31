@@ -481,3 +481,21 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - `pnpm -r test`: green
 - Live A/B smoke: `test/performance/runs/latency-filler-ab-2026-05-31T16-08-48-429Z/baseline.json` — `qualityGate.passed:true`, filler-off **5539 ms** vs filler-on **4623 ms** speech-end→first-audio (**−916 ms**), both arms produced assistant audio
 - `git diff --check`: clean on VE-03 files
+
+## VE-05 — EVA-Bench / Full-Duplex-Bench CI gate (2026-05-31)
+
+**Approach (EVA-X turn-taking-timing + Full-Duplex overlap):** bot-to-bot examiner harness over recorder-backed university session. `eva-evaluator.ts` scores turn-taking timing from per-turn timeline (response latency, inter-turn gap) and overlap from stereo `conversation.wav` (100 ms RMS windows, same detector as `analyze-overlap.mjs`). Perturbation suite: white-noise overlay (12 dB SNR, turn 1) + accent rate-shift (1.06×, turn 2) in the noise arm. CI gate defaults to **warn** (`SYRINX_EVA_GATE_MODE=warn`); set `block` to hard-fail baseline regressions on timing/overlap scores.
+
+**Implementation:**
+- `examples/02-hello-voice-headless/scripts/eva-evaluator.ts` — scoring, perturbations, baseline compare
+- `examples/02-hello-voice-headless/scripts/run-eva-bench-examiner-smoke.ts` — live 3-turn clean + noise arms, Whisper audit, baseline writer
+- `examples/02-hello-voice-headless/test/fixtures/eva-examiner/` — known-good/bad deterministic timelines
+- `examples/02-hello-voice-headless/test/eva-examiner.test.ts` + `eva-bench-examiner-gate.test.ts` — unit + gate tests
+
+**Verification:**
+- Unit: known-good timeline scores higher than known-bad; warn vs block regression modes (9 tests)
+- `pnpm -r typecheck`: exit 0
+- `pnpm -r test`: green (example suite 55 passed)
+- Live smoke: `test/performance/runs/eva-bench-examiner-2026-05-31T16-14-51-754Z/baseline.json` — `qualityGate.passed:true`, clean timing **80**/overlap **100**, noise timing **80**/overlap **100**, **0 ms** conversation overlap, Whisper user/assistant transcripts non-empty (906/895 chars)
+- Checked-in baseline: `test/performance/eva-bench-examiner-baseline.json`
+- `git diff --check`: clean on VE-05 files

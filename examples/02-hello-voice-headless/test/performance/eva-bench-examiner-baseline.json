@@ -1,0 +1,47 @@
+{
+  "scenario": "eva_bench_examiner_university_three_turn",
+  "generatedAt": "2026-05-31T16:14:51.754Z",
+  "gateMode": "warn",
+  "clean": {
+    "turnTakingTimingScore": 80,
+    "overlapScore": 100,
+    "avgResponseLatencyMs": 7018,
+    "maxResponseLatencyMs": 12069,
+    "minInterTurnGapMs": 850.625,
+    "conversationOverlapMs": 0,
+    "overlapPercent": 0,
+    "perturbation": "clean"
+  },
+  "noise": {
+    "turnTakingTimingScore": 80,
+    "overlapScore": 100,
+    "avgResponseLatencyMs": 6477,
+    "maxResponseLatencyMs": 11429,
+    "minInterTurnGapMs": 826.625,
+    "conversationOverlapMs": 0,
+    "overlapPercent": 0,
+    "perturbation": "noise"
+  },
+  "conversationOverlapMs": 0,
+  "qualityGate": {
+    "passed": true,
+    "failures": [],
+    "warnings": [
+      "max response latency 12069ms exceeds 8000ms",
+      "max response latency 11429ms exceeds 8000ms"
+    ]
+  },
+  "diagnostics": [
+    "turn-taking-timing score=80",
+    "overlap score=100",
+    "avg response latency=7018ms",
+    "conversation overlap=0ms (0.0%)",
+    "perturbation=noise",
+    "turn-taking-timing score=80",
+    "overlap score=100",
+    "avg response latency=6477ms",
+    "conversation overlap=0ms (0.0%)",
+    "whisper user chars=906",
+    "whisper assistant chars=895"
+  ]
+}

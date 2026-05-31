@@ -19,7 +19,6 @@ Legend: `WT` = WebSocket transport · `VE` = voice engine · `(Pn)` priority ·
 _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 
 ## 🟢 Ready (unblocked — transport track shipped sequentially, in order)
-- **VE-05** (P3) EVA-Bench CI gate
 
 ## ⛔ Blocked (waiting on a dependency)
 
@@ -27,6 +26,7 @@ _(empty — all sprint issues are specced and promoted to Ready/Blocked)_
 _(none)_
 
 ## 👀 In Review (tests green, awaiting diff review)
+- **VE-05** (P3) EVA-Bench / Full-Duplex-Bench CI gate (G26) — cursor/auto. `eva-evaluator.ts` scores EVA-X turn-taking timing + stereo overlap; live examiner smoke with clean + noise/accent perturbation arms; warn→block gate via `SYRINX_EVA_GATE_MODE`. **9 examiner tests**; live smoke `qualityGate.passed:true` (`eva-bench-examiner-2026-05-31T16-14-51-754Z`, timing 80 / overlap 100, 0 ms overlap).
 - **VE-03** (P3) Latency-hiding filler token dual-track (G24) — cursor/auto. Optional `latencyFillerEnabled` connective at endpoint before LLM TTFB; interruptible + splice-safe; metrics `filler.started|spliced|cancelled`. **105 voice tests**; live A/B smoke `qualityGate.passed:true` (`latency-filler-ab-2026-05-31T16-08-48-429Z`, −916 ms speech-end→first-audio vs off).
 - **VE-02** (P2) Speaker-attribution barge-in gate (G23) — cursor/auto. Goertzel-band primary-speaker fingerprint locked on first user turn; composes with G1 `minInterruptionMs`; `interrupt.suppressed_non_primary` + assistant-echo rejection; G1 fallback when no profile. **97 voice tests**; live smoke `qualityGate.passed:true` (`primary-speaker-barge-in-2026-05-31T16-03-22-762Z`, 0 false interrupts).
 - **VE-03** (P3) Latency-hiding filler token dual-track (G24) — cursor/auto. Optional `latencyFillerEnabled` connective at `eos.turn_complete` before LLM TTFB; cancel on user resume; splice strips duplicate connectives. **105 voice tests**; live A/B smoke `qualityGate.passed:true` (`latency-filler-ab-2026-05-31T16-08-48-429Z`, −916 ms endpoint→first-audio).
@@ -36,6 +36,7 @@ _(none)_
 - **WT-07** (P2) `ClientTransport` seam + Opus browser leg — **In Review**. `ClientTransport` + `WebSocketClientTransport`; `SyrinxBrowserClient` on seam; Opus uplink/downlink at 48 kHz wire (16 kHz engine) via `ready.supportedInputCodecs`; PCM fallback. Smoke: **~102 kbps** vs **~256 kbps** PCM baseline (`browser-opus-uplink-2026-05-31T15-10-02-401Z`). **138 tests ×5 stable**; client 45/45; `pnpm -r typecheck` green.
 
 ## ✅ Done (diff reviewed + behavior observed)
+- **VE-03** (P3) Latency-hiding filler token — cursor/auto `5b27689`. Off-by-default `LatencyFillerController`: connective → TTS at endpoint before LLM, first `llm.delta` splices with duplicate-prefix stripping, cancel-on-resume. Voice 105 tests; **live A/B smoke `qualityGate.passed:true`: −916 ms (~17%) speech-end→first-audio** (5539→4623). Hygiene clean.
 - **VE-02** (P2) Speaker-attribution barge-in — cursor/auto `f698dfe`. Lightweight `PrimarySpeakerGate` (no model) composes with G1: scores VAD audio vs first-turn fingerprint, blocks assistant TTS echo, emits `interrupt.suppressed_non_primary` for non-primary, falls back to G1. Voice 97 tests; **live background-speech smoke `qualityGate.passed:true`, 0 false interrupts**. Hygiene clean.
 - **VE-01** (P2) Semantic endpointing fused off STT partials — cursor/auto `a301796` + reviewer `d76f5e3`. Zero-latency heuristic `scoreSemanticCompleteness()` on STT partials + `fuseEndpointDecision()` augmenting Smart Turn (mid-thought pauses defer, complete utterances shortcut). 18 turn-pipecat tests + labeled fixture set; voice session 88 tests; **live recorder-coherence smoke `qualityGate.passed:true`** (3 multi-clause turns, 0 truncations). Reviewer committed the dangling `@evan/opus` lock entry from WT-07. _(Interactive-smoke manifest-write hiccup flagged pre-existing; recorder coherence same PCM path passed.)_
 - **WT-09** (P2) Metrics + per-turn timestamps + browser loss/jitter smoke — cursor/auto `824f7fd`. `TurnMetricsTracker` (4 canonical timestamps + stage latencies + correlation id) → `metrics` message; browser jitter smoke `qualityGate.passed:true` (jittery profile, e2eMs=598, 0 playback errors); interactive P50/P95 SLO. Suite 5/5×147, client 46. Hygiene clean. **→ TRANSPORT TRACK WT-01–WT-10 COMPLETE.**
@@ -53,7 +54,7 @@ _(none)_
 ---
 
 ### Burndown
-14 sprint issues + WT-10 (flakiness, from delegated diagnosis) · **7 done (WT-01..05, VE-04, WT-10)** + G27 bonus · 5 in review (WT-06..09, VE-02) · VE-01/03/05 queued.
+14 sprint issues + WT-10 (flakiness, from delegated diagnosis) · **7 done (WT-01..05, VE-04, WT-10)** + G27 bonus · 6 in review (WT-06..09, VE-01..03, VE-05) · VE-05 queued→review.
 External reviews: gemini-review w0/w1/w2 fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).
 Worker note: claude 1M-context credits exhausted → workers run on `cursor-agent --model auto` (fast) / sonnet-4.
 External review: `gemini-review-w0` + `gemini-review-w1` fired (unread, accumulating in GEMINI-EXTERNAL-REVIEW.md).

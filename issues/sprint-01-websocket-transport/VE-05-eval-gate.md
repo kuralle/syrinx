@@ -31,9 +31,9 @@ regress these axes. Reuse the existing smoke harness + recorder + Whisper audit;
 add the EVA-X scoring layer. Keep model-judge axes as diagnostics initially.
 
 ## Acceptance criteria
-- [ ] Bot-to-bot examiner runs the engine and scores turn-taking timing + overlap.
-- [ ] Accent/noise perturbation suite included.
-- [ ] CI gate (warn first, then block) on turn-taking-timing / overlap regression.
+- [x] Bot-to-bot examiner runs the engine and scores turn-taking timing + overlap.
+- [x] Accent/noise perturbation suite included.
+- [x] CI gate (warn first, then block) on turn-taking-timing / overlap regression.
 
 ## Test plan (TDD + smoke)
 - **Unit:** the examiner scores a known-good vs known-bad transcript/timeline

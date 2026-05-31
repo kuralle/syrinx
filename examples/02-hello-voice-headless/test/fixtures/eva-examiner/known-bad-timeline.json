@@ -1,0 +1,28 @@
+{
+  "turns": [
+    {
+      "id": "turn-01",
+      "userSpeechStartMs": 0,
+      "userSpeechEndMs": 8000,
+      "assistantSpeechStartMs": 7900,
+      "assistantSpeechEndMs": 14000
+    },
+    {
+      "id": "turn-02",
+      "userSpeechStartMs": 13500,
+      "userSpeechEndMs": 21000,
+      "assistantSpeechStartMs": 20900,
+      "assistantSpeechEndMs": 27000
+    },
+    {
+      "id": "turn-03",
+      "userSpeechStartMs": 26500,
+      "userSpeechEndMs": 34000,
+      "assistantSpeechStartMs": 42000,
+      "assistantSpeechEndMs": 48000
+    }
+  ],
+  "conversationOverlapMs": 3200,
+  "totalConversationMs": 50000,
+  "perturbation": "clean"
+}
