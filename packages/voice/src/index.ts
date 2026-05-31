@@ -146,3 +146,18 @@ export {
   BYSTANDER_SPEAKER_TONE_HZ,
   ASSISTANT_ECHO_TONE_HZ,
 } from "./primary-speaker-fixtures.js";
+
+// Latency-hiding filler track (VE-03)
+export {
+  LatencyFillerController,
+  selectLatencyFillerConnective,
+  stripRedundantFillerPrefix,
+  LATENCY_FILLER_CONNECTIVES,
+  type LatencyFillerConfig,
+  type LatencyFillerState,
+  type LatencyFillerConnective,
+} from "./latency-filler.js";
+export {
+  LATENCY_FILLER_FIXTURES,
+  type LatencyFillerFixture,
+} from "./latency-filler-fixtures.js";

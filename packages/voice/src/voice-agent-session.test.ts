@@ -1710,4 +1710,141 @@ describe("VoiceAgentSession", () => {
 
     await closeSession(session);
   });
+
+  it("enqueues filler TTS at endpoint before the first LLM token when enabled", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      latencyFillerEnabled: true,
+    });
+    const ttsText: TextToSpeechTextPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      text: "Can I add Biology 101?",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(ttsText).toEqual([
+      expect.objectContaining({
+        kind: "tts.text",
+        contextId: "turn-1",
+        text: "Well,",
+      }),
+    ]);
+    expect(metrics).toContain("filler.started");
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: 1500,
+      text: "You can still submit a late add petition.",
+    } satisfies LlmDeltaPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(ttsText).toEqual([
+      expect.objectContaining({ text: "Well," }),
+      expect.objectContaining({ text: "You can still submit a late add petition." }),
+    ]);
+    expect(metrics).toContain("filler.spliced");
+
+    await closeSession(session);
+  });
+
+  it("cancels filler when the user keeps talking after endpoint", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      latencyFillerEnabled: true,
+    });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      text: "I need help with",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-1",
+      timestampMs: 1100,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "turn-1" }),
+    ]);
+    expect(metrics).toContain("filler.cancelled");
+
+    await closeSession(session);
+  });
+
+  it("splices filler into the real response without duplicating connectives", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      latencyFillerEnabled: true,
+    });
+    const ttsText: TextToSpeechTextPacket[] = [];
+
+    await session.start();
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      text: "hello",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-1",
+      timestampMs: 1400,
+      text: "So the petition is still open.",
+    } satisfies LlmDeltaPacket);
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: 1401,
+      text: "So the petition is still open.",
+    } satisfies LlmResponseDonePacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(ttsText.map((pkt) => pkt.text)).toEqual([
+      "So,",
+      "the petition is still open.",
+    ]);
+
+    await closeSession(session);
+  });
 });

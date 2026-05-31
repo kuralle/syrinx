@@ -31,9 +31,9 @@ spins up; splice the real response in seamlessly. Must be:
 - Measured: report perceived-latency (endpoint→first-audio) with/without.
 
 ## Acceptance criteria
-- [ ] Optional filler track starts audio at endpoint, before LLM TTFB.
-- [ ] Filler is interruptible and splices cleanly into the real response.
-- [ ] Perceived latency (endpoint→first-audio) drops measurably with it on.
+- [x] Optional filler track starts audio at endpoint, before LLM TTFB.
+- [x] Filler is interruptible and splices cleanly into the real response.
+- [x] Perceived latency (endpoint→first-audio) drops measurably with it on.
 
 ## Test plan (TDD + smoke)
 - **Unit:** on endpoint, filler audio is enqueued before the first LLM token;

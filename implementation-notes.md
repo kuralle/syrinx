@@ -462,3 +462,22 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - `pnpm -r typecheck`: exit 0
 - Live smoke: `test/performance/runs/primary-speaker-barge-in-2026-05-31T16-03-22-762Z/baseline.json` — `qualityGate.passed:true`, `interrupts:0`, `interrupt.suppressed_non_primary` observed
 - `git diff --check`: clean on VE-02 files
+
+## VE-03 — Latency-hiding filler token dual-track (2026-05-31)
+
+**Approach (DDTSR direction, no model surgery):** at `eos.turn_complete`, optionally enqueue a short discourse connective via the normal TTS path before `user.input` reaches the LLM. A curated connective set is selected by fast heuristics (question → "Well,", gratitude → "Right,", round-robin otherwise). First `llm.delta` splices in via `stripRedundantFillerPrefix()` so duplicate leading connectives are removed. User resume during filler-only cancels immediately (`filler.cancelled` + interrupt). Off by default (`latencyFillerEnabled: true` escape hatch).
+
+**Implementation:**
+- `packages/voice/src/latency-filler.ts` — `LatencyFillerController`, connective selection, splice helper
+- `packages/voice/src/latency-filler-fixtures.ts` — labeled selection fixtures
+- `packages/voice/src/voice-agent-session.ts` — endpoint enqueue, splice on first delta, cancel on `vad.speech_started` during filler-only
+- `examples/02-hello-voice-headless/scripts/run-latency-filler-smoke.ts` — live A/B smoke (filler off vs on)
+- `examples/02-hello-voice-headless/src/university-support-agent.ts` — `latencyFillerEnabled` session option
+
+**Verification:**
+- `latency-filler.test.ts` (5) + session integration (3): filler-before-token, cancel-on-resume, splice without duplicate connective
+- `pnpm --filter @asyncdot/voice test`: 105/105
+- `pnpm -r typecheck`: exit 0
+- `pnpm -r test`: green
+- Live A/B smoke: `test/performance/runs/latency-filler-ab-2026-05-31T16-08-48-429Z/baseline.json` — `qualityGate.passed:true`, filler-off **5539 ms** vs filler-on **4623 ms** speech-end→first-audio (**−916 ms**), both arms produced assistant audio
+- `git diff --check`: clean on VE-03 files
