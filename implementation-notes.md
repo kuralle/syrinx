@@ -198,3 +198,61 @@ The live smoke should be re-run when Cartesia API access is confirmed working.
 - `voice-bridge-aisdk`: 3 new tests — word-boundary exactness + deadlock regression,
   fallback (no timestamps), fallback (no playout position)
 - `voice-tts-cartesia`: 1 new test — word timestamps emitted with correct cumulative offset
+
+## WT-01 — Extract WebSocketTransportHost (collapse 4 transports → 1) (2026-05-31)
+
+### New files
+
+- `packages/voice-server-websocket/src/transport-helpers.ts` — shared utilities: `positiveInteger`,
+  `nonNegativeInteger`, `numberFromString`, `optionalPositiveIntegerString`,
+  `optionalNonNegativeIntegerString`, `rawDataToText`, `rawDataByteLength`, `cloneRawData`,
+  `decodeStrictBase64`, `requireTtsAudioSampleRate`. Previously duplicated 4× across transports.
+
+- `packages/voice-server-websocket/src/transport-host.ts` — `runWebSocketConnection`: the shared
+  connection lifecycle. Owns: pending-buffer-until-ready, startup-timeout + abort, heartbeat,
+  max-session-duration, backpressured send, close/cleanup. Generic over `TransportAdapter<TState>`.
+
+- `packages/voice-server-websocket/src/outbound-playout-pipeline.ts` — `wireTelephonyOutboundPipeline`:
+  the ONE `interrupt.tts` → clear / `tts.audio` → encode+pace / `tts.end` → drain chain.
+  Parameterized by carrier callbacks (encodeFrames, onInterrupt, onDrain, onStop, onClear).
+
+### Per-carrier inbound ordering policies (preserved exactly)
+
+| Carrier  | Ordering policy |
+|----------|----------------|
+| Twilio   | Reject-out-of-order: `rememberTwilioMediaChunk` throws monotonicity violation |
+| Telnyx   | Bounded reorder: buffers up to `maxInboundReorderFrames`, flushes on overflow and disconnect |
+| SmartPBX | Passthrough: no chunk numbers, frames emitted in arrival order |
+
+### Browser pacing deferred to WT-03
+
+The browser transport inherits `WebSocketTransportHost` for lifecycle but keeps immediate
+(non-paced) outbound in WT-01. `wireBrowserSessionEvents` sends TTS chunks directly without
+`PacedPlayoutQueue`. WT-03 will wire browser through the outbound pipeline.
+
+### Line counts
+
+| File | Lines |
+|------|-------|
+| index.ts (browser) | 683 |
+| telnyx.ts | 630 |
+| twilio.ts | 522 |
+| smartpbx.ts | 457 |
+| transport-host.ts (new) | 185 |
+| outbound-playout-pipeline.ts (new) | 119 |
+| transport-helpers.ts (new) | 78 |
+
+Total new transport implementation: 2,674 lines (was 3,397 for four files). No file > 1000 lines.
+
+### Verification artifacts
+
+- `pnpm -r typecheck`: exit 0
+- `pnpm --filter @asyncdot/voice-server-websocket test` ×5: 117/117 stable
+- `pnpm -r test`: exit 0
+- `git diff --check`: clean
+- Local emulator smokes (all `qualityGate.passed: true`):
+  - Twilio: `test/performance/runs/twilio-emulator-2026-05-31T11-38-47-513Z/`
+  - Telnyx: `test/performance/runs/telnyx-emulator-2026-05-31T11-38-51-678Z/`
+  - SmartPBX: `test/performance/runs/smartpbx-emulator-g711_ulaw-2026-05-31T11-38-55-747Z/`
+- Fly synthetic-carrier smoke: NOT RUN — requires Fly credentials. Run:
+  `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:fly-synthetic-carrier`

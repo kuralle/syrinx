@@ -20,13 +20,14 @@ import {
 import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
-import {
-  WebSocketStartupTimeoutError,
-  startWebSocketHeartbeat,
-  startWebSocketMaxSessionDuration,
-  withWebSocketStartupTimeout,
-} from "./websocket-lifecycle.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
+import { runWebSocketConnection, type TransportAdapter, type TransportHostConfig } from "./transport-host.js";
+import {
+  decodeStrictBase64,
+  nonNegativeInteger,
+  positiveInteger,
+  rawDataToText,
+} from "./transport-helpers.js";
 
 export * from "./twilio.js";
 export * from "./telnyx.js";
@@ -91,19 +92,13 @@ interface ManagedSession {
   connectionCount: number;
 }
 
-interface ManagedSessionLease {
-  readonly managed: ManagedSession;
-  readonly resumed: boolean;
-}
-
-interface PendingClientMessage {
-  readonly data: RawData;
-  readonly isBinary: boolean;
-  readonly byteLength: number;
-}
-
 interface AudioSequenceState {
   lastSequence: number | null;
+}
+
+interface BrowserConnectionState {
+  managed: ManagedSession | null;
+  readonly initialContextId: string;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -121,38 +116,150 @@ export async function createVoiceWebSocketServer(
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws");
   const wsServer = routedWebSocket.wsServer;
   const sessions = new Map<string, ManagedSession>();
-  const sessionId = options.sessionId ?? defaultSessionId;
-  const contextId = options.contextId ?? defaultContextId;
+  const sessionIdFn = options.sessionId ?? defaultSessionId;
+  const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
-  const heartbeatIntervalMs = nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  const startupTimeoutMs = nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS;
-  const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
-  const maxBufferedAmountBytes = positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES;
-  const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
-  const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
   const rawBinaryInput = options.rawBinaryInput ?? false;
   const binaryAudioEnvelope = options.binaryAudioEnvelope ?? true;
+  const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
+  const hostConfig: TransportHostConfig = {
+    heartbeatIntervalMs: nonNegativeInteger(options.heartbeatIntervalMs) ?? DEFAULT_HEARTBEAT_INTERVAL_MS,
+    startupTimeoutMs: nonNegativeInteger(options.startupTimeoutMs) ?? DEFAULT_STARTUP_TIMEOUT_MS,
+    maxSessionDurationMs: nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS,
+    maxBufferedAmountBytes: positiveInteger(options.maxBufferedAmountBytes) ?? DEFAULT_MAX_BUFFERED_AMOUNT_BYTES,
+    maxInboundMessageBytes: positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES,
+  };
+
+  const adapter: TransportAdapter<BrowserConnectionState> = {
+    createState: () => ({
+      managed: null,
+      initialContextId: contextIdFn(),
+    }),
+
+    async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
+      const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(request) ?? sessionIdFn(request));
+      const existing = sessions.get(requestedSessionId);
+      if (existing) {
+        const resumed = existing.connectionCount > 0 || existing.closeTimer !== null;
+        if (existing.closeTimer) {
+          clearTimeout(existing.closeTimer);
+          existing.closeTimer = null;
+        }
+        existing.connectionCount += 1;
+        state.managed = existing;
+        return { session: existing.session, resumed };
+      }
+      const sess = await options.createSession(request);
+      onSessionCreated(sess);
+      if (shouldAbort()) {
+        await sess.close().catch(() => undefined);
+        throw new Error("websocket session startup aborted");
+      }
+      await sess.start();
+      if (shouldAbort()) {
+        await sess.close().catch(() => undefined);
+        throw new Error("websocket session startup aborted");
+      }
+      const managed: ManagedSession = {
+        id: requestedSessionId,
+        session: sess,
+        currentContextId: state.initialContextId,
+        contextSampleRates: new Map(),
+        inputSequence: { lastSequence: null },
+        closeTimer: null,
+        connectionCount: 1,
+      };
+      sessions.set(requestedSessionId, managed);
+      state.managed = managed;
+      return { session: sess, resumed: false };
+    },
+
+    wireSession(session, socket, state, disposers) {
+      wireBrowserSessionEvents(session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, hostConfig.maxBufferedAmountBytes);
+      return () => undefined;
+    },
+
+    processMessage(data, isBinary, session, state) {
+      if (!state.managed) return;
+      const managed = state.managed;
+      const nextContextId = handleClientMessage(
+        session,
+        data,
+        isBinary,
+        managed.currentContextId,
+        contextIdFn,
+        inputSampleRateHz,
+        rawBinaryInput,
+        managed.contextSampleRates,
+        managed.inputSequence,
+      );
+      managed.currentContextId = nextContextId;
+    },
+
+    onDisconnect(_session, state, { maxSessionTimedOut }) {
+      if (state.managed) {
+        state.managed.connectionCount = Math.max(0, state.managed.connectionCount - 1);
+        scheduleManagedSessionClose(state.managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
+      }
+    },
+
+    onStartupTimeout(_state, session) {
+      void session.close().catch(() => undefined);
+    },
+
+    sendReady(session, socket, state, resumed, config) {
+      const managed = state.managed;
+      if (!managed) return;
+      sendJson(socket, {
+        type: "ready",
+        sessionId: managed.id,
+        turnId: managed.currentContextId,
+        resumed,
+        resumeWindowMs,
+        maxSessionDurationMs: config.maxSessionDurationMs,
+        audio: {
+          inputSampleRateHz,
+          outputSampleRateHz,
+          encoding: "pcm_s16le",
+          channels: 1,
+          binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
+          rawBinaryInput,
+          maxInboundMessageBytes: config.maxInboundMessageBytes,
+        },
+      }, config.maxBufferedAmountBytes);
+    },
+
+    sendError(socket, _state, message) {
+      sendJson(socket, {
+        type: "error",
+        component: "transport",
+        category: "invalid_input",
+        message,
+      }, hostConfig.maxBufferedAmountBytes);
+    },
+
+    sendStartupError(socket, _state, err, isTimeout) {
+      sendJson(socket, {
+        type: "error",
+        component: "session",
+        category: isTimeout ? "startup_timeout" : "initialization",
+        message: err instanceof Error ? err.message : String(err),
+      }, hostConfig.maxBufferedAmountBytes);
+    },
+
+    onMaxSessionTimeout(socket, _state) {
+      sendJson(socket, {
+        type: "error",
+        component: "transport",
+        category: "session_timeout",
+        message: "Websocket max session duration exceeded",
+      }, hostConfig.maxBufferedAmountBytes);
+    },
+  };
 
   wsServer.on("connection", (socket, request) => {
-    void handleConnection({
-      socket,
-      request,
-      createSession: options.createSession,
-      sessionId,
-      contextId,
-      sessions,
-      inputSampleRateHz,
-      outputSampleRateHz,
-      heartbeatIntervalMs,
-      startupTimeoutMs,
-      maxSessionDurationMs,
-      maxBufferedAmountBytes,
-      maxInboundMessageBytes,
-      resumeWindowMs,
-      rawBinaryInput,
-      binaryAudioEnvelope,
-    });
+    void runWebSocketConnection(socket, request, hostConfig, adapter);
   });
 
   if (ownsHttpServer || typeof options.port === "number") {
@@ -170,268 +277,19 @@ export async function createVoiceWebSocketServer(
     wsServer,
     address: () => httpServer.address(),
     close: async () => {
-      for (const client of wsServer.clients) {
-        client.terminate();
-      }
+      for (const client of wsServer.clients) client.terminate();
       for (const managed of sessions.values()) {
         if (managed.closeTimer) clearTimeout(managed.closeTimer);
         await managed.session.close().catch(() => undefined);
       }
       sessions.clear();
-      await new Promise<void>((resolveClose) => {
-        wsServer.close(() => resolveClose());
-      });
+      await new Promise<void>((resolveClose) => { wsServer.close(() => resolveClose()); });
       routedWebSocket.detach();
       if (ownsHttpServer || typeof options.port === "number") {
-        await new Promise<void>((resolveClose) => {
-          httpServer.close(() => resolveClose());
-        });
+        await new Promise<void>((resolveClose) => { httpServer.close(() => resolveClose()); });
       }
     },
   };
-}
-
-async function handleConnection(args: {
-  readonly socket: WebSocket;
-  readonly request: IncomingMessage;
-  readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
-  readonly sessionId: (request: IncomingMessage) => string;
-  readonly contextId: () => string;
-  readonly sessions: Map<string, ManagedSession>;
-  readonly inputSampleRateHz: number;
-  readonly outputSampleRateHz: number;
-  readonly heartbeatIntervalMs: number;
-  readonly startupTimeoutMs: number;
-  readonly maxSessionDurationMs: number;
-  readonly maxBufferedAmountBytes: number;
-  readonly maxInboundMessageBytes: number;
-  readonly resumeWindowMs: number;
-  readonly rawBinaryInput: boolean;
-  readonly binaryAudioEnvelope: boolean;
-}): Promise<void> {
-  const {
-    socket,
-    request,
-    createSession,
-    sessionId,
-    contextId,
-    sessions,
-    inputSampleRateHz,
-    outputSampleRateHz,
-    heartbeatIntervalMs,
-    startupTimeoutMs,
-    maxSessionDurationMs,
-    maxBufferedAmountBytes,
-    maxInboundMessageBytes,
-    resumeWindowMs,
-    rawBinaryInput,
-    binaryAudioEnvelope,
-  } = args;
-  let managed: ManagedSession | null = null;
-  const initialContextId = contextId();
-  const disposers: Array<() => void> = [];
-  const pendingMessages: PendingClientMessage[] = [];
-  let pendingMessageBytes = 0;
-  let ready = false;
-  let socketClosed = false;
-  let maxSessionTimedOut = false;
-  let startupTimedOut = false;
-  const startupSession: { current?: VoiceAgentSession } = {};
-
-  const handleIncomingMessage = (data: RawData, isBinary: boolean): void => {
-    try {
-      const byteLength = rawDataByteLength(data);
-      if (byteLength > maxInboundMessageBytes) {
-        sendJson(socket, {
-          type: "error",
-          component: "transport",
-          category: "invalid_input",
-          message: `Websocket message exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)})`,
-        }, maxBufferedAmountBytes);
-        socket.close(1009, "websocket message too large");
-        return;
-      }
-      if (!ready) {
-        pendingMessageBytes += byteLength;
-        if (pendingMessageBytes > maxInboundMessageBytes) {
-          sendJson(socket, {
-            type: "error",
-            component: "transport",
-            category: "invalid_input",
-            message: `Pending websocket input exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)}) before session ready`,
-          }, maxBufferedAmountBytes);
-          socket.close(1009, "websocket pending input too large");
-          return;
-        }
-        pendingMessages.push({
-          data: cloneRawData(data),
-          isBinary,
-          byteLength,
-        });
-        return;
-      }
-      processClientMessage(data, isBinary);
-    } catch (err) {
-      sendJson(socket, {
-        type: "error",
-        component: "transport",
-        category: "invalid_input",
-        message: err instanceof Error ? err.message : String(err),
-      }, maxBufferedAmountBytes);
-    }
-  };
-
-  const processClientMessage = (data: RawData, isBinary: boolean): void => {
-    if (!managed) return;
-    const currentContextId = handleClientMessage(
-      managed.session,
-      data,
-      isBinary,
-      managed.currentContextId,
-      contextId,
-      inputSampleRateHz,
-      rawBinaryInput,
-      managed.contextSampleRates,
-      managed.inputSequence,
-    );
-    managed.currentContextId = currentContextId;
-  };
-
-  socket.on("message", handleIncomingMessage);
-
-  socket.on("close", () => {
-    socketClosed = true;
-    for (const dispose of disposers.splice(0)) {
-      dispose();
-    }
-    if (managed) {
-      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
-      scheduleManagedSessionClose(managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
-    }
-  });
-
-  try {
-    const startup = getOrCreateManagedSession({
-      request,
-      createSession,
-      sessionId,
-      sessions,
-      initialContextId,
-      onSessionCreated: (session) => {
-        startupSession.current = session;
-      },
-      shouldAbort: () => socketClosed || startupTimedOut,
-    });
-    startup.catch(() => undefined);
-    const lease = await withWebSocketStartupTimeout(startup, startupTimeoutMs);
-    managed = lease.managed;
-    managed.connectionCount += 1;
-    if (socketClosed) {
-      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
-      scheduleManagedSessionClose(managed, sessions, maxSessionTimedOut ? 0 : resumeWindowMs);
-      return;
-    }
-    startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers);
-    startWebSocketMaxSessionDuration(socket, maxSessionDurationMs, disposers, () => {
-      maxSessionTimedOut = true;
-      sendJson(socket, {
-        type: "error",
-        component: "transport",
-        category: "session_timeout",
-        message: "Websocket max session duration exceeded",
-      }, maxBufferedAmountBytes);
-    });
-    wireSessionEvents(managed.session, socket, disposers, outputSampleRateHz, binaryAudioEnvelope, maxBufferedAmountBytes);
-    sendJson(socket, {
-      type: "ready",
-      sessionId: managed.id,
-      turnId: managed.currentContextId,
-      resumed: lease.resumed,
-      resumeWindowMs,
-      maxSessionDurationMs,
-      audio: {
-        inputSampleRateHz,
-        outputSampleRateHz,
-        encoding: "pcm_s16le",
-        channels: 1,
-        binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
-        rawBinaryInput,
-        maxInboundMessageBytes,
-      },
-    }, maxBufferedAmountBytes);
-    ready = true;
-    for (const pending of pendingMessages.splice(0)) {
-      pendingMessageBytes -= pending.byteLength;
-      try {
-        processClientMessage(pending.data, pending.isBinary);
-      } catch (err) {
-        sendJson(socket, {
-          type: "error",
-          component: "transport",
-          category: "invalid_input",
-          message: err instanceof Error ? err.message : String(err),
-        }, maxBufferedAmountBytes);
-      }
-    }
-    pendingMessageBytes = 0;
-  } catch (err) {
-    if (err instanceof WebSocketStartupTimeoutError) {
-      startupTimedOut = true;
-      void startupSession.current?.close().catch(() => undefined);
-    }
-    sendJson(socket, {
-      type: "error",
-      component: "session",
-      category: err instanceof WebSocketStartupTimeoutError ? "startup_timeout" : "initialization",
-      message: err instanceof Error ? err.message : String(err),
-    }, maxBufferedAmountBytes);
-    socket.close(1011, "session initialization failed");
-    return;
-  }
-}
-
-async function getOrCreateManagedSession(args: {
-  readonly request: IncomingMessage;
-  readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
-  readonly sessionId: (request: IncomingMessage) => string;
-  readonly sessions: Map<string, ManagedSession>;
-  readonly initialContextId: string;
-  readonly onSessionCreated?: (session: VoiceAgentSession) => void;
-  readonly shouldAbort?: () => boolean;
-}): Promise<ManagedSessionLease> {
-  const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(args.request) ?? args.sessionId(args.request));
-  const existing = args.sessions.get(requestedSessionId);
-  if (existing) {
-    const resumed = existing.connectionCount > 0 || existing.closeTimer !== null;
-    if (existing.closeTimer) {
-      clearTimeout(existing.closeTimer);
-      existing.closeTimer = null;
-    }
-    return { managed: existing, resumed };
-  }
-
-  const session = await args.createSession(args.request);
-  args.onSessionCreated?.(session);
-  if (args.shouldAbort?.()) {
-    await session.close().catch(() => undefined);
-    throw new Error("websocket session startup aborted");
-  }
-  await session.start();
-  if (args.shouldAbort?.()) {
-    await session.close().catch(() => undefined);
-    throw new Error("websocket session startup aborted");
-  }
-  const managed: ManagedSession = {
-    id: requestedSessionId,
-    session,
-    currentContextId: args.initialContextId,
-    contextSampleRates: new Map(),
-    inputSequence: { lastSequence: null },
-    closeTimer: null,
-    connectionCount: 0,
-  };
-  args.sessions.set(requestedSessionId, managed);
-  return { managed, resumed: false };
 }
 
 function scheduleManagedSessionClose(
@@ -453,7 +311,7 @@ function scheduleManagedSessionClose(
   }, resumeWindowMs);
 }
 
-function wireSessionEvents(
+function wireBrowserSessionEvents(
   session: VoiceAgentSession,
   socket: WebSocket,
   disposers: Array<() => void>,
@@ -719,22 +577,6 @@ function rawDataToBytes(data: RawData): Uint8Array {
   throw new Error("Unsupported binary message payload");
 }
 
-function rawDataByteLength(data: RawData): number {
-  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
-  if (Buffer.isBuffer(data)) return data.byteLength;
-  if (data instanceof ArrayBuffer) return data.byteLength;
-  if (Array.isArray(data)) return data.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  return 0;
-}
-
-function cloneRawData(data: RawData): RawData {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return Buffer.from(data);
-  if (data instanceof ArrayBuffer) return data.slice(0);
-  if (Array.isArray(data)) return data.map((chunk) => Buffer.from(chunk));
-  throw new Error("Unsupported websocket message payload");
-}
-
 function decodeBinaryAudioMessage(
   data: Uint8Array,
   defaultSampleRateHz: number,
@@ -746,15 +588,18 @@ function decodeBinaryAudioMessage(
     }
     return { sampleRateHz: defaultSampleRateHz, audio: data };
   }
-
   const { header, audio } = decodeSyrinxAudioEnvelope(data);
-
   return {
     contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
-    sampleRateHz: positiveInteger(header.sampleRateHz) ?? defaultSampleRateHz,
+    sampleRateHz: requirePositiveIntegerFromHeader(header.sampleRateHz) ?? defaultSampleRateHz,
     sequence: header.sequence,
     audio,
   };
+}
+
+function requirePositiveIntegerFromHeader(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
+  return value;
 }
 
 function resampleAudioBytes(audio: Uint8Array, sourceSampleRateHz: number, targetSampleRateHz: number): Uint8Array {
@@ -772,33 +617,26 @@ function pcm16DurationMs(audio: Uint8Array, sampleRateHz: number): number {
   return Math.round((audio.byteLength / 2 / sampleRateHz) * 1000);
 }
 
-function positiveInteger(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
-  return value;
-}
-
-function nonNegativeInteger(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+function requireTtsAudioSampleRate(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("tts.audio sampleRateHz must be a positive integer");
+  }
   return value;
 }
 
 function optionalSequence(value: unknown): number | undefined {
   if (value === undefined) return undefined;
-  const sequence = nonNegativeInteger(value);
-  if (sequence === null) throw new Error("Websocket audio sequence must be a non-negative integer");
-  return sequence;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error("Websocket audio sequence must be a non-negative integer");
+  }
+  return value;
 }
 
 function requiredJsonAudioSampleRate(value: unknown): number {
-  const sampleRateHz = positiveInteger(value);
-  if (sampleRateHz === null) throw new Error("JSON websocket audio sampleRateHz must be a positive integer");
-  return sampleRateHz;
-}
-
-function requireTtsAudioSampleRate(value: unknown): number {
-  const sampleRateHz = positiveInteger(value);
-  if (sampleRateHz === null) throw new Error("tts.audio sampleRateHz must be a positive integer");
-  return sampleRateHz;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("JSON websocket audio sampleRateHz must be a positive integer");
+  }
+  return value;
 }
 
 function sessionIdFromRequest(request: IncomingMessage): string | null {
@@ -816,24 +654,6 @@ function sanitizeSessionId(value: string): string {
   const trimmed = value.trim();
   if (/^[A-Za-z0-9_.:-]{1,128}$/.test(trimmed)) return trimmed;
   return defaultSessionId();
-}
-
-function rawDataToText(data: RawData): string {
-  if (typeof data === "string") return data;
-  if (Buffer.isBuffer(data)) return data.toString("utf8");
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
-  throw new Error("Unsupported text message payload");
-}
-
-function decodeStrictBase64(value: string, fieldName: string): Uint8Array {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${fieldName} must be a non-empty base64 string`);
-  }
-  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
-    throw new Error(`${fieldName} must be valid base64`);
-  }
-  return Uint8Array.from(Buffer.from(value, "base64"));
 }
 
 function sendJson(socket: WebSocket, value: unknown, maxBufferedAmountBytes: number): void {
