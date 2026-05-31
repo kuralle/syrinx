@@ -1,5 +1,5 @@
 {
-  "name": "@asyncdot/voice-tts-cartesia",
+  "name": "@asyncdot/voice-ws",
   "version": "2.0.0",
   "private": false,
   "type": "module",
@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@asyncdot/voice": "workspace:*",
-    "@asyncdot/voice-ws": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

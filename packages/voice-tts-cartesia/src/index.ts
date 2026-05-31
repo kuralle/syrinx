@@ -18,15 +18,15 @@ import {
   optionalStringConfig,
   readRetryConfig,
   requireStringConfig,
-  waitForRetryDelay,
 } from "@asyncdot/voice";
+import { WebSocketConnection } from "@asyncdot/voice-ws";
+import type { RawData } from "ws";
+
+const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
 export class CartesiaTTSPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
-  private ws: import("ws").WebSocket | null = null;
-  private ready = false;
-  private connResolver: (() => void) | null = null;
-  private connRejecter: ((err: Error) => void) | null = null;
+  private conn: WebSocketConnection | null = null;
   private apiKey = "";
   private voiceId = "c2ac25f9-ecc4-4f56-9095-651354df60c0";
   private modelId = "sonic-2-2025-03-07";
@@ -35,8 +35,6 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private sampleRate = 16000;
   private language = "en";
   private retryConfig: RetryConfig = readRetryConfig({});
-  private closed = false;
-  private reconnecting = false;
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
   private disposers: Array<() => void> = [];
@@ -51,9 +49,21 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.sampleRate = (config["sample_rate"] as number) ?? this.sampleRate;
     this.language = optionalStringConfig(config, "language") ?? this.language;
     this.retryConfig = readRetryConfig(config);
-    this.closed = false;
 
-    await this.connect();
+    this.conn = new WebSocketConnection({
+      url: () => {
+        const params = new URLSearchParams({ cartesia_version: this.apiVersion });
+        const separator = this.endpointUrl.includes("?") ? "&" : "?";
+        return `${this.endpointUrl}${separator}${params.toString()}`;
+      },
+      headers: { "X-API-Key": this.apiKey },
+      retry: this.retryConfig,
+      keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
+      onMessage: (data) => this.handleProviderMessage(data),
+      onConnectionLost: (err) => this.failActiveContexts(err),
+      onUnrecoverable: (err) => this.failActiveContexts(err),
+    });
+    await this.conn.connect();
 
     this.disposers.push(
       bus.on("tts.text", async (pkt: unknown) => {
@@ -80,7 +90,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (!text.trim()) return;
     if (this.cancelledContexts.has(contextId)) return;
     this.activeContexts.add(contextId);
-    const sent = await this.sendWithRetry(
+    const sent = await this.trySend(
       JSON.stringify({
         model_id: this.modelId,
         transcript: text,
@@ -113,7 +123,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
   async finishContext(contextId: string): Promise<void> {
     if (this.cancelledContexts.has(contextId)) return;
-    const sent = await this.sendWithRetry(
+    const sent = await this.trySend(
       JSON.stringify({
         model_id: this.modelId,
         transcript: "",
@@ -137,128 +147,23 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   }
 
   async close(): Promise<void> {
-    this.closed = true;
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
-    this.connResolver = null;
-    this.connRejecter = null;
-    this.ready = false;
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    await this.conn?.close();
+    this.conn = null;
     this.bus = null;
   }
 
-  private async connect(): Promise<void> {
-    const { default: WebSocket } = await import("ws");
-    const params = new URLSearchParams({
-      cartesia_version: this.apiVersion,
-    });
-    const separator = this.endpointUrl.includes("?") ? "&" : "?";
-    const url = `${this.endpointUrl}${separator}${params.toString()}`;
-
-    this.ws = new WebSocket(url, {
-      headers: {
-        "X-API-Key": this.apiKey,
-      },
-    });
-    this.ready = false;
-
-    this.ws.on("open", () => {
-      this.ready = true;
-      this.connResolver?.();
-      this.connResolver = null;
-      this.connRejecter = null;
-    });
-
-    this.ws.on("message", (data: import("ws").RawData) => {
-      this.handleProviderMessage(data);
-    });
-
-    this.ws.on("error", (err: Error) => {
-      this.ready = false;
-      this.connRejecter?.(err);
-      this.connResolver = null;
-      this.connRejecter = null;
-      this.failActiveContexts(err);
-    });
-
-    this.ws.on("close", (code, reason) => {
-      this.ready = false;
-      this.connRejecter?.(cartesiaCloseError(code, reason));
-      this.connResolver = null;
-      this.connRejecter = null;
-      if (!this.closed && !this.reconnecting) {
-        if (this.activeContexts.size > 0) {
-          this.failActiveContexts(cartesiaCloseError(code, reason));
-        }
-        void this.reconnect();
-      }
-    });
-  }
-
-  private async sendWithRetry(payload: string, contextId: string): Promise<boolean> {
-    for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
-      try {
-        await this.ensureReady();
-        if (!this.ws || this.ws.readyState !== (this.ws as import("ws").WebSocket).OPEN) {
-          throw new Error("Cartesia TTS WebSocket is not open");
-        }
-        this.ws.send(payload);
-        return true;
-      } catch (err) {
-        const category = categorizeTtsError(err);
-        const recoverable = isRecoverable(category);
-        if (!recoverable || attempt >= this.retryConfig.maxAttempts) {
-          this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
-          return false;
-        }
-
-        this.bus?.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId,
-          timestampMs: Date.now(),
-          name: "tts.retry",
-          value: String(attempt + 1),
-        });
-        await this.reconnect();
-        await waitForRetryDelay(attempt, this.retryConfig);
-      }
-    }
-    return false;
-  }
-
-  private async ensureReady(): Promise<void> {
-    if (this.ready) return;
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Cartesia TTS WebSocket connect timeout"));
-      }, 10_000);
-      this.connResolver = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      this.connRejecter = (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      };
-    });
-  }
-
-  private async reconnect(): Promise<void> {
-    if (this.closed || this.reconnecting) return;
-    this.reconnecting = true;
+  /** Send a frame, ensuring the socket is ready; emit a typed error if it cannot be sent. */
+  private async trySend(payload: string, contextId: string): Promise<boolean> {
     try {
-      this.ws?.close();
-    } catch {
-      // best effort
-    }
-    try {
-      await this.connect();
-    } finally {
-      this.reconnecting = false;
+      await this.conn?.ensureReady();
+      this.conn?.send(payload);
+      return true;
+    } catch (err) {
+      this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
   }
 
@@ -273,7 +178,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (!contextId) return;
     this.cancelledContexts.add(contextId);
     this.activeContexts.delete(contextId);
-    await this.sendWithRetry(
+    await this.trySend(
       JSON.stringify({
         context_id: contextId,
         cancel: true,
@@ -282,7 +187,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     );
   }
 
-  private handleProviderMessage(data: import("ws").RawData): void {
+  private handleProviderMessage(data: RawData): void {
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(data.toString()) as Record<string, unknown>;
@@ -378,15 +283,6 @@ function cartesiaProviderError(msg: Record<string, unknown>): Error {
   const statusCode = typeof msg["status_code"] === "number" ? `status ${String(msg["status_code"])}` : "";
   const details = [message, errorCode, statusCode].filter((part) => part.length > 0).join(" ");
   return new Error(details ? `${title}: ${details}` : title);
-}
-
-function cartesiaCloseError(code: number, reason: Buffer): Error {
-  const reasonText = reason.toString("utf8").trim();
-  return new Error(
-    reasonText
-      ? `Cartesia TTS WebSocket closed unexpectedly: code=${code} reason=${reasonText}`
-      : `Cartesia TTS WebSocket closed unexpectedly: code=${code}`,
-  );
 }
 
 function decodeStrictBase64(value: string, name: string): Buffer {

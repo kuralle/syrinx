@@ -2,12 +2,13 @@
 //
 // Syrinx Kernel v2 — Deepgram Aura TTS Plugin (streaming)
 //
-// Streaming synthesis over Deepgram's WebSocket `/v1/speak`: each sentence the
+// Streaming synthesis over Deepgram's WebSocket /v1/speak: each sentence the
 // LLM produces is sent as a `Speak` message and raw linear16 PCM streams back
 // immediately, so audio starts before the full turn is generated (low latency).
 // `Flush` ends a turn (acked by `Flushed`); `Clear` stops a turn on barge-in.
-// One persistent socket is reused across turns (the handshake is paid once at
-// init), mirroring our Cartesia plugin's connection management.
+//
+// The socket is held open across turns by the shared WebSocketConnection
+// (exponential-backoff reconnect, ping-verify, quick-failure guard, KeepAlive).
 //
 // Reference: LiveKit agents-js plugins/deepgram/src/tts.ts (SynthesizeStream).
 // Protocol verified against the live API: Speak/Flush/Clear/Close in;
@@ -28,27 +29,24 @@ import {
   optionalStringConfig,
   readRetryConfig,
   requireStringConfig,
-  waitForRetryDelay,
 } from "@asyncdot/voice";
+import { WebSocketConnection } from "@asyncdot/voice-ws";
+import type { RawData } from "ws";
 
 const SPEAK = (text: string): string => JSON.stringify({ type: "Speak", text });
 const FLUSH_MSG = JSON.stringify({ type: "Flush" });
 const CLEAR_MSG = JSON.stringify({ type: "Clear" });
 const EMPTY = new Uint8Array(0);
+const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
 export class DeepgramTTSPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
-  private ws: import("ws").WebSocket | null = null;
-  private ready = false;
-  private connResolver: (() => void) | null = null;
-  private connRejecter: ((err: Error) => void) | null = null;
+  private conn: WebSocketConnection | null = null;
   private apiKey = "";
   private model = "aura-asteria-en";
   private endpointUrl = "wss://api.deepgram.com/v1/speak";
   private sampleRate = 24000;
   private retryConfig: RetryConfig = readRetryConfig({});
-  private closed = false;
-  private reconnecting = false;
   // Deepgram's speak socket has no per-message context id, but the engine
   // synthesizes one turn at a time, so the audio streaming back belongs to the
   // turn currently being spoken. carry holds an odd trailing PCM byte across
@@ -66,9 +64,26 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
     this.sampleRate = readPositiveInteger(config["sample_rate"], this.sampleRate);
     this.retryConfig = readRetryConfig(config);
-    this.closed = false;
 
-    await this.connect();
+    this.conn = new WebSocketConnection({
+      url: () => {
+        const params = new URLSearchParams({
+          model: this.model,
+          encoding: "linear16",
+          sample_rate: String(this.sampleRate),
+          container: "none",
+        });
+        const separator = this.endpointUrl.includes("?") ? "&" : "?";
+        return `${this.endpointUrl}${separator}${params.toString()}`;
+      },
+      headers: { Authorization: `Token ${this.apiKey}` },
+      retry: this.retryConfig,
+      keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
+      onMessage: (data, isBinary) => this.handleProviderMessage(data, isBinary),
+      onConnectionLost: (err) => this.failActiveContexts(err),
+      onUnrecoverable: (err) => this.failActiveContexts(err),
+    });
+    await this.conn.connect();
 
     this.disposers.push(
       bus.on("tts.text", async (pkt: unknown) => {
@@ -92,8 +107,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     if (this.cancelledContexts.has(contextId)) return;
     this.activeContexts.add(contextId);
     this.currentContextId = contextId;
-    const sent = await this.sendWithRetry(SPEAK(text), contextId);
-    if (!sent) this.activeContexts.delete(contextId);
+    if (!(await this.trySend(SPEAK(text), contextId))) this.activeContexts.delete(contextId);
   }
 
   private async finishContext(contextId: string): Promise<void> {
@@ -103,8 +117,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       this.emitEnd(contextId);
       return;
     }
-    const sent = await this.sendWithRetry(FLUSH_MSG, contextId);
-    if (!sent) this.activeContexts.delete(contextId);
+    if (!(await this.trySend(FLUSH_MSG, contextId))) this.activeContexts.delete(contextId);
     // tts.end is emitted when the matching `Flushed` acknowledgement arrives.
   }
 
@@ -114,19 +127,13 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   }
 
   async close(): Promise<void> {
-    this.closed = true;
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
-    this.connResolver = null;
-    this.connRejecter = null;
-    this.ready = false;
     this.currentContextId = "";
     this.carry = EMPTY;
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    await this.conn?.close();
+    this.conn = null;
     this.bus = null;
   }
 
@@ -139,121 +146,22 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     if (contextIds.length === 0) return;
     // Clear stops Deepgram from streaming the rest of the interrupted turn while
     // keeping the socket open for the next turn.
-    await this.sendWithRetry(CLEAR_MSG, contextIds[contextIds.length - 1] ?? "");
+    await this.trySend(CLEAR_MSG, contextIds[contextIds.length - 1] ?? "");
   }
 
-  private async connect(): Promise<void> {
-    const { default: WebSocket } = await import("ws");
-    const params = new URLSearchParams({
-      model: this.model,
-      encoding: "linear16",
-      sample_rate: String(this.sampleRate),
-      container: "none",
-    });
-    const separator = this.endpointUrl.includes("?") ? "&" : "?";
-    const url = `${this.endpointUrl}${separator}${params.toString()}`;
-
-    this.ws = new WebSocket(url, {
-      headers: { Authorization: `Token ${this.apiKey}` },
-    });
-    this.ready = false;
-
-    this.ws.on("open", () => {
-      this.ready = true;
-      this.connResolver?.();
-      this.connResolver = null;
-      this.connRejecter = null;
-    });
-
-    this.ws.on("message", (data: import("ws").RawData, isBinary: boolean) => {
-      this.handleProviderMessage(data, isBinary);
-    });
-
-    this.ws.on("error", (err: Error) => {
-      this.ready = false;
-      this.connRejecter?.(err);
-      this.connResolver = null;
-      this.connRejecter = null;
-      this.failActiveContexts(err);
-    });
-
-    this.ws.on("close", (code, reason) => {
-      this.ready = false;
-      this.connRejecter?.(deepgramCloseError(code, reason));
-      this.connResolver = null;
-      this.connRejecter = null;
-      if (!this.closed && !this.reconnecting) {
-        if (this.activeContexts.size > 0) {
-          this.failActiveContexts(deepgramCloseError(code, reason));
-        }
-        void this.reconnect();
-      }
-    });
-  }
-
-  private async sendWithRetry(payload: string, contextId: string): Promise<boolean> {
-    for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
-      try {
-        await this.ensureReady();
-        const ws = this.ws;
-        if (!ws || ws.readyState !== ws.OPEN) {
-          throw new Error("Deepgram TTS WebSocket is not open");
-        }
-        ws.send(payload);
-        return true;
-      } catch (err) {
-        const category = categorizeTtsError(err);
-        if (!isRecoverable(category) || attempt >= this.retryConfig.maxAttempts) {
-          this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
-          return false;
-        }
-        this.bus?.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId,
-          timestampMs: Date.now(),
-          name: "tts.retry",
-          value: String(attempt + 1),
-        });
-        await this.reconnect();
-        await waitForRetryDelay(attempt, this.retryConfig);
-      }
-    }
-    return false;
-  }
-
-  private async ensureReady(): Promise<void> {
-    if (this.ready) return;
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Deepgram TTS WebSocket connect timeout"));
-      }, 10_000);
-      this.connResolver = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      this.connRejecter = (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      };
-    });
-  }
-
-  private async reconnect(): Promise<void> {
-    if (this.closed || this.reconnecting) return;
-    this.reconnecting = true;
+  /** Send a frame, ensuring the socket is ready; emit a typed error if it cannot be sent. */
+  private async trySend(payload: string, contextId: string): Promise<boolean> {
     try {
-      this.ws?.close();
-    } catch {
-      // best effort
-    }
-    try {
-      await this.connect();
-    } finally {
-      this.reconnecting = false;
+      await this.conn?.ensureReady();
+      this.conn?.send(payload);
+      return true;
+    } catch (err) {
+      this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
   }
 
-  private handleProviderMessage(data: import("ws").RawData, isBinary: boolean): void {
+  private handleProviderMessage(data: RawData, isBinary: boolean): void {
     if (isBinary) {
       this.handleAudio(data);
       return;
@@ -291,7 +199,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     }
   }
 
-  private handleAudio(data: import("ws").RawData): void {
+  private handleAudio(data: RawData): void {
     const contextId = this.currentContextId;
     if (!contextId || this.cancelledContexts.has(contextId)) return;
     const frame = toUint8(data);
@@ -331,10 +239,6 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.activeContexts.clear();
     this.currentContextId = "";
     this.carry = EMPTY;
-    if (contextIds.length === 0) {
-      this.emitError("", err);
-      return;
-    }
     for (const contextId of contextIds) this.emitError(contextId, err);
   }
 
@@ -347,7 +251,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   }
 }
 
-function toUint8(data: import("ws").RawData): Uint8Array {
+function toUint8(data: RawData): Uint8Array {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   if (Array.isArray(data)) return new Uint8Array(Buffer.concat(data));
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -367,15 +271,6 @@ function deepgramProviderError(msg: Record<string, unknown>): Error {
     (typeof msg["err_msg"] === "string" && msg["err_msg"]) ||
     "Deepgram TTS provider error";
   return new Error(description);
-}
-
-function deepgramCloseError(code: number, reason: Buffer): Error {
-  const reasonText = reason.toString("utf8").trim();
-  return new Error(
-    reasonText
-      ? `Deepgram TTS WebSocket closed unexpectedly: code=${code} reason=${reasonText}`
-      : `Deepgram TTS WebSocket closed unexpectedly: code=${code}`,
-  );
 }
 
 function readPositiveInteger(value: unknown, fallback: number): number {
