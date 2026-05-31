@@ -1,8 +1,14 @@
 # CR-05 — `voice-agent-session.ts` Still Relies On Broad Packet Casts At Internal Wire Boundaries
 
-- **Status:** Filed (not fixed in this pass)
+- **Status:** Fixed (commit 1b026c0)
 - **Severity:** medium
 - **Area:** engine boundary types / CR-02 adjacency
+
+> **Fixed:** `packet-factories.ts` adds typed constructors for every packet the
+> session pushes; all 23 `as <Packet>` construction casts and 17 inline metric
+> literals are gone, and the 3 `unknown`-payload bus handlers are typed via
+> `bus.on<T>` generics. Illegal packet shapes are now unrepresentable at
+> construction. Voice suite green (125 tests).
 
 ## Problem
 `voice-agent-session.ts` still uses pervasive `unknown`/`as` casting when dispatching packets and wiring handlers, which allows illegal packet shapes to bypass compile-time guarantees.
