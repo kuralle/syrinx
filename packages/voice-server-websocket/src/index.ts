@@ -88,6 +88,7 @@ export interface VoiceWebSocketServerOptions {
   readonly browserOpusDownlink?: boolean;
   readonly sessionStore?: SessionStore;
   readonly maxConcurrentSessions?: number;
+  readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
 }
 
@@ -134,6 +135,7 @@ export async function createVoiceWebSocketServer(
   const httpServer = options.server ?? createServer();
   const routedWebSocket = createRoutedWebSocketServer(httpServer, options.path ?? "/ws", {
     maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
+    maxConcurrentSessionsScope: options.maxConcurrentSessionsScope,
     onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
   });
   const wsServer = routedWebSocket.wsServer;

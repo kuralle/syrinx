@@ -28,6 +28,7 @@ export interface TransportHostConfig {
 
 export interface TransportAdmissionOptions {
   readonly maxConcurrentSessions?: number;
+  readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onAdmissionRejected?: () => void;
 }
 
