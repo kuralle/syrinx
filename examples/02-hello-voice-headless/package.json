@@ -28,6 +28,7 @@
     "smoke:websocket-interactive": "tsx scripts/run-websocket-university-interactive.ts",
     "smoke:websocket-university": "tsx scripts/run-websocket-university-multiturn.ts",
     "smoke:browser-client-reconnect": "tsx scripts/run-browser-client-reconnect-smoke.ts",
+    "smoke:browser-opus-uplink": "tsx scripts/run-browser-opus-uplink-smoke.ts",
     "test": "vitest run"
   },
   "dependencies": {

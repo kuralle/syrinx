@@ -375,3 +375,25 @@ load this pegged CPU and cascaded into 5 s / 10 s timeouts in later tests (~1/3 
 - `pnpm -r typecheck`: exit 0
 - `pnpm -r test`: green (3rd run; 1st/2nd had pre-existing telnyx/twilio flakes under monorepo parallel load)
 - `git diff --check`: clean
+
+## WT-07 — `ClientTransport` seam + Opus browser leg (2026-05-31)
+
+**Implementation:**
+- `packages/voice-client-browser/src/transport.ts` — `ClientTransport` interface (`connect`/`disconnect`/`connected`/`sendAudio`/`sendJson`/`onAudio`/`onMessage`)
+- `packages/voice-client-browser/src/websocket-transport.ts` — default WebSocket impl; future drop-ins: WebRTC / WebTransport (swap transport, keep `SyrinxBrowserClient` API)
+- `packages/voice-client-browser/src/browser-opus.ts` — dynamic `@evan/opus` load; 48 kHz wire / 16 kHz engine with resample at boundaries
+- `packages/voice-client-browser/src/index.ts` — `SyrinxBrowserClient` consumes `ClientTransport`; Opus negotiated via `ready.audio.supportedInputCodecs`
+- `packages/voice-server-websocket/src/browser-opus.ts` + `index.ts` — Opus ingress decode → engine PCM16; Opus downlink in Syrinx envelope; `ready` advertises `supportedInputCodecs: ["pcm_s16le","opus"]`
+- `packages/voice/src/audio-envelope.ts` — envelope `encoding: "opus"` support
+
+**Live smoke artifact:**
+`examples/02-hello-voice-headless/test/performance/runs/browser-opus-uplink-2026-05-31T15-10-02-401Z/result.json`
+
+Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps** PCM baseline (2 s, 20 ms frames); server decoded **19 474** PCM16 bytes; `compressionRatio` **0.399**.
+
+**Verification:**
+- `pnpm -r typecheck`: exit 0
+- `pnpm --filter @asyncdot/voice-client-browser test`: 45/45
+- `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5** (138 tests/run)
+- `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:browser-opus-uplink`: pass
+- `git diff --check`: clean

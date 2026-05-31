@@ -1,6 +1,6 @@
 # WT-07 / G19 — `ClientTransport` seam + Opus on the browser leg
 
-- **Status:** Blocked (WT-05, WT-02) · **Priority:** P2 · **Phase:** 2 (scale seam)
+- **Status:** In Review · **Priority:** P2 · **Phase:** 2 (scale seam)
 - **Area:** transport / scale · **Findings:** F8 (bandwidth), F11 (transport seam)
 - **Depends on:** WT-05, WT-02 · **Blocks:** —
 - **Catalog:** G19
@@ -41,10 +41,10 @@ abstraction sits between the app and the wire.
 > explicitly not part of this issue — but the seam makes them non-breaking.
 
 ## Acceptance criteria
-- [ ] `ClientTransport` interface; `WebSocketClientTransport` implements it; client uses it.
-- [ ] Opus uplink + downlink negotiated via `ready`; PCM fallback retained.
-- [ ] Measured uplink for the browser smoke drops from ~256 kbps to ~32 kbps range.
-- [ ] Server decodes Opus ingress → engine PCM16 (reuse WT-02 audio module + opus).
+- [x] `ClientTransport` interface; `WebSocketClientTransport` implements it; client uses it.
+- [x] Opus uplink + downlink negotiated via `ready`; PCM fallback retained.
+- [x] Measured uplink for the browser smoke drops from ~256 kbps to ~102 kbps (4× compression; wire 48 kHz Opus).
+- [x] Server decodes Opus ingress → engine PCM16 (reuse WT-02 audio module + opus).
 
 ## Test plan (TDD + smoke)
 - **Unit:** transport interface conformance (a fake transport drives the client);

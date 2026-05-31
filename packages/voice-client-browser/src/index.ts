@@ -12,15 +12,44 @@ export {
   type SyrinxAudioJsonFrame,
 } from "./audio.js";
 
-import { encodeSyrinxAudioEnvelope } from "@asyncdot/voice";
+import {
+  createBrowserOpusCodec,
+  encodeBrowserOpusEnvelope,
+  encodeBrowserPcmEnvelope,
+  loadBrowserOpusModule,
+  pickBrowserWireCodec,
+  type BrowserOpusCodec,
+  type BrowserWireCodec,
+} from "./browser-opus.js";
+import { BROWSER_OPUS_SAMPLE_RATE_HZ } from "./browser-opus.js";
+import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 import {
   decodeBrowserAssistantAudio,
   encodeBrowserAudioEnvelopeFrame,
+  float32ToPcm16,
+  resampleFloat32Linear,
   AudioJitterBuffer,
   type BrowserAssistantAudio,
   type EncodeBrowserAudioOptions,
   type AudioJitterBufferOptions,
 } from "./audio.js";
+import type { ClientTransport } from "./transport.js";
+import { WebSocketClientTransport } from "./websocket-transport.js";
+
+export type { ClientTransport, ClientTransportHandlers } from "./transport.js";
+export { WebSocketClientTransport } from "./websocket-transport.js";
+export {
+  BROWSER_OPUS_FRAME_DURATION_MS,
+  BROWSER_OPUS_SAMPLE_RATE_HZ,
+  BROWSER_SUPPORTED_INPUT_CODECS,
+  createBrowserOpusCodec,
+  encodeBrowserOpusEnvelope,
+  encodeBrowserPcmEnvelope,
+  loadBrowserOpusModule,
+  pickBrowserWireCodec,
+  type BrowserOpusCodec,
+  type BrowserWireCodec,
+} from "./browser-opus.js";
 
 export type SyrinxStudioMessage =
   | {
@@ -31,7 +60,8 @@ export type SyrinxStudioMessage =
       readonly audio?: {
         readonly inputSampleRateHz: number;
         readonly outputSampleRateHz: number;
-        readonly encoding: "pcm_s16le";
+        readonly encoding: "pcm_s16le" | "opus";
+        readonly supportedInputCodecs?: readonly string[];
         readonly channels: 1;
         readonly binaryEnvelope?: "syrinx.audio.v1";
         readonly rawBinaryInput?: boolean;
@@ -84,6 +114,8 @@ export type SyrinxBrowserClientHandler = (event: SyrinxBrowserClientEvent) => vo
 export interface SyrinxBrowserClientOptions {
   readonly url: string;
   readonly protocols?: string | readonly string[];
+  /** Injectable transport seam (default: WebSocket). Future: WebRTC / WebTransport. */
+  readonly transport?: ClientTransport;
   /**
    * Auto-reconnect on unexpected close. Set false to disable entirely.
    * Defaults to enabled with 10 attempts, 1 s base delay, 30 s cap.
@@ -121,7 +153,7 @@ const RECONNECT_MAX_QUICK_FAILURES = 3;
 const KEEPALIVE_INTERVAL_MS = 10_000;
 
 export class SyrinxBrowserClient {
-  private socket: WebSocket | null = null;
+  private readonly transport: ClientTransport;
   private readonly handlers = new Set<SyrinxBrowserClientHandler>();
   private audioSequence = 0;
   private currentSessionId: string | null = null;
@@ -133,8 +165,22 @@ export class SyrinxBrowserClient {
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private jitterBuffer: AudioJitterBuffer | null = null;
   private outputSampleRateHz = 16000;
+  private wireCodec: BrowserWireCodec = "pcm_s16le";
+  private inputSampleRateHz = 16000;
+  private opusCodec: BrowserOpusCodec | null = null;
+  private opusLoadFailed = false;
+  private codecNegotiation: Promise<void> | null = null;
+  private pendingUplink: Array<() => void> = [];
 
   constructor(private readonly options: SyrinxBrowserClientOptions) {
+    this.transport = options.transport ?? new WebSocketClientTransport({ protocols: options.protocols });
+    this.transport.setHandlers({
+      onOpen: () => this.handleTransportOpen(),
+      onClose: (code, reason) => this.handleTransportClose(code, reason),
+      onError: (error) => this.emit({ type: "error", error }),
+      onMessage: (data) => this.handleTransportMessage(data),
+      onAudio: (data) => this.handleTransportAudio(data),
+    });
     if (options.audioContext) {
       this.jitterBuffer = new AudioJitterBuffer(options.audioContext, {
         sampleRateHz: this.outputSampleRateHz,
@@ -144,7 +190,7 @@ export class SyrinxBrowserClient {
   }
 
   get connected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
+    return this.transport.connected;
   }
 
   /** The sessionId received from the server's last `ready` message. Used to resume on reconnect. */
@@ -160,12 +206,11 @@ export class SyrinxBrowserClient {
   }
 
   connect(): void {
-    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
-      return;
-    }
+    if (this.transport.connected) return;
     this.cleanClose = false;
     this.cancelReconnect();
-    this.openSocket();
+    void loadBrowserOpusModule().catch(() => undefined);
+    this.openTransport();
   }
 
   close(code?: number, reason?: string): void {
@@ -173,7 +218,7 @@ export class SyrinxBrowserClient {
     this.cancelReconnect();
     this.stopKeepalive();
     this.jitterBuffer?.clear();
-    this.socket?.close(code, reason);
+    this.transport.disconnect(code, reason);
   }
 
   sendAudioPcm(
@@ -186,10 +231,11 @@ export class SyrinxBrowserClient {
       : new Uint8Array(audio);
     if (bytes.byteLength % 2 !== 0) throw new Error("PCM16 audio payload must contain an even number of bytes");
     const sampleRate = readPositiveSampleRate(sampleRateHz);
-    this.requireOpenSocket().send(encodeBrowserPcmEnvelope(bytes, sampleRate, {
-      ...options,
-      sequence: this.nextAudioSequence(options.sequence),
-    }) as Uint8Array<ArrayBuffer>);
+    this.scheduleUplink(() => {
+      for (const frame of this.encodeUplinkPcm(bytes, sampleRate, options)) {
+        this.requireOpenTransport().sendAudio(frame);
+      }
+    });
   }
 
   sendAudioBase64(
@@ -207,8 +253,24 @@ export class SyrinxBrowserClient {
   }
 
   sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
+    if (this.wireCodec === "opus" && this.opusCodec) {
+      const targetRate = readPositiveSampleRate(options.toSampleRateHz);
+      const resampled = resampleFloat32Linear(input, options);
+      const pcm = float32ToPcm16(resampled);
+      const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+      this.scheduleUplink(() => {
+        for (const frame of this.encodeUplinkPcm(bytes, targetRate, options)) {
+          this.requireOpenTransport().sendAudio(frame);
+        }
+      });
+      return;
+    }
     const sequence = this.nextAudioSequence(options.sequence);
-    this.requireOpenSocket().send(encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }) as Uint8Array<ArrayBuffer>);
+    this.scheduleUplink(() => {
+      this.requireOpenTransport().sendAudio(
+        encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }) as Uint8Array<ArrayBuffer>,
+      );
+    });
   }
 
   sendText(text: string): void {
@@ -216,45 +278,43 @@ export class SyrinxBrowserClient {
   }
 
   sendJson(value: unknown): void {
-    this.requireOpenSocket().send(JSON.stringify(value));
+    this.transport.sendJson(value);
   }
 
-  private openSocket(): void {
+  private openTransport(): void {
     const url = this.currentSessionId !== null
       ? buildResumeUrl(this.options.url, this.currentSessionId)
       : this.options.url;
-    const socket = new WebSocket(url, this.options.protocols as string | string[] | undefined);
-    socket.binaryType = "arraybuffer";
-    this.socket = socket;
+    this.transport.connect(url);
+  }
 
-    socket.addEventListener("open", () => {
-      this.openedAt = Date.now();
-      if (this.reconnectAttempt > 0) {
-        const attempt = this.reconnectAttempt;
-        this.reconnectAttempt = 0;
-        this.emit({ type: "reconnected", attempt });
-      } else {
-        this.emit({ type: "open" });
-      }
-      this.startKeepalive(socket);
-    });
+  private handleTransportOpen(): void {
+    this.openedAt = Date.now();
+    if (this.reconnectAttempt > 0) {
+      const attempt = this.reconnectAttempt;
+      this.reconnectAttempt = 0;
+      this.emit({ type: "reconnected", attempt });
+    } else {
+      this.emit({ type: "open" });
+    }
+    this.startKeepalive();
+  }
 
-    socket.addEventListener("close", (event) => {
-      this.stopKeepalive();
-      if (this.cleanClose) {
-        this.emit({ type: "close", code: event.code, reason: event.reason });
-        return;
-      }
-      this.scheduleReconnect(event.code, event.reason);
-    });
+  private handleTransportClose(code: number, reason: string): void {
+    this.stopKeepalive();
+    if (this.cleanClose) {
+      this.emit({ type: "close", code, reason });
+      return;
+    }
+    this.scheduleReconnect(code, reason);
+  }
 
-    socket.addEventListener("error", (event) => {
-      this.emit({ type: "error", error: event });
-    });
+  private handleTransportMessage(data: unknown): void {
+    this.handleJsonMessage(data);
+  }
 
-    socket.addEventListener("message", (event) => {
-      this.handleMessage(event.data);
-    });
+  private handleTransportAudio(data: ArrayBuffer): void {
+    this.handleBinaryMessage(data);
   }
 
   private scheduleReconnect(code: number, reason: string): void {
@@ -304,7 +364,7 @@ export class SyrinxBrowserClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (this.cleanClose) return;
-      this.openSocket();
+      this.openTransport();
     }, delayMs);
   }
 
@@ -318,14 +378,14 @@ export class SyrinxBrowserClient {
     this.openedAt = 0;
   }
 
-  private startKeepalive(socket: WebSocket): void {
+  private startKeepalive(): void {
     this.stopKeepalive();
     const intervalMs = this.options.keepaliveIntervalMs;
     if (intervalMs === false) return;
     const ms = typeof intervalMs === "number" && intervalMs > 0 ? intervalMs : KEEPALIVE_INTERVAL_MS;
     this.keepaliveTimer = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "ping" }));
+      if (this.transport.connected) {
+        this.transport.sendJson({ type: "ping" });
       } else {
         this.stopKeepalive();
       }
@@ -339,61 +399,116 @@ export class SyrinxBrowserClient {
     }
   }
 
-  private handleMessage(data: unknown): void {
-    if (typeof data === "string") {
-      try {
-        const message = parseStudioMessage(JSON.parse(data) as unknown);
-        if (message.type === "ready" && message.sessionId !== undefined) {
-          this.currentSessionId = message.sessionId;
-          // Update output sample rate and recreate jitter buffer if needed
-          if (message.audio?.outputSampleRateHz && message.audio.outputSampleRateHz !== this.outputSampleRateHz) {
-            this.outputSampleRateHz = message.audio.outputSampleRateHz;
-            if (this.options.audioContext) {
-              this.jitterBuffer = new AudioJitterBuffer(this.options.audioContext, {
-                sampleRateHz: this.outputSampleRateHz,
-                ...this.options.jitterBuffer,
-              });
-            }
+  private handleJsonMessage(data: unknown): void {
+    if (typeof data !== "string") return;
+    try {
+      const message = parseStudioMessage(JSON.parse(data) as unknown);
+      if (message.type === "ready") {
+        if (message.sessionId !== undefined) this.currentSessionId = message.sessionId;
+        if (message.audio?.outputSampleRateHz && message.audio.outputSampleRateHz !== this.outputSampleRateHz) {
+          this.outputSampleRateHz = message.audio.outputSampleRateHz;
+          if (this.options.audioContext) {
+            this.jitterBuffer = new AudioJitterBuffer(this.options.audioContext, {
+              sampleRateHz: this.outputSampleRateHz,
+              ...this.options.jitterBuffer,
+            });
           }
         }
-        // Handle jitter buffer clearing on interrupts
-        if ((message.type === "audio_clear" || message.type === "agent_interrupted") && this.jitterBuffer) {
-          this.jitterBuffer.clear(message.turnId);
+        if (message.audio?.supportedInputCodecs?.includes("opus") && !this.opusLoadFailed) {
+          this.codecNegotiation = this.negotiateWireCodec(message.audio).finally(() => {
+            this.codecNegotiation = null;
+            const pending = this.pendingUplink;
+            this.pendingUplink = [];
+            for (const send of pending) send();
+          });
+        } else {
+          void this.negotiateWireCodec(message.audio);
         }
-        
-        this.emit({ type: "message", message });
-        if (message.type === "ready" && message.resumed === true) {
-          this.emit({ type: "resumed" });
-        }
-      } catch (err) {
-        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
       }
-      return;
-    }
-    if (data instanceof Blob) {
-      void data.arrayBuffer().then((buffer) => {
-        const audio = decodeBrowserAssistantAudio(buffer);
-        this.handleAudioData(audio.data, audio.metadata);
-      }).catch((err: unknown) => {
-        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
-      });
-      return;
-    }
-    if (data instanceof ArrayBuffer) {
-      try {
-        const audio = decodeBrowserAssistantAudio(data);
-        this.handleAudioData(audio.data, audio.metadata);
-      } catch (err) {
-        this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
+      if ((message.type === "audio_clear" || message.type === "agent_interrupted") && this.jitterBuffer) {
+        this.jitterBuffer.clear(message.turnId);
       }
+      this.emit({ type: "message", message });
+      if (message.type === "ready" && message.resumed === true) {
+        this.emit({ type: "resumed" });
+      }
+    } catch (err) {
+      this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
     }
   }
 
-  private requireOpenSocket(): WebSocket {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("SyrinxBrowserClient WebSocket is not open");
+  private handleBinaryMessage(data: ArrayBuffer): void {
+    try {
+      const audio = decodeBrowserAssistantAudio(data, this.opusCodec);
+      let pcmData = audio.data;
+      const wireRate = audio.metadata?.sampleRateHz;
+      if (wireRate !== undefined && wireRate !== this.outputSampleRateHz) {
+        const samples = pcm16BytesToSamples(new Uint8Array(pcmData));
+        const resampled = pcm16SamplesToBytes(resamplePcm16(samples, wireRate, this.outputSampleRateHz));
+        const copy = new Uint8Array(resampled.byteLength);
+        copy.set(resampled);
+        pcmData = copy.buffer;
+      }
+      this.handleAudioData(pcmData, audio.metadata);
+    } catch (err) {
+      this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
     }
-    return this.socket;
+  }
+
+  private scheduleUplink(send: () => void): void {
+    if (this.codecNegotiation) {
+      this.pendingUplink.push(send);
+      return;
+    }
+    send();
+  }
+
+  private async negotiateWireCodec(audio: SyrinxReadyAudio): Promise<void> {
+    if (!audio) return;
+    this.inputSampleRateHz = audio.inputSampleRateHz;
+    const supported = audio.supportedInputCodecs;
+    if (!supported?.includes("opus") || this.opusLoadFailed) {
+      this.wireCodec = "pcm_s16le";
+      return;
+    }
+    try {
+      this.opusCodec = await createBrowserOpusCodec(BROWSER_OPUS_SAMPLE_RATE_HZ);
+      this.wireCodec = pickBrowserWireCodec(supported, true);
+    } catch {
+      this.opusLoadFailed = true;
+      this.opusCodec = null;
+      this.wireCodec = "pcm_s16le";
+    }
+  }
+
+  private encodeUplinkPcm(
+    bytes: Uint8Array,
+    sampleRateHz: number,
+    options: { readonly contextId?: string; readonly sequence?: number },
+  ): Uint8Array[] {
+    if (this.wireCodec === "opus" && this.opusCodec) {
+      const frames: Uint8Array[] = [];
+      let seq: number | undefined = options.sequence;
+      const samples = pcm16BytesToSamples(bytes);
+      const wireSamples = sampleRateHz === this.opusCodec.sampleRateHz
+        ? samples
+        : resamplePcm16(samples, sampleRateHz, this.opusCodec.sampleRateHz);
+      for (const opus of this.opusCodec.encodePcm16Frame(wireSamples, true)) {
+        const sequence = this.nextAudioSequence(seq);
+        frames.push(encodeBrowserOpusEnvelope(opus, this.opusCodec.sampleRateHz, { ...options, sequence }));
+        seq = sequence;
+      }
+      return frames;
+    }
+    const sequence = this.nextAudioSequence(options.sequence);
+    return [encodeBrowserPcmEnvelope(bytes, sampleRateHz, { ...options, sequence })];
+  }
+
+  private requireOpenTransport(): ClientTransport {
+    if (!this.transport.connected) {
+      throw new Error("SyrinxBrowserClient transport is not connected");
+    }
+    return this.transport;
   }
 
   private nextAudioSequence(sequence: number | undefined): number {
@@ -434,23 +549,6 @@ function buildResumeUrl(baseUrl: string, sessionId: string): string {
     const sep = baseUrl.includes("?") ? "&" : "?";
     return `${baseUrl}${sep}sessionId=${encodeURIComponent(sessionId)}`;
   }
-}
-
-function encodeBrowserPcmEnvelope(
-  audio: Uint8Array,
-  sampleRateHz: number,
-  options: { readonly contextId?: string; readonly sequence?: number },
-): Uint8Array {
-  return encodeSyrinxAudioEnvelope({
-    type: "audio",
-    contextId: options.contextId,
-    sampleRateHz,
-    sequence: options.sequence,
-    encoding: "pcm_s16le",
-    channels: 1,
-    byteLength: audio.byteLength,
-    durationMs: Math.round((audio.byteLength / 2 / sampleRateHz) * 1000),
-  }, audio);
 }
 
 function readPositiveSampleRate(value: number): number {
@@ -547,16 +645,29 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
 function parseReadyAudio(value: unknown): SyrinxReadyAudio {
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error("ready.audio must be an object");
+  const encoding = value.encoding;
+  if (encoding !== "pcm_s16le" && encoding !== "opus") {
+    throw new Error("ready.audio.encoding must be pcm_s16le or opus");
+  }
   return {
     inputSampleRateHz: requiredPositiveInteger(value.inputSampleRateHz, "ready.audio.inputSampleRateHz"),
     outputSampleRateHz: requiredPositiveInteger(value.outputSampleRateHz, "ready.audio.outputSampleRateHz"),
-    encoding: requiredLiteral(value.encoding, "pcm_s16le", "ready.audio.encoding"),
+    encoding,
+    supportedInputCodecs: parseSupportedInputCodecs(value.supportedInputCodecs),
     channels: requiredLiteral(value.channels, 1, "ready.audio.channels"),
     binaryEnvelope: value.binaryEnvelope === undefined
       ? undefined
       : requiredLiteral(value.binaryEnvelope, "syrinx.audio.v1", "ready.audio.binaryEnvelope"),
     rawBinaryInput: optionalBoolean(value.rawBinaryInput, "ready.audio.rawBinaryInput"),
   };
+}
+
+function parseSupportedInputCodecs(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error("ready.audio.supportedInputCodecs must be an array of strings");
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
