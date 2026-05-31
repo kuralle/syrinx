@@ -20,6 +20,7 @@ const BASELINE_PATH = join(SCRIPT_DIR, "..", "test", "performance", "websocket-u
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 320;
+const VOICE_TO_VOICE_SLO_MS = 800;
 const TRAILING_SILENCE_MS = 1400;
 const POST_TTS_DRAIN_MS = 500;
 
@@ -66,6 +67,7 @@ interface InteractiveTurnCapture {
   agentReply: string;
   toolCalls: string[];
   audioBytes: number;
+  metricsE2eMs: number;
   error: string;
 }
 
@@ -125,6 +127,8 @@ async function main(): Promise<void> {
         avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.firstAgentAtMs)),
         avgSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs)),
         avgVadSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.speechEndedAtMs)),
+        voiceToVoiceP50Ms: percentile(turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0), 50),
+        voiceToVoiceP95Ms: percentile(turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0), 95),
       },
       turns: turns.map((turn) => ({
         id: turn.id,
@@ -290,6 +294,7 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       agentReply: "",
       toolCalls: [],
       audioBytes: 0,
+      metricsE2eMs: 0,
       error: "",
     };
 
@@ -361,6 +366,11 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
     }
     if (msg["type"] === "tts_end" && msg["turnId"] === turn.id) {
       turn.ttsEndedAtMs = Date.now();
+      return;
+    }
+    if (msg["type"] === "metrics" && msg["turnId"] === turn.id) {
+      const e2eMs = Number(msg["e2eMs"]);
+      if (Number.isFinite(e2eMs) && e2eMs > 0) turn.metricsE2eMs = e2eMs;
       return;
     }
     if (msg["type"] === "error") {
@@ -461,6 +471,17 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
   const avgStt = average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs));
   const avgVadEnd = average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs));
   const avgE2e = average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs));
+  const voiceToVoice = turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
+  const p50 = percentile(voiceToVoice, 50);
+  const p95 = percentile(voiceToVoice, 95);
+  if (p50 > 0) diagnostics.push(`voice-to-voice P50=${String(p50)}ms`);
+  if (p95 > 0) diagnostics.push(`voice-to-voice P95=${String(p95)}ms`);
+  if (p50 > VOICE_TO_VOICE_SLO_MS) {
+    diagnostics.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  }
+  if (p95 > VOICE_TO_VOICE_SLO_MS) {
+    diagnostics.push(`voice-to-voice P95 ${String(p95)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  }
   if (avgStt > 7000) failures.push(`avg STT final after speech end was ${String(avgStt)}ms, expected <= 7000ms`);
   if (avgVadEnd > 2500) failures.push(`avg VAD speech end after audio end was ${String(avgVadEnd)}ms, expected <= 2500ms`);
   if (avgE2e > 20_000) failures.push(`avg speech end to first assistant audio was ${String(avgE2e)}ms, expected <= 20000ms`);
@@ -486,6 +507,13 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
 function average(values: readonly number[]): number {
   if (values.length === 0) return 0;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function percentile(values: readonly number[], pct: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1));
+  return sorted[index] ?? 0;
 }
 
 function rawBytes(data: RawData): Uint8Array {

@@ -1,6 +1,6 @@
 # WT-09 / G21 — Metrics wiring + per-turn timestamps + browser loss/jitter smoke
 
-- **Status:** Blocked (WT-01, WT-03) · **Priority:** P2 · **Phase:** 2
+- **Status:** In Review · **Priority:** P2 · **Phase:** 2
 - **Area:** observability · **Findings:** transport-strategy corpus (measure, don't argue)
 - **Depends on:** WT-01, WT-03 · **Blocks:** —
 - **Catalog:** G21
@@ -38,9 +38,9 @@ harness or a populated metrics channel.
    interactive smoke (warn, not fail, with P50/P95 logged).
 
 ## Acceptance criteria
-- [ ] Server emits populated `metrics` per turn (4 timestamps + stage latencies + correlation id).
-- [ ] Browser loss/jitter smoke exists and passes with the jitter buffer absorbing impairment.
-- [ ] Interactive smoke logs P50/P95 voice-to-voice and asserts the SLO band.
+- [x] Server emits populated `metrics` per turn (4 timestamps + stage latencies + correlation id).
+- [x] Browser loss/jitter smoke exists and passes with the jitter buffer absorbing impairment.
+- [x] Interactive smoke logs P50/P95 voice-to-voice and asserts the SLO band.
 
 ## Test plan (TDD + smoke)
 - **Unit:** metrics computed correctly from synthetic stage events; correlation id stable per turn.

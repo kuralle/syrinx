@@ -410,3 +410,20 @@ Smoke: `qualityGate.passed: true` — uplink **~102 kbps** Opus vs **~256 kbps**
 - `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5 pass** (142 tests/run)
 - `pnpm -r typecheck`: exit 0
 - `git diff --check`: clean
+
+## WT-09 — Metrics wiring + per-turn timestamps + browser loss/jitter smoke (2026-05-31)
+
+**Implementation:**
+- `turn-metrics.ts` — `TurnMetricsTracker` listens on pipeline bus for `vad.speech_ended`, `stt.result`, `llm.delta`, `tts.audio`, and `tts.playout_progress{complete}`; emits populated `metrics` JSON per turn with four canonical timestamps + stage latencies + stable `correlationId`.
+- `index.ts` — wires tracker into `wireBrowserSessionEvents`; metrics push on playout complete sourced from `PlayoutProgressEmitter`.
+- `voice-client-browser` — extended `metrics` message type/parser with timestamps + correlation fields.
+- `run-browser-jitter-smoke.ts` — uplink jitter proxy (`clean|jittery|bursty`), headless Chrome review console, quality gate for metrics + playback lead + impairment gap.
+- `run-websocket-university-interactive.ts` — captures server `metrics.e2eMs`, logs P50/P95 voice-to-voice, warns (diagnostic) when above 800 ms SLO band.
+
+**Verification:**
+- `turn-metrics.test.ts` (4 tests): stage latency math, correlation id stability, playout-complete emit, interrupt discard.
+- `index.test.ts`: websocket client receives populated `metrics` after paced TTS drain.
+- `pnpm --filter @asyncdot/voice-server-websocket test` ×5: **5/5 pass** (147 tests/run)
+- `pnpm --filter @asyncdot/voice-client-browser test`: 46/46 pass
+- `pnpm -r typecheck`: exit 0
+- Live smoke artifact: `examples/02-hello-voice-headless/test/performance/runs/browser-jitter-2026-05-31T15-35-29-161Z/baseline.json` (jittery uplink, metrics `e2eMs=598`, `minPlaybackLeadMs=0`, quality gate passed)

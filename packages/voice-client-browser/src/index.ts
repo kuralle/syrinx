@@ -90,6 +90,13 @@ export type SyrinxStudioMessage =
     }
   | {
       readonly type: "metrics";
+      readonly turnId?: string;
+      readonly correlationId?: string;
+      readonly speechEndMs?: number;
+      readonly textReadyMs?: number;
+      readonly firstAudioByteMs?: number;
+      readonly firstAudioPlayedMs?: number;
+      readonly lastAudioPlayedMs?: number;
       readonly sttMs?: number;
       readonly llmTTFTMs?: number;
       readonly ttsTTFBMs?: number;
@@ -625,6 +632,13 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
   if (type === "metrics") {
     return {
       type,
+      turnId: optionalString(value.turnId, "metrics.turnId"),
+      correlationId: optionalString(value.correlationId, "metrics.correlationId"),
+      speechEndMs: optionalNumber(value.speechEndMs, "metrics.speechEndMs"),
+      textReadyMs: optionalNumber(value.textReadyMs, "metrics.textReadyMs"),
+      firstAudioByteMs: optionalNumber(value.firstAudioByteMs, "metrics.firstAudioByteMs"),
+      firstAudioPlayedMs: optionalNumber(value.firstAudioPlayedMs, "metrics.firstAudioPlayedMs"),
+      lastAudioPlayedMs: optionalNumber(value.lastAudioPlayedMs, "metrics.lastAudioPlayedMs"),
       sttMs: optionalNumber(value.sttMs, "metrics.sttMs"),
       llmTTFTMs: optionalNumber(value.llmTTFTMs, "metrics.llmTTFTMs"),
       ttsTTFBMs: optionalNumber(value.ttsTTFBMs, "metrics.ttsTTFBMs"),
