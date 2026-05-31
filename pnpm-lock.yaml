@@ -141,6 +141,9 @@ importers:
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice
+      '@evan/opus':
+        specifier: 1.0.3
+        version: 1.0.3
     devDependencies:
       typescript:
         specifier: ^5.7.0
