@@ -12,7 +12,7 @@ import {
   pcm16SamplesToBytes,
   resamplePcm16,
 } from "@asyncdot/voice/audio";
-import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { sendJsonCapped } from "./websocket-close.js";
 import {
   optionalRecord,
   optionalString,
@@ -471,12 +471,5 @@ function sendSmartPbxError(
 }
 
 function sendSmartPbxJson(socket: WebSocket, value: unknown, maxBufferedAmountBytes: number): boolean {
-  if (socket.readyState !== WebSocket.OPEN) return false;
-  const data = JSON.stringify(value);
-  if (socket.bufferedAmount + Buffer.byteLength(data, "utf8") > maxBufferedAmountBytes) {
-    closeWebSocketWithFallback(socket, 1013, "websocket send buffer exceeded");
-    return false;
-  }
-  socket.send(data);
-  return true;
+  return sendJsonCapped(socket, value, maxBufferedAmountBytes);
 }

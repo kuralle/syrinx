@@ -5,7 +5,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { Route, type VoiceAgentSession } from "@asyncdot/voice";
 import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
-import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { sendJsonCapped } from "./websocket-close.js";
 import {
   optionalRecord,
   optionalString,
@@ -536,12 +536,5 @@ function sendTwilioError(socket: WebSocket, streamSid: string, message: string, 
 }
 
 function sendTwilioJson(socket: WebSocket, value: unknown, maxBufferedAmountBytes: number): boolean {
-  if (socket.readyState !== WebSocket.OPEN) return false;
-  const data = JSON.stringify(value);
-  if (socket.bufferedAmount + Buffer.byteLength(data, "utf8") > maxBufferedAmountBytes) {
-    closeWebSocketWithFallback(socket, 1013, "websocket send buffer exceeded");
-    return false;
-  }
-  socket.send(data);
-  return true;
+  return sendJsonCapped(socket, value, maxBufferedAmountBytes);
 }
