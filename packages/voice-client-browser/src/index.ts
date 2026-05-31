@@ -392,7 +392,15 @@ export class SyrinxBrowserClient {
     const ms = typeof intervalMs === "number" && intervalMs > 0 ? intervalMs : KEEPALIVE_INTERVAL_MS;
     this.keepaliveTimer = setInterval(() => {
       if (this.transport.connected) {
-        this.transport.sendJson({ type: "ping" });
+        try {
+          this.transport.sendJson({ type: "ping" });
+        } catch (error) {
+          this.stopKeepalive();
+          this.emit({
+            type: "error",
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        }
       } else {
         this.stopKeepalive();
       }

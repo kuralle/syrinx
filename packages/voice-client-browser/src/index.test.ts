@@ -550,6 +550,23 @@ describe("SyrinxBrowserClient — keepalive", () => {
 
     expect(sockets[0]!.sent).toContain(JSON.stringify({ type: "ping" }));
   });
+
+  it("stops keepalive and emits error when ping send races a socket close", async () => {
+    const client = makeClient({ keepaliveIntervalMs: 5000, reconnect: false });
+    const events = collectEvents(client);
+    client.connect();
+    sockets[0]!.dispatch("open", {});
+
+    sockets[0]!.send = () => {
+      throw new Error("socket closed during ping");
+    };
+
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(events.some((e) => e.type === "error")).toBe(true);
+    expect(sockets[0]!.sent.filter((s) => s === JSON.stringify({ type: "ping" }))).toHaveLength(0);
+  });
 });
 
 describe("SyrinxBrowserClient — metrics", () => {
