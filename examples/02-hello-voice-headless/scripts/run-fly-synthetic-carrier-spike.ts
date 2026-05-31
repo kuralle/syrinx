@@ -609,6 +609,8 @@ async function importBotSecrets(app: string): Promise<void> {
     "CARTESIA_VOICE_ID",
     "SYRINX_DEEPGRAM_MODEL",
     "SYRINX_DEEPGRAM_LANGUAGE",
+    "SYRINX_REVIEW_TTS",
+    "SYRINX_DEEPGRAM_TTS_MODEL",
   ];
   const lines: string[] = [];
   for (const name of names) {
