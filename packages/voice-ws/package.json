@@ -9,7 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
-    "./whatwg": "./src/whatwg.ts"
+    "./web": "./src/web-socket.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

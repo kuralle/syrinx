@@ -9,8 +9,8 @@
 // holds the connection open through idle with a KeepAlive.
 //
 // Runtime-agnostic: it drives a ManagedSocket adapter, not a concrete library.
-// Inject createNodeWsSocket (Node/Bun, via `ws`) or createWhatwgSocket
-// (Cloudflare Workers / browser, via the platform WebSocket). The reconnection
+// Inject createNodeWsSocket (Node/Bun, via `ws`) or createWebSocketAdapter
+// (Cloudflare Workers / browser, via the built-in WebSocket). The reconnection
 // logic is identical everywhere; only the socket primitive differs.
 //
 // Reconnection model ported from Pipecat's WebsocketService
@@ -25,7 +25,7 @@ export type SocketData = string | Uint8Array;
 
 /**
  * The minimal socket the connection manager drives. Implemented over Node `ws`
- * (createNodeWsSocket) or the WHATWG WebSocket (createWhatwgSocket). Keeping the
+ * (createNodeWsSocket) or the built-in WebSocket (createWebSocketAdapter). Keeping the
  * manager behind this seam is what makes it portable to Cloudflare Workers,
  * where `ws` does not run and there are no ping frames.
  */
@@ -34,7 +34,7 @@ export interface ManagedSocket {
   send(data: SocketData): void;
   /** Fire-and-forget liveness ping (Node WS ping frame). No-op where unsupported. */
   keepAlivePing(): void;
-  /** Probe liveness: Node pings and awaits a pong; WHATWG just reports readyState. */
+  /** Probe liveness: Node pings and awaits a pong; the built-in WebSocket just reports readyState. */
   verify(timeoutMs: number): Promise<boolean>;
   /** Remove listeners and close — used when replacing or tearing down. */
   dispose(): void;
@@ -59,7 +59,7 @@ export interface WebSocketConnectionOptions {
   /** Periodic KeepAlive to stop idle providers from closing the socket. 0 disables. */
   readonly keepAliveIntervalMs?: number;
   /** App-level KeepAlive payload (e.g. Deepgram `{"type":"KeepAlive"}`). When omitted a WS ping is used
-   *  (which is a no-op on WHATWG sockets — provide a message for KeepAlive on Workers/browser). */
+   *  (which is a no-op on built-in WebSockets — provide a message for KeepAlive on Workers/browser). */
   readonly keepAliveMessage?: () => SocketData;
   /** A reconnect that re-opens then dies within this window counts as a quick failure. */
   readonly minStableMs?: number;
