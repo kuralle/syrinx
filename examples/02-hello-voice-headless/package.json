@@ -27,11 +27,13 @@
     "smoke:twilio-emulator": "tsx scripts/run-twilio-emulator-smoke.ts",
     "smoke:websocket-interactive": "tsx scripts/run-websocket-university-interactive.ts",
     "smoke:websocket-university": "tsx scripts/run-websocket-university-multiturn.ts",
+    "smoke:browser-client-reconnect": "tsx scripts/run-browser-client-reconnect-smoke.ts",
     "test": "vitest run"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",
     "@asyncdot/voice": "workspace:*",
+    "@asyncdot/voice-client-browser": "workspace:*",
     "@asyncdot/voice-bridge-aisdk": "workspace:*",
     "@asyncdot/voice-recorder": "workspace:*",
     "@asyncdot/voice-server-websocket": "workspace:*",

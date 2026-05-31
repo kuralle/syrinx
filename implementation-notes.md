@@ -61,3 +61,21 @@
 - Workspace packages (@asyncdot/voice-*) don't exist locally — will create source stubs
 - Deepgram WebSocket key requires streaming credits (402 on ws connection) — noted
 - Following RFC Q1-Q4 resolutions: setTimeout drain loop, native bus contract (breaking), Background route for events, synthetic LLM packets for idle messages
+
+---
+
+## WT-05 — Browser Client Reconnect + Resume + Keepalive (2026-05-31)
+
+**Implementation**: `packages/voice-client-browser/src/index.ts`
+
+Key decisions:
+- `message` event fires before synthetic `resumed` event so handlers reading `ready.resumed` see it first
+- `reconnectAttempt` resets to 0 after a successful open — storm cap is per-outage, not lifetime
+- `buildResumeUrl` uses `URL` constructor with fallback for non-standard WebSocket URLs
+- `as Uint8Array<ArrayBuffer>` cast on `socket.send()` to satisfy TS6 stricter `ArrayBufferView<ArrayBuffer>` type
+
+**Live smoke artifact**:
+`examples/02-hello-voice-headless/test/performance/runs/browser-client-reconnect-2026-05-31T10-40-54-263Z/result.json`
+
+Events observed: `open → message → reconnecting → reconnected → message → resumed → close`
+Server confirmed: `resumed: true`, `sessionResumed: true`

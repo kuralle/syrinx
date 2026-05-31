@@ -24,6 +24,8 @@ export type SyrinxStudioMessage =
   | {
       readonly type: "ready";
       readonly sessionId?: string;
+      readonly resumed?: boolean;
+      readonly resumeWindowMs?: number;
       readonly audio?: {
         readonly inputSampleRateHz: number;
         readonly outputSampleRateHz: number;
@@ -70,24 +72,56 @@ export type SyrinxBrowserClientEvent =
   | { readonly type: "close"; readonly code: number; readonly reason: string }
   | { readonly type: "error"; readonly error: Event | Error }
   | { readonly type: "message"; readonly message: SyrinxStudioMessage }
-  | { readonly type: "audio"; readonly data: ArrayBuffer; readonly metadata?: BrowserAssistantAudio["metadata"] };
+  | { readonly type: "audio"; readonly data: ArrayBuffer; readonly metadata?: BrowserAssistantAudio["metadata"] }
+  | { readonly type: "reconnecting"; readonly attempt: number; readonly delayMs: number }
+  | { readonly type: "reconnected"; readonly attempt: number }
+  | { readonly type: "resumed" };
 
 export type SyrinxBrowserClientHandler = (event: SyrinxBrowserClientEvent) => void;
 
 export interface SyrinxBrowserClientOptions {
   readonly url: string;
   readonly protocols?: string | readonly string[];
+  /**
+   * Auto-reconnect on unexpected close. Set false to disable entirely.
+   * Defaults to enabled with 10 attempts, 1 s base delay, 30 s cap.
+   */
+  readonly reconnect?: false | {
+    readonly maxAttempts?: number;
+    readonly baseDelayMs?: number;
+    readonly maxDelayMs?: number;
+  };
+  /**
+   * Interval (ms) for periodic {type:"ping"} keepalives. Set false to disable.
+   * Default: 10 000 ms — below typical proxy idle-kill thresholds.
+   */
+  readonly keepaliveIntervalMs?: number | false;
 }
+
+const RECONNECT_MAX_ATTEMPTS = 10;
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const KEEPALIVE_INTERVAL_MS = 10_000;
 
 export class SyrinxBrowserClient {
   private socket: WebSocket | null = null;
   private readonly handlers = new Set<SyrinxBrowserClientHandler>();
   private audioSequence = 0;
+  private currentSessionId: string | null = null;
+  private cleanClose = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: SyrinxBrowserClientOptions) {}
 
   get connected(): boolean {
     return this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  /** The sessionId received from the server's last `ready` message. Used to resume on reconnect. */
+  get sessionId(): string | null {
+    return this.currentSessionId;
   }
 
   on(handler: SyrinxBrowserClientHandler): () => void {
@@ -101,26 +135,15 @@ export class SyrinxBrowserClient {
     if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
       return;
     }
-
-    const socket = new WebSocket(this.options.url, this.options.protocols as string | string[] | undefined);
-    socket.binaryType = "arraybuffer";
-    this.socket = socket;
-
-    socket.addEventListener("open", () => {
-      this.emit({ type: "open" });
-    });
-    socket.addEventListener("close", (event) => {
-      this.emit({ type: "close", code: event.code, reason: event.reason });
-    });
-    socket.addEventListener("error", (event) => {
-      this.emit({ type: "error", error: event });
-    });
-    socket.addEventListener("message", (event) => {
-      this.handleMessage(event.data);
-    });
+    this.cleanClose = false;
+    this.cancelReconnect();
+    this.openSocket();
   }
 
   close(code?: number, reason?: string): void {
+    this.cleanClose = true;
+    this.cancelReconnect();
+    this.stopKeepalive();
     this.socket?.close(code, reason);
   }
 
@@ -137,7 +160,7 @@ export class SyrinxBrowserClient {
     this.requireOpenSocket().send(encodeBrowserPcmEnvelope(bytes, sampleRate, {
       ...options,
       sequence: this.nextAudioSequence(options.sequence),
-    }));
+    }) as Uint8Array<ArrayBuffer>);
   }
 
   sendAudioBase64(
@@ -156,7 +179,7 @@ export class SyrinxBrowserClient {
 
   sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
     const sequence = this.nextAudioSequence(options.sequence);
-    this.requireOpenSocket().send(encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }));
+    this.requireOpenSocket().send(encodeBrowserAudioEnvelopeFrame(input, { ...options, sequence }) as Uint8Array<ArrayBuffer>);
   }
 
   sendText(text: string): void {
@@ -167,10 +190,114 @@ export class SyrinxBrowserClient {
     this.requireOpenSocket().send(JSON.stringify(value));
   }
 
+  private openSocket(): void {
+    const url = this.currentSessionId !== null
+      ? buildResumeUrl(this.options.url, this.currentSessionId)
+      : this.options.url;
+    const socket = new WebSocket(url, this.options.protocols as string | string[] | undefined);
+    socket.binaryType = "arraybuffer";
+    this.socket = socket;
+
+    socket.addEventListener("open", () => {
+      if (this.reconnectAttempt > 0) {
+        const attempt = this.reconnectAttempt;
+        this.reconnectAttempt = 0;
+        this.emit({ type: "reconnected", attempt });
+      } else {
+        this.emit({ type: "open" });
+      }
+      this.startKeepalive(socket);
+    });
+
+    socket.addEventListener("close", (event) => {
+      this.stopKeepalive();
+      if (this.cleanClose) {
+        this.emit({ type: "close", code: event.code, reason: event.reason });
+        return;
+      }
+      this.scheduleReconnect(event.code, event.reason);
+    });
+
+    socket.addEventListener("error", (event) => {
+      this.emit({ type: "error", error: event });
+    });
+
+    socket.addEventListener("message", (event) => {
+      this.handleMessage(event.data);
+    });
+  }
+
+  private scheduleReconnect(code: number, reason: string): void {
+    const opts = this.options.reconnect;
+    if (opts === false) {
+      this.emit({ type: "close", code, reason });
+      return;
+    }
+
+    const maxAttempts = opts?.maxAttempts ?? RECONNECT_MAX_ATTEMPTS;
+    const baseDelayMs = opts?.baseDelayMs ?? RECONNECT_BASE_DELAY_MS;
+    const maxDelayMs = opts?.maxDelayMs ?? RECONNECT_MAX_DELAY_MS;
+
+    this.reconnectAttempt += 1;
+
+    if (maxAttempts > 0 && this.reconnectAttempt > maxAttempts) {
+      this.emit({ type: "close", code, reason });
+      return;
+    }
+
+    const exponential = Math.min(baseDelayMs * Math.pow(2, this.reconnectAttempt - 1), maxDelayMs);
+    const jitter = exponential * 0.2 * Math.random();
+    const delayMs = Math.round(exponential + jitter);
+
+    this.emit({ type: "reconnecting", attempt: this.reconnectAttempt, delayMs });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.cleanClose) return;
+      this.openSocket();
+    }, delayMs);
+  }
+
+  private cancelReconnect(): void {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+  }
+
+  private startKeepalive(socket: WebSocket): void {
+    this.stopKeepalive();
+    const intervalMs = this.options.keepaliveIntervalMs;
+    if (intervalMs === false) return;
+    const ms = typeof intervalMs === "number" && intervalMs > 0 ? intervalMs : KEEPALIVE_INTERVAL_MS;
+    this.keepaliveTimer = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      } else {
+        this.stopKeepalive();
+      }
+    }, ms);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer !== null) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
   private handleMessage(data: unknown): void {
     if (typeof data === "string") {
       try {
-        this.emit({ type: "message", message: parseStudioMessage(JSON.parse(data) as unknown) });
+        const message = parseStudioMessage(JSON.parse(data) as unknown);
+        if (message.type === "ready" && message.sessionId !== undefined) {
+          this.currentSessionId = message.sessionId;
+        }
+        this.emit({ type: "message", message });
+        if (message.type === "ready" && message.resumed === true) {
+          this.emit({ type: "resumed" });
+        }
       } catch (err) {
         this.emit({ type: "error", error: err instanceof Error ? err : new Error(String(err)) });
       }
@@ -222,6 +349,17 @@ export class SyrinxBrowserClient {
   }
 }
 
+function buildResumeUrl(baseUrl: string, sessionId: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("sessionId", sessionId);
+    return url.toString();
+  } catch {
+    const sep = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${sep}sessionId=${encodeURIComponent(sessionId)}`;
+  }
+}
+
 function encodeBrowserPcmEnvelope(
   audio: Uint8Array,
   sampleRateHz: number,
@@ -251,6 +389,8 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
     return {
       type,
       sessionId: optionalString(value.sessionId, "ready.sessionId"),
+      resumed: optionalBoolean(value.resumed, "ready.resumed"),
+      resumeWindowMs: optionalNumber(value.resumeWindowMs, "ready.resumeWindowMs"),
       audio: parseReadyAudio(value.audio),
     };
   }
