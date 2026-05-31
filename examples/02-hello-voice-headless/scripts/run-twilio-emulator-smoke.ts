@@ -6,11 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import {
-  createTwilioMediaStreamServer,
-  encodePcm16ToMuLaw,
-  pcm16SamplesToBytes,
-} from "@asyncdot/voice-server-websocket";
+import { createTwilioMediaStreamServer } from "@asyncdot/voice-server-websocket";
+import { encodePcm16ToMuLaw, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 
 import {
   pcMuDurationMs,

@@ -17,6 +17,7 @@ import {
   type VoiceAgentSession,
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
+import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import {
@@ -516,7 +517,7 @@ function wireSessionEvents(
       const audioPacket = pkt as TextToSpeechAudioPacket;
       if (interruptedContextIds.has(audioPacket.contextId)) return;
       const sourceSampleRateHz = requireTtsAudioSampleRate(audioPacket.sampleRateHz);
-      const audio = normalizePcm16(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
+      const audio = resampleAudioBytes(audioPacket.audio, sourceSampleRateHz, outputSampleRateHz);
       if (socket.readyState !== WebSocket.OPEN) {
         session.bus.push(Route.Background, {
           kind: "metric.conversation",
@@ -590,7 +591,7 @@ function handleClientMessage(
     }
     rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
     rememberInputSequence(session, inputSequence, nextContextId, binaryAudio.sequence);
-    const audio = normalizePcm16(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
+    const audio = resampleAudioBytes(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
@@ -627,7 +628,7 @@ function handleClientMessage(
       kind: "user.audio_received",
       contextId: nextContextId,
       timestampMs: Date.now(),
-      audio: normalizePcm16(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz),
+      audio: resampleAudioBytes(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz),
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
@@ -756,35 +757,14 @@ function decodeBinaryAudioMessage(
   };
 }
 
-function normalizePcm16(audio: Uint8Array, sourceSampleRateHz: number, targetSampleRateHz: number): Uint8Array {
+function resampleAudioBytes(audio: Uint8Array, sourceSampleRateHz: number, targetSampleRateHz: number): Uint8Array {
   if (audio.byteLength % 2 !== 0) {
     throw new Error("PCM16 audio payload must contain an even number of bytes");
   }
   if (sourceSampleRateHz === targetSampleRateHz) return audio;
-
-  const input = pcm16BytesToSamples(audio);
-  const outputSampleCount = Math.max(1, Math.round((input.length * targetSampleRateHz) / sourceSampleRateHz));
-  const output = new Int16Array(outputSampleCount);
-  const ratio = sourceSampleRateHz / targetSampleRateHz;
-
-  for (let i = 0; i < output.length; i += 1) {
-    const sourceIndex = i * ratio;
-    const lo = Math.floor(sourceIndex);
-    const hi = Math.min(input.length - 1, lo + 1);
-    const frac = sourceIndex - lo;
-    output[i] = Math.round(input[lo]! * (1 - frac) + input[hi]! * frac);
-  }
-
-  return new Uint8Array(output.buffer, output.byteOffset, output.byteLength);
-}
-
-function pcm16BytesToSamples(audio: Uint8Array): Int16Array {
-  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
-  const samples = new Int16Array(audio.byteLength / 2);
-  for (let i = 0; i < samples.length; i += 1) {
-    samples[i] = view.getInt16(i * 2, true);
-  }
-  return samples;
+  const samples = pcm16BytesToSamples(audio);
+  const resampled = resamplePcm16(samples, sourceSampleRateHz, targetSampleRateHz);
+  return pcm16SamplesToBytes(resampled);
 }
 
 function pcm16DurationMs(audio: Uint8Array, sampleRateHz: number): number {

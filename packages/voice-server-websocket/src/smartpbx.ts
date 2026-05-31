@@ -17,7 +17,7 @@ import {
   pcm16BytesToSamples,
   pcm16SamplesToBytes,
   resamplePcm16,
-} from "./twilio.js";
+} from "@asyncdot/voice/audio";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";

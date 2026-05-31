@@ -11,12 +11,14 @@ import {
   type VoiceAgentSession,
 } from "@asyncdot/voice";
 import {
+  bigEndianPcm16BytesToSamples,
   decodeMuLawToPcm16,
   encodePcm16ToMuLaw,
   pcm16BytesToSamples,
   pcm16SamplesToBytes,
+  pcm16SamplesToBigEndianBytes,
   resamplePcm16,
-} from "./twilio.js";
+} from "@asyncdot/voice/audio";
 import { PacedPlayoutQueue, type PacedPlayoutFrame } from "./paced-playout.js";
 import { PlayoutProgressEmitter } from "./playout-progress.js";
 import { closeWebSocketWithFallback } from "./websocket-close.js";
@@ -820,25 +822,6 @@ function encodeOutboundPayload(
     frames.push(encoded.subarray(offset, Math.min(encoded.byteLength, offset + frameBytes)));
   }
   return frames;
-}
-
-function bigEndianPcm16BytesToSamples(audio: Uint8Array): Int16Array {
-  if (audio.byteLength % 2 !== 0) throw new Error("L16 audio payload must contain an even number of bytes");
-  const view = new DataView(audio.buffer, audio.byteOffset, audio.byteLength);
-  const samples = new Int16Array(audio.byteLength / 2);
-  for (let i = 0; i < samples.length; i += 1) {
-    samples[i] = view.getInt16(i * 2, false);
-  }
-  return samples;
-}
-
-function pcm16SamplesToBigEndianBytes(samples: Int16Array): Uint8Array {
-  const bytes = new Uint8Array(samples.byteLength);
-  const view = new DataView(bytes.buffer);
-  for (let i = 0; i < samples.length; i += 1) {
-    view.setInt16(i * 2, samples[i]!, false);
-  }
-  return bytes;
 }
 
 function defaultTelnyxContextId(start: TelnyxStartPayload): string {

@@ -19,13 +19,11 @@ import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
   createTwilioMediaStreamServer,
-  decodeMuLawToPcm16,
-  encodePcm16ToMuLaw,
-  resamplePcm16,
   type SmartPbxMediaStreamServer,
   type TelnyxMediaStreamServer,
   type TwilioMediaStreamServer,
 } from "@asyncdot/voice-server-websocket";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, resamplePcm16 } from "@asyncdot/voice/audio";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,
