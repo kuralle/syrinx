@@ -95,6 +95,12 @@ export function selectLatencyFillerConnective(userText: string, turnIndex: numbe
   return pool[((turnIndex % pool.length) + pool.length) % pool.length]!;
 }
 
+function fillerPrefixBoundary(lowerBody: string, prefixLen: number): boolean {
+  if (prefixLen >= lowerBody.length) return true;
+  const next = lowerBody[prefixLen]!;
+  return /[\s,.!?…:;—\-]/.test(next);
+}
+
 export function stripRedundantFillerPrefix(fillerText: string, llmText: string): string {
   const fillerWord = fillerText.replace(/[.,!?…\s]+$/g, "").trim().toLowerCase();
   if (!fillerWord) return llmText;
@@ -102,14 +108,14 @@ export function stripRedundantFillerPrefix(fillerText: string, llmText: string):
   const body = llmText.trimStart();
   const lowerBody = body.toLowerCase();
 
-  if (lowerBody.startsWith(fillerWord)) {
+  if (lowerBody.startsWith(fillerWord) && fillerPrefixBoundary(lowerBody, fillerWord.length)) {
     let rest = body.slice(fillerWord.length);
     rest = rest.replace(/^[\s,]+/, "");
     return rest;
   }
 
   const withPunct = `${fillerWord},`;
-  if (lowerBody.startsWith(withPunct)) {
+  if (lowerBody.startsWith(withPunct) && fillerPrefixBoundary(lowerBody, withPunct.length)) {
     let rest = body.slice(withPunct.length);
     rest = rest.replace(/^[\s,]+/, "");
     return rest;
