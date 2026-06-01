@@ -77,7 +77,7 @@ export function scoreSemanticCompleteness(text: string): SemanticCompletenessSco
   for (const prefix of INCOMPLETE_PREFIXES) {
     if (!prefix.test(normalized)) continue;
     const remainder = normalized.replace(prefix, "").trim();
-    if (!remainder || TRAILING_INCOMPLETE.test(normalized)) {
+    if (!remainder) {
       return { complete: false, label: "incomplete", confidence: 0.8 };
     }
   }
