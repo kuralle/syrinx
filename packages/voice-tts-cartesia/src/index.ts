@@ -43,10 +43,10 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private retryConfig: RetryConfig = readRetryConfig({});
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
-  // Cumulative audio duration (ms) already received for each context before the
-  // current chunk. Cartesia's word_timestamps start at 0 per each response
-  // message; we add this offset to make them absolute from context start.
-  private contextAudioOffsetMs = new Map<string, number>();
+  // Cumulative PCM16 mono samples already received per context. Cartesia's
+  // word_timestamps start at 0 per response message; offsets derive from sample
+  // count to avoid per-chunk Math.round drift on long turns.
+  private contextAudioSampleCount = new Map<string, number>();
   private disposers: Array<() => void> = [];
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -160,7 +160,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
-    this.contextAudioOffsetMs.clear();
+    this.contextAudioSampleCount.clear();
     await this.conn?.close();
     this.conn = null;
     this.bus = null;
@@ -189,7 +189,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (!contextId) return;
     this.cancelledContexts.add(contextId);
     this.activeContexts.delete(contextId);
-    this.contextAudioOffsetMs.delete(contextId);
+    this.contextAudioSampleCount.delete(contextId);
     await this.trySend(
       JSON.stringify({
         context_id: contextId,
@@ -219,6 +219,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
     if (msg["type"] === "error" || isErrorStatusCode(msg["status_code"])) {
       this.activeContexts.delete(contextId);
+      this.contextAudioSampleCount.delete(contextId);
       this.emitError(contextId, cartesiaProviderError(msg));
       if (msg["done"] === true) this.emitEnd(contextId);
       return;
@@ -243,7 +244,8 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         // start of the context's audio. Cartesia timestamps start at 0 per response
         // message (per-chunk relative); we add the pre-existing context offset to
         // make them absolute so callers can compare against a playout position.
-        const chunkOffsetMs = this.contextAudioOffsetMs.get(contextId) ?? 0;
+        const priorSamples = this.contextAudioSampleCount.get(contextId) ?? 0;
+        const chunkOffsetMs = Math.floor((priorSamples * 1000) / this.sampleRate);
         const wtRaw = msg["word_timestamps"];
         if (wtRaw !== null && typeof wtRaw === "object") {
           const wt = wtRaw as { words?: unknown };
@@ -275,19 +277,17 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           }
         }
 
-        // Advance the offset by this chunk's audio duration so the next chunk's
-        // timestamps are offset correctly (each sample is 2 bytes, mono).
-        const chunkDurationMs = Math.round((audioBytes.length / 2 / this.sampleRate) * 1000);
-        this.contextAudioOffsetMs.set(contextId, chunkOffsetMs + chunkDurationMs);
+        const chunkSamples = audioBytes.length / 2;
+        this.contextAudioSampleCount.set(contextId, priorSamples + chunkSamples);
       } catch (err) {
         this.activeContexts.delete(contextId);
-        this.contextAudioOffsetMs.delete(contextId);
+        this.contextAudioSampleCount.delete(contextId);
         this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
       }
     }
     if (msg["done"] === true) {
       this.activeContexts.delete(contextId);
-      this.contextAudioOffsetMs.delete(contextId);
+      this.contextAudioSampleCount.delete(contextId);
       this.emitEnd(contextId);
     }
   }
@@ -309,7 +309,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private failActiveContexts(err: Error): void {
     const contextIds = [...this.activeContexts];
     this.activeContexts.clear();
-    this.contextAudioOffsetMs.clear();
+    this.contextAudioSampleCount.clear();
     if (contextIds.length === 0) {
       this.emitError("", err);
       return;

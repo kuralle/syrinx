@@ -742,4 +742,168 @@ describe("CartesiaTTSPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("clears cumulative audio offset state when Cartesia returns an error frame", async () => {
+    let sendCount = 0;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        sendCount += 1;
+        if (sendCount === 1) {
+          socket.send(JSON.stringify({
+            type: "chunk",
+            context_id: msg.context_id,
+            data: Buffer.from(new Uint8Array(3200)).toString("base64"),
+            word_timestamps: {
+              words: [{ word: "Hi", start: 0.0, end: 0.1 }],
+            },
+            done: false,
+            status_code: 206,
+          }));
+          socket.send(JSON.stringify({
+            type: "error",
+            done: true,
+            title: "Provider failed",
+            status_code: 500,
+            context_id: msg.context_id,
+          }));
+          return;
+        }
+        socket.send(JSON.stringify({
+          type: "chunk",
+          context_id: msg.context_id,
+          data: Buffer.from(new Uint8Array(1600)).toString("base64"),
+          word_timestamps: {
+            words: [{ word: "Again", start: 0.0, end: 0.1 }],
+          },
+          done: false,
+          status_code: 206,
+        }));
+        if (msg.continue === false) {
+          socket.send(JSON.stringify({
+            type: "done",
+            context_id: msg.context_id,
+            done: true,
+            status_code: 200,
+          }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const wordTsPackets: TextToSpeechWordTimestampsPacket[] = [];
+    bus.on("tts.word_timestamps", (pkt) => {
+      wordTsPackets.push(pkt as TextToSpeechWordTimestampsPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-offset-reset",
+      timestampMs: Date.now(),
+      text: "first try",
+    });
+    await waitForCondition(() => wordTsPackets.length >= 1);
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-offset-reset",
+      timestampMs: Date.now(),
+      text: "second try",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-offset-reset",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => wordTsPackets.length >= 2);
+
+    expect(wordTsPackets[0]!.words[0]?.startMs).toBe(0);
+    expect(wordTsPackets[1]!.words[0]?.startMs).toBe(0);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("derives word-timestamp offsets from cumulative sample count without per-chunk rounding drift", async () => {
+    const chunkBytes = 333;
+    const chunkCount = 120;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.transcript === "Long turn.") {
+          for (let i = 0; i < chunkCount; i += 1) {
+            socket.send(JSON.stringify({
+              type: "chunk",
+              context_id: msg.context_id,
+              data: Buffer.from(new Uint8Array(chunkBytes)).toString("base64"),
+              word_timestamps: i === chunkCount - 1
+                ? { words: [{ word: "end", start: 0.0, end: 0.01 }] }
+                : undefined,
+              done: false,
+              status_code: 206,
+            }));
+          }
+        }
+        if (msg.continue === false) {
+          socket.send(JSON.stringify({
+            type: "done",
+            context_id: msg.context_id,
+            done: true,
+            status_code: 200,
+          }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const wordTsPackets: TextToSpeechWordTimestampsPacket[] = [];
+    bus.on("tts.word_timestamps", (pkt) => {
+      wordTsPackets.push(pkt as TextToSpeechWordTimestampsPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-drift",
+      timestampMs: Date.now(),
+      text: "Long turn.",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-drift",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => wordTsPackets.length >= 1);
+
+    const totalSamples = (chunkBytes / 2) * chunkCount;
+    const expectedOffsetMs = Math.floor((totalSamples * 1000) / 16000) - Math.floor((chunkBytes / 2 * 1000) / 16000);
+    const roundedOffsetMs = (() => {
+      let offsetMs = 0;
+      for (let i = 0; i < chunkCount - 1; i += 1) {
+        offsetMs += Math.round(((chunkBytes / 2) / 16000) * 1000);
+      }
+      return offsetMs;
+    })();
+    expect(expectedOffsetMs).not.toBe(roundedOffsetMs);
+    expect(wordTsPackets.at(-1)!.words[0]?.startMs).toBe(expectedOffsetMs);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
 });
