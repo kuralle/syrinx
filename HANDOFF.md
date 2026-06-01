@@ -44,7 +44,7 @@
 > needs proper TDD and smoke testing with live API keys. Every issue: failing test → fix → green,
 > a live-API/transport smoke where a boundary is touched, docs, and a regression assertion.
 
-**Date:** 2026-05-29
+**Date:** 2026-06-01 (latest pass: Browser Studio Live-Conversation)
 **Working dir:** `/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx`
 **Current focus:** v2 websocket-first speech engine reliability, browser transport hardening, then sequential telephony websocket adapters.
 
@@ -399,6 +399,95 @@ The refactor touches the provider hot path, so it was verified end-to-end on Fly
 | SmartPBX | 1,263 | 937 | `outboundQuietDrains: 1` | Passed |
 
 `cleanup` confirmed `botDestroyed: true` / `carrierDestroyed: true`. Each downloaded telephony `conversation.wav` measured **0.0 s overlap** via `scripts/analyze-overlap.mjs`, STT transcribed, and `qualityGate.failures` was empty for every provider. Lesson recorded: changes to the provider-connection layer need the Fly telephony E2E as the definitive check — the headless smoke does not exercise the carrier transports.
+
+## Browser Studio Live-Conversation Pass (2026-06-01)
+
+A persistent browser studio is deployed to Fly for live human conversation with the
+university-support agent: **`https://syrinx-studio-mcj.fly.dev`** (app `syrinx-studio-mcj`,
+`sin`, `shared-cpu-1x:1024MB`, auto-stop, `Dockerfile.studio-spike` + `fly.studio-spike.toml`,
+serving the raw `packages/voice-client-browser/index.html` over `/ws`). Driving it with a real
+microphone surfaced two production bugs the headless/carrier smokes never hit, plus a third
+(turn-finalization) whose root is still under investigation.
+
+**Lesson — Fly deploys for these spike apps MUST use `--no-cache`.** The Depot build cache reused
+a pre-fix `COPY packages` layer and shipped stale source while reporting success, producing two
+false "it's fixed" cycles. Every `fly deploy` for `Dockerfile.*-spike` now gets `--no-cache --ha=false`.
+
+**Lesson — verify the real dirty-input path, not a clean shortcut.** A JSON-audio e2e and a
+frame-*counting* harness both gave false green: the inbound bug needs an odd-byteOffset envelope
+subarray, and the downlink bug needs the browser to actually *decode* the envelope (counting frames
+hides it). Probes now replicate the exact browser decode (`.handoff/downlink-decode-repro.mjs`).
+
+Shipped (branch `v2`):
+
+- **Inbound odd-offset VAD crash (`3535ca0`, prior session-adjacent + `ef59838` test).** The browser
+  `syrinx.audio.v1` envelope decodes `.audio` as a subarray at offset `7+4+headerLen` — frequently
+  **odd** — and Silero VAD did `new Int16Array(buf.buffer, buf.byteOffset, …)`, which throws
+  `RangeError: start offset of Int16Array should be a multiple of 2`. Carrier paths realign on µ-law/Opus
+  decode so only the browser envelope path hit it. Fixed with the offset-safe `pcm16BytesToSamples`
+  (DataView-based) from `@asyncdot/voice/audio`; codex regression sweep audited the whole bug class
+  (`REGRESSION-ALIGNMENT.md`).
+- **Downlink codec mismatch (`d351737`, hardened `2ce94cf`).** The studio `index.html`
+  assistant-audio decoder is **PCM16-only — it ignores `metadata.encoding`** — but the server defaults
+  to **Opus** downlink (`browserOpusDownlink ?? true`). So the server streamed Opus envelopes the page
+  rejected with "PCM16 payload must contain an even number of bytes" / "durationMs mismatch" — text
+  replies worked, no voice played. Fix: the page sends `codec_capability: {downlinkEncoding:"pcm_s16le"}`
+  on socket open so the server streams PCM. Live red→green: 236/236 frames failed without the handshake,
+  0/234 with it. Hardening (`2ce94cf`, R-02): the decoder now branches on `metadata.encoding` and rejects
+  non-PCM loudly instead of failing as cryptic PCM. Guards: `studio-page.test.ts` + a strengthened
+  server PCM-downlink test (even bytes + matching durationMs).
+- **STT finalize-timeout reset cascade (`af69623`, hardened `2ce94cf`).** Under rapid restart/barge-in
+  speech, Deepgram's `from_finalize` echo didn't arrive within the timeout → `handleProviderFinalizeTimeout`
+  discarded the turn AND called `conn.reset()`, which reopens a fresh Deepgram stream (losing context);
+  the next turn's audio awaits the reconnect and hits a context-less stream → another timeout → another
+  reset → a cascade (observed: 3 errors in 23 s, STT-final 4498 ms). Fix: count **consecutive** finalize
+  timeouts, only `reset()` at `finalize_reset_threshold` (default 2); a single timeout keeps the healthy
+  socket. After this: 1 isolated error, STT-final 776 ms. Hardening (`2ce94cf`, R-01): the counter is also
+  cleared on a socket-close reconnect (`discardProviderStateForReconnect`) so a stale count can't force an
+  avoidable reset post-reconnect. Both behaviors have red→green regression tests using a fake Deepgram
+  `ws` server. Studio interactive `provider_finalize_timeout_ms` raised 1500→3000 for headroom.
+- **Dropped-turn symptom mitigation (`cee6698`) — band-aid, now superseded by the root fix below.** A
+  *single* finalize timeout discarded its turn, emitting no `stt.result`, so `voice-turn-pipecat` never
+  emitted `eos.turn_complete` → the turn hung on "Waiting for assistant…". Added opt-in
+  `finalize_timeout_fallback` (complete the turn from buffered text on timeout). It did NOT fully fix the
+  hang — instrumentation later showed the hung turns never even reach the timeout (see root cause) — so
+  the fallback is now demoted to a rare provider-anomaly safety net, not the completion path.
+
+**Root cause — CONFIRMED (live instrumentation) and FIXED (`7598c42`).** Temporary `[FZDRIFT]` logging on
+the deployed studio proved the exact mechanism, which is sharper than "the provider is slow": when the user
+starts a new utterance **before** the previous turn's Deepgram finalize confirms, the browser mints a new
+`contextId`, the server fires `turn.change`, and the Deepgram plugin's `turn.change` handler **deleted the
+outgoing context's pending finalize** (cleared its timer + `finalizeRequested`). The orphaned turn then
+**never completed, timed out, or hit the fallback** — it hung on "finalizing" forever. Every stuck turn in
+the trace showed `turn.change … pendingFinalize=TRUE`; the sole determinant of success was whether the user
+paused long enough for the provider to confirm before speaking again. (Analysis:
+`issues/sprint-01-websocket-transport/codex-review/TURN-FINALIZE-ROOTCAUSE.md`.)
+
+The root fix (`7598c42`, codex impl, manager-reviewed against the diff, WBS R-01..R-05):
+- **R-01 single turn authority.** The browser keeps **one** capture context across a VAD `speech_ended`
+  pause and only opens a new context after the server commits the turn. Server relays `eos.turn_complete`
+  → browser `turn_complete`; the browser nulls `activeTurn` on that signal, not on `speech_ended`. Stops
+  the context churn that raced ahead of Smart-Turn.
+- **R-02 decouple text from finalize.** Every Deepgram `is_final` is emitted as `stt.result` regardless of
+  `speech_final`/`from_finalize` (the pipecat/livekit pattern). Smart-Turn (`voice-turn-pipecat`) stays the
+  semantic EOS authority and gates premature cuts via `smartTurnComplete && semanticComplete`, so earlier
+  text does NOT cut users off — this respects the prior "naive VAD timer cut people off" finding rather than
+  repeating it.
+- **R-03 fix the orphaning + correlate Finalize.** `turn.change` no longer clears the outgoing context's
+  finalize state; transcript state is now **per-`contextId`** (was a shared-field bug); provider finals are
+  FIFO-correlated to the requesting context, not the drifted current one.
+- **R-04 integration replay** (`examples/02-hello-voice-headless/test/turn-finalize-rootfix.test.ts`): real
+  STT + real EOS plugins; a restarted utterance under one context completes as **exactly one** turn with the
+  combined text and **no** `stt_provider_finalize_timeout`/`_fallback` metric.
+- **R-05** `finalize_timeout_fallback` retained as a rare provider-anomaly net.
+
+Verification: `pnpm -r typecheck` + `pnpm -r test` green across all 13 packages
+(`voice-stt-deepgram` 18, `voice-turn-pipecat` 21, `voice-client-browser` 55, `voice-server-websocket` 167
+incl. telephony, example 58/1-skip); earlier cascade/counter/fallback regression tests intact; no
+`.skip`/`@ts-ignore`/weakening. Deployed `--no-cache`. **Pending: human-mic live re-confirmation** of the
+restart scenario on the studio (the clean-audio harness cannot reproduce the live context-churn path).
+Recommended pre-merge for telephony: the Fly synthetic-carrier E2E, since this touches the shared Deepgram
+plugin (per the connection-layer lesson below).
 
 ## Operational Follow-Up
 
