@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from "vitest";
-import { PrimarySpeakerGate, extractSpeakerFingerprint, fingerprintSimilarity } from "./primary-speaker-gate.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  PrimarySpeakerGate,
+  extractSpeakerFingerprint,
+  fingerprintSimilarity,
+} from "./primary-speaker-gate.js";
+import * as primarySpeakerGateModule from "./primary-speaker-gate.js";
 import {
   ASSISTANT_ECHO_TONE_HZ,
   BYSTANDER_SPEAKER_TONE_HZ,
@@ -83,6 +88,34 @@ describe("PrimarySpeakerGate", () => {
     );
     expect(gate.hasProfile()).toBe(false);
     expect(gate.shouldCommitBargeIn()).toBe(true);
+  });
+
+  it("commits barge-in when primary similarity beats echo even above threshold", () => {
+    const gate = new PrimarySpeakerGate({ similarityThreshold: 0.72, echoDominanceMargin: 0.12 });
+    const primary = synthesizeTonePcm16({ frequencyHz: PRIMARY_SPEAKER_TONE_HZ, durationMs: 32 });
+    gate.enrollUserTurnChunk(primary);
+    gate.lockProfileFromFirstTurn();
+    gate.observeAssistantPlayout(
+      synthesizeTonePcm16({ frequencyHz: ASSISTANT_ECHO_TONE_HZ, durationMs: 32 }),
+    );
+
+    const profile = (gate as unknown as { profile: NonNullable<ReturnType<typeof extractSpeakerFingerprint>> }).profile;
+    const assistantProfile = (gate as unknown as {
+      assistantProfile: NonNullable<ReturnType<typeof extractSpeakerFingerprint>>;
+    }).assistantProfile;
+
+    vi.spyOn(primarySpeakerGateModule, "fingerprintSimilarity").mockImplementation((_frame, reference) => {
+      if (reference === profile) return 0.95;
+      if (reference === assistantProfile) return 0.73;
+      return 0;
+    });
+
+    gate.beginBargeInWindow();
+    for (let i = 0; i < 6; i += 1) {
+      gate.observeBargeInChunk(primary);
+    }
+    expect(gate.shouldCommitBargeIn()).toBe(true);
+    vi.restoreAllMocks();
   });
 
   it("allows mixed audio when primary dominates", () => {

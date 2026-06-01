@@ -221,6 +221,72 @@ describe("TurnArbiter", () => {
     expect(metrics).toContain("interrupt.suppressed_non_primary");
   });
 
+  it("recommits after non-primary suppression when primary speech continues", async () => {
+    const gate = new PrimarySpeakerGate();
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, gate);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    const enroll = synthesizeTonePcm16({ frequencyHz: PRIMARY_SPEAKER_TONE_HZ, durationMs: 32 });
+    for (let i = 0; i < 12; i += 1) {
+      gate.enrollUserTurnChunk(enroll);
+    }
+    gate.lockProfileFromFirstTurn();
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 7000);
+    const bystander = synthesizeTonePcm16({ frequencyHz: BYSTANDER_SPEAKER_TONE_HZ, durationMs: 32 });
+    const primary = synthesizeTonePcm16({ frequencyHz: PRIMARY_SPEAKER_TONE_HZ, durationMs: 32 });
+    const t0 = 9000;
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: t0,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    for (let i = 0; i < 8; i += 1) {
+      arbiter.observeBargeInAudio({
+        kind: "vad.audio",
+        contextId: "user",
+        timestampMs: t0 + 20 + i * 30,
+        audio: bystander,
+      } satisfies VadAudioPacket);
+    }
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 320,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+    expect(metrics).toContain("interrupt.suppressed_non_primary");
+    expect(interrupts).toEqual([]);
+
+    for (let i = 0; i < 6; i += 1) {
+      arbiter.observeBargeInAudio({
+        kind: "vad.audio",
+        contextId: "user",
+        timestampMs: t0 + 400 + i * 30,
+        audio: primary,
+      } satisfies VadAudioPacket);
+    }
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 620,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toHaveLength(1);
+    expect(metrics).toContain("interrupt.committed_after_ms");
+  });
+
   it("locks profile on idle speech end", async () => {
     const gate = new PrimarySpeakerGate();
     const { arbiter } = await createArbiter(280, gate);

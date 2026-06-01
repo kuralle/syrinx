@@ -151,18 +151,25 @@ async function enrollPrimarySpeaker(
     frequencyHz: PRIMARY_SPEAKER_TONE_HZ,
     durationMs: 32,
   });
+  const t0 = Date.now();
+  session.bus.push(Route.Main, {
+    kind: "vad.speech_started",
+    contextId,
+    timestampMs: t0,
+    confidence: 0.99,
+  } satisfies VadSpeechStartedPacket);
   for (let i = 0; i < 12; i += 1) {
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId,
-      timestampMs: Date.now(),
+      timestampMs: t0 + i * 20,
       audio: chunk,
     } satisfies UserAudioReceivedPacket);
   }
   session.bus.push(Route.Main, {
     kind: "vad.speech_ended",
     contextId,
-    timestampMs: Date.now(),
+    timestampMs: t0 + 300,
   } satisfies VadSpeechEndedPacket);
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
