@@ -1579,6 +1579,13 @@ describe("createVoiceWebSocketServer", () => {
     });
     expect(envelope.audio.byteLength).toBe(640);
 
+    // The PCM-only browser decoder rejects odd payloads and a durationMs that does not
+    // match round(bytes/2/rate*1000); the PCM downlink must satisfy both or playback
+    // throws "PCM16 payload must contain an even number of bytes" / "durationMs mismatch".
+    expect(envelope.audio.byteLength % 2).toBe(0);
+    const expectedDurationMs = Math.round((envelope.audio.byteLength / 2 / 16000) * 1000);
+    expect(Math.abs((envelope.header.durationMs ?? -1) - expectedDurationMs)).toBeLessThanOrEqual(1);
+
     client.close();
     await server.close();
   });

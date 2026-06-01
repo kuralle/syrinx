@@ -593,6 +593,9 @@
           connectBtn.disabled = false;
           connectBtn.textContent = "Disconnect";
           talkBtn.disabled = false;
+          // This page decodes PCM16 downlink only (no Opus decoder), so declare it —
+          // otherwise the server streams Opus envelopes this decoder rejects.
+          socket.send(JSON.stringify({ type: "codec_capability", downlinkEncoding: "pcm_s16le" }));
           addEvent(`connected ${wsUrl.value}`);
         });
         socket.addEventListener("close", () => {
