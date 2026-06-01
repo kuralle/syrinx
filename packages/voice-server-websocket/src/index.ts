@@ -109,6 +109,12 @@ export interface VoiceWebSocketServer {
 type ClientMessage =
   | { readonly type: "text"; readonly text: string; readonly contextId?: string }
   | {
+      readonly type: "client_interrupt";
+      readonly assistantContextId?: string;
+      readonly contextId?: string;
+      readonly reason?: string;
+    }
+  | {
       readonly type: "audio";
       readonly audio: string;
       readonly contextId?: string;
@@ -621,6 +627,13 @@ function handleClientMessage(
     state.browserOpusDownlink = message.downlinkEncoding === "opus";
     return currentContextId;
   }
+  if (message.type === "client_interrupt") {
+    const interruptedContextId = message.assistantContextId ?? message.contextId ?? currentContextId;
+    if (interruptedContextId) {
+      session.requestClientInterrupt(interruptedContextId);
+    }
+    return currentContextId;
+  }
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
     if (nextContextId !== currentContextId) {
@@ -662,6 +675,14 @@ function parseClientMessage(value: unknown): ClientMessage {
       type,
       text: requiredString(value.text, "Websocket JSON text"),
       contextId: optionalContextId(value.contextId),
+    };
+  }
+  if (type === "client_interrupt") {
+    return {
+      type,
+      assistantContextId: optionalContextId(value.assistantContextId),
+      contextId: optionalContextId(value.contextId),
+      reason: optionalString(value.reason, "client_interrupt.reason"),
     };
   }
   if (type === "audio") {

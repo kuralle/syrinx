@@ -208,7 +208,7 @@ export interface UserInputPacket extends VoicePacket {
 // Interruption Packets (flow through Critical route)
 // =============================================================================
 
-export type InterruptionSource = "vad" | "word";
+export type InterruptionSource = "vad" | "word" | "client";
 
 export interface InterruptionDetectedPacket extends VoicePacket {
   readonly kind: "interrupt.detected";

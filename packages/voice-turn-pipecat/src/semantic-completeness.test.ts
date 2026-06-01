@@ -34,6 +34,12 @@ describe("scoreSemanticCompleteness", () => {
     }
   });
 
+  it("does not treat word count alone as a complete turn", () => {
+    const score = scoreSemanticCompleteness("I was wondering if I can still add biology");
+    expect(score.complete).toBe(false);
+    expect(score.label).toBe("incomplete");
+  });
+
   it("labels backchannels as complete turns", () => {
     for (const fixture of SEMANTIC_LABELED_UTTERANCES.filter((item) => item.category === "backchannel")) {
       const score = scoreSemanticCompleteness(fixture.text);
@@ -71,7 +77,7 @@ describe("fuseEndpointDecision", () => {
     });
   });
 
-  it("shortcuts when semantics are complete but Smart Turn is uncertain", () => {
+  it("shortcuts only high-confidence semantics when Smart Turn is uncertain", () => {
     const decision = fuseEndpointDecision(
       false,
       scoreSemanticCompleteness("What are your office hours?"),
@@ -82,6 +88,19 @@ describe("fuseEndpointDecision", () => {
       requestFinalize: true,
       finalizeDelayMs: 50,
       shortcutReason: "semantic_complete",
+    });
+  });
+
+  it("waits for fallback when semantics are weak and Smart Turn is uncertain", () => {
+    const decision = fuseEndpointDecision(
+      false,
+      scoreSemanticCompleteness("I was wondering if I can still add biology"),
+      fusionConfig,
+    );
+    expect(decision).toEqual({
+      release: false,
+      requestFinalize: false,
+      finalizeDelayMs: 2000,
     });
   });
 

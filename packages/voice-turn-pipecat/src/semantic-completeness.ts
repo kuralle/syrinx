@@ -38,11 +38,14 @@ const INCOMPLETE_PREFIXES: readonly RegExp[] = [
   /^can you tell me about\b/i,
   /^what is the\b/i,
   /^how do i\b/i,
-  /^i was wondering if\b/i,
   /^i'm trying to\b/i,
   /^i am trying to\b/i,
   /^could you help me with\b/i,
   /^tell me about the\b/i,
+];
+
+const OPEN_ENDED_PREFIXES: readonly RegExp[] = [
+  /^i was wondering if\b/i,
 ];
 
 const BACKCHANNEL =
@@ -82,6 +85,12 @@ export function scoreSemanticCompleteness(text: string): SemanticCompletenessSco
     }
   }
 
+  for (const prefix of OPEN_ENDED_PREFIXES) {
+    if (prefix.test(normalized)) {
+      return { complete: false, label: "incomplete", confidence: 0.75 };
+    }
+  }
+
   if (/,\s*$/.test(normalized)) {
     return { complete: false, label: "incomplete", confidence: 0.75 };
   }
@@ -94,10 +103,6 @@ export function scoreSemanticCompleteness(text: string): SemanticCompletenessSco
     words.length >= 4
   ) {
     return { complete: true, label: "complete", confidence: 0.7 };
-  }
-
-  if (words.length >= 5) {
-    return { complete: true, label: "complete", confidence: 0.6 };
   }
 
   return { complete: true, label: "complete", confidence: 0.55 };
@@ -133,7 +138,7 @@ export function fuseEndpointDecision(
     };
   }
 
-  if (!smartTurnComplete && semantic.complete) {
+  if (!smartTurnComplete && semantic.complete && semantic.confidence >= 0.85 && config.semanticShortcutDelayMs > 0) {
     return {
       release: true,
       requestFinalize: true,

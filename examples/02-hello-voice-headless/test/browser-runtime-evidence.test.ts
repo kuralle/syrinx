@@ -19,6 +19,10 @@ function passingBrowserResult(overrides: Partial<BrowserSmokeResult> = {}): Brow
     receivedAssistantBytes: 16000,
     assistantSampleRateHz: 16000,
     audioClearEvents: 1,
+    localSpeechStartEvents: 1,
+    clientInterruptsSent: 1,
+    localSpeechStartFlushAtMs: 10,
+    serverAudioClearAtMs: 30,
     audioPlaybackErrors: 0,
     ...overrides,
   };
@@ -49,5 +53,17 @@ describe("browser runtime evidence gate", () => {
     const failures = evaluate(passingBrowserResult(), receivedPackets(3, 300), "");
 
     expect(failures).toContain("server received 900 PCM bytes, browser sent 960");
+  });
+
+  it("requires local barge-in flush before the server audio_clear confirmation", () => {
+    expect(evaluate(passingBrowserResult(), receivedPackets(3, 320), "")).toStrictEqual([]);
+
+    const failures = evaluate(
+      passingBrowserResult({ localSpeechStartFlushAtMs: 40, serverAudioClearAtMs: 30 }),
+      receivedPackets(3, 320),
+      "",
+    );
+
+    expect(failures).toContain("browser local playout flush did not precede server audio_clear");
   });
 });

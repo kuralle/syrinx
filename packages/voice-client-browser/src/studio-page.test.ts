@@ -47,3 +47,23 @@ describe("studio index.html capture turn lifecycle", () => {
     expect(turnComplete).toMatch(/activeTurn\s*=\s*null/);
   });
 });
+
+describe("studio index.html local speech-start barge-in", () => {
+  it("flushes local assistant playout before sending a server client_interrupt", () => {
+    const handler = html.slice(
+      html.indexOf("function handleLocalSpeechStart"),
+      html.indexOf("function createCaptureTurn"),
+    );
+    expect(handler).toMatch(/flushOutputAudio\(\)[\s\S]*sendClientInterrupt/);
+    expect(handler).toMatch(/local_vad_speech_start/);
+  });
+
+  it("does not use browser speech_ended or silence as an EOS signal", () => {
+    const capture = html.slice(
+      html.indexOf("processorNode.onaudioprocess"),
+      html.indexOf("sourceNode.connect"),
+    );
+    expect(capture).toMatch(/handleLocalSpeechStart/);
+    expect(capture).not.toMatch(/eos\.turn_complete|turn_complete|client_eos|speech_ended/);
+  });
+});

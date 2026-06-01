@@ -92,7 +92,7 @@ export interface UniversitySupportSessionOptions {
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
   const ttsProvider = options.ttsProvider ?? inferTtsProvider();
-  const pluginConfig = createPluginConfig(options, ttsProvider);
+  const pluginConfig = createUniversitySupportPluginConfig({ ...options, ttsProvider });
   const session = new VoiceAgentSession({
     plugins: pluginConfig,
     idleTimeout: {
@@ -117,11 +117,11 @@ export function createUniversitySupportSession(options: UniversitySupportSession
   return session;
 }
 
-function createPluginConfig(
-  options: UniversitySupportSessionOptions,
-  ttsProvider: UniversitySupportTtsProvider,
+export function createUniversitySupportPluginConfig(
+  options: UniversitySupportSessionOptions & { readonly ttsProvider?: UniversitySupportTtsProvider },
 ): Record<string, PluginConfig> {
   const interactive = options.profile === "interactive";
+  const ttsProvider = options.ttsProvider ?? inferTtsProvider();
   return {
     stt: {
       api_key: requireEnv("DEEPGRAM_API_KEY"),
@@ -144,9 +144,11 @@ function createPluginConfig(
       speech_pad_ms: interactive ? 180 : 400,
     },
     eos: {
-      finalize_delay_ms: interactive ? 250 : 500,
+      finalize_delay_ms: interactive ? 450 : 500,
       max_delay_ms: interactive ? 4500 : 15_000,
-      incomplete_fallback_ms: interactive ? 2200 : 1200,
+      incomplete_fallback_ms: interactive ? 3200 : 1200,
+      semantic_shortcut_delay_ms: interactive ? 0 : 50,
+      semantic_defer_fallback_ms: interactive ? 4500 : 4000,
     },
     bridge: {
       api_key: requireEnv("GOOGLE_GENERATIVE_AI_API_KEY"),

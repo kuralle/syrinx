@@ -696,6 +696,75 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("routes browser client_interrupt through the assistant interruption path", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const messages: any[] = [];
+    const binaries: Buffer[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+    client.on("message", (data, isBinary) => {
+      if (isBinary) {
+        binaries.push(Buffer.from(data as Buffer));
+        return;
+      }
+      messages.push(JSON.parse(data.toString()));
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(1600),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.send(JSON.stringify({
+      type: "client_interrupt",
+      assistantContextId: "assistant-turn",
+      reason: "local_vad_speech_start",
+    }));
+    await waitForCondition(() => messages.some((message) => message.type === "audio_clear"));
+    binaries.length = 0;
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "audio_clear", turnId: "assistant-turn", reason: "barge_in" }),
+      expect.objectContaining({ type: "agent_interrupted", turnId: "assistant-turn", reason: "barge_in" }),
+    ]));
+    expect(metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "interrupt.committed_after_ms", value: "0" }),
+    ]));
+    expect(messages.some((message) => message.type === "tts_end")).toBe(false);
+    expect(binaries).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
   it("forwards VAD speech boundary events to websocket clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = registerServer(await createVoiceWebSocketServer({

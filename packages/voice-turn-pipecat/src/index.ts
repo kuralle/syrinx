@@ -19,11 +19,15 @@ import {
   Route,
   type EndOfSpeechPacket,
   type FinalizeSttPacket,
+  type InterruptionDetectedPacket,
   type InterimEndOfSpeechPacket,
   type PipelineBus,
   type PluginConfig,
   type SttInterimPacket,
   type SttResultPacket,
+  type TextToSpeechAudioPacket,
+  type TextToSpeechEndPacket,
+  type TextToSpeechPlayoutProgressPacket,
   type VadAudioPacket,
   type VadSpeechEndedPacket,
   type VadSpeechStartedPacket,
@@ -118,6 +122,8 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private semanticDeferFallbackMs = 4000;
   private semanticEndpointingEnabled = true;
   private probabilityThreshold = 0.5;
+  private readonly lockedContextIds = new Set<string>();
+  private readonly lockedContextsWithAssistantAudio = new Set<string>();
 
   constructor(private readonly predictor: SmartTurnPredictor = new LocalSmartTurnV3Predictor()) {}
 
@@ -148,6 +154,18 @@ export class PipecatEOSPlugin implements VoicePlugin {
       bus.on("vad.speech_ended", async (pkt) => {
         await this.handleSpeechEnded(pkt as VadSpeechEndedPacket);
       }),
+      bus.on("tts.audio", (pkt) => {
+        this.handleTtsAudio(pkt as TextToSpeechAudioPacket);
+      }),
+      bus.on("tts.end", (pkt) => {
+        this.handleTtsEnd(pkt as TextToSpeechEndPacket);
+      }),
+      bus.on("tts.playout_progress", (pkt) => {
+        this.handleTtsPlayoutProgress(pkt as TextToSpeechPlayoutProgressPacket);
+      }),
+      bus.on("interrupt.detected", (pkt) => {
+        this.releaseContextLock((pkt as InterruptionDetectedPacket).contextId);
+      }),
     );
   }
 
@@ -159,11 +177,14 @@ export class PipecatEOSPlugin implements VoicePlugin {
       clearTurnTimers(state);
     }
     this.turns.clear();
+    this.lockedContextIds.clear();
+    this.lockedContextsWithAssistantAudio.clear();
     await this.predictor.close();
     this.bus = null;
   }
 
   private handleAudio(pkt: VadAudioPacket): void {
+    if (this.lockedContextIds.has(pkt.contextId)) return;
     if (pkt.audio.byteLength % 2 !== 0) return;
     const state = this.stateFor(pkt.contextId);
     const samples = pcm16BytesToSamples(pkt.audio);
@@ -176,6 +197,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   }
 
   private handleInterim(pkt: SttInterimPacket): void {
+    if (this.lockedContextIds.has(pkt.contextId)) return;
     if (!pkt.text.trim()) return;
     const state = this.stateFor(pkt.contextId);
     state.latestInterim = pkt.text.trim();
@@ -188,6 +210,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   }
 
   private handleFinal(pkt: SttResultPacket): void {
+    if (this.lockedContextIds.has(pkt.contextId)) return;
     if (!pkt.text.trim()) return;
     const state = this.stateFor(pkt.contextId);
     appendFinalPacket(state, pkt);
@@ -220,6 +243,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   }
 
   private handleSpeechStarted(pkt: VadSpeechStartedPacket): void {
+    if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
     state.boundaryAnalyzed = false;
     state.smartTurnComplete = false;
@@ -230,6 +254,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   }
 
   private async handleSpeechEnded(pkt: VadSpeechEndedPacket): Promise<void> {
+    if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
     const sequence = ++state.analysisSequence;
     const probability = await this.predictor.predict(Float32Array.from(state.audio));
@@ -368,10 +393,32 @@ export class PipecatEOSPlugin implements VoicePlugin {
     }, this.maxDelayMs);
   }
 
+  private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
+    if (this.lockedContextIds.has(pkt.contextId)) {
+      this.lockedContextsWithAssistantAudio.add(pkt.contextId);
+    }
+  }
+
+  private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
+    if (!this.lockedContextsWithAssistantAudio.has(pkt.contextId)) {
+      this.releaseContextLock(pkt.contextId);
+    }
+  }
+
+  private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
+    if (pkt.complete) this.releaseContextLock(pkt.contextId);
+  }
+
+  private releaseContextLock(contextId: string): void {
+    this.lockedContextIds.delete(contextId);
+    this.lockedContextsWithAssistantAudio.delete(contextId);
+  }
+
   private finalize(state: TurnState): void {
     const text = state.finalSegments.join(" ").replace(/\s+/g, " ").trim();
     if (state.finalized || state.finalPackets.length === 0 || !text) return;
     state.finalized = true;
+    this.lockedContextIds.add(state.contextId);
     clearTurnTimers(state);
     this.bus?.push(Route.Main, {
       kind: "eos.turn_complete",
