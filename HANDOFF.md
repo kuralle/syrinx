@@ -489,6 +489,49 @@ restart scenario on the studio (the clean-audio harness cannot reproduce the liv
 Recommended pre-merge for telephony: the Fly synthetic-carrier E2E, since this touches the shared Deepgram
 plugin (per the connection-layer lesson below).
 
+### Turn-taking quality: over-segmentation + audio overlap (2026-06-01, after the root fix)
+
+Once turns completed (root fix above), the *next* layer surfaced: a mid-thought pause made Smart-Turn
+commit a partial turn, the agent started replying, and the continuation produced a **second**
+`eos.turn_complete` on the **same** contextId while turn-1 TTS was still playing → two replies **overlapped**.
+
+- **Session-scoped observability (`3fcbff5`).** The studio writes one JSONL per WS session to
+  `$SYRINX_OBS_DIR` (default `/tmp/syrinx-obs/<sessionId>.jsonl`) capturing the turn lifecycle
+  (`vad.speech_started/ended`, `stt.result`, `eos.turn_complete`, `tts.first_audio/tts.end`,
+  `interrupt.*`, `stt.error`, finalize/interrupt metrics). Read on Fly with
+  `fly ssh console -C 'cat /tmp/syrinx-obs/<file>'`. It reproduced the overlap as a clean trace
+  (one utterance → two `eos.turn_complete`, same context) — the evidence that grounded the fix.
+- **Fix (`6fd79c7`, WBS R-01..R-05 + obs-sharpened R-03b), grounded in a Pipecat/LiveKit browser-client
+  study (`BROWSER-TURNTAKING.md`):**
+  - R-03: removed the bogus `words>=5 ⇒ complete` heuristic (`semantic-completeness.ts`) and gated the 50 ms
+    semantic shortcut behind `confidence>=0.85 && semanticShortcutDelayMs>0` (disabled for interactive) —
+    Smart-Turn (the model) is the endpoint authority, not a word count.
+  - R-03b: per-context **lock** in `PipecatEOSPlugin` — on `finalize` the context is locked and turn handlers
+    early-return, so **no second `eos.turn_complete` fires while the assistant is still speaking**; released on
+    `tts.playout_progress {complete}` / `tts.end` (no audio) / `interrupt.detected`.
+  - R-01/R-02: **client-side barge-in** — browser local-RMS speech-start → `flushOutputAudio()` +
+    `client_interrupt` WS control → `requestClientInterrupt` → turn-arbiter `commitClientInterrupt` →
+    `interrupt.detected(source:"client")` clears playout. Browser VAD is barge-in-only, never an EOS signal
+    (honors the "naive VAD timer cut people off" finding).
+  - R-04: rebalanced interactive endpoint config (`finalize_delay_ms` 250→450, `incomplete_fallback_ms`
+    2200→3200, `semantic_shortcut_delay_ms` 0). No raw-VAD silence timer.
+- **Verified:** `pnpm -r typecheck` + `pnpm -r test` green (all 13 packages; `voice-turn-pipecat` 25,
+  `voice-server-websocket` 168 incl. telephony, `voice-client-browser` 57, example 60/1-skip); new tests prove
+  no low-confidence shortcut and no same-context duplicate completion during playout. Deployed `--no-cache`;
+  the obs trace on the live build shows the WAV now yields **one** `eos.turn_complete`, no stacked overlap.
+- **Known tradeoff:** while a context is locked, a *short* trailing continuation is dropped (better than
+  overlap); a *sustained* continuation barges in and becomes a new turn.
+
+### ⚠️ Live testing still PENDING
+
+All of the above (root fix + turn-taking + barge-in) is **unit/integration-verified and obs-confirmed on the
+clean-audio harness, but NOT yet confirmed by a real human-mic session.** The clean harness cannot reproduce
+the live context-churn / barge-in feel. Pending human-mic confirmation on `https://syrinx-studio-mcj.fly.dev`:
+(1) pause mid-sentence → one reply, no overlap; (2) talk over the agent → its audio cuts (barge-in).
+If natural speech still segments too eagerly, that's an R-04 endpoint-tuning dial, not an architecture gap.
+Worker note: codex is rate-limited; future delegations use **pi-glm (GLM 5.1)** (see auto-memory).
+Manager always reads the diff + runs the suite regardless of worker.
+
 ## Operational Follow-Up
 
 - Twilio, Telnyx, and SmartPBX endpoints are deterministic-emulator tested, live-provider adapter-smoke tested, and public-TLS Fly synthetic-carrier tested with live Deepgram/Gemini/Cartesia plus recorder output. If real provider accounts become available, run the provider-account validation in `TELEPHONY-VOICE-HANDOFF.md` to validate dashboard/call-control setup and account-specific webhook timing.
