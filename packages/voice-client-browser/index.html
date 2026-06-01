@@ -636,7 +636,6 @@
         } else if (message.type === "speech_ended") {
           if (activeTurn?.id === turn.id) {
             drainPcmQueue(turn.id);
-            activeTurn = null;
           }
           if (!turn.audioEndedAt) turn.audioEndedAt = Date.now();
           turn.state.textContent = "finalizing";
@@ -656,6 +655,10 @@
           turn.user.textContent = message.transcript || "";
           turn.state.textContent = "agent";
           updateLatency(turn);
+        } else if (message.type === "turn_complete") {
+          if (activeTurn?.id === turn.id) activeTurn = null;
+          if (message.transcript) turn.user.textContent = message.transcript;
+          turn.state.textContent = "agent";
         } else if (message.type === "agent_tool_call") {
           turn.toolText += `${message.name || "tool"} ${JSON.stringify(message.args || {})}\n`;
           turn.tools.textContent = turn.toolText.trim();

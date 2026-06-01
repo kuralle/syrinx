@@ -29,3 +29,21 @@ describe("studio index.html downlink codec negotiation", () => {
     expect(decode).toMatch(/metadata\.encoding\s*&&\s*metadata\.encoding\s*!==\s*"pcm_s16le"/);
   });
 });
+
+describe("studio index.html capture turn lifecycle", () => {
+  it("keeps the capture context open across VAD speech_ended until the server commits the turn", () => {
+    const speechEnded = html.slice(
+      html.indexOf('message.type === "speech_ended"'),
+      html.indexOf('message.type === "audio_clear"'),
+    );
+    expect(speechEnded).toMatch(/drainPcmQueue\(turn\.id\)/);
+    expect(speechEnded).not.toMatch(/activeTurn\s*=\s*null/);
+
+    const turnComplete = html.slice(
+      html.indexOf('message.type === "turn_complete"'),
+      html.indexOf('message.type === "agent_tool_call"'),
+    );
+    expect(turnComplete).toMatch(/activeTurn\?\.id\s*===\s*turn\.id/);
+    expect(turnComplete).toMatch(/activeTurn\s*=\s*null/);
+  });
+});

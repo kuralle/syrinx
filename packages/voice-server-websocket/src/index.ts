@@ -426,6 +426,12 @@ function wireBrowserSessionEvents(
   onSession("user_input_final", (event) => {
     sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence }, maxBufferedAmountBytes);
   });
+  disposers.push(
+    session.bus.on("eos.turn_complete", (pkt) => {
+      const turn = pkt as { contextId: string; text?: string };
+      sendJson(socket, { type: "turn_complete", turnId: turn.contextId, transcript: turn.text ?? "" }, maxBufferedAmountBytes);
+    }),
+  );
   onSession("agent_text_delta", (event) => {
     sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta }, maxBufferedAmountBytes);
   });

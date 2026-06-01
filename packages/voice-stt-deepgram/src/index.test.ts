@@ -88,7 +88,7 @@ describe("DeepgramSTTPlugin", () => {
     expect(controlMessages.at(-1)).toBe("CloseStream");
   });
 
-  it("releases an already closed provider-final buffer after explicit finalization", async () => {
+  it("emits provider-final segments immediately while still allowing explicit finalization", async () => {
     let finalizeMessages = 0;
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data, isBinary) => {
@@ -145,10 +145,6 @@ describe("DeepgramSTTPlugin", () => {
       audio: new Uint8Array(640),
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(finals).toHaveLength(0);
-
-    plugin.forceFinalize("turn-1");
-    await new Promise((resolve) => setTimeout(resolve, 3));
     expect(finals).toEqual([
       expect.objectContaining({
         kind: "stt.result",
@@ -158,17 +154,17 @@ describe("DeepgramSTTPlugin", () => {
       }),
     ]);
 
+    plugin.forceFinalize("turn-1");
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(finals).toHaveLength(1);
+    expect(finals).toEqual([
+      expect.objectContaining({ contextId: "turn-1", text: "premature", confidence: 0.8 }),
+      expect.objectContaining({ contextId: "turn-1", text: "partial", confidence: 0.7 }),
+      expect.objectContaining({ contextId: "turn-1", text: "confirmed", confidence: 0.95 }),
+    ]);
     expect(finalizeMessages).toBe(1);
     expect(metrics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: "stt_provider_finalize_requested",
-        contextId: "turn-1",
-        value: expect.stringContaining("\"bytes\":640"),
-      }),
-      expect.objectContaining({
-        name: "stt_provider_final_buffer_released",
         contextId: "turn-1",
         value: expect.stringContaining("\"bytes\":640"),
       }),
@@ -179,7 +175,7 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
-  it("waits for a trailing provider-final segment after Pipecat requests finalize", async () => {
+  it("emits trailing provider-final segments after Pipecat requests finalize", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
@@ -224,16 +220,25 @@ describe("DeepgramSTTPlugin", () => {
       audio: new Uint8Array(640),
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finals).toEqual([
+      expect.objectContaining({
+        contextId: "turn-2",
+        text: "first phrase",
+        confidence: 0.8,
+      }),
+    ]);
 
     plugin.forceFinalize("turn-2");
-    await new Promise((resolve) => setTimeout(resolve, 3));
-    expect(finals).toHaveLength(0);
-
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(finals).toEqual([
       expect.objectContaining({
         contextId: "turn-2",
-        text: "first phrase trailing phrase",
+        text: "first phrase",
+        confidence: 0.8,
+      }),
+      expect.objectContaining({
+        contextId: "turn-2",
+        text: "trailing phrase",
         confidence: 0.9,
       }),
     ]);
@@ -436,9 +441,13 @@ describe("DeepgramSTTPlugin", () => {
       timestampMs: Date.now(),
       audio: new Uint8Array(640),
     });
-    await waitFor(finals);
+    await waitFor(finals, 2);
 
     expect(finals).toEqual([
+      expect.objectContaining({
+        contextId: "turn-before-reconnect",
+        text: "stale pre reconnect",
+      }),
       expect.objectContaining({
         contextId: "turn-after-reconnect",
         text: "fresh after reconnect",
@@ -517,12 +526,12 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
-  it("does not promote cached provider text when Finalize is not confirmed", async () => {
+  it("times out interim-only provider text when Finalize is not confirmed", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
           socket.send(JSON.stringify({
-            is_final: true,
+            is_final: false,
             speech_final: false,
             channel: { alternatives: [{ transcript: "unconfirmed segment", confidence: 0.8 }] },
           }));
@@ -591,6 +600,212 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
+  it("emits provider is_final text without waiting for speech_final or explicit Finalize confirmation", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (_data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: "released provider text", confidence: 0.87 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
+    bus.on("metric.conversation", (pkt) => { metrics.push(pkt as ConversationMetricPacket); });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 10,
+    });
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-is-final", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await waitFor(finals);
+    plugin.forceFinalize("turn-is-final");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(finals).toEqual([
+      expect.objectContaining({
+        kind: "stt.result",
+        contextId: "turn-is-final",
+        text: "released provider text",
+        confidence: 0.87,
+        provider: expect.objectContaining({
+          name: "deepgram",
+          speechFinal: false,
+          fromFinalize: false,
+          finalizeRequested: false,
+        }),
+      }),
+    ]);
+    expect(errors).toHaveLength(0);
+    expect(metrics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "stt_provider_finalize_timeout" }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("correlates a pending Finalize response to the requested context across turn.change", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) return;
+        const msg = JSON.parse(data.toString()) as { type?: string };
+        if (msg.type !== "Finalize") return;
+        setTimeout(() => {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            from_finalize: true,
+            channel: { alternatives: [{ transcript: "old turn flushed", confidence: 0.91 }] },
+          }));
+        }, 5);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
+    bus.on("metric.conversation", (pkt) => { metrics.push(pkt as ConversationMetricPacket); });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 25,
+    });
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-old", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    plugin.forceFinalize("turn-old");
+    bus.push(Route.Main, {
+      kind: "turn.change",
+      previousContextId: "turn-old",
+      contextId: "turn-new",
+      reason: "websocket_audio_turn",
+      timestampMs: Date.now(),
+    });
+
+    await waitFor(finals);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+
+    expect(finals).toEqual([
+      expect.objectContaining({
+        kind: "stt.result",
+        contextId: "turn-old",
+        text: "old turn flushed",
+        provider: expect.objectContaining({
+          fromFinalize: true,
+          finalizeRequested: true,
+        }),
+      }),
+    ]);
+    expect(errors).toHaveLength(0);
+    expect(metrics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "stt_provider_finalize_timeout", contextId: "turn-old" }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("keeps Finalize response correlation after already released final text crosses turn.change", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            channel: { alternatives: [{ transcript: "old released text", confidence: 0.88 }] },
+          }));
+          return;
+        }
+        const msg = JSON.parse(data.toString()) as { type?: string };
+        if (msg.type !== "Finalize") return;
+        setTimeout(() => {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            from_finalize: true,
+            channel: { alternatives: [{ transcript: "old finalize tail", confidence: 0.93 }] },
+          }));
+        }, 5);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
+    bus.on("metric.conversation", (pkt) => { metrics.push(pkt as ConversationMetricPacket); });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 25,
+    });
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-old-released", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await waitFor(finals);
+    plugin.forceFinalize("turn-old-released");
+    bus.push(Route.Main, {
+      kind: "turn.change",
+      previousContextId: "turn-old-released",
+      contextId: "turn-new-after-release",
+      reason: "websocket_audio_turn",
+      timestampMs: Date.now(),
+    });
+
+    await waitFor(finals, 2);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+
+    expect(finals).toEqual([
+      expect.objectContaining({ contextId: "turn-old-released", text: "old released text" }),
+      expect.objectContaining({
+        contextId: "turn-old-released",
+        text: "old finalize tail",
+        provider: expect.objectContaining({
+          fromFinalize: true,
+          finalizeRequested: true,
+        }),
+      }),
+    ]);
+    expect(errors).toHaveLength(0);
+    expect(metrics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "stt_provider_finalize_timeout" }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("keeps the live connection after a single unconfirmed Finalize timeout", async () => {
     // A lone slow finalize must NOT tear down the socket — the next turn has to stream
     // on the same connection, otherwise a reconnect stall cascades into more timeouts.
@@ -600,11 +815,11 @@ describe("DeepgramSTTPlugin", () => {
       connections.push(socket);
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
-          // Only the fresh turn gets a confirming speech_final; the stale turn's
-          // Finalize is intentionally never confirmed so it times out.
+          // Only the fresh turn gets final text; the stale turn's interim-only
+          // text is intentionally never confirmed so its Finalize times out.
           const forFreshTurn = lastAudioContext === "turn-fresh";
           socket.send(JSON.stringify({
-            is_final: true,
+            is_final: forFreshTurn,
             speech_final: forFreshTurn,
             channel: { alternatives: [{ transcript: forFreshTurn ? "fresh confirmed text" : "stale interim", confidence: 0.9 }] },
           }));
@@ -671,7 +886,7 @@ describe("DeepgramSTTPlugin", () => {
             }));
           } else {
             socket.send(JSON.stringify({
-              is_final: true,
+              is_final: false,
               speech_final: false,
               channel: { alternatives: [{ transcript: "wedged interim", confidence: 0.8 }] },
             }));
