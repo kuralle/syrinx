@@ -2,7 +2,7 @@
 //
 // Synthetic PCM fixtures for primary-speaker gate tests.
 
-import { pcm16SamplesToBytes } from "./audio/pcm.js";
+import { pcm16BytesToSamples, pcm16SamplesToBytes } from "./audio/pcm.js";
 
 export function synthesizeTonePcm16(options: {
   frequencyHz: number;
@@ -31,7 +31,7 @@ export function mixPcm16(chunks: Uint8Array[], weights: number[]): Uint8Array {
   for (let c = 0; c < chunks.length; c += 1) {
     const chunk = chunks[c]!;
     const weight = weights[c] ?? 1;
-    const samples = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
+    const samples = pcm16BytesToSamples(chunk);
     for (let i = 0; i < samples.length; i += 1) {
       const mixed = (out[i] ?? 0) + samples[i]! * weight;
       out[i] = Math.max(-32768, Math.min(32767, Math.round(mixed)));
