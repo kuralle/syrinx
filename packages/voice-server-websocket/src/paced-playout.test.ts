@@ -159,6 +159,30 @@ describe("PacedPlayoutQueue — drift-corrected scheduling", () => {
     expect(misses).toHaveLength(0);
   });
 
+  it("does not advance the playout deadline by frameDurationMs after a 0 ms control frame", () => {
+    const FRAME_MS = 20;
+    let sends = 0;
+    const misses: number[] = [];
+
+    const queue = new PacedPlayoutQueue(
+      FRAME_MS,
+      10_000,
+      () => {},
+      () => {},
+      (lateMs) => misses.push(lateMs),
+    );
+
+    queue.enqueue([{ send: () => { sends += 1; } }]);
+    expect(sends).toBe(1);
+    queue.enqueueControl(() => { sends += 1; });
+    queue.enqueue([{ send: () => { sends += 1; } }]);
+    vi.advanceTimersByTime(FRAME_MS);
+    expect(sends).toBe(3);
+    vi.advanceTimersByTime(FRAME_MS);
+    expect(sends).toBe(3);
+    expect(misses).toHaveLength(0);
+  });
+
   it("backward-compatible: works without onDeadlineMiss callback", () => {
     const queue = new PacedPlayoutQueue(20, 10_000, () => {});
     expect(() => {
