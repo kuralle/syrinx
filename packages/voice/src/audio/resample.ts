@@ -84,6 +84,10 @@ function linearInterpolate(input: Int16Array, outputLength: number, ratio: numbe
   return output;
 }
 
+function outputLengthFor(inputLength: number, sourceSampleRateHz: number, targetSampleRateHz: number): number {
+  return Math.max(1, Math.round((inputLength * targetSampleRateHz) / sourceSampleRateHz));
+}
+
 export function resamplePcm16(
   input: Int16Array,
   sourceSampleRateHz: number,
@@ -92,16 +96,82 @@ export function resamplePcm16(
   if (input.length === 0) return new Int16Array(0);
   if (sourceSampleRateHz === targetSampleRateHz) return input;
 
-  const outputLength = Math.max(1, Math.round((input.length * targetSampleRateHz) / sourceSampleRateHz));
+  const outputLength = outputLengthFor(input.length, sourceSampleRateHz, targetSampleRateHz);
   const ratio = sourceSampleRateHz / targetSampleRateHz;
 
   if (ratio <= 1) {
-    // Upsample: linear interpolation is alias-free (no folding risk on expansion).
     return linearInterpolate(input, outputLength, ratio);
   }
 
-  // Downsample: apply anti-alias FIR at 0.45 × targetRate before decimation.
   const cutoffNormalized = (0.45 * targetSampleRateHz) / sourceSampleRateHz;
   const fir = getLowPassFir(cutoffNormalized);
   return firDecimate(input, outputLength, ratio, fir);
+}
+
+export class StreamingPcm16Resampler {
+  private history = new Int16Array(0);
+  private readonly ratio: number;
+  private readonly fir: Float64Array | null;
+  private readonly sourceSampleRateHz: number;
+  private readonly targetSampleRateHz: number;
+
+  constructor(sourceSampleRateHz: number, targetSampleRateHz: number) {
+    this.sourceSampleRateHz = sourceSampleRateHz;
+    this.targetSampleRateHz = targetSampleRateHz;
+    this.ratio = sourceSampleRateHz / targetSampleRateHz;
+    if (this.ratio > 1) {
+      const cutoffNormalized = (0.45 * targetSampleRateHz) / sourceSampleRateHz;
+      this.fir = getLowPassFir(cutoffNormalized);
+    } else {
+      this.fir = null;
+    }
+  }
+
+  process(input: Int16Array): Int16Array {
+    if (input.length === 0) return new Int16Array(0);
+    if (this.sourceSampleRateHz === this.targetSampleRateHz) return input;
+
+    if (this.ratio <= 1 || this.fir === null) {
+      const outputLength = outputLengthFor(input.length, this.sourceSampleRateHz, this.targetSampleRateHz);
+      return linearInterpolate(input, outputLength, this.ratio);
+    }
+
+    const historyLength = this.history.length;
+    const combined = new Int16Array(historyLength + input.length);
+    combined.set(this.history, 0);
+    combined.set(input, historyLength);
+
+    const fullOutputLength = outputLengthFor(combined.length, this.sourceSampleRateHz, this.targetSampleRateHz);
+    const fullOutput = firDecimate(combined, fullOutputLength, this.ratio, this.fir);
+    let firstNewOutput = 0;
+    if (historyLength > 0) {
+      while (firstNewOutput < fullOutput.length) {
+        const centerInputIndex = Math.round(firstNewOutput * this.ratio);
+        if (centerInputIndex >= historyLength) break;
+        firstNewOutput += 1;
+      }
+    }
+    const output = fullOutput.subarray(firstNewOutput);
+
+    const keepHistory = Math.min(FIR_TAPS - 1, combined.length);
+    this.history = combined.subarray(combined.length - keepHistory);
+    return output;
+  }
+}
+
+export function resamplePcm16Streaming(
+  resamplers: Map<string, StreamingPcm16Resampler>,
+  input: Int16Array,
+  sourceSampleRateHz: number,
+  targetSampleRateHz: number,
+): Int16Array {
+  if (input.length === 0) return new Int16Array(0);
+  if (sourceSampleRateHz === targetSampleRateHz) return input;
+  const key = `${String(sourceSampleRateHz)}->${String(targetSampleRateHz)}`;
+  let resampler = resamplers.get(key);
+  if (!resampler) {
+    resampler = new StreamingPcm16Resampler(sourceSampleRateHz, targetSampleRateHz);
+    resamplers.set(key, resampler);
+  }
+  return resampler.process(input);
 }

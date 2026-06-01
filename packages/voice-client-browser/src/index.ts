@@ -22,7 +22,12 @@ import {
   type BrowserWireCodec,
 } from "./browser-opus.js";
 import { BROWSER_OPUS_SAMPLE_RATE_HZ } from "./browser-opus.js";
-import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
+import {
+  pcm16BytesToSamples,
+  pcm16SamplesToBytes,
+  resamplePcm16Streaming,
+  type StreamingPcm16Resampler,
+} from "@asyncdot/voice/audio";
 import {
   decodeBrowserAssistantAudio,
   encodeBrowserAudioEnvelopeFrame,
@@ -178,6 +183,7 @@ export class SyrinxBrowserClient {
   private opusLoadFailed = false;
   private codecNegotiation: Promise<void> | null = null;
   private pendingUplink: Array<() => void> = [];
+  private readonly streamingResamplers = new Map<string, StreamingPcm16Resampler>();
 
   constructor(private readonly options: SyrinxBrowserClientOptions) {
     this.transport = options.transport ?? new WebSocketClientTransport({ protocols: options.protocols });
@@ -463,7 +469,9 @@ export class SyrinxBrowserClient {
       const wireRate = audio.metadata?.sampleRateHz;
       if (wireRate !== undefined && wireRate !== this.outputSampleRateHz) {
         const samples = pcm16BytesToSamples(new Uint8Array(pcmData));
-        const resampled = pcm16SamplesToBytes(resamplePcm16(samples, wireRate, this.outputSampleRateHz));
+        const resampled = pcm16SamplesToBytes(
+          resamplePcm16Streaming(this.streamingResamplers, samples, wireRate, this.outputSampleRateHz),
+        );
         const copy = new Uint8Array(resampled.byteLength);
         copy.set(resampled);
         pcmData = copy.buffer;
@@ -518,7 +526,7 @@ export class SyrinxBrowserClient {
       const samples = pcm16BytesToSamples(bytes);
       const wireSamples = sampleRateHz === this.opusCodec.sampleRateHz
         ? samples
-        : resamplePcm16(samples, sampleRateHz, this.opusCodec.sampleRateHz);
+        : resamplePcm16Streaming(this.streamingResamplers, samples, sampleRateHz, this.opusCodec.sampleRateHz);
       for (const opus of this.opusCodec.encodePcm16Frame(wireSamples, true)) {
         const sequence = this.nextAudioSequence(seq);
         frames.push(encodeBrowserOpusEnvelope(opus, this.opusCodec.sampleRateHz, { ...options, sequence }));

@@ -17,7 +17,12 @@ import {
   type VoiceAgentSession,
   type VoiceAgentSessionEvents,
 } from "@asyncdot/voice";
-import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
+import {
+  pcm16BytesToSamples,
+  pcm16SamplesToBytes,
+  resamplePcm16Streaming,
+  type StreamingPcm16Resampler,
+} from "@asyncdot/voice/audio";
 import {
   BROWSER_OPUS_FRAME_DURATION_MS,
   BROWSER_OPUS_SAMPLE_RATE_HZ,
@@ -119,6 +124,7 @@ interface BrowserConnectionState {
   outboundHandle: TelephonyOutboundHandle | null;
   opusCodec: BrowserOpusCodec | null;
   browserOpusDownlink: boolean;
+  readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -168,6 +174,7 @@ export async function createVoiceWebSocketServer(
       outboundHandle: null,
       opusCodec: null,
       browserOpusDownlink: browserOpusDownlink,
+      streamingResamplers: new Map(),
     }),
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
@@ -216,6 +223,7 @@ export async function createVoiceWebSocketServer(
         inputSampleRateHz,
         () => state.browserOpusDownlink,
         managed.turnMetricsTurns,
+        state.streamingResamplers,
       );
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
@@ -259,6 +267,7 @@ export async function createVoiceWebSocketServer(
           state.opusCodec,
           inputSampleRateHz,
           state,
+          state.streamingResamplers,
         );
       });
     },
@@ -392,6 +401,7 @@ function wireBrowserSessionEvents(
   engineInputSampleRateHz: number,
   getBrowserOpusDownlink: () => boolean,
   turnMetricsTurns: Map<string, TurnTimestampState>,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
   let currentContextId = "";
@@ -443,7 +453,7 @@ function wireBrowserSessionEvents(
     isActive: () => true, // Always active for metrics and processing, socket state is checked in encodeFrames
     
     encodeFrames: (audio, sourceSampleRateHz, contextId) => {
-      const resampled = resampleAudioBytes(audio, sourceSampleRateHz, outputSampleRateHz);
+      const resampled = resampleAudioBytes(audio, sourceSampleRateHz, outputSampleRateHz, streamingResamplers);
       const frames: PacedPlayoutFrame[] = [];
       const frameSampleCount = Math.max(1, Math.round((outputSampleRateHz * outboundFrameDurationMs) / 1000));
       const frameBytesCount = frameSampleCount * 2;
@@ -492,7 +502,7 @@ function wireBrowserSessionEvents(
           const framePcm = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
           let samples = pcm16BytesToSamples(framePcm);
           if (outputSampleRateHz !== opusCodec.sampleRateHz) {
-            samples = resamplePcm16(samples, outputSampleRateHz, opusCodec.sampleRateHz);
+            samples = resamplePcm16Streaming(streamingResamplers, samples, outputSampleRateHz, opusCodec.sampleRateHz);
           }
           const flush = offset + frameBytesCount >= resampled.byteLength;
           for (const opus of opusCodec.encodePcm16Frame(samples, flush)) {
@@ -572,6 +582,7 @@ function handleClientMessage(
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
   state: BrowserConnectionState,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): string {
   if (isBinary) {
     const binaryAudio = decodeBinaryAudioMessage(
@@ -580,6 +591,7 @@ function handleClientMessage(
       rawBinaryInput,
       opusCodec,
       engineInputSampleRateHz,
+      streamingResamplers,
     );
     const nextContextId = binaryAudio.contextId ?? currentContextId;
     if (nextContextId !== currentContextId) {
@@ -587,7 +599,7 @@ function handleClientMessage(
     }
     rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
     rememberInputSequence(session, inputSequence, nextContextId, binaryAudio.sequence);
-    const audio = resampleAudioBytes(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz);
+    const audio = resampleAudioBytes(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz, streamingResamplers);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
@@ -628,7 +640,7 @@ function handleClientMessage(
       kind: "user.audio_received",
       contextId: nextContextId,
       timestampMs: Date.now(),
-      audio: resampleAudioBytes(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz),
+      audio: resampleAudioBytes(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz, streamingResamplers),
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
@@ -732,6 +744,7 @@ function decodeBinaryAudioMessage(
   rawBinaryInput: boolean,
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): { readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number; readonly audio: Uint8Array } {
   if (!hasSyrinxAudioEnvelope(data)) {
     if (!rawBinaryInput) {
@@ -742,7 +755,7 @@ function decodeBinaryAudioMessage(
   const { header, audio } = decodeSyrinxAudioEnvelope(data);
   const sampleRateHz = requirePositiveIntegerFromHeader(header.sampleRateHz) ?? defaultSampleRateHz;
   const wireAudio = header.encoding === "opus"
-    ? decodeBrowserOpusIngress(audio, sampleRateHz, opusCodec, engineInputSampleRateHz)
+    ? decodeBrowserOpusIngress(audio, sampleRateHz, opusCodec, engineInputSampleRateHz, streamingResamplers)
     : audio;
   return {
     contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
@@ -757,6 +770,7 @@ function decodeBrowserOpusIngress(
   sampleRateHz: number,
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): Uint8Array {
   if (!opusCodec) throw new Error("Browser websocket opus ingress is not initialized");
   if (opusCodec.sampleRateHz !== sampleRateHz) {
@@ -765,7 +779,9 @@ function decodeBrowserOpusIngress(
   const pcm = decodeBrowserOpusToPcm16Bytes(wire, opusCodec);
   if (sampleRateHz === engineInputSampleRateHz) return pcm;
   const samples = pcm16BytesToSamples(pcm);
-  return pcm16SamplesToBytes(resamplePcm16(samples, sampleRateHz, engineInputSampleRateHz));
+  return pcm16SamplesToBytes(
+    resamplePcm16Streaming(streamingResamplers, samples, sampleRateHz, engineInputSampleRateHz),
+  );
 }
 
 function requirePositiveIntegerFromHeader(value: unknown): number | null {
@@ -773,13 +789,18 @@ function requirePositiveIntegerFromHeader(value: unknown): number | null {
   return value;
 }
 
-function resampleAudioBytes(audio: Uint8Array, sourceSampleRateHz: number, targetSampleRateHz: number): Uint8Array {
+function resampleAudioBytes(
+  audio: Uint8Array,
+  sourceSampleRateHz: number,
+  targetSampleRateHz: number,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
+): Uint8Array {
   if (audio.byteLength % 2 !== 0) {
     throw new Error("PCM16 audio payload must contain an even number of bytes");
   }
   if (sourceSampleRateHz === targetSampleRateHz) return audio;
   const samples = pcm16BytesToSamples(audio);
-  const resampled = resamplePcm16(samples, sourceSampleRateHz, targetSampleRateHz);
+  const resampled = resamplePcm16Streaming(streamingResamplers, samples, sourceSampleRateHz, targetSampleRateHz);
   return pcm16SamplesToBytes(resampled);
 }
 
