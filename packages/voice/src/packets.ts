@@ -164,6 +164,7 @@ export interface SttResultPacket extends VoicePacket {
   readonly text: string;
   readonly confidence: number;
   readonly language?: string;
+  readonly provider?: Record<string, unknown>;
 }
 
 /** Requests that a streaming STT plugin publish its accumulated final transcript. */

@@ -32,6 +32,13 @@ import {
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
 import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
+interface ProviderTranscriptState {
+  lastInterimTranscript: string;
+  lastInterimConfidence: number;
+  finalTranscriptParts: string[];
+  finalConfidence: number;
+}
+
 export class DeepgramSTTPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private apiKey: string = "";
@@ -67,16 +74,14 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
   constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
 
-  // Track provider text for display/debug only; final output requires provider confirmation.
-  private lastInterimTranscript = "";
-  private lastInterimConfidence = 0;
-  private finalTranscriptParts: string[] = [];
-  private finalConfidence = 0;
+  private transcriptStateByContextId = new Map<string, ProviderTranscriptState>();
   private finalizeRequestedContextIds = new Set<string>();
   private finalizedContextIds = new Set<string>();
   private speechFinalContextIds = new Set<string>();
   private ignoreNextProviderFinalContextIds = new Set<string>();
   private providerFinalizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private providerFinalizeCorrelationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingProviderFinalizeContextIds: string[] = [];
   private audioStatsByContextId = new Map<string, {
     bytes: number;
     chunks: number;
@@ -154,16 +159,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       // Turn change handler
       bus.on("turn.change", (pkt: unknown) => {
         const tc = pkt as { contextId: string };
-        if (this.currentContextId && this.currentContextId !== tc.contextId) {
-          this.clearProviderFinalizeTimer(this.currentContextId);
-          this.finalizeRequestedContextIds.delete(this.currentContextId);
-          this.finalizedContextIds.delete(this.currentContextId);
-          this.speechFinalContextIds.delete(this.currentContextId);
-          this.audioStatsByContextId.delete(this.currentContextId);
-        }
         this.currentContextId = tc.contextId;
         this.streamStartTime = Date.now();
-        this.resetTurnTranscriptState();
       }),
 
       // STT interrupt handler
@@ -200,11 +197,16 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
     const transcript = alt["transcript"].trim();
     const confidence = typeof alt["confidence"] === "number" ? alt["confidence"] : 0;
-    if (!transcript || this.finalizedContextIds.has(this.currentContextId)) return;
+    const fromFinalize = msg["from_finalize"] === true;
+    const speechFinal = msg["speech_final"] === true;
+    const providerContextId = msg["is_final"] === true
+      ? this.contextIdForProviderFinal({ speechFinal, fromFinalize })
+      : this.currentContextId;
+    if (!transcript || this.finalizedContextIds.has(providerContextId)) return;
 
-    // Track provider text for display/debug; do not treat it as EOS.
-    this.lastInterimTranscript = transcript;
-    this.lastInterimConfidence = confidence;
+    const state = this.transcriptState(providerContextId);
+    state.lastInterimTranscript = transcript;
+    state.lastInterimConfidence = confidence;
 
     // Confidence threshold filter (Rapida pattern)
     if (
@@ -213,7 +215,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     ) {
       this.bus?.push(Route.Background, {
         kind: "metric.conversation",
-        contextId: this.currentContextId,
+        contextId: providerContextId,
         timestampMs: Date.now(),
         name: "stt_low_confidence",
         value: String(confidence),
@@ -222,29 +224,33 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
 
     if (msg["is_final"] === true) {
-      if (this.ignoreNextProviderFinalContextIds.delete(this.currentContextId)) {
-        this.resetPendingTranscript();
+      if (this.ignoreNextProviderFinalContextIds.delete(providerContextId)) {
+        this.resetPendingTranscript(providerContextId);
         return;
       }
-      this.appendFinalSegment(transcript, confidence);
-      const fromFinalize = msg["from_finalize"] === true;
-      const speechFinal = msg["speech_final"] === true;
-      if (speechFinal) this.speechFinalContextIds.add(this.currentContextId);
-      const finalizeRequested = this.finalizeRequestedContextIds.has(this.currentContextId);
-      this.pushProviderFinalMetric(transcript, {
+      this.appendFinalSegment(providerContextId, transcript, confidence);
+      if (speechFinal) this.speechFinalContextIds.add(providerContextId);
+      const finalizeRequested = this.finalizeRequestedContextIds.has(providerContextId);
+      this.pushProviderFinalMetric(providerContextId, transcript, {
         confidence,
         speechFinal,
         fromFinalize,
         finalizeRequested,
       });
-      if (!this.emitEosOnFinal && finalizeRequested && (speechFinal || fromFinalize)) {
-        this.pushBufferedProviderFinal(this.currentContextId);
-      } else if (this.emitEosOnFinal && ((this.finalizeOnSpeechFinal && speechFinal) || (finalizeRequested && fromFinalize))) {
-        this.pushFinal(this.combinedFinalTranscript(), this.finalConfidence);
-        this.resetPendingTranscript();
+      this.pushResult(transcript, confidence, providerContextId, {
+        name: "deepgram",
+        speechFinal,
+        fromFinalize,
+        finalizeRequested,
+      });
+      if (speechFinal || fromFinalize) {
+        this.resolveProviderFinalize(providerContextId);
+      }
+      if (this.emitEosOnFinal && ((this.finalizeOnSpeechFinal && speechFinal) || (finalizeRequested && fromFinalize))) {
+        this.pushTurnComplete(providerContextId);
       }
     } else {
-      this.pushInterim(transcript);
+      this.pushInterim(transcript, providerContextId);
     }
   }
 
@@ -272,11 +278,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private requestProviderFinalize(contextId: string): void {
     if (this.finalizedContextIds.has(contextId)) return;
     this.finalizeRequestedContextIds.add(contextId);
+    this.trackPendingProviderFinalize(contextId);
     this.pushMetric(contextId, "stt_provider_finalize_requested", this.audioStats(contextId));
     if (this.conn?.isReady) {
       this.conn.send(JSON.stringify({ type: "Finalize" }));
     }
-    if (!this.emitEosOnFinal && this.speechFinalContextIds.has(contextId) && this.pushBufferedProviderFinal(contextId)) {
+    if (!this.emitEosOnFinal && this.hasFinalTranscript(contextId)) {
+      this.scheduleProviderFinalizeCorrelationExpiry(contextId);
       return;
     }
 
@@ -297,13 +305,14 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     // never confirms the Finalize, complete it with the best buffered text — confirmed
     // is_final segments first, then the latest interim — so the turn still reaches the LLM.
     if (this.finalizeTimeoutFallback) {
-      const fallbackText = this.combinedFinalTranscript() || this.lastInterimTranscript;
+      const state = this.transcriptState(contextId);
+      const fallbackText = this.combinedFinalTranscript(contextId) || state.lastInterimTranscript;
       if (fallbackText) {
         this.pushMetric(contextId, "stt_provider_finalize_timeout_fallback", this.audioStats(contextId));
         // A late provider-final for this turn must not double-emit after we promote here.
         this.ignoreNextProviderFinalContextIds.add(contextId);
-        this.pushFinal(fallbackText, this.finalConfidence || this.lastInterimConfidence, contextId);
-        this.resetPendingTranscript();
+        this.pushFinal(fallbackText, state.finalConfidence || state.lastInterimConfidence, contextId);
+        this.resetPendingTranscript(contextId);
         return;
       }
     }
@@ -327,28 +336,17 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private discardUnconfirmedTurn(contextId: string): void {
     this.clearProviderFinalizeTimer(contextId);
     this.finalizeRequestedContextIds.delete(contextId);
+    this.removePendingProviderFinalize(contextId);
     this.speechFinalContextIds.delete(contextId);
     this.ignoreNextProviderFinalContextIds.add(contextId);
     this.audioStatsByContextId.delete(contextId);
-    this.resetPendingTranscript();
-  }
-
-  private pushBufferedProviderFinal(contextId: string): boolean {
-    const transcript = this.combinedFinalTranscript();
-    if (!transcript || !this.bus) return false;
-
-    this.ignoreNextProviderFinalContextIds.add(contextId);
-    this.pushMetric(contextId, "stt_provider_final_buffer_released", this.audioStats(contextId));
-    this.pushFinal(transcript, this.finalConfidence, contextId);
-    this.resetPendingTranscript();
-    return true;
+    this.resetPendingTranscript(contextId);
   }
 
   /** Emit final transcript + EOS turn complete. */
   private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
     const ctxId = contextId;
-    this.finalizeRequestedContextIds.delete(ctxId);
-    this.clearProviderFinalizeTimer(ctxId);
+    this.resolveProviderFinalize(ctxId);
     this.finalizedContextIds.add(ctxId);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
@@ -366,7 +364,30 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.audioStatsByContextId.delete(ctxId);
   }
 
-  private pushResult(transcript: string, confidence: number, contextId = this.currentContextId): void {
+  private pushTurnComplete(contextId: string): void {
+    const transcript = this.combinedFinalTranscript(contextId);
+    if (!transcript || !this.bus) return;
+    this.resolveProviderFinalize(contextId);
+    this.finalizedContextIds.add(contextId);
+    this.consecutiveFinalizeTimeouts = 0;
+    this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
+    this.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId,
+      timestampMs: Date.now(),
+      text: transcript,
+      transcripts: [],
+    });
+    this.audioStatsByContextId.delete(contextId);
+    this.resetPendingTranscript(contextId);
+  }
+
+  private pushResult(
+    transcript: string,
+    confidence: number,
+    contextId = this.currentContextId,
+    provider?: Record<string, unknown>,
+  ): void {
     this.bus?.push(Route.Main, {
       kind: "stt.result",
       contextId,
@@ -374,41 +395,92 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       text: transcript,
       confidence,
       language: this.language,
+      provider,
     });
   }
 
   /** Emit interim transcript for real-time display. */
-  private pushInterim(transcript: string): void {
+  private pushInterim(transcript: string, contextId = this.currentContextId): void {
     this.bus?.push(Route.Main, {
       kind: "stt.interim",
-      contextId: this.currentContextId,
+      contextId,
       timestampMs: Date.now(),
       text: transcript,
     });
   }
 
-  private appendFinalSegment(transcript: string, confidence: number): void {
+  private appendFinalSegment(contextId: string, transcript: string, confidence: number): void {
     if (transcript.length === 0) return;
-    const last = this.finalTranscriptParts.at(-1);
+    const state = this.transcriptState(contextId);
+    const last = state.finalTranscriptParts.at(-1);
     if (last !== transcript) {
-      this.finalTranscriptParts.push(transcript);
+      state.finalTranscriptParts.push(transcript);
     }
-    this.finalConfidence = Math.max(this.finalConfidence, confidence);
+    state.finalConfidence = Math.max(state.finalConfidence, confidence);
   }
 
-  private combinedFinalTranscript(): string {
-    return this.finalTranscriptParts.join(" ").replace(/\s+/g, " ").trim();
+  private combinedFinalTranscript(contextId: string): string {
+    return this.transcriptState(contextId).finalTranscriptParts.join(" ").replace(/\s+/g, " ").trim();
   }
 
-  private resetPendingTranscript(): void {
-    this.finalTranscriptParts = [];
-    this.finalConfidence = 0;
-    this.lastInterimTranscript = "";
-    this.lastInterimConfidence = 0;
+  private resetPendingTranscript(contextId: string): void {
+    this.transcriptStateByContextId.delete(contextId);
   }
 
   private resetTurnTranscriptState(): void {
-    this.resetPendingTranscript();
+    this.resetPendingTranscript(this.currentContextId);
+  }
+
+  private transcriptState(contextId: string): ProviderTranscriptState {
+    const existing = this.transcriptStateByContextId.get(contextId);
+    if (existing) return existing;
+    const next: ProviderTranscriptState = {
+      lastInterimTranscript: "",
+      lastInterimConfidence: 0,
+      finalTranscriptParts: [],
+      finalConfidence: 0,
+    };
+    this.transcriptStateByContextId.set(contextId, next);
+    return next;
+  }
+
+  private hasFinalTranscript(contextId: string): boolean {
+    const state = this.transcriptStateByContextId.get(contextId);
+    return Boolean(state && state.finalTranscriptParts.length > 0);
+  }
+
+  private contextIdForProviderFinal(flags: { readonly speechFinal: boolean; readonly fromFinalize: boolean }): string {
+    const pending = this.pendingProviderFinalizeContextIds[0];
+    if (pending && (flags.speechFinal || flags.fromFinalize)) return pending;
+    return this.currentContextId;
+  }
+
+  private trackPendingProviderFinalize(contextId: string): void {
+    if (!this.pendingProviderFinalizeContextIds.includes(contextId)) {
+      this.pendingProviderFinalizeContextIds.push(contextId);
+    }
+  }
+
+  private removePendingProviderFinalize(contextId: string): void {
+    this.pendingProviderFinalizeContextIds = this.pendingProviderFinalizeContextIds.filter((ctxId) => ctxId !== contextId);
+  }
+
+  private scheduleProviderFinalizeCorrelationExpiry(contextId: string): void {
+    this.clearProviderFinalizeCorrelationTimer(contextId);
+    if (this.providerFinalizeTimeoutMs <= 0) return;
+    const timer = setTimeout(() => {
+      this.providerFinalizeCorrelationTimers.delete(contextId);
+      this.finalizeRequestedContextIds.delete(contextId);
+      this.removePendingProviderFinalize(contextId);
+    }, this.providerFinalizeTimeoutMs);
+    this.providerFinalizeCorrelationTimers.set(contextId, timer);
+  }
+
+  private resolveProviderFinalize(contextId: string): void {
+    this.finalizeRequestedContextIds.delete(contextId);
+    this.clearProviderFinalizeTimer(contextId);
+    this.clearProviderFinalizeCorrelationTimer(contextId);
+    this.removePendingProviderFinalize(contextId);
   }
 
   private recordAudioSent(contextId: string, byteLength: number): void {
@@ -427,6 +499,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   private pushProviderFinalMetric(
+    contextId: string,
     transcript: string,
     flags: {
       readonly confidence: number;
@@ -435,7 +508,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       readonly finalizeRequested: boolean;
     },
   ): void {
-    const contextId = this.currentContextId;
     this.pushMetric(contextId, "stt_provider_final_segment", {
       ...this.audioStats(contextId),
       transcriptChars: transcript.length,
@@ -490,15 +562,19 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
   async close(): Promise<void> {
     for (const dispose of this.disposers.splice(0)) dispose();
-    if (this.lastInterimTranscript || this.finalTranscriptParts.length > 0) {
+    if (this.transcriptStateByContextId.size > 0) {
       this.pushMetric(this.currentContextId, "stt_pending_transcript_discarded_on_close", this.audioStats(this.currentContextId));
     }
     for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
     this.providerFinalizeTimers.clear();
+    for (const timer of this.providerFinalizeCorrelationTimers.values()) clearTimeout(timer);
+    this.providerFinalizeCorrelationTimers.clear();
+    this.pendingProviderFinalizeContextIds = [];
     this.finalizeRequestedContextIds.clear();
     this.finalizedContextIds.clear();
     this.speechFinalContextIds.clear();
     this.ignoreNextProviderFinalContextIds.clear();
+    this.transcriptStateByContextId.clear();
     this.audioStatsByContextId.clear();
 
     if (this.conn) {
@@ -523,15 +599,25 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.providerFinalizeTimers.delete(contextId);
   }
 
+  private clearProviderFinalizeCorrelationTimer(contextId: string): void {
+    const timer = this.providerFinalizeCorrelationTimers.get(contextId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.providerFinalizeCorrelationTimers.delete(contextId);
+  }
+
   private discardProviderStateForReconnect(): void {
     const contextId = this.currentContextId;
-    const discarded = this.finalTranscriptParts.length > 0 ||
-      this.lastInterimTranscript.length > 0 ||
+    const discarded = this.transcriptStateByContextId.size > 0 ||
       this.finalizeRequestedContextIds.size > 0 ||
       this.audioStatsByContextId.size > 0 ||
-      this.providerFinalizeTimers.size > 0;
+      this.providerFinalizeTimers.size > 0 ||
+      this.providerFinalizeCorrelationTimers.size > 0;
     for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
     this.providerFinalizeTimers.clear();
+    for (const timer of this.providerFinalizeCorrelationTimers.values()) clearTimeout(timer);
+    this.providerFinalizeCorrelationTimers.clear();
+    this.pendingProviderFinalizeContextIds = [];
     this.finalizeRequestedContextIds.clear();
     this.speechFinalContextIds.clear();
     this.ignoreNextProviderFinalContextIds.clear();
@@ -540,7 +626,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     // signal resets too — otherwise a stale count could force an avoidable reset on the
     // first timeout after reconnecting.
     this.consecutiveFinalizeTimeouts = 0;
-    this.resetPendingTranscript();
+    this.transcriptStateByContextId.clear();
     if (discarded && contextId) {
       this.pushMetric(contextId, "stt_provider_reconnect_discarded_state", {});
     }

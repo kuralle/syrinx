@@ -1953,4 +1953,37 @@ describe("createVoiceWebSocketServer", () => {
     client.close();
     await server.close();
   });
+
+  it("notifies browser clients when the server commits the semantic turn", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const turnComplete = readJsonMatching(client, (message) =>
+      (message as { type?: string }).type === "turn_complete",
+    );
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "semantic-turn",
+      timestampMs: Date.now(),
+      text: "I need help choosing modules.",
+      transcripts: [],
+    });
+
+    await expect(turnComplete).resolves.toMatchObject({
+      type: "turn_complete",
+      turnId: "semantic-turn",
+      transcript: "I need help choosing modules.",
+    });
+
+    client.close();
+    await server.close();
+  });
 });
