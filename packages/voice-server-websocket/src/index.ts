@@ -30,7 +30,7 @@ import { isRecord, parseJsonRecord, optionalString, requiredString } from "./jso
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
 import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
-import { TurnMetricsTracker } from "./turn-metrics.js";
+import { TurnMetricsTracker, type TurnTimestampState } from "./turn-metrics.js";
 import { type PacedPlayoutFrame } from "./paced-playout.js";
 import {
   InMemorySessionStore,
@@ -190,6 +190,7 @@ export async function createVoiceWebSocketServer(
           currentContextId: state.initialContextId,
           contextSampleRates: new Map(),
           inputSequence: { lastSequence: null },
+          turnMetricsTurns: new Map(),
           closeTimer: null,
           connectionCount: 1,
         };
@@ -199,6 +200,8 @@ export async function createVoiceWebSocketServer(
     },
 
     wireSession(session, socket, state, disposers) {
+      const managed = state.managed;
+      if (!managed) throw new Error("websocket session missing managed state");
       state.opusCodec = createBrowserOpusCodec(BROWSER_OPUS_SAMPLE_RATE_HZ);
       state.outboundHandle = wireBrowserSessionEvents(
         session,
@@ -212,6 +215,7 @@ export async function createVoiceWebSocketServer(
         state.opusCodec,
         inputSampleRateHz,
         () => state.browserOpusDownlink,
+        managed.turnMetricsTurns,
       );
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
@@ -241,21 +245,22 @@ export async function createVoiceWebSocketServer(
     processMessage(data, isBinary, session, state) {
       if (!state.managed) return;
       const managed = state.managed;
-      const nextContextId = handleClientMessage(
-        session,
-        data,
-        isBinary,
-        managed.currentContextId,
-        contextIdFn,
-        inputSampleRateHz,
-        rawBinaryInput,
-        managed.contextSampleRates,
-        managed.inputSequence,
-        state.opusCodec,
-        inputSampleRateHz,
-        state,
-      );
-      managed.currentContextId = nextContextId;
+      sessionStore.update(managed.id, (stored) => {
+        stored.currentContextId = handleClientMessage(
+          session,
+          data,
+          isBinary,
+          stored.currentContextId,
+          contextIdFn,
+          inputSampleRateHz,
+          rawBinaryInput,
+          stored.contextSampleRates,
+          stored.inputSequence,
+          state.opusCodec,
+          inputSampleRateHz,
+          state,
+        );
+      });
     },
 
     onDisconnect(_session, state, { maxSessionTimedOut }) {
@@ -386,6 +391,7 @@ function wireBrowserSessionEvents(
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
   getBrowserOpusDownlink: () => boolean,
+  turnMetricsTurns: Map<string, TurnTimestampState>,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
   let currentContextId = "";
@@ -540,7 +546,7 @@ function wireBrowserSessionEvents(
 
   const turnMetrics = new TurnMetricsTracker(session.bus, (message) => {
     sendJson(socket, message, maxBufferedAmountBytes);
-  });
+  }, turnMetricsTurns);
   turnMetrics.wire(disposers);
 
   return wireTelephonyOutboundPipeline({

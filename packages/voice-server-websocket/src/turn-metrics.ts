@@ -77,12 +77,15 @@ function emptyTurnState(): TurnTimestampState {
 }
 
 export class TurnMetricsTracker {
-  private readonly turns = new Map<string, TurnTimestampState>();
+  private readonly turns: Map<string, TurnTimestampState>;
 
   constructor(
     private readonly bus: PipelineBus,
     private readonly onEmit: (message: BrowserMetricsMessage) => void,
-  ) {}
+    persistedTurns?: Map<string, TurnTimestampState>,
+  ) {
+    this.turns = persistedTurns ?? new Map();
+  }
 
   wire(disposers: Array<() => void>): void {
     disposers.push(
