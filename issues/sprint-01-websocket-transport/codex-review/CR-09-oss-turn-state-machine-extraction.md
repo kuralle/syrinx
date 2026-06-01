@@ -1,8 +1,17 @@
 # CR-09 — Deferred barge-in state machine extraction remains a structural risk vs OSS patterns
 
-- **Status:** Filed — **design study complete**, implementation staged (test-first)
+- **Status:** **Architecture complete (Stages 0–3 shipped)** — Stage 4 features deferred by decision (additive roadmap)
 - **Severity:** medium
 - **Area:** session architecture / interruption correctness
+
+> **Shipped:** `612f2a6` `3cb542f` `d669c1b` `bdce858`. The barge-in logic is now an
+> explicit, position-aware state machine (`packages/voice/src/turn-arbiter.ts`,
+> discriminated-union state, narrow injected deps), extracted from the session
+> (1688 → **998** lines). Behavior-identical (the byte-frozen barge-in test suite is the
+> proof); voice suite 125 → **142** green. **Stage 4** (resume / backchannel / min-words /
+> semantic-endpoint + the composable-policy framework) is **not built** — each embeds a
+> product decision or integration and would be speculative today; tracked as additive
+> roadmap in the RFC §6. Resume is likely unnecessary given the gate design.
 
 > **Design study:** see [`CR-09-RFC-explicit-turn-taking-state-machine.md`](./CR-09-RFC-explicit-turn-taking-state-machine.md).
 > Root cause is not "big file" — it's an *implicit, distributed, position-blind*

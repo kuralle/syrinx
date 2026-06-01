@@ -210,6 +210,16 @@ Once the arbiter owns position + composable policies, the deferred roadmap becom
 
 ## 6. Implementation plan — staged, test-first, behavior-identical
 
+> **STATUS (shipped): Stages 0–3 complete; architecture done. Stage 4 deferred by
+> decision** (tracked roadmap, not built — see note below).
+> Commits: `612f2a6` (S0 characterization net), `3cb542f` (S1 explicit-in-place),
+> `d669c1b` (S2 extract `TurnArbiter` + watchdog/util split), `bdce858` (S3
+> position capture). Result: `voice-agent-session.ts` **1688 → 998 lines**;
+> `turn-arbiter.ts` is the explicit, position-aware barge-in state machine
+> (discriminated union `idle | pending{awaitingAudio}`, narrow injected deps);
+> voice suite **125 → 142** green; the byte-frozen `voice-agent-session.test.ts`
+> proves behavior-identity across all four stages.
+
 - **Stage 0 — Characterization net (zero risk).** Add focused tests that pin the exact
   current transition table: short-blip-suppressed, sustained-commit-after-`minInterruptionMs`,
   suppressed-non-primary, suppressed-short-speech, immediate-cut (`minInterruptionMs<=0`),
@@ -223,8 +233,20 @@ Once the arbiter owns position + composable policies, the deferred roadmap becom
   drops well under 1000 lines.
 - **Stage 3 — Position-aware.** Thread `playedOutMs` into the arbiter (stop discarding
   it); unify the execution bundle with the bridge's truncate. Still no new behavior.
-- **Stage 4 (separate, opt-in) — Ship the unlocked features** behind config/profile:
-  resume, backchannel, min-words, semantic endpoint. Each is a policy + its own tests.
+- **Stage 4 (DEFERRED BY DECISION — tracked roadmap, NOT built)** — ship the unlocked
+  features behind config/profile. **Not implemented**: each embeds a product decision or
+  an integration, so building them now would be speculative config + premature
+  abstraction (only one real decision policy exists today). They are now *additive* —
+  pick up per-feature when there is a concrete driver + its parameters:
+  - *Resume-on-false-interruption* — **likely unnecessary** in our design: the gate never
+    cuts until speech is sustained, so there is nothing to "resume." It only applies if an
+    immediate-cut mode is added (a product choice). Documented, not planned.
+  - *Backchannel window* — needs a product-defined "what is a backchannel" heuristic
+    (duration/position/prosody). Position is now available (Stage 3) when it's built.
+  - *Min-words* — needs new STT-word plumbing into the arbiter, then a threshold (product).
+  - *Semantic endpointing (Smart Turn v2)* — a model integration, not a policy; its own effort.
+  - *Composable-policy framework* — build when the 2nd–3rd policy lands (today there is
+    one: primary-speaker); abstracting for one is premature.
 
 Each stage is independently revertible and gated on the full suite.
 
