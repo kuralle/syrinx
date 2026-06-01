@@ -182,6 +182,7 @@ export class SyrinxBrowserClient {
   private opusCodec: BrowserOpusCodec | null = null;
   private opusLoadFailed = false;
   private codecNegotiation: Promise<void> | null = null;
+  private uplinkCodecDecided = false;
   private pendingUplink: Array<() => void> = [];
   private readonly streamingResamplers = new Map<string, StreamingPcm16Resampler>();
 
@@ -244,6 +245,9 @@ export class SyrinxBrowserClient {
       : new Uint8Array(audio);
     if (bytes.byteLength % 2 !== 0) throw new Error("PCM16 audio payload must contain an even number of bytes");
     const sampleRate = readPositiveSampleRate(sampleRateHz);
+    if (options.sequence !== undefined) {
+      this.assertAudioSequenceCanAdvance(options.sequence);
+    }
     this.scheduleUplink(() => {
       for (const frame of this.encodeUplinkPcm(bytes, sampleRate, options)) {
         this.requireOpenTransport().sendAudio(frame);
@@ -266,6 +270,9 @@ export class SyrinxBrowserClient {
   }
 
   sendFloat32Audio(input: Float32Array, options: EncodeBrowserAudioOptions): void {
+    if (options.sequence !== undefined) {
+      this.assertAudioSequenceCanAdvance(options.sequence);
+    }
     if (this.wireCodec === "opus" && this.opusCodec) {
       const targetRate = readPositiveSampleRate(options.toSampleRateHz);
       const resampled = resampleFloat32Linear(input, options);
@@ -295,6 +302,7 @@ export class SyrinxBrowserClient {
   }
 
   private openTransport(): void {
+    this.uplinkCodecDecided = false;
     const url = this.currentSessionId !== null
       ? buildResumeUrl(this.options.url, this.currentSessionId)
       : this.options.url;
@@ -441,12 +449,12 @@ export class SyrinxBrowserClient {
         if (message.audio?.supportedInputCodecs?.includes("opus") && !this.opusLoadFailed) {
           this.codecNegotiation = this.negotiateWireCodec(message.audio).finally(() => {
             this.codecNegotiation = null;
-            const pending = this.pendingUplink;
-            this.pendingUplink = [];
-            for (const send of pending) send();
+            this.flushPendingUplink();
           });
         } else {
-          void this.negotiateWireCodec(message.audio);
+          void this.negotiateWireCodec(message.audio).finally(() => {
+            this.flushPendingUplink();
+          });
         }
       }
       if ((message.type === "audio_clear" || message.type === "agent_interrupted") && this.jitterBuffer) {
@@ -483,11 +491,18 @@ export class SyrinxBrowserClient {
   }
 
   private scheduleUplink(send: () => void): void {
-    if (this.codecNegotiation) {
+    if (!this.uplinkCodecDecided || this.codecNegotiation) {
       this.pendingUplink.push(send);
       return;
     }
     send();
+  }
+
+  private flushPendingUplink(): void {
+    this.uplinkCodecDecided = true;
+    const pending = this.pendingUplink;
+    this.pendingUplink = [];
+    for (const run of pending) run();
   }
 
   private async negotiateWireCodec(audio: SyrinxReadyAudio): Promise<void> {
@@ -543,6 +558,15 @@ export class SyrinxBrowserClient {
       throw new Error("SyrinxBrowserClient transport is not connected");
     }
     return this.transport;
+  }
+
+  private assertAudioSequenceCanAdvance(sequence: number): void {
+    if (!Number.isInteger(sequence) || sequence < 0) {
+      throw new Error("audio sequence must be a non-negative integer");
+    }
+    if (sequence <= this.audioSequence) {
+      throw new Error(`audio sequence must increase monotonically: ${String(this.audioSequence)} -> ${String(sequence)}`);
+    }
   }
 
   private nextAudioSequence(sequence: number | undefined): number {
