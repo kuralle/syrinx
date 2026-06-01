@@ -823,7 +823,7 @@ export class VoiceAgentSession {
   }
 
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
-    this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete);
+    this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete, pkt.playedOutMs);
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {

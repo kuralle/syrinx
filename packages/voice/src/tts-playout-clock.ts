@@ -20,6 +20,7 @@ export class TtsPlayoutClock {
   // sample-duration estimate defers to it (it is only a fallback for transports
   // without a paced-playout layer, e.g. headless).
   private readonly realPlayoutContexts = new Set<string>();
+  private readonly playedOutMsByContext = new Map<string, number>();
 
   /**
    * A TTS audio chunk arrived: mark the context active and advance its playout
@@ -64,9 +65,14 @@ export class TtsPlayoutClock {
    * Transport reported realtime playout progress for a context. Real playout is
    * authoritative once seen; release the context when it reports complete.
    */
-  noteProgress(contextId: string, complete: boolean): void {
+  noteProgress(contextId: string, complete: boolean, playedOutMs?: number): void {
     this.realPlayoutContexts.add(contextId);
+    if (playedOutMs !== undefined) this.playedOutMsByContext.set(contextId, playedOutMs);
     if (complete) this.release(contextId);
+  }
+
+  positionMs(contextId: string): number | undefined {
+    return this.playedOutMsByContext.get(contextId);
   }
 
   release(contextId: string): void {
@@ -74,6 +80,7 @@ export class TtsPlayoutClock {
     this.active.delete(contextId);
     this.playoutEndMs.delete(contextId);
     this.realPlayoutContexts.delete(contextId);
+    this.playedOutMsByContext.delete(contextId);
   }
 
   isActive(contextId: string): boolean {
@@ -92,6 +99,7 @@ export class TtsPlayoutClock {
     this.active.clear();
     this.playoutEndMs.clear();
     this.realPlayoutContexts.clear();
+    this.playedOutMsByContext.clear();
   }
 
   private cancelRelease(contextId: string): void {

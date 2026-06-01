@@ -72,6 +72,46 @@ describe("TtsPlayoutClock", () => {
     expect(clock.latestActive()).toBe("");
   });
 
+  it("records playout position and returns it via positionMs", () => {
+    const clock = new TtsPlayoutClock();
+    expect(clock.positionMs("c1")).toBeUndefined();
+    clock.noteAudio("c1", 100, Date.now());
+    clock.noteProgress("c1", false, 42);
+    expect(clock.positionMs("c1")).toBe(42);
+  });
+
+  it("keeps the latest playout position across multiple progress updates", () => {
+    const clock = new TtsPlayoutClock();
+    clock.noteAudio("c1", 100, Date.now());
+    clock.noteProgress("c1", false, 10);
+    clock.noteProgress("c1", false, 55);
+    expect(clock.positionMs("c1")).toBe(55);
+  });
+
+  it("drops recorded position on release and clear", () => {
+    const clock = new TtsPlayoutClock();
+    clock.noteAudio("c1", 100, Date.now());
+    clock.noteProgress("c1", false, 30);
+    clock.release("c1");
+    expect(clock.positionMs("c1")).toBeUndefined();
+
+    clock.noteAudio("c2", 100, Date.now());
+    clock.noteProgress("c2", false, 20);
+    clock.clear();
+    expect(clock.positionMs("c2")).toBeUndefined();
+  });
+
+  it("noteProgress without position still releases on complete", () => {
+    const clock = new TtsPlayoutClock();
+    clock.noteAudio("c1", 100, Date.now());
+    clock.noteProgress("c1", false);
+    expect(clock.positionMs("c1")).toBeUndefined();
+    expect(clock.isActive("c1")).toBe(true);
+    clock.noteProgress("c1", true);
+    expect(clock.isActive("c1")).toBe(false);
+    expect(clock.positionMs("c1")).toBeUndefined();
+  });
+
   it("clear() drops all state and cancels pending release timers", () => {
     const clock = new TtsPlayoutClock();
     clock.noteAudio("c1", 100, Date.now());
