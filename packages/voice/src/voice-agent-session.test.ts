@@ -1812,6 +1812,39 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("clears latency filler state on recoverable component errors", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      latencyFillerEnabled: true,
+    });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-error-clear",
+      timestampMs: 1000,
+      text: "hello",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(session["latencyFiller"].getState("turn-error-clear")).toBeDefined();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.error",
+      contextId: "turn-error-clear",
+      timestampMs: 1100,
+      component: "llm",
+      category: ErrorCategory.NetworkTimeout,
+      cause: new Error("provider down"),
+      isRecoverable: true,
+    } satisfies LlmErrorPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(session["latencyFiller"].getState("turn-error-clear")).toBeUndefined();
+
+    await closeSession(session);
+  });
+
   it("splices filler into the real response without duplicating connectives", async () => {
     const session = new VoiceAgentSession({
       plugins: {},
