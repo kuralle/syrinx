@@ -9,6 +9,15 @@ import type { ClientTransport, ClientTransportHandlers } from "./transport.js";
 import * as browserOpus from "./browser-opus.js";
 import { pickBrowserWireCodec, createBrowserOpusCodec } from "./browser-opus.js";
 
+async function pollUntil(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
 class FakeTransport implements ClientTransport {
   readonly sent: unknown[] = [];
   private handlers: ClientTransportHandlers = {};
@@ -92,6 +101,53 @@ describe("browser opus negotiation", () => {
     const wire = codec.encodePcm16Frame(pcm, true)[0]!;
     expect(wire.byteLength).toBeGreaterThan(0);
     expect(codec.decodeOpusFrame(wire).length).toBeGreaterThan(0);
+  });
+
+  it("flushes pre-ready uplink audio in negotiated opus, not pcm", async () => {
+    const transport = new FakeTransport();
+    const client = new SyrinxBrowserClient({
+      url: "ws://unused/ws",
+      transport,
+      reconnect: false,
+      keepaliveIntervalMs: false,
+    });
+    client.connect();
+
+    const pcm = new Uint8Array(640);
+    pcm[0] = 1;
+    pcm[1] = 0;
+    client.sendAudioPcm(pcm, 16000, { contextId: "turn-early" });
+
+    expect(transport.sent.filter((entry) => entry instanceof Uint8Array)).toHaveLength(0);
+
+    transport.emitMessage(JSON.stringify({
+      type: "ready",
+      sessionId: "sess-opus-early",
+      audio: {
+        inputSampleRateHz: 16000,
+        outputSampleRateHz: 16000,
+        encoding: "opus",
+        supportedInputCodecs: ["pcm_s16le", "opus"],
+        channels: 1,
+        binaryEnvelope: "syrinx.audio.v1",
+      },
+    }));
+
+    await pollUntil(
+      () => transport.sent.some((entry) => {
+        if (typeof entry !== "string") return false;
+        return (JSON.parse(entry) as { type?: string }).type === "codec_capability";
+      }),
+      3_000,
+      "codec_capability",
+    );
+
+    const uplink = transport.sent.filter((entry): entry is Uint8Array => entry instanceof Uint8Array);
+    expect(uplink.length).toBeGreaterThan(0);
+    for (const frame of uplink) {
+      expect(decodeSyrinxAudioEnvelope(frame).header.encoding).toBe("opus");
+    }
+    expect(decodeSyrinxAudioEnvelope(uplink[0]!).header.contextId).toBe("turn-early");
   });
 
   it("encodes uplink envelopes as opus after ready negotiation", async () => {

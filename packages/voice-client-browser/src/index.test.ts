@@ -56,6 +56,25 @@ function makeClient(overrides: Partial<ConstructorParameters<typeof SyrinxBrowse
   return new SyrinxBrowserClient({ url: "ws://localhost/ws", ...overrides });
 }
 
+const PCM_READY_MESSAGE = JSON.stringify({
+  type: "ready",
+  audio: {
+    inputSampleRateHz: 16000,
+    outputSampleRateHz: 16000,
+    encoding: "pcm_s16le",
+    channels: 1,
+  },
+});
+
+async function dispatchPcmReady(socket: FakeWebSocket): Promise<void> {
+  socket.dispatch("message", { data: PCM_READY_MESSAGE });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function binaryEnvelopes(socket: FakeWebSocket): Uint8Array[] {
+  return socket.sent.filter((entry): entry is Uint8Array => entry instanceof Uint8Array);
+}
+
 function collectEvents(client: SyrinxBrowserClient): SyrinxBrowserClientEvent[] {
   const events: SyrinxBrowserClientEvent[] = [];
   client.on((e) => events.push(e));
@@ -72,10 +91,11 @@ describe("SyrinxBrowserClient — audio sequence", () => {
     globalThis.WebSocket = originalWebSocket;
   });
 
-  it("adds monotonic sequence metadata to every audio send path by default", () => {
+  it("adds monotonic sequence metadata to every audio send path by default", async () => {
     const client = makeClient();
     client.connect();
     const socket = sockets[0]!;
+    await dispatchPcmReady(socket);
 
     client.sendAudioBase64(Buffer.from([1, 0, 2, 0]).toString("base64"), 16000, { contextId: "turn-json" });
     client.sendAudioPcm(new Uint8Array([3, 0, 4, 0]), 16000, { contextId: "turn-pcm" });
@@ -85,19 +105,26 @@ describe("SyrinxBrowserClient — audio sequence", () => {
       contextId: "turn-float",
     });
 
-    const jsonAudio = JSON.parse(socket.sent[0] as string) as { readonly sequence?: number };
-    const pcmEnvelope = decodeSyrinxAudioEnvelope(socket.sent[1] as Uint8Array);
-    const floatEnvelope = decodeSyrinxAudioEnvelope(socket.sent[2] as Uint8Array);
+    const jsonAudio = JSON.parse(
+      socket.sent.find((entry) => {
+        if (typeof entry !== "string") return false;
+        return (JSON.parse(entry) as { type?: string }).type === "audio";
+      }) as string,
+    ) as { readonly sequence?: number };
+    const envelopes = binaryEnvelopes(socket);
+    const pcmEnvelope = decodeSyrinxAudioEnvelope(envelopes[0]!);
+    const floatEnvelope = decodeSyrinxAudioEnvelope(envelopes[1]!);
 
     expect(jsonAudio.sequence).toBe(1);
     expect(pcmEnvelope.header).toMatchObject({ contextId: "turn-pcm", sequence: 2 });
     expect(floatEnvelope.header).toMatchObject({ contextId: "turn-float", sequence: 3 });
   });
 
-  it("honors explicit audio sequence overrides and advances later automatic sequences past them", () => {
+  it("honors explicit audio sequence overrides and advances later automatic sequences past them", async () => {
     const client = makeClient();
     client.connect();
     const socket = sockets[0]!;
+    await dispatchPcmReady(socket);
 
     client.sendAudioPcm(new Uint8Array([1, 0, 2, 0]), 16000, { contextId: "turn-pcm", sequence: 10 });
     client.sendFloat32Audio(new Float32Array([0, 0.5, 1]), {
@@ -106,14 +133,15 @@ describe("SyrinxBrowserClient — audio sequence", () => {
       contextId: "turn-float",
     });
 
-    const pcmEnvelope = decodeSyrinxAudioEnvelope(socket.sent[0] as Uint8Array);
-    const floatEnvelope = decodeSyrinxAudioEnvelope(socket.sent[1] as Uint8Array);
+    const envelopes = binaryEnvelopes(socket);
+    const pcmEnvelope = decodeSyrinxAudioEnvelope(envelopes[0]!);
+    const floatEnvelope = decodeSyrinxAudioEnvelope(envelopes[1]!);
 
     expect(pcmEnvelope.header).toMatchObject({ contextId: "turn-pcm", sequence: 10 });
     expect(floatEnvelope.header).toMatchObject({ contextId: "turn-float", sequence: 11 });
   });
 
-  it("rejects duplicate or regressing explicit audio sequence overrides before sending", () => {
+  it("rejects duplicate or regressing explicit audio sequence overrides before sending", async () => {
     const client = makeClient();
     client.connect();
     const socket = sockets[0]!;
@@ -122,6 +150,7 @@ describe("SyrinxBrowserClient — audio sequence", () => {
       contextId: "turn-json",
       sequence: 3,
     });
+    await dispatchPcmReady(socket);
 
     expect(() => client.sendAudioPcm(new Uint8Array([3, 0, 4, 0]), 16000, {
       contextId: "turn-pcm",
@@ -134,7 +163,11 @@ describe("SyrinxBrowserClient — audio sequence", () => {
       sequence: 2,
     })).toThrow("audio sequence must increase monotonically: 3 -> 2");
 
-    expect(socket.sent).toHaveLength(1);
+    const jsonAudio = socket.sent.filter((entry) => {
+      if (typeof entry !== "string") return false;
+      return (JSON.parse(entry) as { type?: string }).type === "audio";
+    });
+    expect(jsonAudio).toHaveLength(1);
   });
 
   it("emits validated server JSON messages", () => {
