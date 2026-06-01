@@ -514,6 +514,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.speechFinalContextIds.clear();
     this.ignoreNextProviderFinalContextIds.clear();
     this.audioStatsByContextId.clear();
+    // A reconnect (from any cause) starts a fresh provider stream, so the wedged-stream
+    // signal resets too — otherwise a stale count could force an avoidable reset on the
+    // first timeout after reconnecting.
+    this.consecutiveFinalizeTimeouts = 0;
     this.resetPendingTranscript();
     if (discarded && contextId) {
       this.pushMetric(contextId, "stt_provider_reconnect_discarded_state", {});

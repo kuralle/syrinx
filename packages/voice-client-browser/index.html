@@ -862,6 +862,12 @@
         if (!Number.isInteger(metadata.sampleRateHz) || metadata.sampleRateHz <= 0) {
           throw new Error("Syrinx audio envelope sampleRateHz must be a positive integer");
         }
+        // This page decodes pcm_s16le only (no Opus decoder). Reject other encodings with a
+        // clear message instead of letting the PCM16 invariants below fail cryptically — the
+        // pcm_s16le codec_capability we send on connect should prevent this from happening.
+        if (metadata.encoding && metadata.encoding !== "pcm_s16le") {
+          throw new Error(`Syrinx studio decodes pcm_s16le only; server sent ${metadata.encoding} downlink (codec negotiation failed)`);
+        }
         if (audioBytes.byteLength % 2 !== 0) {
           throw new Error("Syrinx audio envelope PCM16 payload must contain an even number of bytes");
         }
