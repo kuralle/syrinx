@@ -39,6 +39,9 @@ function getOrCreateRouter(httpServer: HttpServer): HttpUpgradeRouter {
       handler(request, socket, head);
       return;
     }
+    if (httpServer.listenerCount("upgrade") > 1) {
+      return;
+    }
     socket.destroy();
   };
   httpServer.on("upgrade", listener);
