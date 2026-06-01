@@ -61,24 +61,19 @@ import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
+import { TurnArbiter } from "./turn-arbiter.js";
 import * as make from "./packet-factories.js";
 import { pluginStage, stageOrder, isAudioStage } from "./init-stage-order.js";
+import {
+  estimatePcm16Duration,
+  languageFromTranscripts,
+  requireTtsAudioSampleRate,
+  VoiceSessionWatchdogs,
+} from "./voice-agent-session-util.js";
 
 // =============================================================================
 // Types
 // =============================================================================
-
-type TurnInterruptionState =
-  | { kind: "idle" }
-  | {
-      kind: "pending";
-      userContextId: string;
-      interruptedContextId: string;
-      firstSpeechMs: number;
-      awaitingAudio: boolean;
-    };
-
-type PendingTurnInterruption = Extract<TurnInterruptionState, { kind: "pending" }>;
 
 export interface VoiceAgentSessionConfig {
   /** Plugin configurations, keyed by plugin name. */
@@ -188,8 +183,6 @@ export class VoiceAgentSession {
   private currentTurnId = "";
   private busStartPromise: Promise<void> | null = null;
   private closePromise: Promise<void> | null = null;
-  private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingSttContextId = "";
   // Tracks which contexts are still playing out their TTS audio; turn-taking and
   // the stall watchdog key on this. Pure state — see TtsPlayoutClock.
   private readonly ttsPlayout = new TtsPlayoutClock();
@@ -197,18 +190,14 @@ export class VoiceAgentSession {
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
+  private readonly turnArbiter!: TurnArbiter;
   private readonly latencyFiller: LatencyFillerController;
   private firstLlmDeltaReceived = new Set<string>();
-  private turnInterruption: TurnInterruptionState = { kind: "idle" };
   private readonly vaqiMissedResponseMs: number;
+  private readonly ttsStallMs: number;
+  private readonly watchdogs!: VoiceSessionWatchdogs;
   private turnUserStoppedAtMs = new Map<string, number>();
   private firstTtsAudioFired = new Set<string>();
-  private vaqiMissedResponseTimer: ReturnType<typeof setTimeout> | null = null;
-  private vaqiMissedResponseContextId = "";
-  private vaqiMissedResponseStartMs = 0;
-  private readonly ttsStallMs: number;
-  private ttsStallTimer: ReturnType<typeof setTimeout> | null = null;
-  private ttsStallContextId = "";
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
 
@@ -256,6 +245,26 @@ export class VoiceAgentSession {
           },
           timestampMs: Date.now(),
         });
+      },
+    });
+
+    this.turnArbiter = new TurnArbiter({
+      bus: this.bus,
+      primarySpeakerGate: this.primarySpeakerGate,
+      ttsPlayout: this.ttsPlayout,
+      minInterruptionMs: this.minInterruptionMs,
+    });
+    this.watchdogs = new VoiceSessionWatchdogs({
+      bus: this.bus,
+      plugins: this.plugins,
+      ttsPlayout: this.ttsPlayout,
+      sttForceFinalizeTimeoutMs: this.sttForceFinalizeTimeoutMs,
+      vaqiMissedResponseMs: this.vaqiMissedResponseMs,
+      ttsStallMs: this.ttsStallMs,
+      getSessionState: () => this._state,
+      isGenerationInterrupted: (contextId) => this.interruptedGenerationContextIds.has(contextId),
+      onVaqiMissedResponseFired: (contextId) => {
+        this.turnUserStoppedAtMs.delete(contextId);
       },
     });
 
@@ -319,10 +328,9 @@ export class VoiceAgentSession {
 
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
-    this.clearSttForceFinalizeTimer();
-    this.clearVaqiMissedResponseTimer();
-    this.clearTtsStallTimer();
+    this.watchdogs.dispose();
     this.ttsPlayout.clear();
+    this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
@@ -477,7 +485,7 @@ export class VoiceAgentSession {
   }
 
   private handleSttAudio(pkt: SpeechToTextAudioPacket): void {
-    this.scheduleSttForceFinalize(pkt.contextId);
+    this.watchdogs.scheduleSttForceFinalize(pkt.contextId);
   }
 
   private handleUserText(pkt: UserTextReceivedPacket): void {
@@ -501,9 +509,7 @@ export class VoiceAgentSession {
   }
 
   private handleSttResult(pkt: SttResultPacket): void {
-    if (this.pendingSttContextId === pkt.contextId) {
-      this.clearSttForceFinalizeTimer();
-    }
+    this.watchdogs.clearSttForceFinalizeIfContext(pkt.contextId);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -524,15 +530,7 @@ export class VoiceAgentSession {
   }
 
   private handleVadAudioForSpeakerGate(pkt: VadAudioPacket): void {
-    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
-    if (pending) {
-      this.primarySpeakerGate.observeBargeInChunk(pkt.audio);
-      if (pending.awaitingAudio) {
-        this.setPendingAwaitingAudio(false);
-        this.tryCommitPendingInterruption(pkt.timestampMs);
-      }
-      return;
-    }
+    if (this.turnArbiter.observeBargeInAudio(pkt)) return;
 
     if (!this.latestActiveTtsContextId()) {
       this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
@@ -561,124 +559,11 @@ export class VoiceAgentSession {
     const interruptedContextId = this.latestActiveTtsContextId();
     if (!interruptedContextId) return;
 
-    if (this.minInterruptionMs <= 0) {
-      if (this.shouldDeferImmediateBargeInForSpeakerGate()) {
-        this.transitionToPendingInterruption(pkt, interruptedContextId, true);
-        return;
-      }
-      this.bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
-      this.emitInterruptDetected(interruptedContextId);
-      return;
-    }
-
-    // Defer the cut until the user's speech is sustained past minInterruptionMs.
-    // VAD emits `vad.speech_activity` per speech frame (never during silence), so a
-    // transient noise spike / click / very short blip produces only a few activity
-    // frames and then `vad.speech_ended` — which cancels this pending interruption
-    // instead of cutting off the agent. Sustained speech keeps emitting activity and
-    // crosses the threshold in handleVadSpeechActivity.
-    this.transitionToPendingInterruption(pkt, interruptedContextId, false);
-  }
-
-  private pendingTurnInterruptionFor(userContextId: string): PendingTurnInterruption | null {
-    const state = this.turnInterruption;
-    if (state.kind !== "pending" || state.userContextId !== userContextId) return null;
-    return state;
-  }
-
-  private transitionToPendingInterruption(
-    pkt: VadSpeechStartedPacket,
-    interruptedContextId: string,
-    awaitingAudio: boolean,
-  ): void {
-    this.primarySpeakerGate.beginBargeInWindow();
-    this.turnInterruption = {
-      kind: "pending",
-      userContextId: pkt.contextId,
-      interruptedContextId,
-      firstSpeechMs: pkt.timestampMs,
-      awaitingAudio,
-    };
-  }
-
-  private setPendingAwaitingAudio(awaitingAudio: boolean): void {
-    const state = this.turnInterruption;
-    if (state.kind !== "pending") return;
-    this.turnInterruption = { ...state, awaitingAudio };
-  }
-
-  private clearTurnInterruption(): void {
-    this.turnInterruption = { kind: "idle" };
-  }
-
-  private shouldDeferImmediateBargeInForSpeakerGate(): boolean {
-    return (
-      this.primarySpeakerGate.isEnabled() &&
-      this.primarySpeakerGate.hasProfile()
-    );
+    this.turnArbiter.onSpeechStarted(pkt, interruptedContextId);
   }
 
   private handleVadSpeechActivity(pkt: VadSpeechActivityPacket): void {
-    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
-    if (!pending) return;
-    if (pkt.timestampMs - pending.firstSpeechMs < this.minInterruptionMs) return;
-    this.tryCommitPendingInterruption(pkt.timestampMs);
-  }
-
-  private tryCommitPendingInterruption(nowMs: number): void {
-    const pending = this.turnInterruption.kind === "pending" ? this.turnInterruption : null;
-    if (!pending) return;
-    if (nowMs - pending.firstSpeechMs < this.minInterruptionMs) return;
-
-    if (
-      this.primarySpeakerGate.isEnabled() &&
-      this.primarySpeakerGate.hasProfile() &&
-      !this.primarySpeakerGate.shouldCommitBargeIn()
-    ) {
-      this.transitionSuppressPendingInterruption(
-        pending,
-        "interrupt.suppressed_non_primary",
-        nowMs - pending.firstSpeechMs,
-      );
-      return;
-    }
-
-    const sustainedMs = nowMs - pending.firstSpeechMs;
-    this.clearTurnInterruption();
-    this.primarySpeakerGate.resetBargeInWindow();
-
-    if (!this.ttsPlayout.isActive(pending.interruptedContextId)) {
-      this.bus.push(
-        Route.Background,
-        make.metric(pending.interruptedContextId, "interrupt.gate_resolved_after_tts_end", String(sustainedMs)),
-      );
-      return;
-    }
-
-    this.bus.push(
-      Route.Background,
-      make.metric(pending.interruptedContextId, "interrupt.committed_after_ms", String(sustainedMs)),
-    );
-    this.bus.push(Route.Background, make.metric(pending.interruptedContextId, "vaqi.interruption", "1"));
-    this.bus.push(
-      Route.Background,
-      make.metric(pending.interruptedContextId, "interrupt.latency_ms", String(sustainedMs)),
-    );
-    this.emitInterruptDetected(pending.interruptedContextId);
-  }
-
-  private transitionSuppressPendingInterruption(
-    pending: PendingTurnInterruption,
-    metricName: string,
-    durationMs: number,
-  ): void {
-    this.clearTurnInterruption();
-    this.primarySpeakerGate.resetBargeInWindow();
-    this.bus.push(Route.Background, make.metric(pending.interruptedContextId, metricName, String(durationMs)));
-  }
-
-  private emitInterruptDetected(interruptedContextId: string): void {
-    this.bus.push(Route.Critical, make.interruptDetected(interruptedContextId, Date.now(), "vad"));
+    this.turnArbiter.onSpeechActivity(pkt);
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
@@ -693,38 +578,10 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
-    if (pending) {
-      const durationMs = pkt.timestampMs - pending.firstSpeechMs;
-      if (durationMs >= this.minInterruptionMs) {
-        if (
-          this.primarySpeakerGate.isEnabled() &&
-          this.primarySpeakerGate.hasProfile() &&
-          !this.primarySpeakerGate.shouldCommitBargeIn()
-        ) {
-          this.transitionSuppressPendingInterruption(
-            pending,
-            "interrupt.suppressed_non_primary",
-            durationMs,
-          );
-        } else {
-          this.tryCommitPendingInterruption(pkt.timestampMs);
-        }
-      } else {
-        this.transitionSuppressPendingInterruption(
-          pending,
-          "interrupt.suppressed_short_speech",
-          durationMs,
-        );
-      }
-    } else if (!this.latestActiveTtsContextId()) {
-      this.primarySpeakerGate.lockProfileFromFirstTurn();
-    }
+    this.turnArbiter.onSpeechEnded(pkt, Boolean(this.latestActiveTtsContextId()));
 
     this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
-    if (this.vaqiMissedResponseMs > 0) {
-      this.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
-    }
+    this.watchdogs.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
@@ -861,7 +718,7 @@ export class VoiceAgentSession {
     const cancelled = this.latencyFiller.cancel(contextId);
     if (!cancelled) return;
     this.bus.push(Route.Background, make.metric(contextId, "filler.cancelled", cancelled.text, timestampMs));
-    this.emitInterruptDetected(contextId);
+    this.turnArbiter.emitInterruptDetected(contextId);
   }
 
   private handleLlmToolCall(pkt: LlmToolCallPacket): void {
@@ -915,9 +772,7 @@ export class VoiceAgentSession {
 
     if (!this.firstTtsAudioFired.has(pkt.contextId)) {
       this.firstTtsAudioFired.add(pkt.contextId);
-      if (this.vaqiMissedResponseContextId === pkt.contextId) {
-        this.clearVaqiMissedResponseTimer();
-      }
+      this.watchdogs.clearVaqiIfContext(pkt.contextId);
       const userStoppedMs = this.turnUserStoppedAtMs.get(pkt.contextId);
       if (userStoppedMs !== undefined) {
         this.bus.push(
@@ -930,7 +785,7 @@ export class VoiceAgentSession {
 
     this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
-    this.armTtsStallTimer(pkt.contextId);
+    this.watchdogs.armTtsStallTimer(pkt.contextId);
 
     // Extend idle timeout by audio duration to prevent timeout during playback.
     const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
@@ -958,7 +813,7 @@ export class VoiceAgentSession {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
     this.ttsPlayout.scheduleRelease(pkt.contextId, Date.now());
-    this.clearTtsStallTimerFor(pkt.contextId);
+    this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
       type: "end",
@@ -977,7 +832,7 @@ export class VoiceAgentSession {
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
     this.ttsPlayout.release(pkt.contextId);
-    this.clearTtsStallTimerFor(pkt.contextId);
+    this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "turn",
       type: "interrupt_detected",
@@ -1137,159 +992,7 @@ export class VoiceAgentSession {
     });
   }
 
-  private scheduleSttForceFinalize(contextId: string): void {
-    if (this._state !== SessionState.Ready) return;
-    if (this.sttForceFinalizeTimeoutMs <= 0) return;
-
-    this.pendingSttContextId = contextId;
-    this.clearSttForceFinalizeTimer(false);
-    this.sttForceFinalizeTimer = setTimeout(() => {
-      this.sttForceFinalizeTimer = null;
-      const plugin = this.findForceFinalizableSttPlugin();
-      plugin?.forceFinalize(contextId);
-    }, this.sttForceFinalizeTimeoutMs);
-  }
-
-  private clearSttForceFinalizeTimer(clearContext = true): void {
-    if (this.sttForceFinalizeTimer) {
-      clearTimeout(this.sttForceFinalizeTimer);
-      this.sttForceFinalizeTimer = null;
-    }
-    if (clearContext) {
-      this.pendingSttContextId = "";
-    }
-  }
-
-  private startVaqiMissedResponseTimer(contextId: string, startMs: number): void {
-    this.clearVaqiMissedResponseTimer();
-    this.vaqiMissedResponseContextId = contextId;
-    this.vaqiMissedResponseStartMs = startMs;
-    this.vaqiMissedResponseTimer = setTimeout(() => {
-      this.vaqiMissedResponseTimer = null;
-      const cid = this.vaqiMissedResponseContextId;
-      const elapsedMs = Date.now() - this.vaqiMissedResponseStartMs;
-      this.vaqiMissedResponseContextId = "";
-      this.vaqiMissedResponseStartMs = 0;
-      this.turnUserStoppedAtMs.delete(cid);
-      this.bus.push(Route.Background, make.metric(cid, "vaqi.missed_response", String(elapsedMs)));
-    }, this.vaqiMissedResponseMs);
-  }
-
-  private clearVaqiMissedResponseTimer(): void {
-    if (this.vaqiMissedResponseTimer) {
-      clearTimeout(this.vaqiMissedResponseTimer);
-      this.vaqiMissedResponseTimer = null;
-    }
-    this.vaqiMissedResponseContextId = "";
-    this.vaqiMissedResponseStartMs = 0;
-  }
-
-  // G3: TTS output stall watchdog. Armed/reset on each tts.audio; if the provider goes
-  // silent (no further audio and no tts.end) for ttsStallMs after producing audio, the
-  // turn is treated as a stalled provider and surfaced as a recoverable tts.error so it
-  // fails visibly instead of hanging. Only arms after first audio, so first-audio latency
-  // is never watchdogged.
-  private armTtsStallTimer(contextId: string): void {
-    if (this.ttsStallMs <= 0) return;
-    this.clearTtsStallTimer();
-    this.ttsStallContextId = contextId;
-    this.ttsStallTimer = setTimeout(() => {
-      this.ttsStallTimer = null;
-      const cid = this.ttsStallContextId;
-      this.ttsStallContextId = "";
-      if (this.interruptedGenerationContextIds.has(cid)) return; // interrupted, not stalled
-      if (!this.ttsPlayout.isActive(cid)) return; // already ended
-      this.ttsPlayout.release(cid);
-      this.bus.push(Route.Background, make.metric(cid, "tts.stall_detected", String(this.ttsStallMs)));
-      this.bus.push(
-        Route.Critical,
-        make.ttsError(
-          cid,
-          Date.now(),
-          new Error(`TTS output stalled: no audio or tts.end for ${String(this.ttsStallMs)}ms`),
-          ErrorCategory.NetworkTimeout,
-          true,
-        ),
-      );
-    }, this.ttsStallMs);
-  }
-
-  private clearTtsStallTimer(): void {
-    if (this.ttsStallTimer) {
-      clearTimeout(this.ttsStallTimer);
-      this.ttsStallTimer = null;
-    }
-    this.ttsStallContextId = "";
-  }
-
-  private clearTtsStallTimerFor(contextId: string): void {
-    if (this.ttsStallContextId === contextId) this.clearTtsStallTimer();
-  }
-
-  private findForceFinalizableSttPlugin(): ForceFinalizableSttPlugin | null {
-    for (const name of ["stt", "deepgram"]) {
-      const plugin = this.plugins.get(name);
-      if (isForceFinalizableSttPlugin(plugin)) {
-        return plugin;
-      }
-    }
-
-    for (const plugin of this.plugins.values()) {
-      if (isForceFinalizableSttPlugin(plugin)) {
-        return plugin;
-      }
-    }
-
-    return null;
-  }
-
   private latestActiveTtsContextId(): string {
     return this.ttsPlayout.latestActive();
   }
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-function estimatePcm16Duration(
-  audio: Uint8Array,
-  sampleRate: number,
-): number {
-  // Each sample is 2 bytes (16-bit), mono = 1 channel
-  const samples = audio.length / 2;
-  return (samples / sampleRate) * 1000;
-}
-
-function requireTtsAudioSampleRate(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new Error("tts.audio sampleRateHz must be a positive integer");
-  }
-  return value;
-}
-
-function languageFromTranscripts(
-  transcripts: readonly SttResultPacket[],
-): string {
-  for (const transcript of transcripts) {
-    if (transcript.language) {
-      return transcript.language;
-    }
-  }
-  return "";
-}
-
-interface ForceFinalizableSttPlugin extends VoicePlugin {
-  forceFinalize(contextId?: string): void;
-}
-
-function isForceFinalizableSttPlugin(
-  plugin: VoicePlugin | undefined,
-): plugin is ForceFinalizableSttPlugin {
-  return (
-    typeof plugin === "object" &&
-    plugin !== null &&
-    "forceFinalize" in plugin &&
-    typeof plugin.forceFinalize === "function"
-  );
 }
