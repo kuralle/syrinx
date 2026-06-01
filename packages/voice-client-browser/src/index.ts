@@ -458,6 +458,7 @@ export class SyrinxBrowserClient {
   private handleBinaryMessage(data: ArrayBuffer): void {
     try {
       const audio = decodeBrowserAssistantAudio(data, this.opusCodec);
+      if (audio.data.byteLength === 0) return;
       let pcmData = audio.data;
       const wireRate = audio.metadata?.sampleRateHz;
       if (wireRate !== undefined && wireRate !== this.outputSampleRateHz) {
@@ -487,6 +488,7 @@ export class SyrinxBrowserClient {
     const supported = audio.supportedInputCodecs;
     if (!supported?.includes("opus") || this.opusLoadFailed) {
       this.wireCodec = "pcm_s16le";
+      this.reportDownlinkCodecCapability();
       return;
     }
     try {
@@ -497,6 +499,12 @@ export class SyrinxBrowserClient {
       this.opusCodec = null;
       this.wireCodec = "pcm_s16le";
     }
+    this.reportDownlinkCodecCapability();
+  }
+
+  private reportDownlinkCodecCapability(): void {
+    const downlinkEncoding = this.opusCodec ? "opus" : "pcm_s16le";
+    this.sendJson({ type: "codec_capability", downlinkEncoding });
   }
 
   private encodeUplinkPcm(

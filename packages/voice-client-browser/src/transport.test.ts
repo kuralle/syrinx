@@ -6,6 +6,7 @@ import { decodeSyrinxAudioEnvelope } from "@asyncdot/voice";
 import { pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 import { SyrinxBrowserClient } from "./index.js";
 import type { ClientTransport, ClientTransportHandlers } from "./transport.js";
+import * as browserOpus from "./browser-opus.js";
 import { pickBrowserWireCodec, createBrowserOpusCodec } from "./browser-opus.js";
 
 class FakeTransport implements ClientTransport {
@@ -137,5 +138,40 @@ describe("browser opus negotiation", () => {
       new OpusDecoder({ channels: 1, sample_rate: 48000 }).decode(envelope.audio),
     );
     expect(reference.length).toBeGreaterThan(0);
+  });
+});
+
+describe("browser downlink codec capability", () => {
+  it("reports pcm downlink when opus load fails", async () => {
+    vi.spyOn(browserOpus, "createBrowserOpusCodec").mockRejectedValue(new Error("opus unavailable"));
+
+    const transport = new FakeTransport();
+    const client = new SyrinxBrowserClient({
+      url: "ws://unused/ws",
+      transport,
+      reconnect: false,
+      keepaliveIntervalMs: false,
+    });
+    client.connect();
+    transport.emitMessage(JSON.stringify({
+      type: "ready",
+      sessionId: "sess-pcm-downlink",
+      audio: {
+        inputSampleRateHz: 16000,
+        outputSampleRateHz: 16000,
+        encoding: "opus",
+        supportedInputCodecs: ["pcm_s16le", "opus"],
+        channels: 1,
+        binaryEnvelope: "syrinx.audio.v1",
+      },
+    }));
+
+    await vi.waitFor(() => transport.sent.some((entry) => {
+      if (typeof entry !== "string") return false;
+      const message = JSON.parse(entry) as { type?: string; downlinkEncoding?: string };
+      return message.type === "codec_capability" && message.downlinkEncoding === "pcm_s16le";
+    }), { timeout: 3_000 });
+
+    vi.restoreAllMocks();
   });
 });
