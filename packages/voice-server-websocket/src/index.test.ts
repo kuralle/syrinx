@@ -7,8 +7,12 @@ import {
   Route,
   VoiceAgentSession,
   type ConversationMetricPacket,
+  type PipelineBus,
+  type PluginConfig,
   type UserAudioReceivedPacket,
   type UserTextReceivedPacket,
+  type VadAudioPacket,
+  type VoicePlugin,
 } from "@asyncdot/voice";
 import { Decoder as OpusDecoder, Encoder as OpusEncoder } from "@evan/opus";
 import { pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
@@ -64,6 +68,27 @@ function decodeTestBinaryAudioEnvelope(data: Buffer): { readonly header: any; re
     header: JSON.parse(data.subarray(headerStart, headerEnd).toString("utf8")),
     audio: data.subarray(headerEnd),
   };
+}
+
+class VadAlignmentProbe implements VoicePlugin {
+  readonly observed: Array<{ contextId: string; byteOffsetParity: number; samples: number[] }> = [];
+  private dispose: (() => void) | null = null;
+
+  async initialize(bus: PipelineBus, _config: PluginConfig): Promise<void> {
+    this.dispose = bus.on("vad.audio", (pkt) => {
+      const audioPkt = pkt as VadAudioPacket;
+      this.observed.push({
+        contextId: audioPkt.contextId,
+        byteOffsetParity: audioPkt.audio.byteOffset % 2,
+        samples: Array.from(pcm16BytesToSamples(audioPkt.audio)),
+      });
+    });
+  }
+
+  async close(): Promise<void> {
+    this.dispose?.();
+    this.dispose = null;
+  }
 }
 
 describe("createVoiceWebSocketServer", () => {
@@ -1263,6 +1288,49 @@ describe("createVoiceWebSocketServer", () => {
     ]);
     // FIR-resampled output: same algorithm as JSON path gives the same weighted sums.
     expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(new Int16Array([476, 10050]).buffer));
+
+    client.close();
+    await server.close();
+  });
+
+  it("routes odd-offset binary envelope PCM through the session VAD branch", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const probe = new VadAlignmentProbe();
+    session.registerPlugin("vad_alignment_probe", probe);
+    const transportErrors: any[] = [];
+    session.bus.on("pipeline.error", (pkt) => {
+      transportErrors.push(pkt);
+    });
+
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const audio = pcm16SamplesToBytes(new Int16Array([0, 32767, -32768, 16384]));
+    const contexts = Array.from({ length: 8 }, (_, i) => `turn-envelope-vad-${"x".repeat(i)}`);
+    for (const [index, contextId] of contexts.entries()) {
+      client.send(encodeTestBinaryAudioEnvelope({
+        type: "audio",
+        contextId,
+        sampleRateHz: 16000,
+        encoding: "pcm_s16le",
+        channels: 1,
+        byteLength: audio.byteLength,
+        sequence: index + 1,
+      }, audio));
+    }
+    await waitForCondition(() => probe.observed.length === contexts.length, 500);
+
+    expect(transportErrors).toEqual([]);
+    const oddOffsetPacket = probe.observed.find((entry) => entry.byteOffsetParity === 1);
+    expect(probe.observed.map((entry) => entry.byteOffsetParity)).toContain(1);
+    expect(oddOffsetPacket?.samples).toEqual([0, 32767, -32768, 16384]);
 
     client.close();
     await server.close();
