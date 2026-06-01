@@ -324,6 +324,11 @@ export interface TtsErrorPacket extends VoicePacket, VoiceErrorPacket {
  * is wired (e.g. headless), in which case consumers fall back to a
  * sample-duration estimate.
  */
+/** First paced audio frame reached the wire for a context (unthrottled). */
+export interface TextToSpeechPlayoutStartedPacket extends VoicePacket {
+  readonly kind: "tts.playout_started";
+}
+
 export interface TextToSpeechPlayoutProgressPacket extends VoicePacket {
   readonly kind: "tts.playout_progress";
   /** Cumulative realtime audio (ms) paced out to the wire for this context. */
@@ -465,6 +470,7 @@ export type TtsPacket =
   | TextToSpeechDonePacket
   | TextToSpeechAudioPacket
   | TextToSpeechEndPacket
+  | TextToSpeechPlayoutStartedPacket
   | TextToSpeechPlayoutProgressPacket
   | TextToSpeechWordTimestampsPacket
   | TtsErrorPacket;

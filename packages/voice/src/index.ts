@@ -62,6 +62,7 @@ export {
   type TextToSpeechDonePacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
+  type TextToSpeechPlayoutStartedPacket,
   type TextToSpeechPlayoutProgressPacket,
   type TextToSpeechWordTimestampsPacket,
   type TtsWordTimestamp,

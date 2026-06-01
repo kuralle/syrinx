@@ -48,6 +48,7 @@ export interface BrowserJitterEvaluationInput {
   readonly browser: BrowserJitterSmokeResult;
   readonly networkProfile: NetworkProfile;
   readonly proxyMaxUplinkGapMs: number;
+  readonly proxyMaxDownlinkGapMs: number;
 }
 
 export function interFrameDelays(profile: NetworkProfile): readonly number[] {
@@ -75,6 +76,16 @@ export function evaluateBrowserJitterSmoke(input: BrowserJitterEvaluationInput):
   }
   if (input.networkProfile !== "clean" && input.proxyMaxUplinkGapMs <= 20) {
     failures.push(`${input.networkProfile} profile did not produce measurable uplink jitter`);
+  }
+  if (input.networkProfile !== "clean" && input.proxyMaxDownlinkGapMs <= 20) {
+    failures.push(`${input.networkProfile} profile did not produce measurable downlink jitter`);
+  }
+  if (
+    input.networkProfile !== "clean"
+    && typeof browser.minPlaybackLeadMs === "number"
+    && browser.minPlaybackLeadMs <= 0
+  ) {
+    failures.push("browser jitter buffer did not report positive playback lead");
   }
   if (typeof browser.minPlaybackLeadMs === "number" && browser.minPlaybackLeadMs < -10) {
     failures.push(`playback lead ${String(browser.minPlaybackLeadMs)}ms indicates an audible gap`);
@@ -167,6 +178,7 @@ async function main(): Promise<void> {
         browser: browserResult,
         networkProfile,
         proxyMaxUplinkGapMs: proxy.maxUplinkGapMs,
+        proxyMaxDownlinkGapMs: proxy.maxDownlinkGapMs,
       });
       if (receiveError) failures.push(receiveError);
       const result = {
@@ -175,6 +187,7 @@ async function main(): Promise<void> {
         transport: "browser_websocket",
         networkProfile,
         proxyMaxUplinkGapMs: proxy.maxUplinkGapMs,
+        proxyMaxDownlinkGapMs: proxy.maxDownlinkGapMs,
         qualityGate: {
           passed: failures.length === 0,
           failures,
@@ -215,10 +228,15 @@ function readNetworkProfile(): NetworkProfile {
 async function createImpairingProxy(
   upstreamUrl: string,
   profile: NetworkProfile,
-): Promise<{ url: string; maxUplinkGapMs: number; close: () => Promise<void> }> {
+): Promise<{ url: string; maxUplinkGapMs: number; maxDownlinkGapMs: number; close: () => Promise<void> }> {
   const delays = [...interFrameDelays(profile)];
   let delayIndex = 0;
-  const stats = { maxUplinkGapMs: 0, previousUplinkAt: 0 };
+  const stats = {
+    maxUplinkGapMs: 0,
+    previousUplinkAt: 0,
+    maxDownlinkGapMs: 0,
+    previousDownlinkAt: 0,
+  };
   const server = createServer();
   const wss = new WebSocketServer({ server });
   const upstreamSockets = new Set<WebSocket>();
@@ -234,7 +252,7 @@ async function createImpairingProxy(
       }
     });
     upstream.on("message", (data, isBinary) => {
-      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(data, { binary: isBinary });
+      void forwardDownlink(data, isBinary);
     });
     upstream.on("close", () => clientSocket.close());
     upstream.on("error", () => clientSocket.close());
@@ -244,6 +262,20 @@ async function createImpairingProxy(
     });
     clientSocket.on("close", () => upstream.close());
     clientSocket.on("error", () => upstream.close());
+
+    async function forwardDownlink(data: WebSocket.RawData, isBinary: boolean): Promise<void> {
+      if (isBinary) {
+        const delayMs = delays[delayIndex % delays.length] ?? 20;
+        delayIndex += 1;
+        await sleep(delayMs);
+        const now = Date.now();
+        if (stats.previousDownlinkAt > 0) {
+          stats.maxDownlinkGapMs = Math.max(stats.maxDownlinkGapMs, now - stats.previousDownlinkAt);
+        }
+        stats.previousDownlinkAt = now;
+      }
+      if (clientSocket.readyState === WebSocket.OPEN) clientSocket.send(data, { binary: isBinary });
+    }
 
     async function forwardUplink(data: WebSocket.RawData, isBinary: boolean): Promise<void> {
       if (isBinary || isAudioJson(data)) {
@@ -275,6 +307,9 @@ async function createImpairingProxy(
     url: `ws://127.0.0.1:${String(address.port)}`,
     get maxUplinkGapMs() {
       return stats.maxUplinkGapMs;
+    },
+    get maxDownlinkGapMs() {
+      return stats.maxDownlinkGapMs;
     },
     close: async () => {
       for (const socket of upstreamSockets) socket.close();

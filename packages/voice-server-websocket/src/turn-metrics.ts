@@ -7,6 +7,7 @@ import {
   type SttResultPacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechPlayoutProgressPacket,
+  type TextToSpeechPlayoutStartedPacket,
   type VadSpeechEndedPacket,
 } from "@asyncdot/voice";
 
@@ -110,13 +111,18 @@ export class TurnMetricsTracker {
         const state = this.turnState(audio.contextId);
         if (state.firstAudioByteMs === 0) state.firstAudioByteMs = audio.timestampMs;
       }),
+      this.bus.on("tts.playout_started", (pkt) => {
+        const started = pkt as TextToSpeechPlayoutStartedPacket;
+        const state = this.turns.get(started.contextId);
+        if (!state) return;
+        if (state.firstAudioPlayedMs === 0) {
+          state.firstAudioPlayedMs = started.timestampMs;
+        }
+      }),
       this.bus.on("tts.playout_progress", (pkt) => {
         const progress = pkt as TextToSpeechPlayoutProgressPacket;
         const state = this.turns.get(progress.contextId);
         if (!state) return;
-        if (state.firstAudioPlayedMs === 0 && progress.playedOutMs > 0) {
-          state.firstAudioPlayedMs = progress.timestampMs;
-        }
         if (progress.complete) {
           state.lastAudioPlayedMs = progress.timestampMs;
           this.onEmit(buildBrowserMetricsMessage(progress.contextId, state));
