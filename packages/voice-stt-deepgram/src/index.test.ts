@@ -591,41 +591,26 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
-  it("reconnects after an unconfirmed Finalize timeout and discards stale provider text", async () => {
+  it("keeps the live connection after a single unconfirmed Finalize timeout", async () => {
+    // A lone slow finalize must NOT tear down the socket — the next turn has to stream
+    // on the same connection, otherwise a reconnect stall cascades into more timeouts.
     const connections: WebSocket[] = [];
+    let lastAudioContext = "";
     const endpointUrl = await createLocalServer((socket) => {
       connections.push(socket);
-      if (connections.length === 1) {
-        socket.on("message", (data, isBinary) => {
-          if (isBinary) {
-            socket.send(JSON.stringify({
-              is_final: true,
-              speech_final: false,
-              channel: { alternatives: [{ transcript: "stale buffered text", confidence: 0.8 }] },
-            }));
-            return;
-          }
-          const msg = JSON.parse(data.toString()) as { type?: string };
-          if (msg.type !== "Finalize") return;
-          setTimeout(() => {
-            if (socket.readyState === socket.OPEN) {
-              socket.send(JSON.stringify({
-                is_final: true,
-                speech_final: true,
-                channel: { alternatives: [{ transcript: "late stale final", confidence: 0.95 }] },
-              }));
-            }
-          }, 30);
-        });
-        return;
-      }
-      socket.on("message", (_data, isBinary) => {
-        if (!isBinary) return;
-        socket.send(JSON.stringify({
-          is_final: true,
-          speech_final: true,
-          channel: { alternatives: [{ transcript: "fresh confirmed text", confidence: 0.9 }] },
-        }));
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          // Only the fresh turn gets a confirming speech_final; the stale turn's
+          // Finalize is intentionally never confirmed so it times out.
+          const forFreshTurn = lastAudioContext === "turn-fresh";
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: forFreshTurn,
+            channel: { alternatives: [{ transcript: forFreshTurn ? "fresh confirmed text" : "stale interim", confidence: 0.9 }] },
+          }));
+          return;
+        }
+        // Swallow Finalize for the stale turn (no from_finalize) → provider timeout.
       });
     });
     const bus = new PipelineBusImpl();
@@ -633,12 +618,8 @@ describe("DeepgramSTTPlugin", () => {
     const plugin = new DeepgramSTTPlugin();
     const finals: SttResultPacket[] = [];
     const errors: SttErrorPacket[] = [];
-    bus.on("stt.result", (pkt) => {
-      finals.push(pkt as SttResultPacket);
-    });
-    bus.on("stt.error", (pkt) => {
-      errors.push(pkt as SttErrorPacket);
-    });
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
 
     await plugin.initialize(bus, {
       api_key: "test",
@@ -646,34 +627,96 @@ describe("DeepgramSTTPlugin", () => {
       sample_rate: 16000,
       provider_finalize_timeout_ms: 10,
     });
-    bus.push(Route.Main, {
-      kind: "stt.audio",
-      contextId: "turn-stale",
-      timestampMs: Date.now(),
-      audio: new Uint8Array(640),
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
+    lastAudioContext = "turn-stale";
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-stale", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-stale");
     await waitFor(errors);
-    await waitFor(connections, 2);
 
-    expect(finals).toHaveLength(0);
-    expect(connections[0]?.readyState).toBe(connections[0]?.CLOSED);
+    // The single timeout surfaced an error but the socket stayed up (no reconnect).
+    expect(errors).toHaveLength(1);
+    expect(connections).toHaveLength(1);
+    expect(connections[0]?.readyState).toBe(connections[0]?.OPEN);
 
-    bus.push(Route.Main, {
-      kind: "stt.audio",
-      contextId: "turn-fresh",
-      timestampMs: Date.now(),
-      audio: new Uint8Array(640),
-    });
+    // Next turn streams on the SAME connection and completes normally.
+    lastAudioContext = "turn-fresh";
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await waitFor(finals);
 
+    expect(connections).toHaveLength(1);
     expect(finals).toEqual([
-      expect.objectContaining({
-        contextId: "turn-fresh",
-        text: "fresh confirmed text",
-      }),
+      expect.objectContaining({ contextId: "turn-fresh", text: "fresh confirmed text" }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("reconnects only after consecutive unconfirmed Finalize timeouts", async () => {
+    // Two finalize timeouts in a row with no confirmed final between them looks like a
+    // genuinely wedged stream → reconnect; the fresh socket then serves the next turn.
+    const connections: WebSocket[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      connections.push(socket);
+      const connIndex = connections.length;
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          if (connIndex >= 2) {
+            socket.send(JSON.stringify({
+              is_final: true,
+              speech_final: true,
+              channel: { alternatives: [{ transcript: "fresh confirmed text", confidence: 0.9 }] },
+            }));
+          } else {
+            socket.send(JSON.stringify({
+              is_final: true,
+              speech_final: false,
+              channel: { alternatives: [{ transcript: "wedged interim", confidence: 0.8 }] },
+            }));
+          }
+          return;
+        }
+        // First connection never confirms any Finalize → repeated timeouts.
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      provider_finalize_timeout_ms: 10,
+      finalize_reset_threshold: 2,
+    });
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-1");
+    await waitFor(errors, 1);
+    // First timeout: still one connection (no reconnect yet).
+    expect(connections).toHaveLength(1);
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-2", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-2");
+    await waitFor(errors, 2);
+    await waitFor(connections, 2);
+
+    // Second consecutive timeout: now it reconnects and abandons the wedged socket.
+    expect(connections[0]?.readyState).toBe(connections[0]?.CLOSED);
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await waitFor(finals);
+    expect(finals).toEqual([
+      expect.objectContaining({ contextId: "turn-fresh", text: "fresh confirmed text" }),
     ]);
 
     await plugin.close();
