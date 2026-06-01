@@ -266,7 +266,6 @@ export class PipecatEOSPlugin implements VoicePlugin {
       return;
     }
 
-    state.smartTurnComplete = true;
     if (fusion.requestFinalize) {
       this.requestSttFinalize(state.contextId);
     }
@@ -338,15 +337,15 @@ export class PipecatEOSPlugin implements VoicePlugin {
       if (state.finalized) return;
       const transcript = latestTranscript(state.finalSegments, state.latestInterim);
       const semantic = scoreSemanticCompleteness(transcript);
-      if (!semantic.complete) {
-        this.scheduleIncompleteFallback(state);
-        return;
-      }
-      state.semanticComplete = true;
       state.smartTurnComplete = true;
       this.requestSttFinalize(state.contextId);
       if (state.finalPackets.length > 0) {
-        this.scheduleFinalize(state, this.finalizeDelayMs);
+        if (semantic.complete) {
+          state.semanticComplete = true;
+          this.scheduleFinalize(state, this.finalizeDelayMs);
+        } else {
+          this.finalize(state);
+        }
       }
     }, this.semanticDeferFallbackMs);
   }
