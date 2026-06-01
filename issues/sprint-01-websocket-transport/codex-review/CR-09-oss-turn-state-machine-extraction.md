@@ -1,8 +1,15 @@
 # CR-09 — Deferred barge-in state machine extraction remains a structural risk vs OSS patterns
 
-- **Status:** Filed (not fixed in this pass)
+- **Status:** Filed — **design study complete**, implementation staged (test-first)
 - **Severity:** medium
 - **Area:** session architecture / interruption correctness
+
+> **Design study:** see [`CR-09-RFC-explicit-turn-taking-state-machine.md`](./CR-09-RFC-explicit-turn-taking-state-machine.md).
+> Root cause is not "big file" — it's an *implicit, distributed, position-blind*
+> turn-taking state machine. The RFC is grounded in LiveKit (`SpeechHandle` + futures +
+> `playback_position`), Pipecat (which **already extracted** turn-taking into a
+> `UserTurnController` state-machine package on `main`), and full-duplex theory
+> (Moshi/Smart-Turn/Full-Duplex-Bench). Implementation is staged and behavior-identical.
 
 ## Problem / Evidence
 
