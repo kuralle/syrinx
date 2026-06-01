@@ -7,16 +7,20 @@ import {
   type EndOfSpeechPacket,
   type InterimEndOfSpeechPacket,
 } from "@asyncdot/voice";
+import { pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 import { PipecatEOSPlugin, type SmartTurnPredictor } from "./index.js";
 
 class PredictableSmartTurn implements SmartTurnPredictor {
+  readonly audioInputs: Float32Array[] = [];
+
   constructor(private readonly predictions: number[] = [1]) {}
 
   async initialize(): Promise<void> {
     // no-op
   }
 
-  async predict(): Promise<number> {
+  async predict(audio: Float32Array): Promise<number> {
+    this.audioInputs.push(audio);
     return this.predictions.shift() ?? 1;
   }
 
@@ -263,6 +267,50 @@ describe("PipecatEOSPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(requests).toEqual(["turn-5"]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("accumulates odd-byteOffset VAD PCM without constructing an unaligned Int16Array view", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const predictor = new PredictableSmartTurn([0.9]);
+    const plugin = new PipecatEOSPlugin(predictor);
+    const requests: string[] = [];
+    bus.on("stt.finalize", (pkt) => {
+      requests.push(pkt.contextId);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5 });
+    const bytes = pcm16SamplesToBytes(new Int16Array([0, 32767, -32768, 16384]));
+    const backing = new Uint8Array(bytes.byteLength + 1);
+    backing.set(bytes, 1);
+    const oddOffsetFrame = backing.subarray(1);
+    expect(oddOffsetFrame.byteOffset % 2).toBe(1);
+
+    bus.push(Route.Main, {
+      kind: "vad.audio",
+      contextId: "turn-odd-offset",
+      timestampMs: Date.now(),
+      audio: oddOffsetFrame,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-odd-offset",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(requests).toEqual(["turn-odd-offset"]);
+    expect(predictor.audioInputs).toHaveLength(1);
+    expect(Array.from(predictor.audioInputs[0]!)).toEqual([
+      0,
+      32767 / 32768,
+      -1,
+      0.5,
+    ]);
 
     await plugin.close();
     bus.stop();

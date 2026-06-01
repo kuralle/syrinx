@@ -30,6 +30,7 @@ import {
   type VoicePlugin,
   optionalStringConfig,
 } from "@asyncdot/voice";
+import { pcm16BytesToSamples } from "@asyncdot/voice/audio";
 
 type Ort = typeof import("onnxruntime-node");
 type InferenceSession = import("onnxruntime-node").InferenceSession;
@@ -165,7 +166,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private handleAudio(pkt: VadAudioPacket): void {
     if (pkt.audio.byteLength % 2 !== 0) return;
     const state = this.stateFor(pkt.contextId);
-    const samples = new Int16Array(pkt.audio.buffer, pkt.audio.byteOffset, pkt.audio.byteLength / 2);
+    const samples = pcm16BytesToSamples(pkt.audio);
     for (const sample of samples) {
       state.audio.push(sample / 32768);
     }
