@@ -110,7 +110,10 @@ export async function runWebSocketConnection<TState>(
   const pendingMessages: PendingMessage[] = [];
   let pendingMessageBytes = 0;
   let ready = false;
-  let socketClosed = false;
+  let socketClosed = socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING;
+  if (socketClosed) {
+    return;
+  }
   let maxSessionTimedOut = false;
   let startupTimedOut = false;
   let teardown: (reason: string) => void = () => undefined;
