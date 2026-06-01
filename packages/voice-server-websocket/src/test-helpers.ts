@@ -6,6 +6,30 @@ import WebSocket from "ws";
 
 export const DEFAULT_CONDITION_TIMEOUT_MS = 5000;
 
+const HTTP_SERVER_CLOSE_FALLBACK_MS = 500;
+
+function closeHttpServerBounded(httpServer: HttpServer): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallbackTimer);
+      resolve();
+    };
+
+    const fallbackTimer = setTimeout(finish, HTTP_SERVER_CLOSE_FALLBACK_MS);
+
+    if (typeof httpServer.closeAllConnections === "function") {
+      httpServer.closeAllConnections();
+    } else if (typeof httpServer.closeIdleConnections === "function") {
+      httpServer.closeIdleConnections();
+    }
+
+    httpServer.close(() => finish());
+  });
+}
+
 interface ClosableServer {
   close(): Promise<void>;
 }
@@ -50,9 +74,7 @@ export function setupTransportTestCleanup(): void {
       });
     }));
     await Promise.allSettled(activeServers.map((server) => server.close()));
-    await Promise.allSettled(
-      activeHttpServers.map((httpServer) => new Promise<void>((resolve) => httpServer.close(() => resolve()))),
-    );
+    await Promise.allSettled(activeHttpServers.map((httpServer) => closeHttpServerBounded(httpServer)));
     activeServers = [];
     activeHttpServers = [];
     activeSockets = [];
