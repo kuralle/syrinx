@@ -8,12 +8,14 @@ export interface WebSocketClientTransportOptions {
 
 export class WebSocketClientTransport implements ClientTransport {
   private socket: WebSocket | null = null;
+  private pendingUrl: string | null = null;
   private handlers: ClientTransportHandlers = {};
 
   constructor(private readonly options: WebSocketClientTransportOptions = {}) {}
 
   get connected(): boolean {
-    return this.socket?.readyState === WebSocket.OPEN;
+    const state = this.socket?.readyState;
+    return state === WebSocket.OPEN;
   }
 
   setHandlers(handlers: ClientTransportHandlers): void {
@@ -21,9 +23,24 @@ export class WebSocketClientTransport implements ClientTransport {
   }
 
   connect(url: string): void {
-    if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
+    const state = this.socket?.readyState;
+    if (state === WebSocket.OPEN) return;
+    if (state === WebSocket.CLOSING) {
+      this.pendingUrl = url;
+      const closingSocket = this.socket!;
+      const onClose = (): void => {
+        closingSocket.removeEventListener("close", onClose);
+        if (this.socket !== closingSocket) return;
+        const nextUrl = this.pendingUrl;
+        this.pendingUrl = null;
+        this.socket = null;
+        if (nextUrl) this.connect(nextUrl);
+      };
+      closingSocket.addEventListener("close", onClose);
       return;
     }
+    if (state === WebSocket.CONNECTING) return;
+    this.pendingUrl = null;
     const socket = new WebSocket(url, this.options.protocols as string | string[] | undefined);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
@@ -43,6 +60,7 @@ export class WebSocketClientTransport implements ClientTransport {
   }
 
   disconnect(code?: number, reason?: string): void {
+    this.pendingUrl = null;
     this.socket?.close(code, reason);
   }
 

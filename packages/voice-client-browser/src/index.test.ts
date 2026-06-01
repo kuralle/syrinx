@@ -31,6 +31,14 @@ class FakeWebSocket {
     this.listeners.set(type, listeners);
   }
 
+  removeEventListener(type: string, listener: (event: any) => void): void {
+    const listeners = this.listeners.get(type);
+    if (!listeners) return;
+    const next = listeners.filter((entry) => entry !== listener);
+    if (next.length === 0) this.listeners.delete(type);
+    else this.listeners.set(type, next);
+  }
+
   send(data: unknown): void {
     this.sent.push(data);
   }
@@ -366,6 +374,19 @@ describe("SyrinxBrowserClient — reconnect", () => {
     });
 
     expect(events.map((e) => e.type)).not.toContain("resumed");
+  });
+
+  it("connect() during CLOSING opens a new socket after the closing socket finishes", () => {
+    const client = makeClient({ reconnect: false, keepaliveIntervalMs: false });
+    client.connect();
+    const first = sockets[0]!;
+    first.readyState = FakeWebSocket.CLOSING;
+    client.connect();
+    expect(sockets).toHaveLength(1);
+    first.readyState = FakeWebSocket.CLOSED;
+    first.dispatch("close", { code: 1000, reason: "" });
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1]!.readyState).toBe(FakeWebSocket.OPEN);
   });
 
   it("clean app-initiated close does not reconnect and emits close", () => {
