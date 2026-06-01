@@ -4,7 +4,14 @@ import type { IncomingMessage } from "node:http";
 import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { Route, type VoiceAgentSession } from "@asyncdot/voice";
-import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
+import {
+  decodeMuLawToPcm16,
+  encodePcm16ToMuLaw,
+  pcm16BytesToSamples,
+  pcm16SamplesToBytes,
+  resamplePcm16Streaming,
+  type StreamingPcm16Resampler,
+} from "@asyncdot/voice/audio";
 import { sendJsonCapped } from "./websocket-close.js";
 import {
   optionalRecord,
@@ -92,6 +99,7 @@ interface TwilioConnectionState {
   pendingEndMarkName: string;
   onPlaybackMarkReceived?: () => void;
   clearPlayout: (reason: string) => void;
+  readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
 }
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
@@ -144,6 +152,7 @@ export async function createTwilioMediaStreamServer(
       pendingMarks: new Set(),
       pendingEndMarkName: "",
       clearPlayout: () => undefined,
+      streamingResamplers: new Map(),
     }),
 
     async acquireSession({ request, shouldAbort, onSessionCreated }) {
@@ -188,7 +197,7 @@ export async function createTwilioMediaStreamServer(
           isActive: () => !state.stopped && !!state.streamSid,
           encodeFrames: (audio, sourceSampleRateHz, contextId) => {
             const samples = pcm16BytesToSamples(audio);
-            const resampled = resamplePcm16(samples, sourceSampleRateHz, twilioSampleRateHz);
+            const resampled = resamplePcm16Streaming(state.streamingResamplers, samples, sourceSampleRateHz, twilioSampleRateHz);
             const encoded = encodePcm16ToMuLaw(resampled);
             const frames = [];
             for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
@@ -294,7 +303,7 @@ export async function createTwilioMediaStreamServer(
         const ulaw = decodeStrictBase64(payload, "media.payload");
         const pcm8k = decodeMuLawToPcm16(ulaw);
         rememberTwilioMediaTimestamp(session, state, message.media?.timestamp, pcm8k.length, twilioSampleRateHz);
-        const pcm16k = resamplePcm16(pcm8k, twilioSampleRateHz, inputSampleRateHz);
+        const pcm16k = resamplePcm16Streaming(state.streamingResamplers, pcm8k, twilioSampleRateHz, inputSampleRateHz);
         session.bus.push(Route.Main, {
           kind: "user.audio_received",
           contextId: state.contextId,

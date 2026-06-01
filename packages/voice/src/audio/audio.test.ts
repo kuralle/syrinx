@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { pcm16BytesToSamples, pcm16SamplesToBytes, bigEndianPcm16BytesToSamples, pcm16SamplesToBigEndianBytes } from "./pcm.js";
 import { decodeMuLawToPcm16, encodePcm16ToMuLaw } from "./mulaw.js";
-import { resamplePcm16 } from "./resample.js";
+import { resamplePcm16, StreamingPcm16Resampler } from "./resample.js";
 
 // ── PCM byte ↔ sample conversions ──────────────────────────────────────────
 
@@ -226,6 +226,30 @@ function naiveDecimate16kTo8k(input: Int16Array): Int16Array {
   }
   return output;
 }
+
+describe("StreamingPcm16Resampler — chunk continuity", () => {
+  it("preserves constant-amplitude PCM across successive 20ms chunks (stateless path rings)", () => {
+    const chunkSamples = 320;
+    const value = 10_000;
+    const chunks = 10;
+    const stateful = new StreamingPcm16Resampler(16_000, 8_000);
+
+    for (let i = 0; i < chunks; i += 1) {
+      const chunk = new Int16Array(chunkSamples).fill(value);
+      const statefulOut = stateful.process(chunk);
+      const statelessOut = resamplePcm16(chunk, 16_000, 8_000);
+      if (i === 0) continue;
+
+      const statefulSwing = Math.max(...statefulOut) - Math.min(...statefulOut);
+      expect(statefulSwing).toBeLessThan(700);
+
+      const statelessSwing = Math.max(...statelessOut) - Math.min(...statelessOut);
+      expect(statelessSwing).toBeGreaterThan(3000);
+      expect(Math.min(...statelessOut)).toBeLessThan(8000);
+      expect(Math.max(...statelessOut)).toBeGreaterThan(10_000);
+    }
+  });
+});
 
 describe("resamplePcm16 — anti-alias spectral test (F3)", () => {
   it("attenuates 7 kHz alias by ≥40 dB compared to naive linear-interp", () => {

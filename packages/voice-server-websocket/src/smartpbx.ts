@@ -10,7 +10,8 @@ import {
   encodePcm16ToMuLaw,
   pcm16BytesToSamples,
   pcm16SamplesToBytes,
-  resamplePcm16,
+  resamplePcm16Streaming,
+  type StreamingPcm16Resampler,
 } from "@asyncdot/voice/audio";
 import { sendJsonCapped } from "./websocket-close.js";
 import {
@@ -91,6 +92,7 @@ interface SmartPbxConnectionState {
   started: boolean;
   stopped: boolean;
   clearPlayout: (reason: string) => void;
+  readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
 }
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
@@ -140,6 +142,7 @@ export async function createSmartPbxMediaStreamServer(
       started: false,
       stopped: false,
       clearPlayout: () => undefined,
+      streamingResamplers: new Map(),
     }),
 
     async acquireSession({ request, shouldAbort, onSessionCreated }) {
@@ -266,7 +269,7 @@ export async function createSmartPbxMediaStreamServer(
         if (!payload) throw new Error("SmartPBX media event is missing media.payload");
         const wire = decodeStrictBase64(payload, "media.payload");
         const decoded = decodeSmartPbxWireAudio(wire, state);
-        const resampled = resamplePcm16(decoded, state.wireSampleRateHz, inputSampleRateHz);
+        const resampled = resamplePcm16Streaming(state.streamingResamplers, decoded, state.wireSampleRateHz, inputSampleRateHz);
         session.bus.push(Route.Main, {
           kind: "user.audio_received",
           contextId: state.contextId,
@@ -403,7 +406,7 @@ function encodeOutboundFrames(
   frameDurationMs: number,
 ): Uint8Array[] {
   const samples = pcm16BytesToSamples(audio);
-  const resampled = resamplePcm16(samples, sourceSampleRateHz, state.wireSampleRateHz);
+  const resampled = resamplePcm16Streaming(state.streamingResamplers, samples, sourceSampleRateHz, state.wireSampleRateHz);
   if (state.codec === "opus") return encodeOpusFrames(resampled, state, frameDurationMs, false);
   const encoded = state.codec === "g711_ulaw" ? encodePcm16ToMuLaw(resampled) : pcm16SamplesToBytes(resampled);
   const bytesPerSample = state.codec === "g711_ulaw" ? 1 : 2;

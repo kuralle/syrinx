@@ -11,7 +11,8 @@ import {
   pcm16BytesToSamples,
   pcm16SamplesToBytes,
   pcm16SamplesToBigEndianBytes,
-  resamplePcm16,
+  resamplePcm16Streaming,
+  type StreamingPcm16Resampler,
 } from "@asyncdot/voice/audio";
 import type { PacedPlayoutFrame } from "./paced-playout.js";
 import { sendJsonCapped } from "./websocket-close.js";
@@ -117,6 +118,7 @@ interface TelnyxConnectionState {
   pendingEndMarkName: string;
   onPlaybackMarkReceived?: () => void;
   clearPlayout: (reason: string) => void;
+  readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
 }
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
@@ -175,6 +177,7 @@ export async function createTelnyxMediaStreamServer(
       pendingMarks: new Set(),
       pendingEndMarkName: "",
       clearPlayout: () => undefined,
+      streamingResamplers: new Map(),
     }),
 
     async acquireSession({ request, shouldAbort, onSessionCreated }) {
@@ -543,7 +546,7 @@ function emitTelnyxMediaFrame(
   inputSampleRateHz: number,
 ): void {
   rememberTelnyxMediaTimestamp(session, state, frame.timestamp, frame.pcm.length, state.inboundSampleRateHz);
-  const resampled = resamplePcm16(frame.pcm, state.inboundSampleRateHz, inputSampleRateHz);
+  const resampled = resamplePcm16Streaming(state.streamingResamplers, frame.pcm, state.inboundSampleRateHz, inputSampleRateHz);
   session.bus.push(Route.Main, {
     kind: "user.audio_received",
     contextId: state.contextId,
@@ -613,7 +616,7 @@ function encodeOutboundPayload(
   frameDurationMs: number,
 ): Uint8Array[] {
   const samples = pcm16BytesToSamples(audio);
-  const resampled = resamplePcm16(samples, sourceSampleRateHz, state.outboundSampleRateHz);
+  const resampled = resamplePcm16Streaming(state.streamingResamplers, samples, sourceSampleRateHz, state.outboundSampleRateHz);
   const encoded = state.outboundCodec === "PCMU"
     ? encodePcm16ToMuLaw(resampled)
     : pcm16SamplesToBigEndianBytes(resampled);
