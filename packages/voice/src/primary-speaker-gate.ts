@@ -82,7 +82,6 @@ export class PrimarySpeakerGate {
       const primarySim = fingerprintSimilarity(frame, this.profile);
       if (this.assistantProfile !== null) {
         const echoSim = fingerprintSimilarity(frame, this.assistantProfile);
-        if (echoSim >= this.similarityThreshold) continue;
         if (echoSim >= primarySim + this.echoDominanceMargin) continue;
       }
       if (primarySim >= this.similarityThreshold) primaryHits += 1;

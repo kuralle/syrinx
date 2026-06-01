@@ -197,6 +197,7 @@ export class VoiceAgentSession {
   private readonly ttsStallMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private turnUserStoppedAtMs = new Map<string, number>();
+  private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
@@ -465,7 +466,7 @@ export class VoiceAgentSession {
   // =========================================================================
 
   private handleUserAudio(pkt: UserAudioReceivedPacket): void {
-    if (!this.latestActiveTtsContextId()) {
+    if (this.shouldEnrollPrimarySpeaker(pkt.contextId)) {
       this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
     }
     this.bus.push(
@@ -532,9 +533,16 @@ export class VoiceAgentSession {
   private handleVadAudioForSpeakerGate(pkt: VadAudioPacket): void {
     if (this.turnArbiter.observeBargeInAudio(pkt)) return;
 
-    if (!this.latestActiveTtsContextId()) {
+    if (this.shouldEnrollPrimarySpeaker(pkt.contextId)) {
       this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
     }
+  }
+
+  private shouldEnrollPrimarySpeaker(contextId: string): boolean {
+    return (
+      !this.latestActiveTtsContextId() &&
+      this.speakerEnrollmentContextId === contextId
+    );
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
@@ -557,7 +565,10 @@ export class VoiceAgentSession {
     });
 
     const interruptedContextId = this.latestActiveTtsContextId();
-    if (!interruptedContextId) return;
+    if (!interruptedContextId) {
+      this.speakerEnrollmentContextId = pkt.contextId;
+      return;
+    }
 
     this.turnArbiter.onSpeechStarted(pkt, interruptedContextId);
   }
@@ -577,6 +588,10 @@ export class VoiceAgentSession {
       data: { context_id: pkt.contextId },
       timestampMs: pkt.timestampMs,
     });
+
+    if (this.speakerEnrollmentContextId === pkt.contextId) {
+      this.speakerEnrollmentContextId = null;
+    }
 
     this.turnArbiter.onSpeechEnded(pkt, Boolean(this.latestActiveTtsContextId()));
 

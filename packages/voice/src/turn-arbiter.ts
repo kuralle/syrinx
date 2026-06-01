@@ -178,8 +178,13 @@ export class TurnArbiter {
     metricName: string,
     durationMs: number,
   ): void {
-    this.turnInterruption = { kind: "idle" };
-    this.deps.primarySpeakerGate.resetBargeInWindow();
+    if (metricName === "interrupt.suppressed_non_primary") {
+      this.deps.primarySpeakerGate.beginBargeInWindow();
+      this.turnInterruption = { ...pending };
+    } else {
+      this.turnInterruption = { kind: "idle" };
+      this.deps.primarySpeakerGate.resetBargeInWindow();
+    }
     this.deps.bus.push(
       Route.Background,
       make.metric(pending.interruptedContextId, metricName, String(durationMs)),
