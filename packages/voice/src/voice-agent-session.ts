@@ -887,6 +887,7 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
+    this.latencyFiller.clear(pkt.contextId);
     if (!isRecoverable(pkt.category)) {
       // Fatal error — close session
       void this.close().catch(() => {
