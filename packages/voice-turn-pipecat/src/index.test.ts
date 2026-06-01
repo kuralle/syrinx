@@ -450,7 +450,7 @@ describe("PipecatEOSPlugin", () => {
       kind: "stt.interim",
       contextId: "turn-vad-first",
       timestampMs: Date.now(),
-      text: "Thanks that answers everything I needed to know today",
+      text: "Thanks, that answers everything I needed to know today.",
     });
     bus.push(Route.Main, {
       kind: "vad.speech_ended",
@@ -464,11 +464,113 @@ describe("PipecatEOSPlugin", () => {
       kind: "stt.result",
       contextId: "turn-vad-first",
       timestampMs: Date.now(),
-      text: "Thanks that answers everything I needed to know today",
+      text: "Thanks, that answers everything I needed to know today.",
       confidence: 0.95,
     });
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(completions).toHaveLength(1);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not shortcut low-confidence semantic partials before fallback", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.1]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 5,
+      semantic_shortcut_delay_ms: 5,
+      incomplete_fallback_ms: 80,
+      max_delay_ms: 0,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-weak-semantic",
+      timestampMs: Date.now(),
+      text: "I was wondering if I can still add biology",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-weak-semantic",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(completions).toEqual([]);
+
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(completions).toHaveLength(1);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("suppresses same-context duplicate completions while the assistant is still playing", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9, 0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 0 });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+      text: "Hi. I'm Maya Chen, and I can still add biology one oh one.",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(completions).toHaveLength(1);
+
+    bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+      text: "and what form I should submit.",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        contextId: "review-turn",
+        text: "Hi. I'm Maya Chen, and I can still add biology one oh one.",
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();

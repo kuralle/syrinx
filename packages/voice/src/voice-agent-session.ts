@@ -357,6 +357,10 @@ export class VoiceAgentSession {
     this.bus.push(Route.Main, make.modeSwitchRequested(this.currentTurnId, Date.now(), mode));
   }
 
+  requestClientInterrupt(contextId: string): void {
+    this.turnArbiter.commitClientInterrupt(contextId);
+  }
+
   // =========================================================================
   // Legacy Event Emitter (client-side consumers)
   // =========================================================================

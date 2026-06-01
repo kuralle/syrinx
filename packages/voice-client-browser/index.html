@@ -456,9 +456,11 @@
       const pendingAudioChunks = [];
       let recording = false;
       let activeTurn = null;
+      let currentAssistantTurnId = null;
       let audioSequence = 0;
       let pcmQueue = new Int16Array(0);
       let preSpeechQueue = new Int16Array(0);
+      let localSpeechActive = false;
       let meterPeak = 0;
       const turns = new Map();
       const startRmsThreshold = 0.012;
@@ -476,6 +478,10 @@
         receivedAssistantBytes: 0,
         assistantSampleRateHz: 0,
         audioClearEvents: 0,
+        localSpeechStartEvents: 0,
+        clientInterruptsSent: 0,
+        localSpeechStartFlushAtMs: 0,
+        serverAudioClearAtMs: 0,
         audioPlaybackErrors: 0,
         metricsEvents: 0,
         lastMetrics: null,
@@ -642,6 +648,9 @@
           updateLatency(turn);
         } else if (message.type === "audio_clear") {
           window.__syrinxReviewState.audioClearEvents += 1;
+          if (!window.__syrinxReviewState.serverAudioClearAtMs) {
+            window.__syrinxReviewState.serverAudioClearAtMs = performance.now();
+          }
           flushOutputAudio();
           turn.state.textContent = "interrupted";
           addEvent(`cleared assistant audio for ${turnId}`);
@@ -666,6 +675,7 @@
           turn.toolText += `result ${message.id || ""}\n`;
           turn.tools.textContent = turn.toolText.trim();
         } else if (message.type === "agent_chunk") {
+          currentAssistantTurnId = turnId;
           if (!turn.firstAgentAt) turn.firstAgentAt = Date.now();
           turn.agentText += message.text || "";
           turn.agent.textContent = turn.agentText;
@@ -674,6 +684,7 @@
         } else if (message.type === "agent_end") {
           turn.state.textContent = "tts";
         } else if (message.type === "tts_chunk") {
+          currentAssistantTurnId = turnId;
           pendingAudioChunks.push(message);
         } else if (message.type === "tts_end") {
           turn.state.textContent = "done";
@@ -693,6 +704,7 @@
         activeTurn = null;
         pcmQueue = new Int16Array(0);
         preSpeechQueue = new Int16Array(0);
+        localSpeechActive = false;
         mediaStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             deviceId: micSelect.value ? { exact: micSelect.value } : undefined,
@@ -713,10 +725,16 @@
           meterPeak = Math.max(meterPeak * 0.82, inputRms);
           const resampled = resampleFloat32(input, audioContext.sampleRate, targetRate);
           const pcm = floatToPcm16(resampled);
+          const speechNow = inputRms >= startRmsThreshold;
+          if (speechNow && !localSpeechActive) {
+            localSpeechActive = true;
+            handleLocalSpeechStart("local_vad_speech_start");
+          } else if (!speechNow) {
+            localSpeechActive = false;
+          }
           if (!activeTurn) {
             appendPreSpeech(pcm, targetRate);
-            if (inputRms < startRmsThreshold) return;
-            flushOutputAudio();
+            if (!speechNow) return;
             activeTurn = createCaptureTurn();
             activeTurn.state.textContent = "listening";
             queuePcm(preSpeechQueue, targetRate, activeTurn.id);
@@ -745,6 +763,7 @@
         mediaStream = null;
         audioContext = null;
         preSpeechQueue = new Int16Array(0);
+        localSpeechActive = false;
         if (activeTurn) {
           drainPcmQueue(activeTurn.id);
           activeTurn.audioEndedAt = Date.now();
@@ -754,6 +773,30 @@
         }
         talkBtn.classList.remove("recording");
         talkBtn.textContent = "Start Listening";
+      }
+
+      function handleLocalSpeechStart(reason = "local_vad_speech_start") {
+        if (!isAssistantPlayoutActive()) return;
+        window.__syrinxReviewState.localSpeechStartEvents += 1;
+        flushOutputAudio();
+        if (!window.__syrinxReviewState.localSpeechStartFlushAtMs) {
+          window.__syrinxReviewState.localSpeechStartFlushAtMs = performance.now();
+        }
+        sendClientInterrupt(reason);
+      }
+
+      function isAssistantPlayoutActive() {
+        return outputSources.size > 0 || pendingAudioChunks.length > 0;
+      }
+
+      function sendClientInterrupt(reason) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        window.__syrinxReviewState.clientInterruptsSent += 1;
+        socket.send(JSON.stringify({
+          type: "client_interrupt",
+          assistantContextId: currentAssistantTurnId || undefined,
+          reason,
+        }));
       }
 
       function createCaptureTurn() {
@@ -833,6 +876,7 @@
           const chunk = pendingAudioChunks.shift();
           const sampleRate = decoded.metadata?.sampleRateHz || chunk?.sampleRateHz || readSampleRate(outputRate.value, 16000);
           const turnId = decoded.metadata?.contextId || chunk?.turnId;
+          if (turnId) currentAssistantTurnId = turnId;
           const turn = turnId ? ensureTurn(turnId) : activeTurn;
           window.__syrinxReviewState.receivedAssistantAudioFrames += 1;
           window.__syrinxReviewState.receivedAssistantBytes += decoded.audio.byteLength;
@@ -941,6 +985,20 @@
         pendingAudioChunks.length = 0;
         if (outputContext) playbackAt = outputContext.currentTime;
       }
+
+      window.__syrinxReviewTriggerLocalSpeechStart = () => {
+        handleLocalSpeechStart("local_vad_speech_start");
+      };
+
+      window.__syrinxReviewInjectPcmFrame = () => {
+        if (!activeTurn) {
+          activeTurn = createCaptureTurn();
+          activeTurn.state.textContent = "listening";
+        }
+        const frame = new Int16Array(Math.round(readSampleRate(inputRate.value, 16000) * 0.02));
+        frame.fill(1200);
+        sendAudioFrame(activeTurn.id, frame);
+      };
 
       function floatToPcm16(samples) {
         const pcm = new Int16Array(samples.length);

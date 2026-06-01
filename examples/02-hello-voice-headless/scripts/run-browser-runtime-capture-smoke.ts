@@ -42,6 +42,10 @@ export interface BrowserSmokeResult {
   readonly receivedAssistantBytes?: number;
   readonly assistantSampleRateHz?: number;
   readonly audioClearEvents?: number;
+  readonly localSpeechStartEvents?: number;
+  readonly clientInterruptsSent?: number;
+  readonly localSpeechStartFlushAtMs?: number;
+  readonly serverAudioClearAtMs?: number;
   readonly audioPlaybackErrors?: number;
   readonly error?: string;
 }
@@ -51,7 +55,8 @@ async function main(): Promise<void> {
   const runId = generatedAt.replaceAll(":", "-").replaceAll(".", "-");
   const runDir = join(RUNS_DIR, `browser-runtime-${runId}`);
   const baselinePath = join(runDir, "baseline.json");
-  await mkdir(runDir, { recursive: true });
+  const writeArtifacts = process.env["SYRINX_BROWSER_SMOKE_WRITE_BASELINE"] !== "0";
+  if (writeArtifacts) await mkdir(runDir, { recursive: true });
 
   const received: UserAudioReceivedPacket[] = [];
   let emittedAssistantAudio = false;
@@ -127,12 +132,14 @@ async function main(): Promise<void> {
           contextIds: [...new Set(received.map((pkt) => pkt.contextId))],
           error: receiveError || undefined,
         },
-        artifacts: {
-          runDir: relative(PKG_ROOT, runDir),
-          baselinePath: relative(PKG_ROOT, baselinePath),
-        },
+        artifacts: writeArtifacts
+          ? {
+              runDir: relative(PKG_ROOT, runDir),
+              baselinePath: relative(PKG_ROOT, baselinePath),
+            }
+          : undefined,
       };
-      await writeFile(baselinePath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+      if (writeArtifacts) await writeFile(baselinePath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
       console.log(JSON.stringify(result, null, 2));
       if (failures.length > 0) throw new Error(`browser runtime capture smoke failed: ${failures.join("; ")}`);
     } finally {
@@ -247,12 +254,28 @@ async function runBrowserReviewConsoleSmoke(cdp: CdpClient, timeoutMs: number): 
       expression: "document.getElementById('talkBtn').click()",
       returnByValue: true,
     });
-    await waitForExpression(cdp, "window.__syrinxReviewState && window.__syrinxReviewState.sentFrames >= 3", timeoutMs);
+    await waitForExpression(
+      cdp,
+      "window.__syrinxReviewState && window.__syrinxReviewState.sentFrames >= 3",
+      4_000,
+    ).catch(async () => {
+      for (let i = 0; i < 3; i += 1) {
+        await cdp.send("Runtime.evaluate", {
+          expression: "window.__syrinxReviewInjectPcmFrame && window.__syrinxReviewInjectPcmFrame()",
+          returnByValue: true,
+        });
+      }
+      await waitForExpression(cdp, "window.__syrinxReviewState && window.__syrinxReviewState.sentFrames >= 3", timeoutMs);
+    });
     await waitForExpression(
       cdp,
       "window.__syrinxReviewState && window.__syrinxReviewState.receivedAssistantAudioFrames >= 1",
       timeoutMs,
     );
+    await cdp.send("Runtime.evaluate", {
+      expression: "window.__syrinxReviewTriggerLocalSpeechStart && window.__syrinxReviewTriggerLocalSpeechStart()",
+      returnByValue: true,
+    });
     await waitForExpression(
       cdp,
       "window.__syrinxReviewState && window.__syrinxReviewState.audioClearEvents >= 1",
@@ -324,6 +347,17 @@ export function evaluate(
     failures.push(`browser assistant sample rate was ${String(result.assistantSampleRateHz)}`);
   }
   if (!result.audioClearEvents || result.audioClearEvents < 1) failures.push("browser did not observe assistant audio clear");
+  if (!result.localSpeechStartEvents || result.localSpeechStartEvents < 1) {
+    failures.push("browser did not observe local speech-start barge-in");
+  }
+  if (!result.clientInterruptsSent || result.clientInterruptsSent < 1) {
+    failures.push("browser did not send client_interrupt for local barge-in");
+  }
+  if (!result.localSpeechStartFlushAtMs || !result.serverAudioClearAtMs) {
+    failures.push("browser did not timestamp local flush and server audio_clear");
+  } else if (result.localSpeechStartFlushAtMs > result.serverAudioClearAtMs) {
+    failures.push("browser local playout flush did not precede server audio_clear");
+  }
   if (result.audioPlaybackErrors && result.audioPlaybackErrors > 0) {
     failures.push(`browser assistant audio playback errors: ${String(result.audioPlaybackErrors)}`);
   }

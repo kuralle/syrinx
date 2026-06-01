@@ -101,6 +101,16 @@ export class TurnArbiter {
     this.deps.bus.push(Route.Critical, make.interruptDetected(interruptedContextId, Date.now(), "vad"));
   }
 
+  commitClientInterrupt(interruptedContextId: string): void {
+    if (!this.deps.ttsPlayout.isActive(interruptedContextId)) return;
+    this.turnInterruption = { kind: "idle" };
+    this.deps.primarySpeakerGate.resetBargeInWindow();
+    this.deps.bus.push(Route.Background, make.metric(interruptedContextId, "interrupt.committed_after_ms", "0"));
+    this.deps.bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
+    this.deps.bus.push(Route.Background, make.metric(interruptedContextId, "interrupt.latency_ms", "0"));
+    this.deps.bus.push(Route.Critical, make.interruptDetected(interruptedContextId, Date.now(), "client"));
+  }
+
   clear(): void {
     this.turnInterruption = { kind: "idle" };
   }
