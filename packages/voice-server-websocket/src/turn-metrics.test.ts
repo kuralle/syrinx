@@ -69,10 +69,15 @@ describe("turn metrics", () => {
       sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
+      kind: "tts.playout_started",
+      contextId: "turn-correlation",
+      timestampMs: 1100,
+    });
+    session.bus.push(Route.Main, {
       kind: "tts.playout_progress",
       contextId: "turn-correlation",
       timestampMs: 1300,
-      playedOutMs: 20,
+      playedOutMs: 200,
       complete: false,
     });
     session.bus.push(Route.Main, {
@@ -91,7 +96,43 @@ describe("turn metrics", () => {
       sttMs: 200,
       llmTTFTMs: 200,
       ttsTTFBMs: 200,
-      e2eMs: 800,
+      e2eMs: 600,
+    });
+
+    for (const dispose of disposers) dispose();
+    await session.close();
+  });
+
+  it("records firstAudioPlayedMs from playout_started, not throttled progress", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const emitted: unknown[] = [];
+    const tracker = new TurnMetricsTracker(session.bus, (message) => emitted.push(message));
+    const disposers: Array<() => void> = [];
+    tracker.wire(disposers);
+    void session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-throttle",
+      timestampMs: 1000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_started",
+      contextId: "turn-throttle",
+      timestampMs: 1100,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-throttle",
+      timestampMs: 1300,
+      playedOutMs: 200,
+      complete: true,
+    });
+
+    await waitForCondition(() => emitted.length === 1);
+    expect(emitted[0]).toMatchObject({
+      firstAudioPlayedMs: 1100,
+      e2eMs: 100,
     });
 
     for (const dispose of disposers) dispose();
@@ -132,10 +173,15 @@ describe("turn metrics", () => {
       sampleRateHz: 16000,
     });
     session.bus.push(Route.Main, {
+      kind: "tts.playout_started",
+      contextId: "turn-live",
+      timestampMs: 10_600,
+    });
+    session.bus.push(Route.Main, {
       kind: "tts.playout_progress",
       contextId: "turn-live",
       timestampMs: 10_800,
-      playedOutMs: 20,
+      playedOutMs: 200,
       complete: false,
     });
     session.bus.push(Route.Main, {
@@ -154,7 +200,7 @@ describe("turn metrics", () => {
       sttMs: 200,
       llmTTFTMs: 250,
       ttsTTFBMs: 150,
-      e2eMs: 800,
+      e2eMs: 600,
     });
 
     for (const dispose of disposers) dispose();

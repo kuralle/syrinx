@@ -31,6 +31,7 @@ describe("browser jitter smoke gate", () => {
       browser: passingBrowser(),
       networkProfile: "jittery",
       proxyMaxUplinkGapMs: 60,
+      proxyMaxDownlinkGapMs: 60,
     })).toStrictEqual([]);
   });
 
@@ -39,6 +40,7 @@ describe("browser jitter smoke gate", () => {
       browser: passingBrowser({ metricsEvents: 0, lastMetrics: undefined }),
       networkProfile: "jittery",
       proxyMaxUplinkGapMs: 60,
+      proxyMaxDownlinkGapMs: 60,
     });
     expect(failures).toContain("browser did not receive metrics events");
     expect(failures).toContain("metrics missing turn correlation id");

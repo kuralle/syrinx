@@ -20,11 +20,20 @@ const PROGRESS_THROTTLE_MS = 200;
 export class PlayoutProgressEmitter {
   private readonly playedOutMs = new Map<string, number>();
   private readonly lastEmittedMs = new Map<string, number>();
+  private readonly playoutStarted = new Set<string>();
 
   constructor(private readonly bus: PipelineBus) {}
 
   onFramePlayed = (contextId: string | undefined, durationMs: number): void => {
-    if (contextId === undefined) return;
+    if (contextId === undefined || durationMs <= 0) return;
+    if (!this.playoutStarted.has(contextId)) {
+      this.playoutStarted.add(contextId);
+      this.bus.push(Route.Main, {
+        kind: "tts.playout_started",
+        contextId,
+        timestampMs: Date.now(),
+      });
+    }
     const total = (this.playedOutMs.get(contextId) ?? 0) + durationMs;
     this.playedOutMs.set(contextId, total);
     const lastEmitted = this.lastEmittedMs.get(contextId) ?? 0;
@@ -43,6 +52,7 @@ export class PlayoutProgressEmitter {
   discard(contextId: string): void {
     this.playedOutMs.delete(contextId);
     this.lastEmittedMs.delete(contextId);
+    this.playoutStarted.delete(contextId);
   }
 
   private emit(contextId: string, playedOutMs: number, complete: boolean): void {
