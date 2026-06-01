@@ -1,0 +1,33 @@
+# Browser voice studio — spike deploy. NOT always-on: the machine auto-stops when
+# idle and auto-starts on the next request (cold start on first visit), so it costs
+# nothing while unused. One smallest machine, no database. Provider keys are set via
+# `fly secrets`, never committed here.
+app = "syrinx-studio-mcj"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile.studio-spike"
+
+[http_service]
+  internal_port = 4180
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "20s"
+    method = "get"
+    path = "/healthz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024
