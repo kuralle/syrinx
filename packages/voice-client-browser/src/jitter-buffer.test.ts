@@ -132,6 +132,42 @@ describe("AudioJitterBuffer", () => {
     expect(jitterBuffer.activeContextIds).toHaveLength(1);
   });
 
+  it("resets schedule baseline after context-specific clear", () => {
+    const frameData = new Int16Array(320);
+    frameData.fill(1000);
+
+    mockContext.currentTime = 1.0;
+    for (let i = 0; i < 50; i += 1) {
+      jitterBuffer.enqueue(frameData.buffer, "assistant");
+    }
+    expect(jitterBuffer.bufferedDurationMs).toBeGreaterThan(1000);
+
+    jitterBuffer.clear("assistant");
+    expect(jitterBuffer.bufferedDurationMs).toBe(0);
+
+    mockContext.currentTime = 1.05;
+    jitterBuffer.enqueue(frameData.buffer, "user-barge");
+    expect(jitterBuffer.bufferedDurationMs).toBeCloseTo(120, -1);
+  });
+
+  it("zeros buffered duration when the cleared context was the only one scheduled", () => {
+    const frameData = new Int16Array(320);
+    frameData.fill(1000);
+
+    mockContext.currentTime = 2.0;
+    jitterBuffer.enqueue(frameData.buffer, "solo-context");
+    jitterBuffer.enqueue(frameData.buffer, "solo-context");
+    expect(jitterBuffer.bufferedDurationMs).toBeGreaterThan(0);
+
+    jitterBuffer.clear("solo-context");
+    expect(jitterBuffer.activeContextIds).toHaveLength(0);
+    expect(jitterBuffer.bufferedDurationMs).toBe(0);
+
+    mockContext.currentTime = 8.0;
+    jitterBuffer.enqueue(frameData.buffer, "next-context");
+    expect(jitterBuffer.bufferedDurationMs).toBeCloseTo(120, -1);
+  });
+
   it("clears all frames on global clear", () => {
     const frameData = new Int16Array(320);
     frameData.fill(1000);
