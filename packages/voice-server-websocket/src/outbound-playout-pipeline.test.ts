@@ -7,16 +7,28 @@ import { Route, VoiceAgentSession } from "@asyncdot/voice";
 import { pcm16SamplesToBytes } from "@asyncdot/voice/audio";
 import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
 
-function createMockSocket(): WebSocket & EventEmitter {
+function createMockSocket(): WebSocket {
   const emitter = new EventEmitter();
-  const socket = emitter as WebSocket & EventEmitter;
-  socket.readyState = WebSocket.OPEN;
-  socket.close = () => {
-    socket.readyState = WebSocket.CLOSED;
-    emitter.emit("close");
-  };
-  socket.terminate = socket.close;
-  return socket;
+  let readyState: number = WebSocket.OPEN;
+  return {
+    get readyState() {
+      return readyState;
+    },
+    close: () => {
+      readyState = WebSocket.CLOSED;
+      emitter.emit("close");
+    },
+    terminate: () => {
+      readyState = WebSocket.CLOSED;
+      emitter.emit("close");
+    },
+    once: (event: string, handler: () => void) => {
+      emitter.once(event, handler);
+    },
+    off: (event: string, handler: () => void) => {
+      emitter.off(event, handler);
+    },
+  } as WebSocket;
 }
 
 function wireTestPipeline(socket: WebSocket): {
@@ -43,6 +55,7 @@ function wireTestPipeline(socket: WebSocket): {
       }],
       onInterrupt: () => undefined,
       onDrain: () => undefined,
+      onStop: () => undefined,
     },
   });
   return { session, handle, disposers };

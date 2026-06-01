@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PipelineBusImpl,
   Route,
@@ -30,6 +30,10 @@ function startBus(bus: PipelineBusImpl): Promise<void> {
 }
 
 describe("PipecatEOSPlugin", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("emits interim EOS packets from interim transcripts", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
@@ -366,6 +370,96 @@ describe("PipecatEOSPlugin", () => {
         text: "What are your office hours?",
       }),
     ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("honors semantic shortcut delay when VAD ends before the STT final", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.1]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 250,
+      semantic_shortcut_delay_ms: 50,
+      incomplete_fallback_ms: 2000,
+      max_delay_ms: 0,
+    });
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-vad-first",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "turn-vad-first",
+      timestampMs: Date.now(),
+      text: "Thanks that answers everything I needed to know today",
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-vad-first",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(completions).toEqual([]);
+
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-vad-first",
+      timestampMs: Date.now(),
+      text: "Thanks that answers everything I needed to know today",
+      confidence: 0.95,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(completions).toHaveLength(1);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("finalizes immediately when semantic defer expires still incomplete", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 250,
+      semantic_defer_fallback_ms: 40,
+      incomplete_fallback_ms: 2000,
+      max_delay_ms: 0,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-defer",
+      timestampMs: Date.now(),
+      text: "I need to know",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-defer",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(completions).toEqual([]);
+
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    expect(completions).toHaveLength(1);
 
     await plugin.close();
     bus.stop();
