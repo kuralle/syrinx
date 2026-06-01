@@ -128,24 +128,30 @@ export function wireTelephonyOutboundPipeline(args: {
       }
       return new Promise<void>((resolve) => {
         let settled = false;
+        let deadlineTimer: ReturnType<typeof setTimeout>;
         const settle = () => {
           if (settled) return;
           settled = true;
+          clearTimeout(deadlineTimer);
+          socket.off("close", onSocketClose);
           resolve();
         };
 
-        const deadlineTimer = setTimeout(() => {
+        const onSocketClose = (): void => {
+          settle();
+        };
+
+        deadlineTimer = setTimeout(() => {
           if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
             socket.terminate();
           }
           settle();
         }, Math.max(0, deadlineMs - Date.now()));
         (deadlineTimer as NodeJS.Timeout).unref?.();
+        socket.once("close", onSocketClose);
 
-        // enqueueControl fires synchronously if queue is idle, or after all
-        // queued audio frames if not — either way closes with 1001 before terminate.
+        // enqueueControl may run synchronously when the queue is idle — register timers first.
         playout.enqueueControl(() => {
-          clearTimeout(deadlineTimer);
           closeWebSocketWithFallback(socket, 1001, "server going away");
           settle();
         });

@@ -24,6 +24,27 @@ export function closeWebSocketWithFallback(
   });
 }
 
+export function waitForWebSocketClose(socket: WebSocket, fallbackMs: number): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+        socket.terminate();
+      }
+      settle();
+    }, fallbackMs);
+    timer.unref?.();
+    socket.once("close", settle);
+  });
+}
+
 /**
  * Serialize `value` to JSON and send it, enforcing the per-socket send-buffer
  * cap. Returns false (and sends nothing) if the socket is not OPEN. If the send

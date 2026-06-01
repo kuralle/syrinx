@@ -30,7 +30,7 @@ import {
   decodeBrowserOpusToPcm16Bytes,
   type BrowserOpusCodec,
 } from "./browser-opus.js";
-import { closeWebSocketWithFallback } from "./websocket-close.js";
+import { closeWebSocketWithFallback, waitForWebSocketClose } from "./websocket-close.js";
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
@@ -361,9 +361,9 @@ export async function createVoiceWebSocketServer(
         await Promise.allSettled(
           [...gracefulCloseRegistry.values()].map((fn) => fn(deadline)),
         );
-        for (const client of wsServer.clients) {
-          if (client.readyState === WebSocket.OPEN) client.terminate();
-        }
+        await Promise.allSettled(
+          [...wsServer.clients].map((client) => waitForWebSocketClose(client, 250)),
+        );
       } else {
         for (const client of wsServer.clients) client.terminate();
       }
