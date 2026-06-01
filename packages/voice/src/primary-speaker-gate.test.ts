@@ -136,4 +136,15 @@ describe("PrimarySpeakerGate", () => {
     }
     expect(gate.shouldCommitBargeIn()).toBe(true);
   });
+
+  it("mixes PCM chunks whose byteOffset is odd", () => {
+    const primary = synthesizeTonePcm16({ frequencyHz: PRIMARY_SPEAKER_TONE_HZ, durationMs: 32 });
+    const backing = new Uint8Array(primary.byteLength + 1);
+    backing.set(primary, 1);
+    const oddOffsetPrimary = backing.subarray(1);
+    expect(oddOffsetPrimary.byteOffset % 2).toBe(1);
+
+    expect(() => mixPcm16([oddOffsetPrimary], [1])).not.toThrow();
+    expect(mixPcm16([oddOffsetPrimary], [1])).toEqual(primary);
+  });
 });
