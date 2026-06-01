@@ -1473,6 +1473,48 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("sends PCM downlink after client reports pcm codec capability", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      outputSampleRateHz: 16000,
+      createSession: () => session,
+      contextId: () => "turn-test",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    client.send(JSON.stringify({ type: "codec_capability", downlinkEncoding: "pcm_s16le" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const binaryMessage = new Promise<Buffer>((resolve) => {
+      client.on("message", (data, isBinary) => {
+        if (isBinary) resolve(data as Buffer);
+      });
+    });
+
+    const pcmFrame = new Uint8Array(640);
+    pcmFrame.set([1, 2, 3, 4]);
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-tts",
+      timestampMs: Date.now(),
+      audio: pcmFrame,
+      sampleRateHz: 16000,
+    });
+
+    const envelope = decodeTestBinaryAudioEnvelope(await binaryMessage);
+    expect(envelope.header).toMatchObject({
+      encoding: "pcm_s16le",
+      sampleRateHz: 16000,
+    });
+    expect(envelope.audio.byteLength).toBe(640);
+
+    client.close();
+    await server.close();
+  });
+
   it("wraps outgoing assistant audio in the binary audio envelope by default", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = registerServer(await createVoiceWebSocketServer({

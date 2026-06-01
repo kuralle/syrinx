@@ -123,7 +123,9 @@ export function decodeBrowserAssistantAudio(
   }
   const envelope = decodeSyrinxAudioEnvelope(bytes);
   if (envelope.header.encoding === "opus") {
-    if (!opusCodec) throw new Error("Opus downlink requires a loaded browser Opus codec");
+    if (!opusCodec) {
+      return { data: new ArrayBuffer(0), metadata: envelope.header };
+    }
     const wireRate = envelope.header.sampleRateHz;
     const decoded = opusCodec.decodeOpusFrame(envelope.audio);
     const pcm = pcm16SamplesToBytes(decoded);

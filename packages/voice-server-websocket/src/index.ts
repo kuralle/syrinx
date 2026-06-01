@@ -110,6 +110,7 @@ type ClientMessage =
       readonly sampleRateHz: number;
       readonly sequence?: number;
     }
+  | { readonly type: "codec_capability"; readonly downlinkEncoding: "pcm_s16le" | "opus" }
   | { readonly type: "ping" };
 
 interface BrowserConnectionState {
@@ -117,6 +118,7 @@ interface BrowserConnectionState {
   readonly initialContextId: string;
   outboundHandle: TelephonyOutboundHandle | null;
   opusCodec: BrowserOpusCodec | null;
+  browserOpusDownlink: boolean;
 }
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -165,6 +167,7 @@ export async function createVoiceWebSocketServer(
       initialContextId: contextIdFn(),
       outboundHandle: null,
       opusCodec: null,
+      browserOpusDownlink: browserOpusDownlink,
     }),
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
@@ -208,7 +211,7 @@ export async function createVoiceWebSocketServer(
         maxQueuedOutputAudioMs,
         state.opusCodec,
         inputSampleRateHz,
-        browserOpusDownlink,
+        () => state.browserOpusDownlink,
       );
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
@@ -250,6 +253,7 @@ export async function createVoiceWebSocketServer(
         managed.inputSequence,
         state.opusCodec,
         inputSampleRateHz,
+        state,
       );
       managed.currentContextId = nextContextId;
     },
@@ -381,7 +385,7 @@ function wireBrowserSessionEvents(
   maxQueuedOutputAudioMs: number,
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
-  browserOpusDownlink: boolean,
+  getBrowserOpusDownlink: () => boolean,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
   let currentContextId = "";
@@ -477,7 +481,7 @@ function wireBrowserSessionEvents(
         });
       };
 
-      if (binaryAudioEnvelope && opusCodec && browserOpusDownlink) {
+      if (binaryAudioEnvelope && opusCodec && getBrowserOpusDownlink()) {
         for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
           const framePcm = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
           let samples = pcm16BytesToSamples(framePcm);
@@ -561,6 +565,7 @@ function handleClientMessage(
   inputSequence: AudioSequenceState,
   opusCodec: BrowserOpusCodec | null,
   engineInputSampleRateHz: number,
+  state: BrowserConnectionState,
 ): string {
   if (isBinary) {
     const binaryAudio = decodeBinaryAudioMessage(
@@ -588,6 +593,10 @@ function handleClientMessage(
 
   const message = parseClientMessage(parseJsonRecord(rawDataToText(data), "Websocket JSON message"));
   if (message.type === "ping") return currentContextId;
+  if (message.type === "codec_capability") {
+    state.browserOpusDownlink = message.downlinkEncoding === "opus";
+    return currentContextId;
+  }
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
     if (nextContextId !== currentContextId) {
@@ -639,6 +648,13 @@ function parseClientMessage(value: unknown): ClientMessage {
       sampleRateHz: requiredJsonAudioSampleRate(value.sampleRateHz),
       sequence: optionalSequence(value.sequence),
     };
+  }
+  if (type === "codec_capability") {
+    const downlinkEncoding = value.downlinkEncoding;
+    if (downlinkEncoding !== "pcm_s16le" && downlinkEncoding !== "opus") {
+      throw new Error("codec_capability.downlinkEncoding must be pcm_s16le or opus");
+    }
+    return { type, downlinkEncoding };
   }
   throw new Error("Unsupported client message type");
 }
