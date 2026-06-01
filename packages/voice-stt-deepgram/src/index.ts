@@ -46,6 +46,12 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private finalizeOnSpeechFinal: boolean = true;
   private emitEosOnFinal: boolean = true;
   private providerFinalizeTimeoutMs: number = 1200;
+  // Consecutive unconfirmed Finalize timeouts that force a connection reset. A single
+  // slow finalize discards its turn but keeps the (healthy) socket; only repeated
+  // failures with no confirmed final between them look like a wedged stream worth
+  // reconnecting. Prevents one slow finalize from cascading into the next turns.
+  private finalizeResetThreshold: number = 2;
+  private consecutiveFinalizeTimeouts = 0;
   private keepAliveIntervalMs: number = 3000;
 
   // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
@@ -88,6 +94,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
     this.providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
+    this.finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
 
     // One session-long socket, managed (reconnect + KeepAlive) by WebSocketConnection.
@@ -284,7 +291,15 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       contextId,
       new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"),
     );
-    this.conn?.reset();
+    // A single slow finalize is not a wedged stream: keep the healthy socket so the
+    // next turn streams normally instead of stalling on a reconnect (which loses
+    // Deepgram-side context and cascades into more timeouts). Only reconnect once the
+    // failures repeat without a confirmed final between them (counter cleared in pushFinal).
+    this.consecutiveFinalizeTimeouts += 1;
+    if (this.consecutiveFinalizeTimeouts >= this.finalizeResetThreshold) {
+      this.consecutiveFinalizeTimeouts = 0;
+      this.conn?.reset();
+    }
   }
 
   private discardUnconfirmedTurn(contextId: string): void {
@@ -313,6 +328,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.finalizeRequestedContextIds.delete(ctxId);
     this.clearProviderFinalizeTimer(ctxId);
     this.finalizedContextIds.add(ctxId);
+    this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
     this.pushResult(transcript, confidence, ctxId);
 

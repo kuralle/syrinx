@@ -132,7 +132,7 @@ function createPluginConfig(
       smart_format: true,
       finalize_on_speech_final: false,
       emit_eos_on_final: false,
-      provider_finalize_timeout_ms: 1500,
+      provider_finalize_timeout_ms: interactive ? 3000 : 1500,
     },
     vad: {
       sample_rate: options.inputSampleRate,
