@@ -133,6 +133,9 @@ function createPluginConfig(
       finalize_on_speech_final: false,
       emit_eos_on_final: false,
       provider_finalize_timeout_ms: interactive ? 3000 : 1500,
+      // Live conversation: if the provider never confirms the Finalize, reply on the
+      // buffered transcript instead of dropping the caller's turn.
+      finalize_timeout_fallback: true,
     },
     vad: {
       sample_rate: options.inputSampleRate,

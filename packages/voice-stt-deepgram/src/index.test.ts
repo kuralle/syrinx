@@ -786,4 +786,53 @@ describe("DeepgramSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("completes a timed-out turn from buffered text when finalize_timeout_fallback is on", async () => {
+    // Provider sends a confirmed is_final segment but never speech_final/from_finalize, so the
+    // turn would normally time out and be dropped. With the fallback on it must still emit an
+    // stt.result (which drives the turn plugin → LLM) instead of a "Finalize timed out" error.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (_data, isBinary) => {
+        if (!isBinary) return; // swallow Finalize → provider never confirms
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: "buffered text", confidence: 0.82 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
+    bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 10,
+      finalize_timeout_fallback: true,
+    });
+
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-timeout-fallback", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-timeout-fallback");
+    await waitFor(finals);
+
+    expect(finals).toEqual([
+      expect.objectContaining({ kind: "stt.result", contextId: "turn-timeout-fallback", text: "buffered text" }),
+    ]);
+    expect(
+      errors.filter((e) => String((e.cause as Error | undefined)?.message ?? "").includes("Finalize timed out")),
+    ).toHaveLength(0);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
 });
