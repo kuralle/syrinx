@@ -723,4 +723,67 @@ describe("DeepgramSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("clears the consecutive-timeout counter across a real socket reconnect", async () => {
+    // A timeout (counter->1) followed by an unrelated socket-close reconnect must not leave
+    // the count stale: a single timeout after reconnecting should NOT force another reset.
+    const connections: WebSocket[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      connections.push(socket);
+      socket.on("message", (_data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: "unconfirmed", confidence: 0.8 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const timeoutErrors: SttErrorPacket[] = [];
+    bus.on("stt.error", (pkt) => {
+      const p = pkt as SttErrorPacket;
+      if (String((p.cause as Error | undefined)?.message ?? "").includes("Finalize timed out")) {
+        timeoutErrors.push(p);
+      }
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      provider_finalize_timeout_ms: 10,
+      finalize_reset_threshold: 2,
+    });
+
+    // Turn 1: one finalize timeout → counter 1 (below threshold, no reset yet).
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-before-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-before-reconnect");
+    await waitFor(timeoutErrors, 1);
+    expect(connections).toHaveLength(1);
+
+    // An unrelated socket-close reconnect happens.
+    connections[0]!.close(1011, "NET-0000");
+    await waitFor(connections, 2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Turn 2: a single post-reconnect timeout must NOT reconnect again — the counter was
+    // cleared on the reconnect, so it is 1 (< threshold 2), not a stale 2.
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-after-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-after-reconnect");
+    await waitFor(timeoutErrors, 2);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Would be 3 without clearing the counter on reconnect.
+    expect(connections).toHaveLength(2);
+    expect(connections[1]?.readyState).toBe(connections[1]?.OPEN);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
 });

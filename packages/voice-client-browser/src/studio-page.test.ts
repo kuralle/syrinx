@@ -20,4 +20,12 @@ describe("studio index.html downlink codec negotiation", () => {
     expect(open).toMatch(/"codec_capability"/);
     expect(open).toMatch(/downlinkEncoding:\s*"pcm_s16le"/);
   });
+
+  it("rejects a non-pcm_s16le downlink encoding loudly instead of failing as cryptic PCM", () => {
+    // If the server ever sends a non-PCM envelope (codec negotiation failure), the decoder
+    // must branch on metadata.encoding and surface a clear error — not the misleading
+    // "PCM16 payload must contain an even number of bytes" the byte invariants would throw.
+    const decode = html.slice(html.indexOf("function decodeAssistantAudio"), html.indexOf("function hasPrefix"));
+    expect(decode).toMatch(/metadata\.encoding\s*&&\s*metadata\.encoding\s*!==\s*"pcm_s16le"/);
+  });
 });
