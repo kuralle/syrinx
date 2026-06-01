@@ -309,6 +309,9 @@ export class SyrinxBrowserClient {
 
   private handleTransportClose(code: number, reason: string): void {
     this.stopKeepalive();
+    if (!this.cleanClose) {
+      this.jitterBuffer?.clear();
+    }
     if (this.cleanClose) {
       this.emit({ type: "close", code, reason });
       return;

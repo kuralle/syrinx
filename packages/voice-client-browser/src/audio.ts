@@ -236,7 +236,6 @@ export class AudioJitterBuffer {
 
   clear(contextId?: string): void {
     if (contextId) {
-      // Clear only frames for the specific context
       for (const frame of this.scheduledFrames) {
         if (frame.contextId === contextId) {
           if (frame.source) {
@@ -250,6 +249,7 @@ export class AudioJitterBuffer {
         }
       }
       this.contextIds.delete(contextId);
+      this.recomputeNextScheduledTime();
     } else {
       // Clear all frames
       for (const frame of this.scheduledFrames) {
@@ -275,5 +275,18 @@ export class AudioJitterBuffer {
 
   get activeContextIds(): readonly string[] {
     return [...this.contextIds];
+  }
+
+  private recomputeNextScheduledTime(): void {
+    if (this.scheduledFrames.size === 0) {
+      this.nextScheduledTime = 0;
+      return;
+    }
+    let maxEnd = 0;
+    for (const frame of this.scheduledFrames) {
+      const end = frame.scheduledTime + frame.buffer.duration;
+      if (end > maxEnd) maxEnd = end;
+    }
+    this.nextScheduledTime = maxEnd;
   }
 }
