@@ -105,7 +105,7 @@ export class PacedPlayoutQueue {
     if (frame.durationMs > 0) this.onFramePlayed(frame.contextId, frame.durationMs);
     this.pumping = false;
     if (this.frames.length > 0) {
-      this.nextDeadlineMs += this.frameDurationMs;
+      this.nextDeadlineMs += frame.durationMs;
       const delay = Math.max(0, this.nextDeadlineMs - Date.now());
       this.timer = setTimeout(() => this.pump(), delay);
     } else {
