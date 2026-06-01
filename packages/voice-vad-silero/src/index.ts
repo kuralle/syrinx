@@ -22,6 +22,7 @@ import {
   isRecoverable,
   optionalStringConfig,
 } from "@asyncdot/voice";
+import { pcm16BytesToSamples } from "@asyncdot/voice/audio";
 
 type Ort = typeof import("onnxruntime-node");
 type InferenceSession = import("onnxruntime-node").InferenceSession;
@@ -81,7 +82,11 @@ export class SileroVADPlugin implements VoicePlugin {
       return;
     }
 
-    const samples = new Int16Array(audio.buffer, audio.byteOffset, audio.byteLength / 2);
+    // Offset-safe: inbound PCM is often a Uint8Array view into a pooled Node
+    // Buffer at an ODD byteOffset, so `new Int16Array(buffer, byteOffset, …)`
+    // throws "start offset of Int16Array should be a multiple of 2". The canonical
+    // helper reads via DataView and is offset-agnostic.
+    const samples = pcm16BytesToSamples(audio);
     for (let i = 0; i < samples.length; i += 1) {
       this.pendingSamples.push(samples[i]! / 32768);
     }

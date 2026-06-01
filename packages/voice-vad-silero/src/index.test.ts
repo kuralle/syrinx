@@ -148,3 +148,29 @@ describe("SileroVADPlugin — G11: periodic state reset gating", () => {
     await plugin.close();
   });
 });
+
+describe("SileroVADPlugin — odd byteOffset PCM (browser buffer alignment)", () => {
+  beforeEach(() => {
+    mockControl.confidence = 0.9;
+    mockControl.stateCallArgs.length = 0;
+  });
+
+  it("processes a PCM frame whose byteOffset is odd without throwing", async () => {
+    const { bus, emitted } = makeBus();
+    const plugin = await initPlugin(bus);
+
+    // Inbound browser PCM is frequently a Uint8Array view into a pooled Node
+    // Buffer at an ODD byteOffset. `new Int16Array(buffer, oddOffset, …)` throws
+    // "start offset of Int16Array should be a multiple of 2" — this reproduces it.
+    const backing = new Uint8Array(512 * 2 + 1);
+    const oddOffsetFrame = backing.subarray(1); // byteOffset 1 (odd), even length
+    expect(oddOffsetFrame.byteOffset % 2).toBe(1);
+
+    await expect(plugin.processAudio(oddOffsetFrame, "ctx-odd")).resolves.toBeUndefined();
+    expect(emitted.some((p) => p.kind === "vad.error")).toBe(false);
+    // Reached the model and emitted a VAD verdict — proof the frame was processed.
+    expect(emitted.some((p) => p.kind === "vad.speech_started")).toBe(true);
+
+    await plugin.close();
+  });
+});
