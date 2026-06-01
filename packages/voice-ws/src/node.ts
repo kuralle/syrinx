@@ -9,6 +9,21 @@ import type { ManagedSocket, SocketData, SocketFactory } from "./index.js";
 
 export const createNodeWsSocket: SocketFactory = (url, headers): ManagedSocket => {
   const ws = new WebSocket(url, Object.keys(headers).length > 0 ? { headers } : undefined);
+  let verifyTimer: ReturnType<typeof setTimeout> | null = null;
+  let verifyOnPong: (() => void) | null = null;
+  let verifyResolve: ((value: boolean) => void) | null = null;
+
+  const clearVerify = (result?: boolean): void => {
+    if (verifyTimer) clearTimeout(verifyTimer);
+    if (verifyOnPong) ws.off("pong", verifyOnPong);
+    verifyTimer = null;
+    verifyOnPong = null;
+    if (verifyResolve) {
+      verifyResolve(result ?? false);
+      verifyResolve = null;
+    }
+  };
+
   return {
     get isOpen(): boolean {
       return ws.readyState === ws.OPEN;
@@ -23,28 +38,28 @@ export const createNodeWsSocket: SocketFactory = (url, headers): ManagedSocket =
     },
     verify: (timeoutMs: number) =>
       new Promise<boolean>((resolve) => {
+        clearVerify(false);
         if (ws.readyState !== ws.OPEN) {
           resolve(false);
           return;
         }
+        verifyResolve = resolve;
         const onPong = (): void => {
-          clearTimeout(timer);
-          resolve(true);
+          clearVerify(true);
         };
-        const timer = setTimeout(() => {
-          ws.off("pong", onPong);
-          resolve(false);
+        verifyOnPong = onPong;
+        verifyTimer = setTimeout(() => {
+          clearVerify(false);
         }, timeoutMs);
         ws.once("pong", onPong);
         try {
           ws.ping();
         } catch {
-          clearTimeout(timer);
-          ws.off("pong", onPong);
-          resolve(false);
+          clearVerify(false);
         }
       }),
     dispose: () => {
+      clearVerify(false);
       ws.removeAllListeners();
       // Closing a socket that is still CONNECTING makes `ws` emit an asynchronous
       // 'error' event ("WebSocket was closed before the connection was established").

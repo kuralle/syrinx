@@ -8,6 +8,7 @@
 // slow provider connect (surfaced live via the Cartesia TTS plugin teardown).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer, type WebSocket } from "ws";
 import { createNodeWsSocket } from "./node.js";
 
 describe("createNodeWsSocket dispose while connecting", () => {
@@ -33,5 +34,35 @@ describe("createNodeWsSocket dispose while connecting", () => {
       process.off("uncaughtException", onUncaught);
     }
     expect(uncaught).toEqual([]);
+  });
+
+  it("clears the verify timeout when disposed during verify", async () => {
+    vi.useFakeTimers();
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let next: WebSocketServer;
+      next = new WebSocketServer({ port: 0 }, () => resolve(next));
+    });
+    server.on("connection", (ws) => {
+      ws.on("ping", () => undefined);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+
+    const socket = await createNodeWsSocket(`ws://127.0.0.1:${String(address.port)}/`, {});
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 2000);
+      socket.onOpen(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
+    const verifyPromise = socket.verify(5000);
+    socket.dispose();
+    await vi.advanceTimersByTimeAsync(6000);
+    await expect(verifyPromise).resolves.toBe(false);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    vi.useRealTimers();
   });
 });

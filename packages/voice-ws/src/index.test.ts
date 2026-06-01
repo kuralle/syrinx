@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { RetryConfig } from "@asyncdot/voice";
 
-import { WebSocketConnection } from "./index.js";
+import { WebSocketConnection, type ManagedSocket, type SocketFactory } from "./index.js";
 import { createNodeWsSocket } from "./node.js";
 
 let servers: WebSocketServer[] = [];
@@ -143,6 +143,35 @@ describe("WebSocketConnection", () => {
     expect((unrecoverable! as Error).message).toContain("failed to reconnect");
 
     await conn.close();
+  });
+
+  it("rejects connect when disposed before the socket opens", async () => {
+    const hangingSocket: ManagedSocket = {
+      get isOpen() {
+        return false;
+      },
+      send: () => undefined,
+      keepAlivePing: () => undefined,
+      verify: async () => false,
+      dispose: () => undefined,
+      onOpen: () => undefined,
+      onMessage: () => undefined,
+      onClose: () => undefined,
+      onError: () => undefined,
+    };
+    const socketFactory: SocketFactory = () => hangingSocket;
+    const conn = new WebSocketConnection({
+      url: () => "ws://127.0.0.1:1/",
+      socketFactory,
+      retry: FAST_RETRY,
+      onMessage: () => undefined,
+    });
+
+    const connectPromise = conn.connect();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await conn.close();
+
+    await expect(connectPromise).rejects.toThrow(/disposed/i);
   });
 
   it("stops reconnecting when the socket keeps dying right after connecting", async () => {

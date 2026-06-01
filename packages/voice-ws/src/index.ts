@@ -90,6 +90,7 @@ export class WebSocketConnection {
   private reconnecting = false;
   private connResolver: (() => void) | null = null;
   private connRejecter: ((err: Error) => void) | null = null;
+  private abortOpen: (() => void) | null = null;
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastConnectAtMs = 0;
   private quickFailures = 0;
@@ -132,6 +133,7 @@ export class WebSocketConnection {
   async close(): Promise<void> {
     this.closed = true;
     this.stopKeepAlive();
+    this.abortPendingOpen(new Error("WebSocket connection closed"));
     this.connResolver = null;
     this.connRejecter = null;
     this.ready = false;
@@ -146,6 +148,7 @@ export class WebSocketConnection {
    */
   reset(): void {
     if (this.closed || this.reconnecting) return;
+    this.abortPendingOpen(new Error("WebSocket connection reset"));
     this.socket?.dispose();
     this.socket = null;
     this.ready = false;
@@ -158,6 +161,7 @@ export class WebSocketConnection {
   }
 
   private async openSocket(): Promise<void> {
+    this.abortPendingOpen(new Error("WebSocket connection replaced"));
     this.socket?.dispose();
     this.ready = false;
 
@@ -169,6 +173,7 @@ export class WebSocketConnection {
       const settle = (fn: () => void) => {
         if (!settled) {
           settled = true;
+          this.abortOpen = null;
           fn();
         }
       };
@@ -179,6 +184,10 @@ export class WebSocketConnection {
       // by a reconnect can emit a late close/message, and acting on it would
       // clobber the healthy connection or trigger a spurious reconnect.
       const isActive = (): boolean => socket === this.socket;
+
+      this.abortOpen = () => {
+        settle(() => reject(new Error("WebSocket connection disposed")));
+      };
 
       socket.onOpen(() => {
         settle(resolve);
@@ -220,6 +229,16 @@ export class WebSocketConnection {
         }
       });
     });
+  }
+
+  private abortPendingOpen(err: Error): void {
+    if (!this.abortOpen) return;
+    const abort = this.abortOpen;
+    this.abortOpen = null;
+    abort();
+    this.connRejecter?.(err);
+    this.connResolver = null;
+    this.connRejecter = null;
   }
 
   private async tryReconnect(): Promise<void> {
