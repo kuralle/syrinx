@@ -52,6 +52,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   // reconnecting. Prevents one slow finalize from cascading into the next turns.
   private finalizeResetThreshold: number = 2;
   private consecutiveFinalizeTimeouts = 0;
+  // When the provider never confirms a Finalize, complete the turn with the best transcript
+  // already buffered instead of dropping it. For live conversation a reply on slightly
+  // imperfect text beats silently losing the user's turn. Opt-in (off preserves the strict
+  // "never promote unconfirmed" behavior for callers that need it).
+  private finalizeTimeoutFallback: boolean = false;
   private keepAliveIntervalMs: number = 3000;
 
   // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
@@ -95,6 +100,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
     this.providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
     this.finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
+    this.finalizeTimeoutFallback = (config["finalize_timeout_fallback"] as boolean) ?? false;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
 
     // One session-long socket, managed (reconnect + KeepAlive) by WebSocketConnection.
@@ -286,6 +292,22 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private handleProviderFinalizeTimeout(contextId: string): void {
     if (!this.finalizeRequestedContextIds.has(contextId) || this.finalizedContextIds.has(contextId)) return;
     this.pushMetric(contextId, "stt_provider_finalize_timeout", this.audioStats(contextId));
+
+    // Graceful degradation (opt-in): rather than dropping the user's turn when the provider
+    // never confirms the Finalize, complete it with the best buffered text — confirmed
+    // is_final segments first, then the latest interim — so the turn still reaches the LLM.
+    if (this.finalizeTimeoutFallback) {
+      const fallbackText = this.combinedFinalTranscript() || this.lastInterimTranscript;
+      if (fallbackText) {
+        this.pushMetric(contextId, "stt_provider_finalize_timeout_fallback", this.audioStats(contextId));
+        // A late provider-final for this turn must not double-emit after we promote here.
+        this.ignoreNextProviderFinalContextIds.add(contextId);
+        this.pushFinal(fallbackText, this.finalConfidence || this.lastInterimConfidence, contextId);
+        this.resetPendingTranscript();
+        return;
+      }
+    }
+
     this.discardUnconfirmedTurn(contextId);
     this.emitError(
       contextId,
