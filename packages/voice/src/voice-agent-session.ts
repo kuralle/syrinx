@@ -68,6 +68,18 @@ import { pluginStage, stageOrder, isAudioStage } from "./init-stage-order.js";
 // Types
 // =============================================================================
 
+type TurnInterruptionState =
+  | { kind: "idle" }
+  | {
+      kind: "pending";
+      userContextId: string;
+      interruptedContextId: string;
+      firstSpeechMs: number;
+      awaitingAudio: boolean;
+    };
+
+type PendingTurnInterruption = Extract<TurnInterruptionState, { kind: "pending" }>;
+
 export interface VoiceAgentSessionConfig {
   /** Plugin configurations, keyed by plugin name. */
   plugins: Record<string, PluginConfig>;
@@ -187,12 +199,7 @@ export class VoiceAgentSession {
   private readonly primarySpeakerGate: PrimarySpeakerGate;
   private readonly latencyFiller: LatencyFillerController;
   private firstLlmDeltaReceived = new Set<string>();
-  private pendingInterruption: {
-    userContextId: string;
-    interruptedContextId: string;
-    firstSpeechMs: number;
-  } | null = null;
-  private pendingInterruptionAwaitingAudio = false;
+  private turnInterruption: TurnInterruptionState = { kind: "idle" };
   private readonly vaqiMissedResponseMs: number;
   private turnUserStoppedAtMs = new Map<string, number>();
   private firstTtsAudioFired = new Set<string>();
@@ -517,11 +524,11 @@ export class VoiceAgentSession {
   }
 
   private handleVadAudioForSpeakerGate(pkt: VadAudioPacket): void {
-    const pending = this.pendingInterruption;
-    if (pending && pending.userContextId === pkt.contextId) {
+    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
+    if (pending) {
       this.primarySpeakerGate.observeBargeInChunk(pkt.audio);
-      if (this.pendingInterruptionAwaitingAudio) {
-        this.pendingInterruptionAwaitingAudio = false;
+      if (pending.awaitingAudio) {
+        this.setPendingAwaitingAudio(false);
         this.tryCommitPendingInterruption(pkt.timestampMs);
       }
       return;
@@ -556,8 +563,7 @@ export class VoiceAgentSession {
 
     if (this.minInterruptionMs <= 0) {
       if (this.shouldDeferImmediateBargeInForSpeakerGate()) {
-        this.beginPendingInterruption(pkt, interruptedContextId);
-        this.pendingInterruptionAwaitingAudio = true;
+        this.transitionToPendingInterruption(pkt, interruptedContextId, true);
         return;
       }
       this.bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
@@ -571,20 +577,38 @@ export class VoiceAgentSession {
     // frames and then `vad.speech_ended` — which cancels this pending interruption
     // instead of cutting off the agent. Sustained speech keeps emitting activity and
     // crosses the threshold in handleVadSpeechActivity.
-    this.beginPendingInterruption(pkt, interruptedContextId);
+    this.transitionToPendingInterruption(pkt, interruptedContextId, false);
   }
 
-  private beginPendingInterruption(
+  private pendingTurnInterruptionFor(userContextId: string): PendingTurnInterruption | null {
+    const state = this.turnInterruption;
+    if (state.kind !== "pending" || state.userContextId !== userContextId) return null;
+    return state;
+  }
+
+  private transitionToPendingInterruption(
     pkt: VadSpeechStartedPacket,
     interruptedContextId: string,
+    awaitingAudio: boolean,
   ): void {
     this.primarySpeakerGate.beginBargeInWindow();
-    this.pendingInterruptionAwaitingAudio = false;
-    this.pendingInterruption = {
+    this.turnInterruption = {
+      kind: "pending",
       userContextId: pkt.contextId,
       interruptedContextId,
       firstSpeechMs: pkt.timestampMs,
+      awaitingAudio,
     };
+  }
+
+  private setPendingAwaitingAudio(awaitingAudio: boolean): void {
+    const state = this.turnInterruption;
+    if (state.kind !== "pending") return;
+    this.turnInterruption = { ...state, awaitingAudio };
+  }
+
+  private clearTurnInterruption(): void {
+    this.turnInterruption = { kind: "idle" };
   }
 
   private shouldDeferImmediateBargeInForSpeakerGate(): boolean {
@@ -595,14 +619,14 @@ export class VoiceAgentSession {
   }
 
   private handleVadSpeechActivity(pkt: VadSpeechActivityPacket): void {
-    const pending = this.pendingInterruption;
-    if (!pending || pending.userContextId !== pkt.contextId) return;
+    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
+    if (!pending) return;
     if (pkt.timestampMs - pending.firstSpeechMs < this.minInterruptionMs) return;
     this.tryCommitPendingInterruption(pkt.timestampMs);
   }
 
   private tryCommitPendingInterruption(nowMs: number): void {
-    const pending = this.pendingInterruption;
+    const pending = this.turnInterruption.kind === "pending" ? this.turnInterruption : null;
     if (!pending) return;
     if (nowMs - pending.firstSpeechMs < this.minInterruptionMs) return;
 
@@ -611,7 +635,7 @@ export class VoiceAgentSession {
       this.primarySpeakerGate.hasProfile() &&
       !this.primarySpeakerGate.shouldCommitBargeIn()
     ) {
-      this.suppressPendingInterruption(
+      this.transitionSuppressPendingInterruption(
         pending,
         "interrupt.suppressed_non_primary",
         nowMs - pending.firstSpeechMs,
@@ -620,8 +644,7 @@ export class VoiceAgentSession {
     }
 
     const sustainedMs = nowMs - pending.firstSpeechMs;
-    this.pendingInterruption = null;
-    this.pendingInterruptionAwaitingAudio = false;
+    this.clearTurnInterruption();
     this.primarySpeakerGate.resetBargeInWindow();
 
     if (!this.ttsPlayout.isActive(pending.interruptedContextId)) {
@@ -644,13 +667,12 @@ export class VoiceAgentSession {
     this.emitInterruptDetected(pending.interruptedContextId);
   }
 
-  private suppressPendingInterruption(
-    pending: NonNullable<typeof this.pendingInterruption>,
+  private transitionSuppressPendingInterruption(
+    pending: PendingTurnInterruption,
     metricName: string,
     durationMs: number,
   ): void {
-    this.pendingInterruption = null;
-    this.pendingInterruptionAwaitingAudio = false;
+    this.clearTurnInterruption();
     this.primarySpeakerGate.resetBargeInWindow();
     this.bus.push(Route.Background, make.metric(pending.interruptedContextId, metricName, String(durationMs)));
   }
@@ -671,8 +693,8 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    const pending = this.pendingInterruption;
-    if (pending && pending.userContextId === pkt.contextId) {
+    const pending = this.pendingTurnInterruptionFor(pkt.contextId);
+    if (pending) {
       const durationMs = pkt.timestampMs - pending.firstSpeechMs;
       if (durationMs >= this.minInterruptionMs) {
         if (
@@ -680,7 +702,7 @@ export class VoiceAgentSession {
           this.primarySpeakerGate.hasProfile() &&
           !this.primarySpeakerGate.shouldCommitBargeIn()
         ) {
-          this.suppressPendingInterruption(
+          this.transitionSuppressPendingInterruption(
             pending,
             "interrupt.suppressed_non_primary",
             durationMs,
@@ -689,7 +711,7 @@ export class VoiceAgentSession {
           this.tryCommitPendingInterruption(pkt.timestampMs);
         }
       } else {
-        this.suppressPendingInterruption(
+        this.transitionSuppressPendingInterruption(
           pending,
           "interrupt.suppressed_short_speech",
           durationMs,
