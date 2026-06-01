@@ -1,0 +1,23 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages ./packages
+COPY examples/02-hello-voice-headless ./examples/02-hello-voice-headless
+
+RUN pnpm install --frozen-lockfile
+
+ENV NODE_ENV=production
+ENV SYRINX_REVIEW_HOST=0.0.0.0
+ENV SYRINX_REVIEW_PORT=4180
+ENV SYRINX_REVIEW_TTS=cartesia
+
+EXPOSE 4180
+
+# Serves the self-contained browser studio (index.html) + the /ws voice endpoint
+# on one HTTP server. Fly fronts it with HTTPS (*.fly.dev), so the page loads over
+# https and the websocket over wss — required for browser microphone access.
+CMD ["pnpm", "--filter", "@asyncdot-example/02-hello-voice-headless", "review:studio"]
