@@ -2,7 +2,7 @@
 
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import { VoiceAgentSession } from "@asyncdot/voice";
 import {
   createSmartPbxMediaStreamServer,
@@ -79,7 +79,7 @@ describe("WT-08 admission control and upgrade routing", () => {
     await server.close();
   });
 
-  it("destroys sockets on unmatched upgrade paths instead of leaking them", async () => {
+  it("destroys sockets on unmatched upgrade paths when this router is the sole upgrade handler", async () => {
     const httpServer = registerHttpServer(createServer());
     const server = registerServer(await createVoiceWebSocketServer({
       server: httpServer,
@@ -106,6 +106,49 @@ describe("WT-08 admission control and upgrade routing", () => {
 
     registered.close();
     await server.close();
+    await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
+  });
+
+  it("leaves unmatched upgrade paths for co-registered upgrade listeners on a shared HTTP server", async () => {
+    const httpServer = registerHttpServer(createServer());
+    const server = registerServer(await createVoiceWebSocketServer({
+      server: httpServer,
+      createSession: () => new VoiceAgentSession({ plugins: {} }),
+    }));
+    const foreignPath = "/foreign-ws";
+    const foreignConnections: WebSocket[] = [];
+    const foreignListener = (
+      request: import("node:http").IncomingMessage,
+      socket: import("node:net").Socket,
+      head: Buffer,
+    ): void => {
+      if (new URL(request.url ?? "/", "http://localhost").pathname !== foreignPath) return;
+      const foreignServer = new WebSocketServer({ noServer: true });
+      foreignServer.handleUpgrade(request, socket, head, (websocket) => {
+        foreignConnections.push(websocket);
+        foreignServer.emit("connection", websocket, request);
+      });
+    };
+    httpServer.on("upgrade", foreignListener);
+    await new Promise<void>((resolveListen, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(0, "127.0.0.1", () => {
+        httpServer.off("error", reject);
+        resolveListen();
+      });
+    });
+    const address = httpServer.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const foreignClient = await openSocket(`ws://127.0.0.1:${String(address.port)}${foreignPath}`, {
+      perMessageDeflate: false,
+    });
+    expect(foreignClient.readyState).toBe(WebSocket.OPEN);
+    expect(foreignConnections).toHaveLength(1);
+
+    foreignClient.close();
+    await server.close();
+    httpServer.off("upgrade", foreignListener);
     await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
   });
 
