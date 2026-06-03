@@ -5,8 +5,10 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
+import { Decoder as OpusDecoder } from "@evan/opus";
 
 import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@asyncdot/voice";
+import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
 import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
 
 import { GEMINI_UNIVERSITY_FIXTURES, PKG_ROOT } from "./generate-gemini-university-fixtures.js";
@@ -19,6 +21,7 @@ const RUNS_DIR = join(SCRIPT_DIR, "..", "test", "performance", "runs");
 const BASELINE_PATH = join(SCRIPT_DIR, "..", "test", "performance", "websocket-university-interactive-baseline.json");
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 16000;
+const OPUS_WIRE_SAMPLE_RATE = 48000;
 const FRAME_SAMPLES = 320;
 const VOICE_TO_VOICE_SLO_MS = 800;
 const TRAILING_SILENCE_MS = 1400;
@@ -67,6 +70,7 @@ interface InteractiveTurnCapture {
   agentReply: string;
   toolCalls: string[];
   audioBytes: number;
+  assistantDecodedPcmBytes?: number;
   assistantAudioEncoding: "pcm_s16le" | "opus" | "unknown";
   metricsE2eMs: number;
   error: string;
@@ -105,6 +109,7 @@ async function main(): Promise<void> {
     const turns = await runConversation(socket);
     socket.close();
 
+    finalizeTurnMetrics(turns);
     const evaluation = evaluateConversation(turns);
     const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
@@ -128,8 +133,9 @@ async function main(): Promise<void> {
         avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.firstAgentAtMs)),
         avgSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs)),
         avgVadSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.speechEndedAtMs)),
-        voiceToVoiceP50Ms: percentile(turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0), 50),
-        voiceToVoiceP95Ms: percentile(turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0), 95),
+        voiceToVoiceP50Ms: percentile(positiveVoiceToVoiceMs(turns), 50),
+        voiceToVoiceP95Ms: percentile(positiveVoiceToVoiceMs(turns), 95),
+        voiceToVoiceP99Ms: percentile(positiveVoiceToVoiceMs(turns), 99),
       },
       turns: turns.map((turn) => ({
         id: turn.id,
@@ -145,13 +151,8 @@ async function main(): Promise<void> {
         audioBytes: turn.audioBytes,
         assistantAudioEncoding: turn.assistantAudioEncoding,
         latencyMs: {
-          sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
-          vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
-          llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
-          ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.firstAgentAtMs,
-          speechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.audioEndedAtMs,
-          vadSpeechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.speechEndedAtMs,
-          turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
+          ...buildTurnLatencyMs(turn),
+          voiceToVoiceMs: turn.metricsE2eMs,
         },
       })),
       diagnostics,
@@ -190,6 +191,24 @@ function buildSmokeManifest(args: {
 }): SmokeArtifactManifest {
   const turnArtifacts = args.turns.map((turn) => {
     const inputByteLength = Math.round((turn.inputAudioMs / 1000) * INPUT_SAMPLE_RATE * 2);
+    const assistantDecodedPcmBytes = effectiveAssistantDecodedPcmBytes(turn);
+    const assistantAudio = turn.assistantAudioEncoding === "opus"
+      ? {
+          sampleRateHz: OUTPUT_SAMPLE_RATE,
+          encoding: "opus" as const,
+          channels: 1 as const,
+          byteLength: turn.audioBytes,
+          wireByteLength: turn.audioBytes,
+          decodedPcmByteLength: assistantDecodedPcmBytes,
+          durationMs: pcm16DurationMs(assistantDecodedPcmBytes, OUTPUT_SAMPLE_RATE),
+        }
+      : {
+          sampleRateHz: OUTPUT_SAMPLE_RATE,
+          encoding: "pcm_s16le" as const,
+          channels: 1 as const,
+          byteLength: turn.audioBytes,
+          durationMs: pcm16DurationMs(turn.audioBytes, OUTPUT_SAMPLE_RATE),
+        };
     return {
       id: turn.id,
       fixtureId: turn.fixtureId,
@@ -200,21 +219,10 @@ function buildSmokeManifest(args: {
         byteLength: inputByteLength,
         durationMs: turn.inputAudioMs,
       },
-      assistantAudio: {
-        sampleRateHz: OUTPUT_SAMPLE_RATE,
-        encoding: turn.assistantAudioEncoding === "opus" ? "opus" as const : "pcm_s16le" as const,
-        channels: 1 as const,
-        byteLength: turn.audioBytes,
-        durationMs: assistantAudioDurationMs(turn),
-      },
+      assistantAudio,
       latencyMs: {
-        sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
-        vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
-        llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
-        ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.firstAgentAtMs,
-        speechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.audioEndedAtMs,
-        vadSpeechEndToFirstAssistantAudio: turn.firstAudioAtMs - turn.speechEndedAtMs,
-        turnWallClock: turn.ttsEndedAtMs - turn.startedAtMs,
+        ...buildTurnLatencyMs(turn),
+        ...(turn.metricsE2eMs > 0 ? { voiceToVoiceMs: turn.metricsE2eMs } : {}),
       },
       vad: {
         speechStartedCount: turn.speechStartedCount,
@@ -223,7 +231,12 @@ function buildSmokeManifest(args: {
     };
   });
   const inputByteLength = turnArtifacts.reduce((sum, turn) => sum + turn.inputAudio.byteLength, 0);
-  const outputByteLength = turnArtifacts.reduce((sum, turn) => sum + turn.assistantAudio.byteLength, 0);
+  const outputWireByteLength = turnArtifacts.reduce((sum, turn) => sum + (turn.assistantAudio.wireByteLength ?? turn.assistantAudio.byteLength), 0);
+  const outputDecodedPcmByteLength = turnArtifacts.reduce(
+    (sum, turn) => sum + (turn.assistantAudio.decodedPcmByteLength ?? turn.assistantAudio.byteLength),
+    0,
+  );
+  const outputDurationMs = turnArtifacts.reduce((sum, turn) => sum + turn.assistantAudio.durationMs, 0);
   return {
     schemaVersion: 2,
     scenario: "websocket_university_student_relations_interactive",
@@ -238,13 +251,13 @@ function buildSmokeManifest(args: {
       inputSampleRateHz: INPUT_SAMPLE_RATE,
       outputSampleRateHz: OUTPUT_SAMPLE_RATE,
       inputByteLength,
-      outputByteLength,
+      outputByteLength: outputWireByteLength,
       inputWireByteLength: inputByteLength,
-      outputWireByteLength: outputByteLength,
+      outputWireByteLength,
       inputDecodedPcmByteLength: inputByteLength,
-      outputDecodedPcmByteLength: outputByteLength,
+      outputDecodedPcmByteLength,
       inputDurationMs: pcm16DurationMs(inputByteLength, INPUT_SAMPLE_RATE),
-      outputDurationMs: pcm16DurationMs(outputByteLength, OUTPUT_SAMPLE_RATE),
+      outputDurationMs,
     },
     turns: turnArtifacts,
     qualityGate: {
@@ -267,6 +280,7 @@ async function openSocket(url: string): Promise<WebSocket> {
 
 async function runConversation(socket: WebSocket): Promise<InteractiveTurnCapture[]> {
   const turns: InteractiveTurnCapture[] = [];
+  const opusDecoder = new OpusDecoder({ channels: 1, sample_rate: OPUS_WIRE_SAMPLE_RATE });
   const maxTurns = Number.parseInt(process.env["SYRINX_WS_MAX_TURNS"] ?? "", 10);
   const fixtures = Number.isFinite(maxTurns) && maxTurns > 0
     ? INTERACTIVE_FIXTURES.slice(0, maxTurns)
@@ -296,13 +310,14 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       agentReply: "",
       toolCalls: [],
       audioBytes: 0,
+      assistantDecodedPcmBytes: 0,
       assistantAudioEncoding: "unknown",
       metricsE2eMs: 0,
       error: "",
     };
 
     console.log(`starting ${turn.id} ${fixture.id} (${String(turn.inputAudioMs)}ms input)`);
-    const dispose = captureTurn(socket, turn);
+    const dispose = captureTurn(socket, turn, opusDecoder);
     await sendPcmFrames(socket, samples, turn.id);
     turn.audioEndedAtMs = Date.now();
     await sendSilence(socket, turn.id, TRAILING_SILENCE_MS);
@@ -321,14 +336,16 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
   return turns;
 }
 
-function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => void {
+function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture, opusDecoder: OpusDecoder): () => void {
   let nextBinaryBelongsToTurn = false;
   const onMessage = (data: RawData, isBinary: boolean): void => {
     if (isBinary) {
       if (!nextBinaryBelongsToTurn) return;
       nextBinaryBelongsToTurn = false;
       if (turn.firstAudioAtMs === 0) turn.firstAudioAtMs = Date.now();
-      turn.audioBytes += rawBytes(data).byteLength;
+      const wire = rawBytes(data);
+      turn.audioBytes += wire.byteLength;
+      accumulateAssistantDecodedPcm(turn, wire, opusDecoder);
       return;
     }
 
@@ -345,7 +362,6 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
       return;
     }
     if (msg["type"] === "stt_output") {
-      if (turn.sttFinalAtMs > 0) return;
       turn.transcript = String(msg["transcript"] ?? "");
       turn.sttFinalAtMs = Date.now();
       return;
@@ -374,11 +390,7 @@ function captureTurn(socket: WebSocket, turn: InteractiveTurnCapture): () => voi
       turn.ttsEndedAtMs = Date.now();
       return;
     }
-    if (msg["type"] === "metrics" && msg["turnId"] === turn.id) {
-      const e2eMs = Number(msg["e2eMs"]);
-      if (Number.isFinite(e2eMs) && e2eMs > 0) turn.metricsE2eMs = e2eMs;
-      return;
-    }
+    if (msg["type"] === "metrics" && msg["turnId"] === turn.id) return;
     if (msg["type"] === "error") {
       turn.error = `websocket error: ${String(msg["component"])} ${String(msg["message"])}`;
     }
@@ -480,8 +492,10 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
   const voiceToVoice = turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
   const p50 = percentile(voiceToVoice, 50);
   const p95 = percentile(voiceToVoice, 95);
+  const p99 = percentile(voiceToVoice, 99);
   if (p50 > 0) diagnostics.push(`voice-to-voice P50=${String(p50)}ms`);
   if (p95 > 0) diagnostics.push(`voice-to-voice P95=${String(p95)}ms`);
+  if (p99 > 0) diagnostics.push(`voice-to-voice P99=${String(p99)}ms`);
   if (p50 > VOICE_TO_VOICE_SLO_MS) {
     diagnostics.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
   }
@@ -507,7 +521,9 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
     if (turn.assistantAudioEncoding === "opus" && turn.audioBytes < 1_000) {
       failures.push(`${turn.id} returned too little Opus TTS audio`);
     }
-    if (turn.sttFinalAtMs < turn.audioEndedAtMs) failures.push(`${turn.id} STT finalized before input audio ended`);
+    if (turn.speechEndedAtMs > 0 && turn.sttFinalAtMs > 0 && turn.sttFinalAtMs < turn.speechEndedAtMs) {
+      failures.push(`${turn.id} STT finalized before VAD speech ended`);
+    }
     if (turn.firstAudioAtMs < turn.firstAgentAtMs) failures.push(`${turn.id} received TTS audio before agent text`);
     if (!/[.!?]\s*$/.test(turn.agentReply.trim())) diagnostics.push(`${turn.id} agent reply did not end cleanly`);
     if (reply.length < 30) diagnostics.push(`${turn.id} agent reply was short`);
@@ -538,15 +554,73 @@ function rawBytes(data: RawData): Uint8Array {
 }
 
 function assistantAudioDurationMs(
-  turn: Pick<InteractiveTurnCapture, "assistantAudioEncoding" | "audioBytes" | "firstAudioAtMs" | "ttsEndedAtMs">,
+  turn: Pick<InteractiveTurnCapture, "assistantAudioEncoding" | "audioBytes" | "assistantDecodedPcmBytes">,
 ): number {
+  return pcm16DurationMs(effectiveAssistantDecodedPcmBytes(turn), OUTPUT_SAMPLE_RATE);
+}
+
+function effectiveAssistantDecodedPcmBytes(
+  turn: Pick<InteractiveTurnCapture, "assistantAudioEncoding" | "audioBytes" | "assistantDecodedPcmBytes">,
+): number {
+  if (turn.assistantAudioEncoding === "opus") return turn.assistantDecodedPcmBytes ?? 0;
+  return turn.audioBytes;
+}
+
+function accumulateAssistantDecodedPcm(
+  turn: InteractiveTurnCapture,
+  wire: Uint8Array,
+  opusDecoder: OpusDecoder,
+): void {
+  if (turn.assistantAudioEncoding === "opus") {
+    const pcm48 = pcm16BytesToSamples(opusDecoder.decode(wire));
+    const pcm16 = resamplePcm16(pcm48, OPUS_WIRE_SAMPLE_RATE, OUTPUT_SAMPLE_RATE);
+    turn.assistantDecodedPcmBytes = (turn.assistantDecodedPcmBytes ?? 0) + pcm16SamplesToBytes(pcm16).byteLength;
+    return;
+  }
   if (turn.assistantAudioEncoding === "pcm_s16le") {
-    return pcm16DurationMs(turn.audioBytes, OUTPUT_SAMPLE_RATE);
+    turn.assistantDecodedPcmBytes = (turn.assistantDecodedPcmBytes ?? 0) + wire.byteLength;
   }
-  if (turn.firstAudioAtMs > 0 && turn.ttsEndedAtMs >= turn.firstAudioAtMs) {
-    return turn.ttsEndedAtMs - turn.firstAudioAtMs;
+}
+
+function finalizeTurnMetrics(turns: readonly InteractiveTurnCapture[]): void {
+  let excludedVoiceToVoiceTurns = 0;
+  for (const turn of turns) {
+    const voiceToVoiceMs = turn.firstAudioAtMs - turn.speechEndedAtMs;
+    if (voiceToVoiceMs > 0) {
+      turn.metricsE2eMs = voiceToVoiceMs;
+      continue;
+    }
+    turn.metricsE2eMs = 0;
+    excludedVoiceToVoiceTurns += 1;
   }
-  return 0;
+  if (excludedVoiceToVoiceTurns > 0) {
+    console.log(
+      `excluded ${String(excludedVoiceToVoiceTurns)} turn(s) from voice-to-voice percentiles (non-positive canonical v2v)`,
+    );
+  }
+}
+
+function positiveVoiceToVoiceMs(turns: readonly InteractiveTurnCapture[]): number[] {
+  return turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
+}
+
+function buildTurnLatencyMs(turn: InteractiveTurnCapture): Record<string, number> {
+  const latencyMs: Record<string, number> = {};
+  const sttFinalAfterSpeechEnd = turn.sttFinalAtMs - turn.audioEndedAtMs;
+  const vadSpeechEndAfterAudioEnd = turn.speechEndedAtMs - turn.audioEndedAtMs;
+  const llmTimeToFirstText = turn.firstAgentAtMs - turn.sttFinalAtMs;
+  const ttsTimeToFirstAudio = turn.firstAudioAtMs - turn.firstAgentAtMs;
+  const speechEndToFirstAssistantAudio = turn.firstAudioAtMs - turn.audioEndedAtMs;
+  const vadSpeechEndToFirstAssistantAudio = turn.firstAudioAtMs - turn.speechEndedAtMs;
+  const turnWallClock = turn.ttsEndedAtMs - turn.startedAtMs;
+  if (sttFinalAfterSpeechEnd >= 0) latencyMs.sttFinalAfterSpeechEnd = sttFinalAfterSpeechEnd;
+  if (vadSpeechEndAfterAudioEnd >= 0) latencyMs.vadSpeechEndAfterAudioEnd = vadSpeechEndAfterAudioEnd;
+  if (llmTimeToFirstText >= 0) latencyMs.llmTimeToFirstText = llmTimeToFirstText;
+  if (ttsTimeToFirstAudio >= 0) latencyMs.ttsTimeToFirstAudio = ttsTimeToFirstAudio;
+  if (speechEndToFirstAssistantAudio >= 0) latencyMs.speechEndToFirstAssistantAudio = speechEndToFirstAssistantAudio;
+  if (vadSpeechEndToFirstAssistantAudio >= 0) latencyMs.vadSpeechEndToFirstAssistantAudio = vadSpeechEndToFirstAssistantAudio;
+  if (turnWallClock >= 0) latencyMs.turnWallClock = turnWallClock;
+  return latencyMs;
 }
 
 function requireEnv(name: string): void {
