@@ -76,6 +76,16 @@ export interface WebSocketConnectionOptions {
   readonly onReconnected?: () => void;
   /** Called when reconnection is abandoned (quick-failure loop or attempts exhausted). */
   readonly onUnrecoverable?: (err: Error) => void;
+  /**
+   * Max frames to buffer for replay-on-reconnect. 0 (default) disables replay — `send()` to a
+   * closed socket throws as before. When > 0, a `send()` that fails because the socket is not open
+   * (so the frame PROVABLY never reached the wire) is buffered and re-sent in order on the next
+   * reconnect. Frames that were sent on an open socket are never buffered, so a frame the provider
+   * may already have received is never replayed — no duplicate speech.
+   */
+  readonly replayBufferSize?: number;
+  /** Observe replay activity: "deferred" (buffered), "replayed" (flushed on reconnect), "overflow" (dropped). */
+  readonly onReplay?: (event: "deferred" | "replayed" | "overflow", count: number) => void;
 }
 
 const DEFAULT_MIN_STABLE_MS = 5000;
@@ -94,8 +104,13 @@ export class WebSocketConnection {
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastConnectAtMs = 0;
   private quickFailures = 0;
+  private pendingReplay: SocketData[] = [];
 
   constructor(private readonly opts: WebSocketConnectionOptions) {}
+
+  private get replayBufferSize(): number {
+    return Math.max(0, Math.floor(this.opts.replayBufferSize ?? 0));
+  }
 
   /** Open the initial connection. Rejects if it cannot be established (so init fails loudly). */
   async connect(): Promise<void> {
@@ -107,12 +122,44 @@ export class WebSocketConnection {
     return this.ready;
   }
 
-  /** Send a frame, throwing if the socket is not open (caller decides how to retry/report). */
+  /**
+   * Send a frame. If the socket is not open: when replay is enabled (`replayBufferSize > 0`) the
+   * frame is buffered for replay on reconnect (it provably never reached the wire); otherwise this
+   * throws and the caller decides how to retry/report.
+   */
   send(payload: SocketData): void {
     if (!this.socket || !this.socket.isOpen) {
+      if (this.replayBufferSize > 0 && !this.closed) {
+        this.bufferForReplay(payload);
+        return;
+      }
       throw new Error("WebSocket is not open");
     }
     this.socket.send(payload);
+  }
+
+  private bufferForReplay(payload: SocketData): void {
+    this.pendingReplay.push(payload);
+    this.opts.onReplay?.("deferred", 1);
+    while (this.pendingReplay.length > this.replayBufferSize) {
+      this.pendingReplay.shift();
+      this.opts.onReplay?.("overflow", 1);
+    }
+  }
+
+  /** Re-send frames buffered during a disconnect gap, in order, on the reconnected socket. */
+  private flushReplay(): void {
+    if (this.pendingReplay.length === 0) return;
+    const frames = this.pendingReplay;
+    this.pendingReplay = [];
+    let replayed = 0;
+    for (const frame of frames) {
+      if (this.socket?.isOpen) {
+        this.socket.send(frame);
+        replayed += 1;
+      }
+    }
+    if (replayed > 0) this.opts.onReplay?.("replayed", replayed);
   }
 
   async ensureReady(): Promise<void> {
@@ -132,6 +179,7 @@ export class WebSocketConnection {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.pendingReplay = [];
     this.stopKeepAlive();
     this.abortPendingOpen(new Error("WebSocket connection closed"));
     this.connResolver = null;
@@ -195,6 +243,7 @@ export class WebSocketConnection {
         this.ready = true;
         this.lastConnectAtMs = Date.now();
         this.startKeepAlive();
+        this.flushReplay();
         this.connResolver?.();
         this.connResolver = null;
         this.connRejecter = null;
