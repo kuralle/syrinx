@@ -137,6 +137,12 @@ export interface VoiceAgentSessionConfig {
    * (TTS/STT-failure fallback needs canned audio / a clarification prompt — out of scope.)
    */
   errorFallbackText?: string;
+  /**
+   * Which component owns turn boundary (EOS) for this session. When set, gates
+   * `eos.audio` fan-out and complements the session-level duplicate-EOS guard.
+   * Unset preserves legacy behavior (all fan-outs + dedup guard only).
+   */
+  endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
 }
 
 export interface VoiceAgentSessionEvents {
@@ -201,8 +207,15 @@ export class VoiceAgentSession {
   private firstTtsAudioFired = new Set<string>();
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
+  private readonly endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
+  private lastFinalizedContextId = "";
 
   constructor(config: VoiceAgentSessionConfig) {
+    const owner = config.endpointingOwner;
+    if (owner !== undefined && owner !== "provider_stt" && owner !== "smart_turn" && owner !== "timer") {
+      throw new Error(`Unsupported endpointingOwner: ${owner}`);
+    }
+    this.endpointingOwner = owner;
     this.config = config;
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
@@ -473,13 +486,22 @@ export class VoiceAgentSession {
     if (this.shouldEnrollPrimarySpeaker(pkt.contextId)) {
       this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
     }
-    this.bus.push(
-      Route.Main,
-      make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
-      make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
-      make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
-      make.eosAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
-    );
+    if (this.endpointingOwner === "provider_stt") {
+      this.bus.push(
+        Route.Main,
+        make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+        make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+        make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+      );
+    } else {
+      this.bus.push(
+        Route.Main,
+        make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+        make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+        make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+        make.eosAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
+      );
+    }
 
     this.debugPush({
       component: "input",
@@ -604,6 +626,12 @@ export class VoiceAgentSession {
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
+    if (this.lastFinalizedContextId === pkt.contextId) {
+      this.bus.push(Route.Background, make.metric(pkt.contextId, "eos.duplicate_dropped", "1"));
+      return;
+    }
+    this.lastFinalizedContextId = pkt.contextId;
+
     this.currentTurnId = pkt.contextId;
     this.idleTimeout.setContextId(pkt.contextId);
 
