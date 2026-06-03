@@ -1,6 +1,6 @@
 # VE-05 — Latency budget & per-stage metrics
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — c19e95d, 93477a8 + budget doc; 4/5 bullets, monotonic/cancelled + provider instr carried to VE-07; see .handoff/session-ve05-latency-metrics-close.md)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§6 Latency Engineering**, **§8 (core metric)**
 
 ## What to build
