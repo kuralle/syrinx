@@ -1,6 +1,6 @@
 # VE-07 — Observability & SLOs
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — af3108c, cd7727a, 2a83b49; OTel backend = optional impl pkg; see .handoff/session-ve07-observability-close.md)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§8 Observability**
 
 ## What to build

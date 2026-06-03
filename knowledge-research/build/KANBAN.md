@@ -8,7 +8,6 @@ Move a card by editing this file (cut/paste the row between columns) and the iss
 | ID | Slice | Tier | Type | Blocked by |
 |----|-------|------|------|-----------|
 | [VE-06](issues/VE-06-reliability.md) | Reliability | T0 | AFK | VE-01 |
-| [VE-07](issues/VE-07-observability.md) | Observability & SLOs | T0 | AFK | VE-05 |
 | [VE-08](issues/VE-08-tier1-hardening.md) | Tier-1 hardening | T1 | mix | VE-02, VE-03 |
 | [VE-09](issues/VE-09-greenfield-gaps.md) | Greenfield gaps (design-first) | GF | HITL | VE-05, VE-07 |
 
@@ -32,6 +31,7 @@ _(empty)_
 | [VE-03](issues/VE-03-barge-in.md) | **Barge-in / interruption** — onset latency probes, backchannel suppression, selective playout clear; browser spoken-prefix verified, pause/resume = sanctioned destructive-flush fallback (commits 2968a2b, dad711a, a9137ce, 6447166) | T0 | AFK | VE-01, VE-02 |
 | [VE-04](issues/VE-04-telephony-leg.md) | **Telephony leg** — typed DTMF routing (bypasses STT/VAD/barge-in), queue/barge-in/idle documented (reuse), µ-law passthrough benchmark plan (commits 5c41d9e, fa47815, 574a985) | T0 | AFK | VE-01 |
 | [VE-05](issues/VE-05-latency-metrics.md) | **Latency budget & per-stage metrics** — canonical v2v, per-stage P50/P95/P99 + dims, EOU split, budget table (c19e95d, 93477a8 + budget doc; monotonic/cancelled + provider instr → VE-07) | T0 | AFK | VE-01 |
+| [VE-07](issues/VE-07-observability.md) | **Observability & SLOs** — canonical turn-boundary events, monotonic clock, MetricsExporter seam, ObservabilityObserver (tagged stage histograms), SLO defs, reconstructTurnTimeline (af3108c, cd7727a, 2a83b49; OTel backend = optional impl pkg) | T0 | AFK | VE-05 |
 
 ---
 
