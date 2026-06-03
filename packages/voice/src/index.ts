@@ -92,8 +92,21 @@ export {
 export {
   type MessageCreatePacket,
   type ConversationMetricPacket,
+  type TurnBoundaryKind,
+  type TurnBoundaryEventPacket,
+  type ObservabilityPacket,
   type PipelineErrorPacket,
 } from "./packets.js";
+
+// Observability backbone (VE-07)
+export {
+  monotonicNowMs,
+  type MetricTags,
+  type SpanHandle,
+  type MetricsExporter,
+  noopMetricsExporter,
+  InMemoryMetricsExporter,
+} from "./observability.js";
 
 // PipelineBus
 export { PipelineBusImpl, Route, type PipelineBus, type PipelineBusConfig, type PacketHandler } from "./pipeline-bus.js";
