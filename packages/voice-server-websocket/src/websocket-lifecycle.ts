@@ -51,6 +51,45 @@ export function startWebSocketHeartbeat(
   });
 }
 
+/** Minimal closable shape: a voice websocket server (or any server) that drains on graceful close. */
+export interface GracefulClosable {
+  close(opts?: { graceful?: boolean; drainDeadlineMs?: number }): Promise<void>;
+}
+
+/**
+ * Wire process termination signals to the server's graceful drain so a deploy/scale-down
+ * drains active calls instead of killing them (Hard Rule: "drain, don't kill"). Idempotent
+ * (a second signal during shutdown is ignored). Returns a disposer that removes the handlers.
+ *
+ * Production hosts call this once after creating the server:
+ *   installGracefulShutdown(server, { drainDeadlineMs: 10_000, onClosed: () => process.exit(0) });
+ */
+export function installGracefulShutdown(
+  server: GracefulClosable,
+  opts?: {
+    readonly drainDeadlineMs?: number;
+    readonly signals?: readonly NodeJS.Signals[];
+    readonly onClosed?: () => void;
+    readonly onError?: (err: unknown) => void;
+  },
+): () => void {
+  const drainDeadlineMs = opts?.drainDeadlineMs ?? 10_000;
+  const signals = opts?.signals ?? (["SIGTERM", "SIGINT"] as const);
+  let shuttingDown = false;
+  const handler = (): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    server
+      .close({ graceful: true, drainDeadlineMs })
+      .then(() => opts?.onClosed?.())
+      .catch((err: unknown) => (opts?.onError ? opts.onError(err) : opts?.onClosed?.()));
+  };
+  for (const signal of signals) process.once(signal, handler);
+  return () => {
+    for (const signal of signals) process.removeListener(signal, handler);
+  };
+}
+
 export function startWebSocketMaxSessionDuration(
   socket: WebSocket,
   maxSessionDurationMs: number,
