@@ -190,4 +190,58 @@ describe("PacedPlayoutQueue — drift-corrected scheduling", () => {
       vi.advanceTimersByTime(40);
     }).not.toThrow();
   });
+
+  it("clearInterruptible drops audio but retains an uninterruptible control frame", () => {
+    const FRAME_MS = 20;
+    const sends: string[] = [];
+    const queue = new PacedPlayoutQueue(FRAME_MS, 10_000, () => {});
+
+    // a1 sends synchronously on enqueue; a2 + a3 remain queued behind the pacer timer.
+    queue.enqueue([
+      { send: () => { sends.push("a1"); } },
+      { send: () => { sends.push("a2"); } },
+      { send: () => { sends.push("a3"); } },
+    ]);
+    expect(sends).toEqual(["a1"]);
+
+    queue.enqueueControl(() => { sends.push("ctrl"); }, { uninterruptible: true });
+
+    const discarded = queue.clearInterruptible();
+
+    // a2 + a3 (interruptible audio) dropped; the uninterruptible control survives and is pumped.
+    expect(discarded).toBe(2 * FRAME_MS);
+    expect(sends).toEqual(["a1", "ctrl"]);
+
+    // No dropped audio is ever replayed on later ticks.
+    vi.advanceTimersByTime(FRAME_MS * 5);
+    expect(sends).toEqual(["a1", "ctrl"]);
+  });
+
+  it("clearInterruptible never replays dropped audio frames", () => {
+    const FRAME_MS = 20;
+    const sends: string[] = [];
+    const queue = new PacedPlayoutQueue(FRAME_MS, 10_000, () => {});
+    queue.enqueue([
+      { send: () => { sends.push("a1"); } },
+      { send: () => { sends.push("a2"); } },
+      { send: () => { sends.push("a3"); } },
+    ]);
+    queue.clearInterruptible();
+    vi.advanceTimersByTime(FRAME_MS * 5);
+    expect(sends).toEqual(["a1"]); // a2/a3 never sent — no speech replay after interrupt
+  });
+
+  it("clearInterruptible drops unmarked control frames (back-compat with clear)", () => {
+    const FRAME_MS = 20;
+    const sends: string[] = [];
+    const queue = new PacedPlayoutQueue(FRAME_MS, 10_000, () => {});
+    queue.enqueue([
+      { send: () => { sends.push("a1"); } },
+      { send: () => { sends.push("a2"); } },
+    ]);
+    queue.enqueueControl(() => { sends.push("ctrl"); }); // default = interruptible
+    queue.clearInterruptible();
+    vi.advanceTimersByTime(FRAME_MS * 5);
+    expect(sends).toEqual(["a1"]); // a2 + unmarked control both dropped
+  });
 });
