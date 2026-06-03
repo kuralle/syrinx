@@ -32,6 +32,8 @@ const DEFAULT_SAMPLE_RATE = 16000;
 const WINDOW_SAMPLES_16K = 512;
 const CONTEXT_SAMPLES_16K = 64;
 
+type VadState = "quiet" | "starting" | "speaking" | "stopping";
+
 export class SileroVADPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private session: InferenceSession | null = null;
@@ -39,10 +41,12 @@ export class SileroVADPlugin implements VoicePlugin {
   private state = new Float32Array(2 * 1 * 128);
   private context = new Float32Array(CONTEXT_SAMPLES_16K);
   private pendingSamples: number[] = [];
-  private speaking = false;
+  private vadState: VadState = "quiet";
+  private speechFrames = 0;
   private confidenceThreshold = 0.5;
   private minSilenceDurationMs = 200;
   private speechPadMs = 80;
+  private speechStartDurationMs = 32;
   private sampleRate = DEFAULT_SAMPLE_RATE;
   private silenceFrames = 0;
   private lastResetMs = 0;
@@ -53,6 +57,7 @@ export class SileroVADPlugin implements VoicePlugin {
     this.confidenceThreshold = readNumber(config, "threshold", 0.5);
     this.minSilenceDurationMs = readNumber(config, "min_silence_duration_ms", 200);
     this.speechPadMs = readNumber(config, "speech_pad_ms", 80);
+    this.speechStartDurationMs = readNumber(config, "speech_start_duration_ms", 32);
     this.sampleRate = readNumber(config, "sample_rate", DEFAULT_SAMPLE_RATE);
     if (this.sampleRate !== 16000) {
       throw new Error(`SileroVADPlugin requires 16 kHz PCM input, got ${String(this.sampleRate)} Hz`);
@@ -132,7 +137,7 @@ export class SileroVADPlugin implements VoicePlugin {
       this.context = input.slice(-CONTEXT_SAMPLES_16K);
 
       const now = Date.now();
-      if (!this.speaking && now - this.lastResetMs >= 5000) {
+      if (this.vadState === "quiet" && now - this.lastResetMs >= 5000) {
         this.resetModelState();
       }
 
@@ -150,42 +155,106 @@ export class SileroVADPlugin implements VoicePlugin {
     const isSpeech = confidence >= this.confidenceThreshold;
     const silenceFrameTarget = Math.max(1, Math.ceil(this.minSilenceDurationMs / 32));
 
-    if (isSpeech) {
-      this.silenceFrames = 0;
-      if (!this.speaking) {
-        this.speaking = true;
-        const started: VadSpeechStartedPacket = {
-          kind: "vad.speech_started",
-          contextId,
-          timestampMs: now,
-          confidence,
-        };
-        this.bus.push(Route.Main, started);
-      }
+    switch (this.vadState) {
+      case "quiet":
+        if (isSpeech) {
+          this.vadState = "starting";
+          this.speechFrames = 1;
+          this.promoteStartingToSpeakingIfReady(confidence, contextId, now);
+        }
+        break;
 
-      const activity: VadSpeechActivityPacket = {
-        kind: "vad.speech_activity",
-        contextId,
-        timestampMs: now,
-        isAsync: true,
-      };
-      this.bus.push(Route.Main, activity);
-      return;
+      case "starting":
+        if (isSpeech) {
+          if (!this.promoteStartingToSpeakingIfReady(confidence, contextId, now)) {
+            this.speechFrames += 1;
+            this.promoteStartingToSpeakingIfReady(confidence, contextId, now);
+          }
+        } else {
+          this.vadState = "quiet";
+          this.speechFrames = 0;
+        }
+        break;
+
+      case "speaking":
+        if (isSpeech) {
+          this.emitSpeechActivity(contextId, now);
+        } else {
+          this.vadState = "stopping";
+          this.silenceFrames = 1;
+        }
+        break;
+
+      case "stopping":
+        if (isSpeech) {
+          this.vadState = "speaking";
+          this.silenceFrames = 0;
+          this.emitSpeechActivity(contextId, now);
+        } else {
+          this.silenceFrames += 1;
+          if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) break;
+          if (this.silenceFrames < silenceFrameTarget) break;
+
+          const hangoverMs = this.silenceFrames * 32;
+          this.vadState = "quiet";
+          this.silenceFrames = 0;
+          this.speechFrames = 0;
+          const ended: VadSpeechEndedPacket = {
+            kind: "vad.speech_ended",
+            contextId,
+            timestampMs: now,
+          };
+          this.bus.push(Route.Main, ended);
+          this.bus.push(Route.Main, {
+            kind: "metric.conversation",
+            contextId,
+            timestampMs: now,
+            name: "vad.stop_hangover_ms",
+            value: String(hangoverMs),
+          });
+        }
+        break;
     }
+  }
 
-    if (!this.speaking) return;
-    this.silenceFrames += 1;
-    if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) return;
-    if (this.silenceFrames < silenceFrameTarget) return;
+  private promoteStartingToSpeakingIfReady(
+    confidence: number,
+    contextId: string,
+    now: number,
+  ): boolean {
+    if (!this.bus || this.vadState !== "starting") return false;
+    if (this.speechFrames * 32 < this.speechStartDurationMs) return false;
 
-    this.speaking = false;
-    this.silenceFrames = 0;
-    const ended: VadSpeechEndedPacket = {
-      kind: "vad.speech_ended",
+    const startDelayMs = this.speechFrames * 32;
+    this.vadState = "speaking";
+    this.speechFrames = 0;
+    const started: VadSpeechStartedPacket = {
+      kind: "vad.speech_started",
       contextId,
       timestampMs: now,
+      confidence,
     };
-    this.bus.push(Route.Main, ended);
+    this.bus.push(Route.Main, started);
+    this.bus.push(Route.Main, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: now,
+      name: "vad.start_delay_ms",
+      value: String(startDelayMs),
+    });
+    this.emitSpeechActivity(contextId, now);
+    return true;
+  }
+
+  private emitSpeechActivity(contextId: string, now: number): void {
+    if (!this.bus) return;
+    const activity: VadSpeechActivityPacket = {
+      kind: "vad.speech_activity",
+      contextId,
+      timestampMs: now,
+      isAsync: true,
+    };
+    this.bus.push(Route.Main, activity);
   }
 
   private resetModelState(): void {
