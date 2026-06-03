@@ -70,6 +70,8 @@ import {
   requireTtsAudioSampleRate,
   VoiceSessionWatchdogs,
 } from "./voice-agent-session-util.js";
+import { noopMetricsExporter, type MetricsExporter } from "./observability.js";
+import { ObservabilityObserver } from "./observability-observer.js";
 
 // =============================================================================
 // Types
@@ -150,6 +152,13 @@ export interface VoiceAgentSessionConfig {
    * Unset preserves legacy behavior (all fan-outs + dedup guard only).
    */
   endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
+  readonly metricsExporter?: MetricsExporter;
+  readonly observability?: {
+    readonly sessionId?: string;
+    readonly provider?: string;
+    readonly model?: string;
+    readonly region?: string;
+  };
 }
 
 export interface VoiceAgentSessionEvents {
@@ -210,6 +219,7 @@ export class VoiceAgentSession {
   private readonly ttsStallMs: number;
   private readonly inputCadenceTimeoutMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
+  private readonly observabilityObserver: ObservabilityObserver;
   private turnUserStoppedAtMs = new Map<string, number>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
@@ -292,6 +302,19 @@ export class VoiceAgentSession {
       },
     });
 
+    const obs = config.observability;
+    this.observabilityObserver = new ObservabilityObserver({
+      bus: this.bus,
+      exporter: config.metricsExporter ?? noopMetricsExporter,
+      sessionId: obs?.sessionId ?? "",
+      dims: {
+        provider: obs?.provider ?? "unknown",
+        model: obs?.model ?? "unknown",
+        region: obs?.region ?? "unknown",
+      },
+      getContextId: () => this.currentContextId,
+    });
+
     // Idle timeout — starts after bus handlers are wired
     this.idleTimeout = new IdleTimeoutManager(this.bus, config.idleTimeout);
 
@@ -305,6 +328,10 @@ export class VoiceAgentSession {
 
   get state(): SessionState {
     return this._state;
+  }
+
+  get currentContextId(): string {
+    return this.currentTurnId;
   }
 
   /** Register a plugin. Must be called before start(). */
@@ -353,6 +380,7 @@ export class VoiceAgentSession {
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
     this.watchdogs.dispose();
+    this.observabilityObserver.dispose();
     this.ttsPlayout.clear();
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
@@ -486,6 +514,8 @@ export class VoiceAgentSession {
     this.bus.on<ModeSwitchRequestedPacket>("mode.switch_requested", async (pkt) => {
       await this.modeSwitcher.handleSwitchRequested(pkt);
     });
+
+    this.observabilityObserver.wire();
   }
 
   // =========================================================================

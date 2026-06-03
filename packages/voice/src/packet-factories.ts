@@ -10,6 +10,8 @@
 import { ErrorCategory } from "./packets.js";
 import type {
   ConversationMetricPacket,
+  TurnBoundaryKind,
+  TurnBoundaryEventPacket,
   DtmfDigit,
   DtmfReceivedPacket,
   RecordUserAudioPacket,
@@ -61,6 +63,37 @@ export function metric(
   timestampMs: number = Date.now(),
 ): ConversationMetricPacket {
   return { kind: "metric.conversation", contextId, timestampMs, name, value };
+}
+
+export function turnBoundary(
+  contextId: string,
+  timestampMs: number,
+  fields: {
+    boundary: TurnBoundaryKind;
+    sessionId: string;
+    speechId: string;
+    monotonicMs: number;
+    provider?: string;
+    model?: string;
+    region?: string;
+    cancelled?: boolean;
+    requestId?: string;
+  },
+): TurnBoundaryEventPacket {
+  return {
+    kind: "obs.turn_boundary",
+    contextId,
+    timestampMs,
+    boundary: fields.boundary,
+    sessionId: fields.sessionId,
+    speechId: fields.speechId,
+    monotonicMs: fields.monotonicMs,
+    provider: fields.provider,
+    model: fields.model,
+    region: fields.region,
+    cancelled: fields.cancelled,
+    requestId: fields.requestId,
+  };
 }
 
 export function recordUserAudio(
