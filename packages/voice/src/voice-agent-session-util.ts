@@ -69,6 +69,7 @@ export interface VoiceSessionWatchdogsDeps {
   readonly sttForceFinalizeTimeoutMs: number;
   readonly vaqiMissedResponseMs: number;
   readonly ttsStallMs: number;
+  readonly inputCadenceTimeoutMs: number;
   readonly getSessionState: () => SessionState;
   readonly isGenerationInterrupted: (contextId: string) => boolean;
   readonly onVaqiMissedResponseFired: (contextId: string) => void;
@@ -82,6 +83,8 @@ export class VoiceSessionWatchdogs {
   private vaqiMissedResponseStartMs = 0;
   private ttsStallTimer: ReturnType<typeof setTimeout> | null = null;
   private ttsStallContextId = "";
+  private inputCadenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private inputCadenceContextId = "";
 
   constructor(private readonly deps: VoiceSessionWatchdogsDeps) {}
 
@@ -89,6 +92,7 @@ export class VoiceSessionWatchdogs {
     this.clearSttForceFinalizeTimer();
     this.clearVaqiMissedResponseTimer();
     this.clearTtsStallTimer();
+    this.clearInputCadenceWatchdog();
   }
 
   scheduleSttForceFinalize(contextId: string): void {
@@ -159,6 +163,43 @@ export class VoiceSessionWatchdogs {
 
   clearTtsStallTimerFor(contextId: string): void {
     if (this.ttsStallContextId === contextId) this.clearTtsStallTimer();
+  }
+
+  scheduleInputCadenceWatchdog(contextId: string): void {
+    if (this.deps.inputCadenceTimeoutMs <= 0) return;
+    if (this.deps.getSessionState() !== SessionState.Ready) return;
+
+    this.clearInputCadenceWatchdog();
+    this.inputCadenceContextId = contextId;
+    this.inputCadenceTimer = setTimeout(() => {
+      this.inputCadenceTimer = null;
+      const cid = this.inputCadenceContextId;
+      if (this.deps.getSessionState() !== SessionState.Ready) return;
+
+      this.deps.bus.push(
+        Route.Background,
+        make.metric(cid, "input.cadence_stall_ms", String(this.deps.inputCadenceTimeoutMs)),
+      );
+      this.deps.bus.push(Route.Critical, {
+        kind: "pipeline.error",
+        contextId: cid,
+        timestampMs: Date.now(),
+        component: "pipeline",
+        category: ErrorCategory.NetworkTimeout,
+        cause: new Error("inbound audio stalled"),
+        isRecoverable: true,
+      });
+
+      this.scheduleInputCadenceWatchdog(cid);
+    }, this.deps.inputCadenceTimeoutMs);
+  }
+
+  clearInputCadenceWatchdog(): void {
+    if (this.inputCadenceTimer) {
+      clearTimeout(this.inputCadenceTimer);
+      this.inputCadenceTimer = null;
+    }
+    this.inputCadenceContextId = "";
   }
 
   private clearSttForceFinalizeTimer(clearContext = true): void {
