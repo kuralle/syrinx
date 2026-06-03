@@ -1,0 +1,56 @@
+{
+  "note": "OBS-11-client-vs-orchestrator-e2e-latency.md",
+  "overall": "PASS",
+  "claims_checked": 6,
+  "claims": [
+    {
+      "claim": "LiveKit computes e2e_latency = started_speaking_at - stopped_speaking_at at agent_activity.py:2769",
+      "kind": "code_ref",
+      "cited": "agent_activity.py:2769",
+      "verdict": "SUPPORTED",
+      "found": "line 2769: 'e2e_latency = started_speaking_at - user_metrics[\"stopped_speaking_at\"]'; line 2770 'assistant_metrics[\"e2e_latency\"] = e2e_latency'",
+      "correction": ""
+    },
+    {
+      "claim": "stopped_speaking_at in the e2e calc is the USER's stop (VAD silence trigger), not the agent's",
+      "kind": "mechanism",
+      "cited": "agent_activity.py:2769",
+      "verdict": "SUPPORTED",
+      "found": "line 2768-2769 gate on 'if user_metrics and \"stopped_speaking_at\" in user_metrics' and subtract user_metrics[\"stopped_speaking_at\"] — confirms it is the user's stop timestamp",
+      "correction": ""
+    },
+    {
+      "claim": "started_speaking_at is pinned to when the TTS first audio frame is produced at orchestrator output",
+      "kind": "mechanism",
+      "cited": "agent_activity.py (around 2664)",
+      "verdict": "SUPPORTED",
+      "found": "started_speaking_at set inside _on_first_frame callback (line 2656-2664): 'started_speaking_at = fut.result() or time.time()' where fut is _AudioOutput.first_frame_fut — agent's first audio frame",
+      "correction": ""
+    },
+    {
+      "claim": "Modal records audio in same space as client and runs Pyannote (Precision-2) speaker diarization offline to recover turn boundaries",
+      "kind": "source_figure",
+      "cited": "modal-v2v line 46",
+      "verdict": "SUPPORTED",
+      "found": "modal source: 'Record conversation in the same space as the client -> full end-to-end latency incl hardware. Use **Pyannote (Precision-2)** for speaker diarization to find start/end of each speaker's turns -> compute/aggregate v2v latency.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram VAQI 'L' (Latency) defined as 'the time between user speech ends and assistant response begins' (~962)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~962",
+      "verdict": "SUPPORTED",
+      "found": "deepgram pdf lines 970-971: 'Latency (L): elapsed time from UserStoppedSpeaking to AgentStartedSpeaking'. Note's wording is a faithful paraphrase (in quotes); semantically equivalent. The 'doesn't specify where timestamps taken' caveat is an interpretation, not a misquote.",
+      "correction": ""
+    },
+    {
+      "claim": "Quantitative deltas: server-side number 100-300ms smaller; ~40-60ms encode+decode; 10-50ms/leg jitter; 10-30ms hardware; 800ms server -> 1000-1200ms client",
+      "kind": "mechanism",
+      "cited": "(note's own reasoning, no source attributed)",
+      "verdict": "UNVERIFIABLE",
+      "found": "These figures are hedged estimates ('typically', '~', 'often') presented as the note's own reasoning, not attributed to any source capture. Not falsifiable against a ground-truth document. Modal source does confirm '~1 second median v2v' which is consistent with the client-side range cited.",
+      "correction": ""
+    }
+  ],
+  "summary": "All checkable citations verified. agent_activity.py:2769 is exact (e2e_latency = started_speaking_at - user_metrics['stopped_speaking_at']). The mechanism claims about which timestamp is user vs agent and that started_speaking_at = TTS first audio frame are confirmed in code (_on_first_frame from _AudioOutput.first_frame_fut). modal-v2v Pyannote Precision-2 diarization claim is exact. deepgram VAQI 'L' definition matches (elapsed time UserStoppedSpeaking->AgentStartedSpeaking); note's paraphrase is faithful. The numeric latency deltas in para 18 are the note's own hedged estimates, not source-attributed, so UNVERIFIABLE but internally consistent with Modal's ~1s figure. No WRONG claims."
+}

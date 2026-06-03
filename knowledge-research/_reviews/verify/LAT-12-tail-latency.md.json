@@ -1,0 +1,80 @@
+{
+  "note": "LAT-12-tail-latency.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "fallback_adapter.py:154-199 = timeout-triggered failover (5s static cut)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/llm/fallback_adapter.py:154",
+      "verdict": "SUPPORTED",
+      "found": "L153-155 `_try_generate(...)`; L175 `timeout=self._fallback_adapter._attempt_timeout`; L186 `except asyncio.TimeoutError:` -> 'timed out, switching to next LLM'. Default `attempt_timeout: float = 5.0` at L45.",
+      "correction": ""
+    },
+    {
+      "claim": "attempt_timeout default is 5.0s (the '5s cut')",
+      "kind": "code_ref",
+      "cited": "fallback_adapter.py (implied 5s)",
+      "verdict": "SUPPORTED",
+      "found": "L45 `attempt_timeout: float = 5.0,`; L55 docstring 'Defaults to 5.0.'; L71 `self._attempt_timeout = attempt_timeout`.",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi hedging 'shaved >1000ms off P95 latency'",
+      "kind": "source_figure",
+      "cited": "vapi-latency",
+      "verdict": "SUPPORTED",
+      "found": "L38 'This system alone shaved >1000ms off P95 latency.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: ~5% of turns hung up to 5000ms",
+      "kind": "source_figure",
+      "cited": "vapi-latency",
+      "verdict": "SUPPORTED",
+      "found": "L32 'Still ~5% of turns hung up to 5000ms (\"death spiral\").'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi attacks tail with per-endpoint mean+kσ dynamic timeout hedging",
+      "kind": "mechanism",
+      "cited": "vapi-latency",
+      "verdict": "SUPPORTED",
+      "found": "L43 'Hedged requests with per-endpoint dynamic timeout (mean+k·σ) to kill silent hangs. Tail latency (P95/P99), not average, is what breaks conversation.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal selects inference engine on 'P95 TTFT, not throughput'",
+      "kind": "source_figure",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "L57 'Pick LLM inference engine by P95 TTFT, not throughput.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal reports results as eCDFs of v2v latency across deployments",
+      "kind": "source_figure",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "L47 'IMAGE (voice-ai-results.webp): v2v latency eCDFs across deployments.'",
+      "correction": ""
+    },
+    {
+      "claim": "Together: 'every 10ms matters -> need deep observability'",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "Summary L33 'Every 10ms matters -> need deep observability'; raw transcript: '10 milliseconds matters. Okay.'",
+      "correction": ""
+    },
+    {
+      "claim": "Together: scale up aggressively so requests never back up",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "Summary L34 'Auto-scaling: scale up aggressively (never let requests back up); scale down carefully...'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 9 checkable assertions verified against ground truth. The code_ref to fallback_adapter.py:154-199 correctly captures the timeout-triggered failover mechanism with the 5.0s default attempt_timeout. All Vapi (>1000ms P95, 5% hung to 5000ms, mean+kσ), Modal (P95 TTFT, eCDFs), and Together (10ms/observability, scale-up-aggressively) figures match their sources, including the raw YouTube transcript. PASS."
+}

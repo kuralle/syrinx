@@ -1,0 +1,88 @@
+{
+  "note": "STT-01-streaming-vs-batch.md",
+  "overall": "FAIL",
+  "claims_checked": 10,
+  "claims": [
+    {
+      "claim": "DeepgramSTTService opens client.listen.v1.connect(**kwargs) once",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:632",
+      "verdict": "SUPPORTED",
+      "found": "line 632: async with self._client.listen.v1.connect(**connect_kwargs) as connection:",
+      "correction": ""
+    },
+    {
+      "claim": "pushes media frames into the socket via send_media",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:534",
+      "verdict": "SUPPORTED",
+      "found": "line 534: await self._connection.send_media(audio)",
+      "correction": ""
+    },
+    {
+      "claim": "receives results via a MESSAGE callback at :685",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:685",
+      "verdict": "SUPPORTED",
+      "found": "line 685: async def _on_message(self, message): -- this is the MESSAGE handler body; registration is connection.on(EventType.MESSAGE, self._on_message) at line 635",
+      "correction": ""
+    },
+    {
+      "claim": "StreamAdapter VAD-segments and calls recognize() once per utterance",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/stt/stream_adapter.py:122-139",
+      "verdict": "SUPPORTED",
+      "found": "lines 122-139: merged_frames = utils.merge_frames(event.frames); t_event = await self._wrapped_stt.recognize(buffer=merged_frames, ...) on END_OF_SPEECH; emits FINAL_TRANSCRIPT",
+      "correction": ""
+    },
+    {
+      "claim": "frontmatter code_ref stream_adapter.py:97 anchors the adapter run loop",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/stt/stream_adapter.py:97",
+      "verdict": "SUPPORTED",
+      "found": "line 97: async def _run(self) -> None: -- the StreamAdapterWrapper run loop",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram glossary: 'Streaming processes audio incrementally and emits results in real time. Batch ... introduces unacceptable latency for conversational UX'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook:1951-1955",
+      "verdict": "SUPPORTED",
+      "found": "lines 1952-1954: 'Streaming processes audio incrementally and emits results in real time. Batch processes complete audio after recording ends... batch processing introduces unacceptable latency for conversational UX.'",
+      "correction": ""
+    },
+    {
+      "claim": "STT latency = time to complete transcript after user stops; Together runs P90 ~100ms; STT trend batch->streaming",
+      "kind": "source_figure",
+      "cited": "together-talk:16-19",
+      "verdict": "SUPPORTED",
+      "found": "line 16: 'Latency = time to complete transcript after the user stops speaking. Together runs models at P90 ~100ms.' line 19: 'evolution from batch -> streaming.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram exposes /v1/listen and /v2/listen for streaming vs the async/batch path",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook:1984-1993",
+      "verdict": "WRONG",
+      "found": "line 1984 '/v1/listen' = 'Low-latency streaming STT over WebSocket' (non-Flux); line 1993 '/v2/listen' = Flux conversational streaming. BOTH endpoints are streaming WebSocket; the ebook describes NO async/batch listen path at these lines. The note's 'vs the async/batch path' framing misrepresents what these two endpoints are.",
+      "correction": "Both /v1/listen and /v2/listen are streaming endpoints (v1=regular streaming non-Flux, v2=Flux conversational streaming). Remove the 'vs the async/batch path' contrast -- the ebook does not document an async/batch listen endpoint here."
+    },
+    {
+      "claim": "Modal chose batch-style segment-then-transcribe (Parakeet) over streaming and still hit ~1s v2v",
+      "kind": "source_figure",
+      "cited": "modal-v2v:33",
+      "verdict": "MISCITED",
+      "found": "line 33 supports the Parakeet segment-then-transcribe-faster-than-streaming claim and 'only thing that matters... is the final transcript time'. But the '~1s v2v' figure is at line 26 ('Apps target ~1 second or less'), not line 33.",
+      "correction": "modal-v2v:26 for the ~1s v2v target; modal-v2v:33 for the segment-then-transcribe choice."
+    },
+    {
+      "claim": "Whisper/OpenAI are inherently batch and are wrapped (Pipecat SegmentedSTTService, LiveKit StreamAdapter)",
+      "kind": "mechanism",
+      "cited": "note prose (Prior-art divergence)",
+      "verdict": "SUPPORTED",
+      "found": "StreamAdapter confirmed in stream_adapter.py: wraps a batch STT (calls recognize() per VAD segment); StreamAdapterWrapper docstring 'recognize speech from vad'. Consistent with claim.",
+      "correction": ""
+    }
+  ],
+  "summary": "5 code_refs all SUPPORTED. deepgram glossary and together-talk figures SUPPORTED. One WRONG: the note frames /v1/listen and /v2/listen as 'streaming vs the async/batch path', but per deepgram-ebook:1981-1993 both are streaming WebSocket endpoints (v1 regular streaming, v2 Flux conversational) -- no async/batch listen endpoint is documented there. One MISCITED: the ~1s v2v figure is at modal-v2v:26 not :33 (:33 supports the segment-then-transcribe claim only)."
+}

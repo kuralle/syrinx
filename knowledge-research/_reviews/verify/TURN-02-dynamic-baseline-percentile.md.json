@@ -1,0 +1,96 @@
+{
+  "note": "TURN-02-dynamic-baseline-percentile.md",
+  "overall": "PASS",
+  "claims_checked": 11,
+  "claims": [
+    {
+      "claim": "DynamicEndpointing class at endpointing.ts:90",
+      "kind": "code_ref",
+      "cited": "agents-js/agents/src/voice/turn_config/endpointing.ts:90",
+      "verdict": "SUPPORTED",
+      "found": "line 90: 'export class DynamicEndpointing extends BaseEndpointing {'",
+      "correction": ""
+    },
+    {
+      "claim": "two ExpFilters alpha=0.9, #utterancePause(init=minDelay), #turnPause(init=maxDelay)",
+      "kind": "code_ref",
+      "cited": "agents-js/agents/src/voice/turn_config/endpointing.ts:90",
+      "verdict": "SUPPORTED",
+      "found": "lines 109-120: #utterancePause = new ExpFilter({alpha, initial:minDelay,...}); #turnPause = new ExpFilter({alpha, initial:maxDelay,...}); default alpha=0.9 (line 102)",
+      "correction": ""
+    },
+    {
+      "claim": "on each end-of-speech learns observed between-utterance vs between-turn pause (endpointing.ts:225-241)",
+      "kind": "code_ref",
+      "cited": "agents-js/agents/src/voice/turn_config/endpointing.ts:225",
+      "verdict": "SUPPORTED",
+      "found": "line 225 this.#utterancePause.apply(1, betweenUtteranceDelay); line 229/233 this.#turnPause.apply(...); line 240 #utterancePause.apply(...) inside onEndOfSpeech",
+      "correction": ""
+    },
+    {
+      "claim": "EMAs clamped to [minDelay, maxDelay]",
+      "kind": "mechanism",
+      "cited": "agents-js/agents/src/voice/turn_config/endpointing.ts:90",
+      "verdict": "SUPPORTED",
+      "found": "ExpFilter constructed with minVal:minDelay, maxVal:maxDelay for both filters (lines 109-120)",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi keeps 30-second rolling window, 85th percentile as dynamic baseline (Problem #1)",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #1",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:14 'Maintains a 30-second rolling window of audio levels, uses the 85th percentile as a dynamic baseline, auto-adjusting to quiet/loud speakers'",
+      "correction": ""
+    },
+    {
+      "claim": "RMS over 3-second rolling windows of 20ms chunks (Problem #2)",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:21 'Baseline Tracking: RMS amplitude over 3-second rolling windows using 20ms chunks.'",
+      "correction": ""
+    },
+    {
+      "claim": "85th-percentile dynamic threshold (Problem #2)",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:22 'Dynamic Thresholds: 85th percentile of audio-level distribution as filtering threshold.'",
+      "correction": ""
+    },
+    {
+      "claim": "updated every 100ms via exponential smoothing",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:23 'Continuous Adaptation: update baseline every 100ms via exponential smoothing.'",
+      "correction": ""
+    },
+    {
+      "claim": "static fallback ~-35dB",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:25 'Static fallback thresholds ~-35dB; baseline offsets auto-adjust when TV/music detected.'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat smooths volume with EMA at vad_analyzer.py:168",
+      "kind": "code_ref",
+      "cited": "pipecat vad_analyzer.py:168",
+      "verdict": "SUPPORTED",
+      "found": "line 168-171: def _get_smoothed_volume ... return exp_smoothing(volume, self._prev_volume, self._smoothing_factor)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat _smoothing_factor=0.2",
+      "kind": "code_ref",
+      "cited": "pipecat vad_analyzer.py (stated as 0.2)",
+      "verdict": "SUPPORTED",
+      "found": "line 85: self._smoothing_factor = 0.2 (default value; note cites it inline alongside the :168 ref, value is correct)",
+      "correction": ""
+    }
+  ],
+  "summary": "All 11 checkable assertions verified against ground truth. Both LiveKit-JS code_refs (endpointing.ts:90 DynamicEndpointing, :225-241 learning logic) are accurate including the dual ExpFilter alpha=0.9 / init=minDelay,maxDelay / clamp design. All five Vapi figures (30s window, 85th pct, 3s RMS over 20ms chunks, 100ms exp-smoothing, -35dB fallback) match vapi-pipeline-part-2.md verbatim. Pipecat EMA-volume claim and _smoothing_factor=0.2 both confirmed (factor literal lives at line 85, mechanism at 168 as cited). No WRONG or MISCITED claims."
+}

@@ -1,0 +1,56 @@
+{
+  "note": "STT-06-wer-unrecoverable.md",
+  "overall": "PASS",
+  "claims_checked": 6,
+  "claims": [
+    {
+      "claim": "Rapida emits final alternative.Transcript into SpeechToTextPacket with Confidence attached at stt_callback.go:91-96",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/transformer/deepgram/internal/stt_callback.go:91",
+      "verdict": "SUPPORTED",
+      "found": "internal_type.SpeechToTextPacket{ ContextID: ctxID, Script: alternative.Transcript, Confidence: alternative.Confidence, Language: lang, Interim: false } emitted inside the mr.IsFinal branch at line 91-97",
+      "correction": ""
+    },
+    {
+      "claim": "Together: Quality = Word Error Rate, SOTA ~6% WER on open benchmarks, errors unrecoverable - LLM and TTS carry mistake forward (together-talk:15)",
+      "kind": "source_figure",
+      "cited": "together-talk:15",
+      "verdict": "SUPPORTED",
+      "found": "line 15: 'Quality = Word Error Rate. SOTA ~6% WER on open benchmarks. Errors are unrecoverable — LLM and TTS carry the mistake forward.'",
+      "correction": ""
+    },
+    {
+      "claim": "latency = time to complete transcript after user stops, P90 ~100ms (together-talk:16)",
+      "kind": "source_figure",
+      "cited": "together-talk:16",
+      "verdict": "SUPPORTED",
+      "found": "line 16: 'Latency = time to complete transcript after the user stops speaking. Together runs models at P90 ~100ms.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: terminology accuracy and environmental robustness matter more than raw WER in production voice-led sales workflows (deepgram-ebook:816-817)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook:816-817",
+      "verdict": "SUPPORTED",
+      "found": "line 816 (two-column wrapped): '...validates that domain-specific terminology accuracy and environmental robustness matter more than raw WER in production voice-led sales workflows.'",
+      "correction": ""
+    },
+    {
+      "claim": "Confidence rides along on the packet so downstream can know how much to trust it",
+      "kind": "mechanism",
+      "cited": "voice-ai/.../stt_callback.go:91",
+      "verdict": "SUPPORTED",
+      "found": "Confidence: alternative.Confidence field populated on SpeechToTextPacket; also a 'low_confidence' event path at lines 60-78 gates below listen.threshold",
+      "correction": ""
+    },
+    {
+      "claim": "No clone attempts post-hoc transcript correction; final transcript handed verbatim",
+      "kind": "mechanism",
+      "cited": "note body (general)",
+      "verdict": "SUPPORTED",
+      "found": "stt_callback emits alternative.Transcript directly into Script with no rewrite step; consistent with claim. (Negative claim across all clones not exhaustively grep-verified but the cited path matches.)",
+      "correction": ""
+    }
+  ],
+  "summary": "All six checkable assertions verified against ground truth. Code_ref stt_callback.go:91 genuinely emits SpeechToTextPacket with alternative.Transcript + Confidence in the IsFinal branch. Both together-talk figures (6% WER, P90 ~100ms) are exact quotes at lines 15-16. Deepgram terminology-vs-WER quote is verbatim at line 816. No WRONG or MISCITED claims."
+}

@@ -1,0 +1,72 @@
+{
+  "note": "TTS-01-streaming-vs-batch.md",
+  "overall": "PARTIAL",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "Cartesia run_tts sends transcript over open socket and returns immediately (yield None)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/tts.py:722",
+      "verdict": "SUPPORTED",
+      "found": "line 722 'async def run_tts(self, text, context_id)'; line 744 'await self._get_websocket().send(msg)'; line 752 'yield None'",
+      "correction": ""
+    },
+    {
+      "claim": "audio arrives asynchronously in _process_messages at :713",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/tts.py:713",
+      "verdict": "MISCITED",
+      "found": "line 713 is 'async def _receive_messages'; _process_messages is defined at line 668 and handles 'chunk' audio frames at lines 690-697",
+      "correction": "pipecat/src/pipecat/services/cartesia/tts.py:668 (chunk handling 690-697)"
+    },
+    {
+      "claim": "LiveKit StreamAdapter synthesizes sentence-by-sentence over non-streaming API, forwarding each sentence's audio as it completes",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/tts/stream_adapter.py:89-137",
+      "verdict": "SUPPORTED",
+      "found": "_run at line 89; sent_stream = sentence_tokenizer.stream() (90); per-token loop 'async for ev in sent_stream' (123) wraps 'self._tts._wrapped_tts.synthesize(text)' (131) and 'output_emitter.push(audio.frame.data.tobytes())' (135)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat assumes websocket streaming provider for WebsocketTTSService base",
+      "kind": "mechanism",
+      "cited": "note inline (no line)",
+      "verdict": "SUPPORTED",
+      "found": "Cartesia streaming class connects a persistent websocket (run_tts: 'if not self._websocket ...: await self._connect()'; _receive_messages reconnects on timeout). Consistent with websocket-streaming base assumption.",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi batch cascade: TTS sends complete text and waits for entire audio before playing, contributing to over 4 seconds of dead air",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-1, L9-14",
+      "verdict": "SUPPORTED",
+      "found": "L11 'TTS: send complete text -> wait for entire audio -> play.'; L13 'This cascade of waiting creates over 4 seconds of dead air between turns.' (actual file vapi-pipeline-part-1.md)",
+      "correction": "source filename is vapi-pipeline-part-1.md (map lists vapi-pipeline-1)"
+    },
+    {
+      "claim": "handle audio in 20ms chunks instead of multi-second files",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-1",
+      "verdict": "SUPPORTED",
+      "found": "L18 'Re-architect everything to handle audio in 20ms chunks instead of multi-second files.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal KokoroTTS streaming output minimizes time-to-first-byte (TTFB) at the client",
+      "kind": "source_figure",
+      "cited": "modal-v2v L35",
+      "verdict": "SUPPORTED",
+      "found": "'TTS: KokoroTTS (82M). Fast + streaming output minimizes time-to-first-byte (TTFB) at the client.' at ~L35",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram /v1/speak supports streaming and non-streaming output",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L2001",
+      "verdict": "SUPPORTED",
+      "found": "Endpoint: /v1/speak ... 'Supports streaming and non-streaming output.' at ~L2000-2001",
+      "correction": ""
+    }
+  ],
+  "summary": "All source figures (vapi 4s dead air + 20ms chunks, modal TTFB, deepgram /v1/speak) and the two core code mechanisms verified. One MISCITE: cartesia/tts.py:713 points at _receive_messages; audio-chunk handling actually lives in _process_messages at :668 (chunks at 690-697). Source map filename vapi-pipeline-1 resolves to vapi-pipeline-part-1.md. No WRONG claims."
+}

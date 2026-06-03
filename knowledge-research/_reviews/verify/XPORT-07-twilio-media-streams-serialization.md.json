@@ -1,0 +1,104 @@
+{
+  "note": "XPORT-07-twilio-media-streams-serialization.md",
+  "overall": "PASS",
+  "claims_checked": 12,
+  "claims": [
+    {
+      "claim": "twilio.py:238 inbound deserialize: parse JSON, on event==media base64-decode media.payload, ulaw_to_pcm -> InputAudioRawFrame; on event==dtmf emit InputDTMFFrame(KeypadEntry(digit))",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:238",
+      "verdict": "SUPPORTED",
+      "found": "L238 'async def deserialize'; L251 if message[\"event\"]==\"media\"; L256 await ulaw_to_pcm(...); L263 InputAudioRawFrame; L267 elif event==\"dtmf\"; L271 InputDTMFFrame(KeypadEntry(digit))",
+      "correction": ""
+    },
+    {
+      "claim": "twilio.py:129 outbound serialize: AudioRawFrame -> pcm_to_ulaw -> base64 -> {event:media, streamSid:self._stream_sid, media:{payload}}",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:129",
+      "verdict": "SUPPORTED",
+      "found": "L129 'async def serialize'; the AudioRawFrame envelope is L152-170: pcm_to_ulaw, base64.b64encode, answer={'event':'media','streamSid':self._stream_sid,'media':{'payload':payload}}. Line 129 is the method entry point of the cited function.",
+      "correction": ""
+    },
+    {
+      "claim": "twilio.py:149-151 on InterruptionFrame emit {event:clear, streamSid:...}",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:149",
+      "verdict": "SUPPORTED",
+      "found": "L149 elif isinstance(frame, InterruptionFrame): L150 answer={'event':'clear','streamSid':self._stream_sid}; L151 return json.dumps(answer)",
+      "correction": ""
+    },
+    {
+      "claim": "twilio.py:142 on EndFrame/CancelFrame optionally hits Twilio REST API to set Status=completed (auto-hangup)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:142",
+      "verdict": "SUPPORTED",
+      "found": "L142 self._params.auto_hang_up within isinstance(frame,(EndFrame,CancelFrame)) check (L141-147); _hang_up_call at L179 POSTs params={'Status':'completed'} to Twilio Calls endpoint (L202,L206)",
+      "correction": ""
+    },
+    {
+      "claim": "serializer constructed with stream_sid",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:129 (frontmatter / body 'constructed with stream_sid')",
+      "verdict": "SUPPORTED",
+      "found": "__init__ L58-60 takes stream_sid: str; L107 self._stream_sid = stream_sid",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare TwilioMediaMessage envelope at index.ts:148",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/twilio/src/index.ts:148",
+      "verdict": "SUPPORTED",
+      "found": "L148 'interface TwilioMediaMessage {' L149 event:\"media\" L150 streamSid:string L155 payload:string // base64 mulaw",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare uses event:mark to correlate agent JSON events at index.ts:255-266",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/twilio/src/index.ts:255",
+      "verdict": "SUPPORTED",
+      "found": "L255 comment 'Forward as a mark so the Twilio side can correlate events'; L264-270 serverSocket.send(JSON.stringify({event:'mark', streamSid, mark:{name:...}}))",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare converts agent MP3 TTS to mulaw at index.ts:12",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/twilio/src/index.ts:12",
+      "verdict": "SUPPORTED",
+      "found": "L12 \"Encoding VoiceAgent's MP3 TTS output -> mulaw 8kHz base64 for Twilio\" (note: outbound conversion code L284-295 actually treats agent audio as 16kHz PCM and warns MP3 cannot be decoded on Workers; the MP3 framing is from the header comment as cited)",
+      "correction": ""
+    },
+    {
+      "claim": "frontmatter code_ref index.ts:129 (Cloudflare envelope)",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/twilio/src/index.ts:129",
+      "verdict": "MISCITED",
+      "found": "L129 is '// --- Twilio protocol types ---' (a section comment). The TwilioMediaMessage envelope is at L148, which the note body cites correctly.",
+      "correction": "cloudflare-agents/voice-providers/twilio/src/index.ts:148"
+    },
+    {
+      "claim": "Deepgram: 'Each session is identified by a unique call or stream identifier, which must be preserved on all inbound and outbound media to avoid cross-call contamination' (ebook 709-711)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 709-711",
+      "verdict": "SUPPORTED",
+      "found": "L709-711: 'Each session is identified by a unique call or stream identifier, which must be preserved on all inbound and outbound media to avoid cross-call contamination.' Exact match.",
+      "correction": ""
+    },
+    {
+      "claim": "DTMF handled 'outside the speech pipeline so they do not pollute transcripts' (ebook 755)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 755",
+      "verdict": "SUPPORTED",
+      "found": "L754-755: 'DTMF tones should be detected explicitly and handled outside the speech pipeline so they do not pollute transcripts.' Exact match at L755.",
+      "correction": ""
+    },
+    {
+      "claim": "Mechanism: without clear, already-sent-but-unplayed audio keeps playing after interrupt (clear flushes Twilio outbound media buffer)",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:149-151 + Twilio protocol semantics",
+      "verdict": "SUPPORTED",
+      "found": "Code emits {event:'clear', streamSid} on InterruptionFrame; clear is Twilio's documented Media Streams message to empty the buffered outbound audio. Deepgram ebook L737-740 corroborates barge-in must stop/mute outbound audio immediately. Mechanism consistent with code + protocol.",
+      "correction": ""
+    }
+  ],
+  "summary": "All technical assertions verified against ground truth. Pipecat twilio.py code_refs (129/238/149/142) accurately describe the JSON envelope, ulaw deserialize/serialize, clear barge-in, and REST auto-hangup. Cloudflare index.ts body citations (148 envelope, 255-266 marks, 12 MP3->mulaw) check out. Both Deepgram quotes (cross-call contamination L709-711, DTMF out-of-band L755) are exact. Only nit: the frontmatter code_ref index.ts:129 points to a section-divider comment rather than the TwilioMediaMessage interface at L148 (which the body cites correctly) -- MISCITED, not WRONG."
+}

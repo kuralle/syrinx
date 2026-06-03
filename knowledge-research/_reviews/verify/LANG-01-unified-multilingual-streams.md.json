@@ -1,0 +1,80 @@
+{
+  "note": "LANG-01-unified-multilingual-streams.md",
+  "overall": "PARTIAL",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "Frontmatter code_ref deepgram.go:92 shows keyword/keyterm STT param handling",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/transformer/deepgram/deepgram.go:92",
+      "verdict": "SUPPORTED",
+      "found": "line 92: `if keywordsRaw, exists := dgOpt.mdlOpts[\"listen.keyword\"]; exists {` — start of the keyword/keyterm block (92-117)",
+      "correction": ""
+    },
+    {
+      "claim": "deepgram.go:92-117 branches on whether config specifies `keyword` vs `keyterm` model params",
+      "kind": "mechanism",
+      "cited": "deepgram.go:92-117",
+      "verdict": "MISCITED",
+      "found": "Block reads a SINGLE config key `listen.keyword`; then branches on opts.Model: line 109 `if opts.Model == \"nova-2\" { opts.Keywords = keywords }`, line 112 `if opts.Model == \"nova-3\" { opts.Keyterm = keywords }`. The branch is on model name, not a 'keyword vs keyterm' config param. Cited line range is correct; mechanism phrasing is imprecise.",
+      "correction": "deepgram.go:109-114 — branches on opts.Model (nova-2 -> opts.Keywords, nova-3 -> opts.Keyterm) from the single listen.keyword input"
+    },
+    {
+      "claim": "stt_callback.go:52-143 handles is_final emits independent of language (stream is language-agnostic)",
+      "kind": "mechanism",
+      "cited": "stt_callback.go:52-143",
+      "verdict": "SUPPORTED",
+      "found": "Message() 52-143: control flow branches on confidence threshold (60-79) and `if mr.IsFinal {` (81), never on language. Language extracted via GetMostUsedLanguage (57) and attached as packet metadata only; no language-conditional routing.",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram defines two multilingual strategies: unified multilingual conversational streams and language-specialized streams (~808-818)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~808-818",
+      "verdict": "SUPPORTED",
+      "found": "'Unified multilingual conversational streams, where a single real-time stream supports multiple languages dynamically' and 'Language-specialized conversational streams, where the system converges on a dominant language and optimizes for it over time'",
+      "correction": ""
+    },
+    {
+      "claim": "Unified streams 'prioritize continuity. They avoid disruptive mid-conversation transitions, simplify orchestration, and handle moderate code-switching naturally' (~822-825)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~822-825",
+      "verdict": "SUPPORTED",
+      "found": "'Unified multilingual streams prioritize continuity. They avoid disruptive mid-conversation transitions, simplify orchestration, and handle moderate code-switching naturally.' — verbatim",
+      "correction": ""
+    },
+    {
+      "claim": "Example: customer support bot 'responds in Spanish, then seamlessly switches to French if the user changes languages mid-conversation' (~816)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~816",
+      "verdict": "SUPPORTED",
+      "found": "'...a customer support bot' / 'that responds in Spanish, then seamlessly switches to French if the user' / 'changes languages mid-conversation' — verbatim (two-column wrap)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram advises continuity usually matters more than marginal accuracy gains unless regulatory/domain/cost considerations dictate otherwise (~824-827)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~824-827",
+      "verdict": "SUPPORTED",
+      "found": "'In practice, real-time voice agents benefit most from minimizing disruption. Continuity usually matters more than marginal accuracy gains unless regulatory, domain-specific, or cost considerations dictate otherwise.' — verbatim",
+      "correction": ""
+    },
+    {
+      "claim": "Language Coach pattern: Nova-3 Multilingual real-time transcription in one continuous session, code-switching without reinitialization (~1429-1455)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~1429-1455",
+      "verdict": "SUPPORTED",
+      "found": "Header 1429 'Language Coach (Multilingual and Localization Pattern)'; body 'Nova-3 Multilingual handles real-time transcription across languages within one continuous session, enabling natural code-switching without reinitialization.'",
+      "correction": ""
+    },
+    {
+      "claim": "Cross-note links (LANG-02/03/04, STT-01) listed as related",
+      "kind": "cross_note_link",
+      "cited": "LANG-02/03/04, STT-01",
+      "verdict": "UNVERIFIABLE",
+      "found": "Links line lists neighbors; note does not assert any neighbor proves a specific claim — nothing to refute.",
+      "correction": ""
+    }
+  ],
+  "summary": "All deepgram-ebook quotes verified verbatim against the ground-truth parsed PDF (two-column layout; cited ~line numbers approximate but text exact). Both cited code files exist at the stated lines. One inline mechanism claim is MISCITED/imprecise: deepgram.go:92-117 reads a single `listen.keyword` config key and branches on opts.Model (nova-2 -> Keywords vs nova-3 -> Keyterm), not on a 'keyword vs keyterm config param' as worded. The 'language-agnostic emit' claim holds (control flow gates on confidence/IsFinal, never language). No WRONG claims, one MISCITED -> PARTIAL. (A prior reviewer marked PASS; I downgrade to PARTIAL on the mechanism-wording imprecision.)"
+}

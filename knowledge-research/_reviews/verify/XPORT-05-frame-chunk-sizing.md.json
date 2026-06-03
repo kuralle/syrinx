@@ -1,0 +1,72 @@
+{
+  "note": "XPORT-05-frame-chunk-sizing.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "audio_out_10ms_chunks defaults to 4",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/base_transport.py:69",
+      "verdict": "SUPPORTED",
+      "found": "audio_out_10ms_chunks: int = 4",
+      "correction": ""
+    },
+    {
+      "claim": "audio_bytes_10ms = (sample_rate/100)*channels*2; chunk_size = audio_bytes_10ms * audio_out_10ms_chunks (=40ms write unit)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/base_output.py:134",
+      "verdict": "SUPPORTED",
+      "found": "audio_bytes_10ms = int(self._sample_rate / 100) * self._params.audio_out_channels * 2; self._audio_chunk_size = audio_bytes_10ms * self._params.audio_out_10ms_chunks",
+      "correction": ""
+    },
+    {
+      "claim": "long TTS frames are re-chunked because it helps with interruption handling (base_output.py:83,133)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/base_output.py:83,133",
+      "verdict": "SUPPORTED",
+      "found": "line 83: 'If we receive long audio frames we will chunk them. This helps with interruption handling.' line 131-133: same comment in start()",
+      "correction": ""
+    },
+    {
+      "claim": "WebRTC RawAudioTrack: _samples_per_10ms = sample_rate*10//1000",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:94",
+      "verdict": "SUPPORTED",
+      "found": "self._samples_per_10ms = sample_rate * 10 // 1000",
+      "correction": ""
+    },
+    {
+      "claim": "add_audio_bytes rejects input not a multiple of 10ms (transport.py:113)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:113",
+      "verdict": "SUPPORTED",
+      "found": "if len(audio_bytes) % self._bytes_per_10ms != 0: raise ValueError('Audio bytes must be a multiple of 10ms size.')",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit room output AudioByteStream samples_per_channel = sample_rate // 20 (= 50ms frames)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/room_io/_output.py:52",
+      "verdict": "SUPPORTED",
+      "found": "AudioByteStream(sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True) at line 51-53",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: frame sizes in the 20-50 millisecond range strike a balance between reactivity and network efficiency; smaller frames increase responsiveness but raise overhead",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 509-513",
+      "verdict": "SUPPORTED",
+      "found": "'Audio should be streamed in small, consistent frames rather than buffered in large chunks. Frame sizes in the 20-50 millisecond range strike a balance between reactivity and network efficiency. Smaller frames increase responsiveness but raise overhead; larger frames reduce overhead but introduce audible lag.' (lines 509-513)",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi cites 20 ms chunks",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-1",
+      "verdict": "SUPPORTED",
+      "found": "'Re-architect everything to handle audio in 20ms chunks instead of multi-second files.' and 'Processes audio in 20ms chunks as it arrives' (vapi-pipeline-part-1.md lines 18, 24)",
+      "correction": ""
+    }
+  ],
+  "summary": "All four code_refs and both source figures verified against ground truth. Pipecat output default 40ms (4x10ms), WebRTC 10ms grain with multiple-of-10ms enforcement, LiveKit 50ms (sample_rate//20), Deepgram 20-50ms quote exact, Vapi 20ms exact. Minor: source file is named vapi-pipeline-part-1.md (note cites shortname vapi-pipeline-1) but content is fully supported."
+}

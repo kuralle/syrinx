@@ -1,0 +1,56 @@
+{
+  "note": "XPORT-12-packet-loss-concealment-opus-fec.md",
+  "overall": "PASS",
+  "claims_checked": 6,
+  "claims": [
+    {
+      "claim": "Pipecat Vonage transport exposes publisher_enable_opus_dtx",
+      "kind": "code_ref",
+      "cited": "vonage/client.py:84-95",
+      "verdict": "SUPPORTED",
+      "found": "L84 docstring 'publisher_enable_opus_dtx: Whether to enable OPUS DTX for publisher audio.'; L95 'publisher_enable_opus_dtx: bool = False'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat SmallWebRTCTransport creates RTCPeerConnection(rtc_config) with no custom codec params / FEC",
+      "kind": "code_ref",
+      "cited": "connection.py:315",
+      "verdict": "SUPPORTED",
+      "found": "L312 'rtc_config = RTCConfiguration(iceServers=self.ice_servers)'; L315 'self._pc = RTCPeerConnection(rtc_config)' — only ICE config passed, no codec/FEC params",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit AudioStreamDecoder decodes Opus->PCM, never inspects/sets FEC flags",
+      "kind": "code_ref",
+      "cited": "decoder.py:336ff",
+      "verdict": "SUPPORTED",
+      "found": "L336 'class AudioStreamDecoder' with docstring 'decode audio stream into PCM AudioFrames'; no FEC handling in the class",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida sets useinbandfec=1 in OpusSDPFmtpLine",
+      "kind": "code_ref",
+      "cited": "voice-ai (Rapida) channel/webrtc/internal/types.go:16",
+      "verdict": "SUPPORTED",
+      "found": "L16 'OpusSDPFmtpLine = \"minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;ptime=20\"'",
+      "correction": ""
+    },
+    {
+      "claim": "OpusSDPFmtpLine fed into the registered Opus codec capability",
+      "kind": "code_ref",
+      "cited": "voice-ai (Rapida) streamer.go:174",
+      "verdict": "SUPPORTED",
+      "found": "L174 'SDPFmtpLine: webrtc_internal.OpusSDPFmtpLine,' inside mediaEngine.RegisterCodec(RTPCodecParameters{ RTPCodecCapability{ MimeType: MimeTypeOpus ... } })",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram lists 'Choppy, Distorted, or Unnatural Audio' from 'playback buffering, encoding mismatches, or network instability'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~2060-2062",
+      "verdict": "SUPPORTED",
+      "found": "L2060 'Choppy, Distorted, or Unnatural Audio'; L2062 'Playback buffering, encoding mismatches, or network instability.'",
+      "correction": ""
+    }
+  ],
+  "summary": "Current note is fully accurate. All four code_refs (Pipecat Vonage DTX client.py:84-95, Pipecat SmallWebRTC connection.py:315, LiveKit AudioStreamDecoder decoder.py:336ff, Rapida types.go:16 + streamer.go:174) and the Deepgram ebook quote (~2060-2062) match ground truth at the cited lines. The note correctly frames Rapida (=voice-ai clone) as the exception that sets useinbandfec=1 in application code, and its self-flagged (Unverified: aiortc FEC defaults) caveat is honest since aiortc is outside the clone set. NOTE: a stale prior verdict JSON existed for an earlier draft (which had MISCITED decoder.py:58, deepgram ~2075, and a WRONG 'no clone configures FEC' thesis); the note has since been corrected and now passes."
+}

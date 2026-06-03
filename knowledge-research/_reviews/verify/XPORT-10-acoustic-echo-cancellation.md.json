@@ -1,0 +1,112 @@
+{
+  "note": "XPORT-10-acoustic-echo-cancellation.md",
+  "overall": "PARTIAL",
+  "claims_checked": 13,
+  "claims": [
+    {
+      "claim": "AgentSession exposes aec_warmup_duration field",
+      "kind": "code_ref",
+      "cited": "agent_session.py:149",
+      "verdict": "SUPPORTED",
+      "found": "line 149: 'aec_warmup_duration: float | None' in AgentSessionOptions dataclass",
+      "correction": ""
+    },
+    {
+      "claim": "aec_warmup_duration defaults to 3.0 seconds",
+      "kind": "code_ref",
+      "cited": "agent_session.py:240",
+      "verdict": "SUPPORTED",
+      "found": "line 240: 'aec_warmup_duration: float | None = 3.0,'",
+      "correction": ""
+    },
+    {
+      "claim": "Docstring: agent ignores user audio interruptions to prevent echo interruption before AEC is ready",
+      "kind": "code_ref",
+      "cited": "agent_session.py:308-310",
+      "verdict": "SUPPORTED",
+      "found": "lines 308-311: 'The duration in seconds that the agent will ignore user's audio interruptions after the agent starts speaking. This is useful to prevent the agent from being interrupted by echo before AEC is ready. Set to None to disable. Default 3.0 s.'",
+      "correction": ""
+    },
+    {
+      "claim": "Session tracks _aec_warmup_remaining",
+      "kind": "code_ref",
+      "cited": "agent_session.py:421",
+      "verdict": "SUPPORTED",
+      "found": "line 421: 'self._aec_warmup_remaining = aec_warmup_duration or 0.0'",
+      "correction": ""
+    },
+    {
+      "claim": "Starts a timer on first agent speech (:1553-1559)",
+      "kind": "code_ref",
+      "cited": "agent_session.py:1553-1559",
+      "verdict": "SUPPORTED",
+      "found": "lines 1551-1559: 'if state == speaking and self._aec_warmup_remaining > 0 and self._aec_warmup_timer is None ... self._aec_warmup_timer = self._loop.call_later(self._aec_warmup_remaining, self._on_aec_warmup_expired)'",
+      "correction": ""
+    },
+    {
+      "claim": "_on_aec_warmup_expired re-enables interruptions (:1510-1517)",
+      "kind": "code_ref",
+      "cited": "agent_session.py:1510-1517",
+      "verdict": "SUPPORTED",
+      "found": "lines 1510-1517: 'def _on_aec_warmup_expired ... logger.debug(aec warmup expired, re-enabling interruptions); self._aec_warmup_remaining = 0.0'",
+      "correction": ""
+    },
+    {
+      "claim": "CLI enables WebRTC AEC via echo_cancellation=True in room connect options",
+      "kind": "code_ref",
+      "cited": "cli.py:308",
+      "verdict": "MISCITED",
+      "found": "line 307-312: 'self._apm = rtc.AudioProcessingModule(echo_cancellation=True, noise_suppression=True, ...)' -- echo_cancellation=True is real and at the cited line, but it is set on an AudioProcessingModule (local console audio I/O), NOT 'room connect options' as the note states. The mechanism (CLI enables WebRTC AEC explicitly) is correct; the framing 'room connect options' is wrong.",
+      "correction": "echo_cancellation=True is on rtc.AudioProcessingModule at cli.py:308, not in room connect options"
+    },
+    {
+      "claim": "AudioRecognition has _ignore_user_transcript_until window",
+      "kind": "code_ref",
+      "cited": "audio_recognition.py:194",
+      "verdict": "SUPPORTED",
+      "found": "line 194: 'self._ignore_user_transcript_until: NotGivenOr[float] = NOT_GIVEN'",
+      "correction": ""
+    },
+    {
+      "claim": "ignore timestamp set at on_end_of_agent_speech (:311-344)",
+      "kind": "code_ref",
+      "cited": "audio_recognition.py:311-344",
+      "verdict": "SUPPORTED",
+      "found": "line 311: 'def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float)'; line 344: 'self._ignore_user_transcript_until = ignore_until - end_cooldown' -- set within the cited range",
+      "correction": ""
+    },
+    {
+      "claim": "governs _should_hold_event gating logic (:505+)",
+      "kind": "code_ref",
+      "cited": "audio_recognition.py:505+",
+      "verdict": "MISCITED",
+      "found": "line 504: 'def _should_hold_stt_event(self, ev: stt.SpeechEvent) -> bool:' with docstring 'Test if the event should be held until the ignore_user_transcript_until timestamp.' Method name is _should_hold_stt_event (not _should_hold_event) and def is at :504; cited ':505+' lands inside the method body. Mechanism correct.",
+      "correction": "method is _should_hold_stt_event at audio_recognition.py:504"
+    },
+    {
+      "claim": "Deepgram lists Echo/Audio Feedback Loops; fix is full-duplex + hardware echo cancellation; telephony gateway isolates channels",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~2071-2079, ~2076",
+      "verdict": "SUPPORTED",
+      "found": "'Echo or Audio Feedback Loops ... Audio routing configuration or lack of echo cancellation. ... full-duplex configuration, and hardware echo cancellation settings. In telephony scenarios, verify that the media gateway properly isolates inbound and outbound audio channels.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram Rust reference agent hard-mutes the mic",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~1546",
+      "verdict": "SUPPORTED",
+      "found": "Rust Agent diagram: 'Playback (Auto-mute mic)'; text: 'automatic microphone muting during playback to prevent feedback and support natural [conversation]'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat AlwaysUserMuteStrategy hard-mutes user during bot speech",
+      "kind": "code_ref",
+      "cited": "always_user_mute_strategy.py:14",
+      "verdict": "SUPPORTED",
+      "found": "line 13-14: 'class AlwaysUserMuteStrategy(BaseUserMuteStrategy): \"\"\"User mute strategy that always mutes the user while the bot is speaking.\"\"\"'; process_frame returns self._bot_speaking. Full path: pipecat/src/pipecat/turns/user_mute/always_user_mute_strategy.py",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and source figures verify. Two minor MISCITED framing issues: (1) cli.py:308 echo_cancellation=True is on an rtc.AudioProcessingModule for local console audio, not 'room connect options' as the note claims; (2) the transcript-hold method is _should_hold_stt_event at :504, not _should_hold_event at :505+. Mechanisms in both cases are correct. No WRONG claims."
+}

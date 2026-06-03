@@ -1,0 +1,72 @@
+{
+  "note": "TURN-10-single-source-of-truth-disable-vad.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "ExternalUserTurnStrategies: aggregator does not push UserStarted/StoppedSpeakingFrame and does not generate interruptions",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_turn_strategies.py:81-100",
+      "verdict": "SUPPORTED",
+      "found": "line 81 @dataclass; docstring l91-94: 'the user aggregator does not push UserStartedSpeakingFrame or UserStoppedSpeakingFrame frames, and does not generate interruptions'; __post_init__ sets External start/stop strategies",
+      "correction": ""
+    },
+    {
+      "claim": "wait_for_transcript=False takes transcripts off critical path when local turn detection is the driver (turn analyzer)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_stop/turn_analyzer_user_turn_stop_strategy.py:51-69",
+      "verdict": "SUPPORTED",
+      "found": "l51 wait_for_transcript: bool = True; l63-67 'When False, the strategy signals turn-end as soon as the turn analyzer reports COMPLETE... Set this to False when local turn detection is the intended driver... so transcripts are off the latency critical path'",
+      "correction": ""
+    },
+    {
+      "claim": "same wait_for_transcript flip in speech timeout stop strategy",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_stop/speech_timeout_user_turn_stop_strategy.py:56-70",
+      "verdict": "SUPPORTED",
+      "found": "l52 wait_for_transcript: bool = True; l66-69 'Set this to False when local turn detection is the intended driver... so transcripts are off the latency critical path'",
+      "correction": ""
+    },
+    {
+      "claim": "Cartesia Ink-2 supports_ttfs -> False, 'TTFS doesn't apply: the server defines turn boundaries directly'",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:176-179",
+      "verdict": "SUPPORTED",
+      "found": "l176-179: @property def supports_ttfs(self)->bool: '\"\"\"TTFS doesn't apply: the server defines turn boundaries directly.\"\"\"' return False",
+      "correction": ""
+    },
+    {
+      "claim": "no is_final flag and no finalize command because server owns the turn",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:65",
+      "verdict": "SUPPORTED",
+      "found": "l65-66 docstring: 'Transcripts are cumulative per turn; there is no is_final flag and no finalize command - closing the socket ends the session.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: downstream VAD/turn logic should be disabled; redundant detection causes desync -> premature/mid-utterance replies; Flux single source of truth",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~557-561",
+      "verdict": "SUPPORTED",
+      "found": "'When integrating Flux into frameworks like LiveKit, Pipecat, or Vapi, downstream VAD and turn logic should be disabled. Redundant detection introduces desynchronization, leading to premature responses or mid-utterance replies. Flux should be the single source of truth for conversational boundaries.' Note: note drops 'frameworks like' but bolded text matches verbatim.",
+      "correction": ""
+    },
+    {
+      "claim": "Flux emits deterministic turn events enabling orchestration to react without polling or redundant VAD",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~552",
+      "verdict": "SUPPORTED",
+      "found": "'Flux emits deterministic turn events, enabling the orchestration layer to react to speech boundaries without polling or redundant VAD.' (appears ~line 552 in figure caption block)",
+      "correction": ""
+    },
+    {
+      "claim": "LLMContextAggregatorPair flips wait_for_transcript when realtime_service_mode=True",
+      "kind": "mechanism",
+      "cited": "turn_analyzer_user_turn_stop_strategy.py:68-69 / speech_timeout:69-70",
+      "verdict": "SUPPORTED",
+      "found": "docstrings both state 'LLMContextAggregatorPair flips this for you when realtime_service_mode=True'",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and source quotes verified. Note PASSES."
+}

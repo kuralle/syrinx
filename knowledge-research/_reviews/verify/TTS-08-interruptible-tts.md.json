@@ -1,0 +1,80 @@
+{
+  "note": "TTS-08-interruptible-tts.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "_handle_interruption does full teardown: text_aggregator.handle_interruption, clears frame sequencer, resets word timestamps, stops audio-context task, drains serialization queue keeping uninterruptible frames, calls on_audio_context_interrupted per context",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:902",
+      "verdict": "SUPPORTED",
+      "found": "async def _handle_interruption(...): await self._text_aggregator.handle_interruption() ... self._aggregated_frame_sequencer.clear() ... await self.reset_word_timestamps() ... await self._stop_audio_context_task() ... self._serialization_queue.reset() ... for ctx_id in audio_contexts: await self.on_audio_context_interrupted(context_id=ctx_id) (lines 902-922)",
+      "correction": ""
+    },
+    {
+      "claim": "Cartesia sends per-context cancel {\"context_id\": ctx, \"cancel\": true}",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/tts.py:609",
+      "verdict": "SUPPORTED",
+      "found": "async def on_audio_context_interrupted(...): cancel_msg = json.dumps({\"context_id\": context_id, \"cancel\": True}); await self._get_websocket().send(cancel_msg) (lines 609-614)",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida Cartesia transformer handles TextToSpeechInterruptPacket by clearing context id and closing + reconnecting the websocket",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/transformer/cartesia/tts.go:197",
+      "verdict": "SUPPORTED",
+      "found": "case internal_type.TextToSpeechInterruptPacket: ct.contextId = \"\" ... conn := ct.connection; ct.connection = nil ... conn.Close() ... if err := ct.Initialize(); err != nil { ... reconnect after interrupt failed } (lines 197-216)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat InterruptibleTTSService uses disconnect/reconnect for providers lacking cancel, only when _bot_speaking",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:1620",
+      "verdict": "SUPPORTED",
+      "found": "class InterruptibleTTSService(...): async def _handle_interruption(...): await super()._handle_interruption(...); if self._bot_speaking: await self._disconnect(); await self._connect() (lines 1620-1624)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: TTS must be interruptible, cancellable, and replaceable at any moment. Voice agents that cannot stop themselves on demand will never feel conversational",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L558-561",
+      "verdict": "SUPPORTED",
+      "found": "L559-561: 'TTS must be interruptible, cancellable, and replaceable at any moment. Voice agents that cannot stop themselves on demand will never feel conversational.' (verbatim)",
+      "correction": ""
+    },
+    {
+      "claim": "Playback cancellation must be explicit so buffers clear",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L572-574",
+      "verdict": "SUPPORTED",
+      "found": "L574: 'Playback cancellation must be explicit so buffers and downstream components reset cleanly.'",
+      "correction": ""
+    },
+    {
+      "claim": "Together: guardrails must sit before TTS because 'you can't take back spoken words'",
+      "kind": "source_figure",
+      "cited": "together-talk L42",
+      "verdict": "SUPPORTED",
+      "found": "L42: 'guardrails after LLM generation, before TTS - because \"you can't take back spoken words\" -> must catch violations before TTS is invoked.'",
+      "correction": ""
+    },
+    {
+      "claim": "Serialization queue reset keeps uninterruptible frames e.g. FunctionCallResultFrame",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:916-918",
+      "verdict": "SUPPORTED",
+      "found": "Comment lines 916-917: 'Drops non-UninterruptibleFrame items while keeping uninterruptible ones (e.g. FunctionCallResultFrame) that must not be lost mid-flight.' followed by self._serialization_queue.reset()",
+      "correction": ""
+    },
+    {
+      "claim": "InterruptibleTTSService designed for TTS services that don't support word timestamps, reconnects websocket on interruption while speaking (basis for prior-art divergence mechanism 2)",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:1600-1605",
+      "verdict": "SUPPORTED",
+      "found": "Docstring: 'Designed for TTS services that don't support word timestamps. Handles interruptions by reconnecting the websocket when the bot is speaking and gets interrupted.'",
+      "correction": ""
+    }
+  ],
+  "summary": "All four code_refs and all three source figures verified against ground truth. Quotes are verbatim; line offsets are within 1-3 lines (PDF parse column-wrap). No WRONG or MISCITED claims."
+}

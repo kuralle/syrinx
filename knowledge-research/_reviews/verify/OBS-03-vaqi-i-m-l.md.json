@@ -1,0 +1,96 @@
+{
+  "note": "OBS-03-vaqi-i-m-l.md",
+  "overall": "PASS",
+  "claims_checked": 11,
+  "claims": [
+    {
+      "claim": "InterruptionMetrics defined with num_interruptions, num_backchannels, detection_delay, prediction_duration at metrics/base.py:166-181",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:166",
+      "verdict": "SUPPORTED",
+      "found": "class InterruptionMetrics(_BaseMetrics) at 166; prediction_duration:171, detection_delay:173, num_interruptions:175, num_backchannels:177",
+      "correction": ""
+    },
+    {
+      "claim": "e2e_latency computed at agent_activity.py:2769",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent_activity.py:2769",
+      "verdict": "SUPPORTED",
+      "found": "e2e_latency = started_speaking_at - user_metrics[\"stopped_speaking_at\"]",
+      "correction": ""
+    },
+    {
+      "claim": "VAQI definitions: I=agent speaks before user finishes; M=fails to respond within window after turn ends; L=UserStoppedSpeaking to AgentStartedSpeaking",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 962-971",
+      "verdict": "SUPPORTED",
+      "found": "Interruptions (I): how often the agent speaks before the user finishes; Missed responses (M): ...within a defined window after a turn ends; Latency (L): elapsed time from UserStoppedSpeaking to AgentStartedSpeaking",
+      "correction": ""
+    },
+    {
+      "claim": "Quote: derived directly from event timestamps, well suited for automated testing",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 972-974",
+      "verdict": "SUPPORTED",
+      "found": "These metrics are derived directly from event timestamps, making them well suited for automated testing (lines 972-973)",
+      "correction": ""
+    },
+    {
+      "claim": "Telephony scorecard: end-of-turn first-audio latency, barge-in success rate, clipped/interrupted frequency, call-abandonment-during-silence",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 775-779",
+      "verdict": "SUPPORTED",
+      "found": "End-of-turn to first audio response latency; Barge-in success rate; Frequency of clipped or interrupted responses; Call abandonment during silence",
+      "correction": ""
+    },
+    {
+      "claim": "VAQI improvements correlate strongly with perceived experience; measurable gains after tuning end-of-turn thresholds or optimizing orchestration latency",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 973-975",
+      "verdict": "SUPPORTED",
+      "found": "Improvements in VAQI correlate strongly with perceived experience. ...teams often see measurable gains after tuning end-of-turn thresholds or optimizing orchestration latency",
+      "correction": ""
+    },
+    {
+      "claim": "M (silence/stall) maps to Deepgram signal: Silence or stall detection, where expected responses fail to arrive within defined time windows",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1047",
+      "verdict": "SUPPORTED",
+      "found": "Silence or stall detection, where expected responses fail to arrive within defined time windows (lines 1047-1048)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram pairs VAQI with Coval for large-scale probabilistic scoring",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 966-969",
+      "verdict": "SUPPORTED",
+      "found": "For large-scale simulation and behavioral evaluation, teams often pair this telemetry with tools from Coval, which specializes in probabilistic testing and multi-turn agent evaluation",
+      "correction": ""
+    },
+    {
+      "claim": "num_backchannels exists so backchannels aren't miscounted as failed interruptions",
+      "kind": "mechanism",
+      "cited": "metrics/base.py:177",
+      "verdict": "SUPPORTED",
+      "found": "num_backchannels:177 and num_interruptions:175 are separate counters; field comment 'Number of backchannels detected, incrementally counted' confirms distinct tracking",
+      "correction": ""
+    },
+    {
+      "claim": "InterruptionMetrics is a raw counter source for I; LiveKit ships constituents but no rolled-up index",
+      "kind": "mechanism",
+      "cited": "metrics/base.py:166-181",
+      "verdict": "SUPPORTED",
+      "found": "Class carries raw int/float counters (num_interruptions, num_backchannels, detection_delay) with no composite/index field; consistent with note's claim",
+      "correction": ""
+    },
+    {
+      "claim": "Qualitative evaluation assesses meaning/intent/task success (framing of two complementary dimensions)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 960-964",
+      "verdict": "SUPPORTED",
+      "found": "Quantitative evaluation measures timing, flow, and responsiveness at the event level. Qualitative evaluation assesses meaning, intent alignment, and task success",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and source citations verified against ground truth. Both LiveKit code_refs land exactly on cited lines. All deepgram-ebook line citations match the parsed PDF, including the verbatim quotes. Mechanism claims (backchannel split, raw-counter-vs-index distinction) are accurate."
+}

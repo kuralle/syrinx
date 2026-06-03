@@ -1,0 +1,80 @@
+{
+  "note": "LAT-08-network-vs-engine-colocation.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "LiveKit STTMetrics exposes acquire_time and connection_reused at metrics/base.py:52-55",
+      "kind": "code_ref",
+      "cited": "_clones/agents/livekit-agents/livekit/agents/metrics/base.py:52-55",
+      "verdict": "SUPPORTED",
+      "found": "line 52 'acquire_time: float = 0.0' / 'Time in seconds to acquire the connection. (WebSocket only)'; line 54 'connection_reused: bool = False' / 'Whether the connection was reused from a pool. (WebSocket only)' inside STTMetrics",
+      "correction": ""
+    },
+    {
+      "claim": "Engine TTFT/TTFA 100-200ms; models in different DCs add ~75ms (US-West->Europe)",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "raw transcript: 'You're doing 100 to 200 milliseconds of time to first token or audio' and 'US West to Europe would certainly be 75 milliseconds'",
+      "correction": ""
+    },
+    {
+      "claim": "Co-locating in same DC/building drops 75ms -> 5ms ~= 30% reduction on already-optimized setup",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "raw transcript: 'drop from 75 milliseconds to five basically gets you a 30% reduction in already a fairly optimized voice agent setup'; 'in the same data center... literally in the same building'",
+      "correction": ""
+    },
+    {
+      "claim": "'every 10ms matters'",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "raw transcript: 'every 10 milliseconds matters'",
+      "correction": ""
+    },
+    {
+      "claim": "Network transit depends on protocol, transport layer, and physical distance between client, bot container, and inference servers",
+      "kind": "source_figure",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "blog line 39: 'depends on protocol, transport layer, and physical distance between client, bot container, and inference servers'",
+      "correction": ""
+    },
+    {
+      "claim": "Bot<->STT/TTS persistent WebSockets via modal.Tunnel, LLM over HTTP+Tunnel, bypassing Modal input plane (no extra proxy/autoscaler hop)",
+      "kind": "mechanism",
+      "cited": "modal-v2v / diagrams modal-architecture.webp",
+      "verdict": "SUPPORTED",
+      "found": "blog line 41 'Tunnels bypass the input plane... Serve a WebSocket endpoint over a Tunnel for STT + TTS... vLLM served similarly (Tunnel forwards HTTP)'; diagram-observations 35-38 STT/TTS WebSocket+modal.Tunnel persistent, LLM HTTP+modal.Tunnel; modal-architecture.webp exists in img/",
+      "correction": ""
+    },
+    {
+      "claim": "Region pinning: small cluster of nearby DCs (Virginia us-east, Bay us-west) + several GPU types to avoid GPU-pool starvation; speed-of-light bound",
+      "kind": "mechanism",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "blog line 43: 'still bound by speed of light -> pin Modal services to a region... permit a small cluster of nearby data centers (Virginia us-east, Bay Area us-west) + several GPU types'",
+      "correction": ""
+    },
+    {
+      "claim": "Client<->bot distance absorbed by WebRTC; bot<->services must be proximal",
+      "kind": "mechanism",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "blog line 51: 'Regardless of client<->bot distance (covered by WebRTC), bot and services must reside in proximal data centers'",
+      "correction": ""
+    },
+    {
+      "claim": "Tunnel trades away autoscaling on bypassed hop; recovered by spawning a FunctionCall tied to conversation lifecycle",
+      "kind": "mechanism",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "blog line 42: 'bypassing input plane loses autoscaling. Workaround: spawn a FunctionCall at conversation start, cancel at end -> link function-call lifecycle to conversation lifecycle'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 9 checkable assertions SUPPORTED. The one code_ref (metrics/base.py:52-55) exactly matches acquire_time/connection_reused on STTMetrics. All Together figures (100-200ms, 75ms, 75->5ms ~30%, 'every 10ms matters', same building) verified verbatim against the GROUND-TRUTH raw youtube transcript, not just the summary md. All Modal mechanism claims (Tunnel WebSocket bypass of input plane, spawn/FunctionCall autoscaling recovery, region pinning with us-east/us-west + GPU types, WebRTC client absorption) match the modal blog and diagram-observations. modal-architecture.webp exists."
+}

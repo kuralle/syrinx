@@ -1,0 +1,112 @@
+{
+  "note": "TURN-01-vad-state-machine-hysteresis.md",
+  "overall": "PASS",
+  "claims_checked": 13,
+  "claims": [
+    {
+      "claim": "Pipecat defines VADState enum {QUIET, STARTING, SPEAKING, STOPPING}",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:30",
+      "verdict": "SUPPORTED",
+      "found": "line 30 'class VADState(Enum):' with QUIET=1, STARTING=2, SPEAKING=3, STOPPING=4 (lines 40-43)",
+      "correction": ""
+    },
+    {
+      "claim": "Per-frame transition table at :206-243",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:206",
+      "verdict": "SUPPORTED",
+      "found": "lines 206-243 contain the speaking flag + match/case state transitions and start/stop frame-count checks",
+      "correction": ""
+    },
+    {
+      "claim": "speaking only when confidence >= params.confidence AND volume >= params.min_volume",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:206",
+      "verdict": "SUPPORTED",
+      "found": "line 206 'speaking = confidence >= self._params.confidence and volume >= self._params.min_volume'",
+      "correction": ""
+    },
+    {
+      "claim": "needs start_secs of consecutive speaking frames to reach SPEAKING",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:229",
+      "verdict": "SUPPORTED",
+      "found": "lines 229-234 'if STARTING and _vad_starting_count >= _vad_start_frames: _vad_state = SPEAKING'",
+      "correction": ""
+    },
+    {
+      "claim": "needs stop_secs of consecutive silence to return to QUIET",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:236",
+      "verdict": "SUPPORTED",
+      "found": "lines 236-241 'if STOPPING and _vad_stopping_count >= _vad_stop_frames: _vad_state = QUIET'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat defaults VAD_CONFIDENCE=0.7, VAD_START_SECS=0.2, VAD_STOP_SECS=0.2, VAD_MIN_VOLUME=0.6 at :24-27",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:24-27",
+      "verdict": "SUPPORTED",
+      "found": "lines 24-27 'VAD_CONFIDENCE = 0.7 / VAD_START_SECS = 0.2 / VAD_STOP_SECS = 0.2 / VAD_MIN_VOLUME = 0.6'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit Silero min_speech_duration=0.05s and min_silence_duration=0.55s at :64-63",
+      "kind": "code_ref",
+      "cited": "agents/livekit-plugins/livekit-plugins-silero/livekit/plugins/silero/vad.py:64",
+      "verdict": "SUPPORTED",
+      "found": "line 63 'min_speech_duration: float = 0.05', line 64 'min_silence_duration: float = 0.55'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit activation_threshold=0.5 to enter speech",
+      "kind": "code_ref",
+      "cited": "agents/livekit-plugins/livekit-plugins-silero/livekit/plugins/silero/vad.py:67",
+      "verdict": "SUPPORTED",
+      "found": "line 67 'activation_threshold: float = 0.5'",
+      "correction": ""
+    },
+    {
+      "claim": "deactivation_threshold default = max(activation_threshold - 0.15, 0.01), per docstring :110",
+      "kind": "code_ref",
+      "cited": "agents/livekit-plugins/livekit-plugins-silero/livekit/plugins/silero/vad.py:110",
+      "verdict": "SUPPORTED",
+      "found": "line 110 docstring '... If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: 4 states with different thresholds for starting vs stopping (hysteresis) to prevent nervous switching",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #1",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:9 'Vapi VAD = state machine, 4 states, different thresholds for starting vs stopping (hysteresis) to prevent nervous switching'; states named QUIET/STARTING/SPEAKING/STOPPING (lines 10-13) under 'Problem #1: Voice Activity Detection'",
+      "correction": ""
+    },
+    {
+      "claim": "~200ms sustained detection to confirm start, ~800ms sustained silence to confirm stop",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #1",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:11 STARTING '~200ms sustained detection'; :13 STOPPING '~800ms sustained silence'",
+      "correction": ""
+    },
+    {
+      "claim": "diagrams vapi-vad-diagram shows asymmetric start/stop = hysteresis state machine",
+      "kind": "source_figure",
+      "cited": "diagrams vapi-vad-diagram",
+      "verdict": "SUPPORTED",
+      "found": "_diagram-observations.md:18-19 'Vapi VAD state machine (vapi-vad-diagram.png) QUIET ->(200ms detection)-> STARTING -> SPEAKING ->(>800ms silence)-> STOPPING ... Asymmetric start/stop thresholds = hysteresis'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi separately uses a dynamic confidence baseline (cross-note link TURN-02)",
+      "kind": "cross_note_link",
+      "cited": "[[TURN-02-dynamic-baseline-percentile]]",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:14 'Maintains a 30-second rolling window of audio levels, uses the 85th percentile as a dynamic baseline' — consistent with the note's claim of a separate dynamic baseline",
+      "correction": ""
+    }
+  ],
+  "summary": "All 13 checkable assertions verified against ground truth. Pipecat VADState enum, transition table, speaking gate (confidence AND volume), start/stop frame thresholds, and defaults (0.7/0.2/0.2/0.6) all match vad_analyzer.py exactly. LiveKit Silero defaults (min_speech 0.05, min_silence 0.55, activation 0.5, deactivation docstring) match vad.py exactly. Vapi blog and diagram source confirm the 4-state machine, names, hysteresis phrasing, and 200ms/800ms figures verbatim. No WRONG or MISCITED claims."
+}

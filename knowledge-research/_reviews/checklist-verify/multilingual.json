@@ -1,0 +1,8 @@
+{
+  "section": "## 9. Multilingual & Audio Preprocessing",
+  "items_checked": 4,
+  "citations_checked": 9,
+  "aligned_count": 4,
+  "findings": [],
+  "summary": "All 4 items in section 9 verified aligned. Code citations confirmed: pipecat deepgram/stt.py:691-694 (language detection on transcript, message.channel.alternatives[0].languages -> Language()), voice-ai stt_callback.go:57-58 (GetMostUsedLanguage + confidence string), pipecat tts_service.py:769-773 (TTSUpdateSettingsFrame delta path), agents agent_session.py:1302 (update_agent), pipecat krisp_viva_filter.py:35 (KrispVivaFilter class, frame_duration=10ms confirmed), rnnoise_filter.py:30 (RNNoiseFilter, 480 samples @ 48kHz / sample_rate=48000 confirmed), voice-ai denoiser.go:27 (GetDenoiser selecting Krisp/RNNoise), cartesia tts.py:192-204 (pronunciation_dict_id hook). Numbers card row 'Internal STT rate 16 kHz' verified against frames.py:855 (audio_in_sample_rate=16000). Source-only flags honest: grep found no clone wiring language detection to automatic mid-session TTS hot-switching, and no automated cross-language voice matching; tts_service.py:461 voice switch is manual not language-triggered. All evidence notes exist (LANG-01..04, STT-11, STT-04, TURN-12, TTS-10, XPORT-02)."
+}

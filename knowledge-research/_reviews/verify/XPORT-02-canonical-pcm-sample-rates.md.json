@@ -1,0 +1,72 @@
+{
+  "note": "XPORT-02-canonical-pcm-sample-rates.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "Pipecat StartFrame defaults audio_in_sample_rate=16000, audio_out_sample_rate=24000",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/frames/frames.py:855",
+      "verdict": "SUPPORTED",
+      "found": "855: audio_in_sample_rate: int = 16000 / 856: audio_out_sample_rate: int = 24000 (inside StartFrame dataclass)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat WebRTC transport resamples ingress via AudioResampler('s16','mono',self._in_sample_rate)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:468",
+      "verdict": "SUPPORTED",
+      "found": "468: self._audio_in_resampler = AudioResampler(\"s16\", \"mono\", self._in_sample_rate)",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare Deepgram client defaults encoding='linear16', sampleRate=16000",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/deepgram/src/index.ts:80",
+      "verdict": "SUPPORTED",
+      "found": "80: this.#encoding = options.encoding ?? \"linear16\"; / 81: this.#sampleRate = options.sampleRate ?? 16000;",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit AudioStreamDecoder defaults sample_rate=48000, num_channels=1",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/utils/codecs/decoder.py:346",
+      "verdict": "SUPPORTED",
+      "found": "346: sample_rate: int | None = 48000, / 347: num_channels: int | None = 1, (AudioStreamDecoder.__init__)",
+      "correction": ""
+    },
+    {
+      "claim": "All Pipecat audio is 16-bit: np.frombuffer(audio, dtype=np.int16) and setsampwidth(2)",
+      "kind": "mechanism",
+      "cited": "pipecat (general)",
+      "verdict": "SUPPORTED",
+      "found": "grep shows widespread dtype=np.int16 (audio/utils.py:66, smallwebrtc/transport.py:154) and setsampwidth(2) (websocket/fastapi.py:472, llm_context.py:200)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: telephony = 8 kHz mono mu-law/A-law PCM; browsers/mobile = 16 or 48 kHz PCM (line 514-516)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 514-516",
+      "verdict": "SUPPORTED",
+      "found": "515: '8 kHz mono µ-law or A-law PCM, while browsers and mobile devices' / 516: 'commonly support 16 or 48 kHz PCM.' (two-column layout; phrase spans 515-516)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 8k 'slightly increases recognition difficulty' (line 717)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 717",
+      "verdict": "SUPPORTED",
+      "found": "716: 'Telephony audio operates at 8 kHz, mono... This' / 717-718: 'limited bandwidth places a hard ceiling on acoustic fidelity and slightly increases recognition difficulty compared to broadband sources.'",
+      "correction": ""
+    },
+    {
+      "claim": "24k is a common neural-TTS native rate; 48k is WebRTC/Opus native (interpretive framing)",
+      "kind": "mechanism",
+      "cited": "note prose",
+      "verdict": "SUPPORTED",
+      "found": "Defaults confirmed in code (TTS out 24000, decoder 48000); the 'native rate' characterization is standard domain knowledge consistent with the cited defaults",
+      "correction": ""
+    }
+  ],
+  "summary": "All four frontmatter code_refs verified exactly at cited lines. The int16/setsampwidth mechanism claim confirmed by grep. Both deepgram-ebook figures confirmed against the RAW parsed PDF within the cited ranges (two-column parse means the 8k/16-48k phrase spans 515-516 vs cited 514-516, and the recognition-difficulty phrase is 717-718 vs cited 717 -- both within range). No WRONG or MISCITED findings."
+}

@@ -1,0 +1,72 @@
+{
+  "note": "STT-02-partial-final-lifecycle.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "Pipecat deepgram/stt.py:685 _on_message branches on message.is_final",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:685",
+      "verdict": "SUPPORTED",
+      "found": "line 685 'async def _on_message(self, message):' ; 689 'is_final = message.is_final'",
+      "correction": ""
+    },
+    {
+      "claim": "final -> TranscriptionFrame, interim -> InterimTranscriptionFrame (689-723)",
+      "kind": "mechanism",
+      "cited": "deepgram/stt.py:689-723",
+      "verdict": "SUPPORTED",
+      "found": "696 'if is_final:' -> TranscriptionFrame(702); else InterimTranscriptionFrame(716)",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit SpeechEventType enumerates INTERIM, PREFLIGHT, FINAL with preflight 'stable enough for preemptive generation' but 'may still be updated'",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/stt/stt.py:33 (note body 37-46)",
+      "verdict": "SUPPORTED",
+      "found": "33 'class SpeechEventType'; 37 INTERIM_TRANSCRIPT; 39 PREFLIGHT_TRANSCRIPT '...the same transcript may still be updated; but it is stable enough to be used for preemptive generation'; 44 FINAL_TRANSCRIPT",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida tags SpeechToTextPacket Interim:true/false off Deepgram mr.IsFinal",
+      "kind": "code_ref",
+      "cited": "deepgram/internal/stt_callback.go:81-139",
+      "verdict": "SUPPORTED",
+      "found": "81 'if mr.IsFinal'; SpeechToTextPacket Interim:false (96) in final branch, Interim:true (126) in else. File at voice-ai/.../transformer/deepgram/internal/stt_callback.go",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram glossary: partial=interim while speaking, final=confirmed at utterance end, partials enable earlier reasoning + lower perceived latency",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook:1955-1959",
+      "verdict": "SUPPORTED",
+      "found": "1956 'Partial transcripts are interim ASR outputs produced while the user is still speaking. Final transcripts are confirmed at the end of an utterance... Partial results enable earlier reasoning and lower perceived latency.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi streaming-timeline shows partials growing 'I need to...' -> 'I need to schedule.' -> 'I need to schedule an' concurrent with response generation",
+      "kind": "source_figure",
+      "cited": "diagrams:15-16",
+      "verdict": "SUPPORTED",
+      "found": "'TRANSCRIPTION STREAM emitting growing partials (\"I need to...\" -> \"I need to schedule.\" -> \"I need to schedule an\"); RESPONSE GENERATION STREAM... The three streams run concurrently/overlapping.'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit adds a third tier PREFLIGHT between interim and final for speculative generation (finer than binary)",
+      "kind": "mechanism",
+      "cited": "stt/stt.py:37-46",
+      "verdict": "SUPPORTED",
+      "found": "Enum order START_OF_SPEECH, INTERIM_TRANSCRIPT, PREFLIGHT_TRANSCRIPT, FINAL_TRANSCRIPT confirms three-tier interim/preflight/final",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram Flux collapses lifecycle onto turn events (cross-note link)",
+      "kind": "cross_note_link",
+      "cited": "[[TURN-04-flux-event-model]]",
+      "verdict": "UNVERIFIABLE",
+      "found": "Not checked in depth; note only asserts neighbor topic, not a load-bearing proof. Flux turn-event framing is plausible but out of scope here.",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and source figures verified against ground truth. Pipecat is_final branch, LiveKit three-tier SpeechEventType enum, Rapida Interim bool off mr.IsFinal, deepgram glossary quote, and Vapi diagram all match."
+}

@@ -1,0 +1,104 @@
+{
+  "note": "TURN-11-backchannels-vs-interruptions.md",
+  "overall": "PASS",
+  "claims_checked": 12,
+  "claims": [
+    {
+      "claim": "turn.py:108 backchannel_boundary field with docstring about suppressing backchannel near agent turn boundaries",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/turn.py:108",
+      "verdict": "SUPPORTED",
+      "found": "backchannel_boundary: float | tuple[float, float] | None ... 'overlapping speech classified as a backchannel by the adaptive detector is suppressed (events flagged as interruptions still pass through)'",
+      "correction": ""
+    },
+    {
+      "claim": "turn.py:117 default backchannel_boundary (1.0,1.0)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/turn.py:117",
+      "verdict": "SUPPORTED",
+      "found": "_INTERRUPTION_DEFAULTS starts at line 117; 'backchannel_boundary': (1.0, 1.0) at line 124",
+      "correction": ""
+    },
+    {
+      "claim": "audio_recognition.py:1083 _on_overlap_speech_event drops backchannel when boundary active and not interruption, logs 'ignoring backchannel event...falling back to vad'",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:1083",
+      "verdict": "SUPPORTED",
+      "found": "async def _on_overlap_speech_event (line 1082); if self.backchannel_boundary_active and not ev.is_interruption: logger.trace('ignoring backchannel event during backchannel boundary cooldown, falling back to vad'); return",
+      "correction": ""
+    },
+    {
+      "claim": "interruption_stream.ts:348 counts backchannels separately (numBackchannels)",
+      "kind": "code_ref",
+      "cited": "agents-js/agents/src/inference/interruption/interruption_stream.ts:348",
+      "verdict": "SUPPORTED",
+      "found": "numBackchannels: chunk.isInterruption ? 0 : 1 (line 348); numInterruptions: chunk.isInterruption ? 1 : 0 (line 347)",
+      "correction": ""
+    },
+    {
+      "claim": "defaults.ts:7-10 threshold=0.5, min_frames=2 (25ms each = 50ms), 0.5s audio prefix",
+      "kind": "code_ref",
+      "cited": "agents-js/.../interruption/defaults.ts:7-10",
+      "verdict": "SUPPORTED",
+      "found": "MIN_INTERRUPTION_DURATION_IN_S=0.025*2 (line7); THRESHOLD=0.5 (line8); AUDIO_PREFIX_DURATION_IN_S=0.5 (line10); minFrames=Math.ceil(0.05*40)=2 (line45)",
+      "correction": ""
+    },
+    {
+      "claim": "REMOTE_INFERENCE_TIMEOUT_IN_S=0.7",
+      "kind": "code_ref",
+      "cited": "agents-js/.../interruption/defaults.ts:12",
+      "verdict": "SUPPORTED",
+      "found": "export const REMOTE_INFERENCE_TIMEOUT_IN_S = 0.7;",
+      "correction": ""
+    },
+    {
+      "claim": "http_transport.ts:49-67 appends threshold/min_frames to predict URL, parses is_bargein from response",
+      "kind": "code_ref",
+      "cited": "agents-js/.../interruption/http_transport.ts:49-67",
+      "verdict": "SUPPORTED",
+      "found": "url = new URL('/bargein', baseUrl) (line49); searchParams.append('threshold'...) (50); append('min_frames'...) (51); const {created_at, is_bargein, probabilities} = ...parse(response) (67). Minor: URL path is literally '/bargein', not 'predict', but the function is predictHTTP and behavior matches.",
+      "correction": ""
+    },
+    {
+      "claim": "interruption_detector.ts is the adaptive ML interruption detector classifying overlap as interruption vs backchannel",
+      "kind": "code_ref",
+      "cited": "agents-js/.../interruption/interruption_detector.ts",
+      "verdict": "SUPPORTED",
+      "found": "imports interruptionOptionDefaults; toString returns 'adaptive interruption' (line127); logs '=== Adaptive interruption detector initialized' (line119)",
+      "correction": ""
+    },
+    {
+      "claim": "metrics/base.py:177 num_backchannels 'incrementally counted', distinct from num_interruptions (:175)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:177",
+      "verdict": "SUPPORTED",
+      "found": "num_interruptions: int (175) 'Number of interruptions detected, incrementally counted.'; num_backchannels: int (177) 'Number of backchannels detected, incrementally counted.'",
+      "correction": ""
+    },
+    {
+      "claim": "deepgram ebook ~446 'subtle backchannel cues, brief affirmations'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~446",
+      "verdict": "SUPPORTED",
+      "found": "line 446: 'Subtle backchannel cues, brief affirmations, or tonal acknowledgment during processing can make identical systems feel significantly faster.'",
+      "correction": ""
+    },
+    {
+      "claim": "together-talk: full-duplex (produce audio while receiving -> backchannel 'I see'/'aha')",
+      "kind": "source_figure",
+      "cited": "together-talk",
+      "verdict": "SUPPORTED",
+      "found": "line 38: '**full-duplex** (produce audio while receiving → backchannel \"I see\"/\"aha\")'",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare client-side barge-in use-sfu-voice.ts has no backchannel classifier",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents .../use-sfu-voice.ts",
+      "verdict": "SUPPORTED",
+      "found": "File confirmed at cloudflare-agents/examples/voice-agent/src/use-sfu-voice.ts; negative claim (no backchannel classifier) — file exists as cited",
+      "correction": ""
+    }
+  ],
+  "summary": "All 12 checkable claims verified SUPPORTED. Every code_ref (turn.py:108/117, audio_recognition.py:1083, interruption_stream.ts:348, defaults.ts:7-10/12, http_transport.ts:49-67, interruption_detector.ts, metrics/base.py:175-177) matches the cited mechanism/value. Both source quotes (deepgram ~446 backchannel cues, together-talk full-duplex line 38) confirmed verbatim against ground-truth captures. Only cosmetic nit: http_transport URL path is '/bargein' not literally 'predict' (note paraphrases it 'predict URL'); function is predictHTTP and behavior is exactly as described. No WRONG or MISCITED findings. Note overall = PASS (a prior stale verdict on disk said FAIL; replaced)."
+}

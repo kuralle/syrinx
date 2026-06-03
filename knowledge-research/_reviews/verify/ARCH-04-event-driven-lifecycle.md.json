@@ -1,0 +1,88 @@
+{
+  "note": "ARCH-04-event-driven-lifecycle.md",
+  "overall": "PASS",
+  "claims_checked": 10,
+  "claims": [
+    {
+      "claim": "LiveKit AgentState = Literal['initializing','idle','listening','thinking','speaking'] and UserState at events.py:107-108",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/events.py:107-108",
+      "verdict": "SUPPORTED",
+      "found": "line 107 UserState = Literal[\"speaking\", \"listening\", \"away\"]; line 108 AgentState = Literal[\"initializing\", \"idle\", \"listening\", \"thinking\", \"speaking\"]",
+      "correction": ""
+    },
+    {
+      "claim": "AgentStateChangedEvent/UserStateChangedEvent plus user_input_transcribed, conversation_item_added, speech_created at events.py:92-101,111-119",
+      "kind": "code_ref",
+      "cited": "agents/.../voice/events.py:92-101,111-119",
+      "verdict": "SUPPORTED",
+      "found": "EventTypes (91-105) lists user_input_transcribed:94, conversation_item_added:95, speech_created:101; UserStateChangedEvent class at 111, AgentStateChangedEvent at 118",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat carries states as SystemFrames UserStartedSpeakingFrame/BotStartedSpeakingFrame/BotStoppedSpeakingFrame at frames.py:962-1098",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/frames/frames.py:962-1098",
+      "verdict": "SUPPORTED",
+      "found": "UserStartedSpeakingFrame(SystemFrame):963, BotStartedSpeakingFrame(SystemFrame):1065, BotStoppedSpeakingFrame(SystemFrame):1076 — all within range",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: loop 'does not operate as a strict, turn-by-turn pipeline... begin reasoning before user finished speaking, or start speaking while remainder still generated'",
+      "kind": "source_figure",
+      "cited": "deepgram-voice-agent.parsed.md:143-147",
+      "verdict": "SUPPORTED",
+      "found": "lines 143-147: 'this loop does not operate as a strict, turn-by-turn pipeline. The stages overlap and run concurrently. An agent may begin reasoning before a user has finished speaking, or start speaking while the remainder of a response is still being generated.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram requires 'an event-driven, interrupt-aware architecture that treats timing and partial signals as first-class inputs'",
+      "kind": "source_figure",
+      "cited": "deepgram-voice-agent.parsed.md:163-166",
+      "verdict": "SUPPORTED",
+      "found": "lines 164-166: 'Human-like interaction requires an event-driven, interrupt-aware architecture that treats timing and partial signals as first-class inputs.'",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare voice mixin sends {type:'status', status:'thinking'} on turn start at voice.ts:607",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/voice/src/voice.ts:607",
+      "verdict": "SUPPORTED",
+      "found": "line 607 in #handleTextMessage: this.#sendJSON(connection, { type: \"status\", status: \"thinking\" });",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare sends status:'listening' after interrupt at voice.ts:587",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/voice/src/voice.ts:587",
+      "verdict": "SUPPORTED",
+      "found": "line 587 in #handleInterrupt: this.#sendJSON(connection, { type: \"status\", status: \"listening\" });",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare sends status:'speaking' during TTS",
+      "kind": "mechanism",
+      "cited": "voice.ts (speaking during TTS)",
+      "verdict": "SUPPORTED",
+      "found": "status:\"speaking\" emitted at lines 430,460,631,740 around TTS/audio output paths",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: 'coordinated through an event-driven architecture'",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2.md:58",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:58 'Coordinated through an **event-driven architecture**.' (actual filename is vapi-pipeline-part-2.md, not vapi-pipeline-2.md; line/content exact)",
+      "correction": "filename: _sources/blogs/vapi-pipeline-part-2.md:58"
+    },
+    {
+      "claim": "Vapi: stream coordination is a 'conversation-understanding problem' where each stream must know what others are doing",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-1.md:45",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-1.md:45 'coordination between streams is a **conversation-understanding problem** — each stream must be aware of what the others are doing' (actual filename vapi-pipeline-part-1.md)",
+      "correction": "filename: _sources/blogs/vapi-pipeline-part-1.md:45"
+    }
+  ],
+  "summary": "All 10 checkable assertions verified against ground truth. Both frontmatter code_refs (LiveKit events.py:107, Pipecat frames.py:962) exact. All inline LiveKit/Cloudflare/Pipecat code citations land on or within a few lines of the cited mechanism. Deepgram quotes are verbatim at cited lines. Only nit: the two Vapi citations use filenames 'vapi-pipeline-2.md'/'vapi-pipeline-1.md' while the on-disk files are 'vapi-pipeline-part-2.md'/'vapi-pipeline-part-1.md' — line numbers and quoted text match exactly, so substance is correct."
+}

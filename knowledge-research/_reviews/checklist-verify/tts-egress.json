@@ -1,0 +1,17 @@
+{
+  "section": "## 5. TTS Egress",
+  "items_checked": 8,
+  "citations_checked": 19,
+  "aligned_count": 7,
+  "findings": [
+    {
+      "item": "Send the first complete sentence immediately, then pace later batches",
+      "kind": "code_citation",
+      "severity": "MINOR",
+      "cited": "_clones/agents/livekit-agents/livekit/agents/tts/stream_pacer.py:97-148 (generation poll 0.2 s)",
+      "issue": "The cited range 97-148 contains the _send_task batching loop and the 0.1 s drain-check (line 123: `curr_time - prev_check_time >= 0.1`), but the actual `wait_time = 0.2  # check more frequently when generation is in progress` is at line 159, just outside the cited 97-148 range. The 0.2 s value itself is correct; only the line range understates where it lives. min_remaining_audio=5.0 / max_text_length=300 at line 20 are correct.",
+      "correct": "_clones/agents/livekit-agents/livekit/agents/tts/stream_pacer.py:159 for the 0.2 s poll (extend range to ~97-164)"
+    }
+  ],
+  "summary": "TTS Egress section is well-aligned. All 8 items verified: streaming TTS (cartesia run_tts:722, livekit ttfb:234), sentence aggregation (simple_text_aggregator + Go aggregator 45-52/114-130 leading-whitespace preservation, LiveKit 20-char min_sentence_len default confirmed), stream pacer defaults (min_remaining_audio=5.0, max_text_length=300 at line 20), RTF source-only flag (grep for rtf/real_time_factor across all clones returned zero matches - honest), transport-native audio (twilio PCM->8kHz mulaw, telnyx mulaw 8kHz:130), interruptible TTS (_handle_interruption:902-918), word timestamps (add_word_timestamps:1185, cartesia timestamps:676-688), pronunciation controls (cartesia pronunciation_dict_id:192-204, AWS LexiconNames:345, Rime PRONOUNCE:379). All 13 note IDs exist. Only one MINOR finding: the 0.2 s generation-poll value is correct but lives at line 159, outside the cited 97-148 range."
+}

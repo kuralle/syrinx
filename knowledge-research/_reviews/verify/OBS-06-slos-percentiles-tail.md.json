@@ -1,0 +1,104 @@
+{
+  "note": "OBS-06-slos-percentiles-tail.md",
+  "overall": "PASS",
+  "claims_checked": 12,
+  "claims": [
+    {
+      "claim": "LiveKit registers per-turn metrics (e2e_latency, llm_ttft, tts_ttfb, transcription_delay) as OTel histograms at otel_metrics.py:23-47",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/telemetry/otel_metrics.py:23-47",
+      "verdict": "SUPPORTED",
+      "found": "_turn_e2e_latency = _meter.create_histogram('lk.agents.turn.e2e_latency'...); _turn_llm_ttft (28); _turn_tts_ttfb (33); _turn_transcription_delay (38) all create_histogram",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit exposes a Prometheus /metrics HTTP endpoint in telemetry/http_server.py",
+      "kind": "code_ref",
+      "cited": "telemetry/http_server.py",
+      "verdict": "SUPPORTED",
+      "found": "self._app.add_routes([web.get('/metrics', metrics)]); uses prometheus_client generate_latest",
+      "correction": ""
+    },
+    {
+      "claim": "UsageCollector / ModelUsageCollector exist for session aggregation",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/usage_collector.py",
+      "verdict": "SUPPORTED",
+      "found": "line 59 'class UsageCollector:' (deprecated, points to ModelUsageCollector)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram SLO trio: response latency below percentile threshold, interruption handling within tolerance, error rates below limits (line 1046-1049)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1046-1049",
+      "verdict": "SUPPORTED",
+      "found": "'Response latency remaining below a defined percentile threshold / Interruption handling success staying within tolerance bands / Error rates remaining below predefined limits'",
+      "correction": ""
+    },
+    {
+      "claim": "Dashboards show latency percentiles, interruption success rates, error counts (line 1042)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1042",
+      "verdict": "SUPPORTED",
+      "found": "'Common views include active session volume, latency percentiles, interruption success rates, and error counts.'",
+      "correction": ""
+    },
+    {
+      "claim": "Load testing: track tail latency rather than averages, worst-case delays dominate user perception (line 996-997)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 996-997",
+      "verdict": "SUPPORTED",
+      "found": "'track tail latency rather than averages, since worst-case delays dominate user perception.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram pushes telemetry to Datadog/Grafana/CloudWatch (line 1029)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1029",
+      "verdict": "SUPPORTED",
+      "found": "'Storage and visualization using systems such as Datadog, Grafana, or CloudWatch'",
+      "correction": ""
+    },
+    {
+      "claim": "Alert on rising tail latency (line 1031)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1031",
+      "verdict": "SUPPORTED",
+      "found": "'Alerting based on sustained deviations, such as rising tail latency or interruption failures'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi hedging shaved >1000ms off P95 (line 38)",
+      "kind": "source_figure",
+      "cited": "vapi-latency line 38",
+      "verdict": "SUPPORTED",
+      "found": "'This system alone shaved >1000ms off P95 latency.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: Tail latency (P95/P99), not average, is what breaks conversation; per-region/deployment volatile (line 42-43)",
+      "kind": "source_figure",
+      "cited": "vapi-latency line 38,42,43",
+      "verdict": "SUPPORTED",
+      "found": "'Tail latency (P95/P99), not average, is what breaks conversation.' and 'Provider latency is volatile and per-region/per-deployment independent'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal selects LLM inference engine by P95 TTFT; visualizes v2v latency eCDFs (line 47,57)",
+      "kind": "source_figure",
+      "cited": "modal-v2v line 47,57",
+      "verdict": "SUPPORTED",
+      "found": "'Pick LLM inference engine by P95 TTFT, not throughput.' and IMAGE 'v2v latency eCDFs across deployments.'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat emits per-cycle LatencyBreakdown events, leaving percentile aggregation to consumer sink",
+      "kind": "mechanism",
+      "cited": "pipecat (note prior-art divergence)",
+      "verdict": "SUPPORTED",
+      "found": "observers/user_bot_latency_observer.py:83 'class LatencyBreakdown' = 'Per-service latency breakdown for a single user-to-bot cycle'; emits on_latency_breakdown event to consumers",
+      "correction": ""
+    }
+  ],
+  "summary": "All 12 checkable assertions verified against ground truth. Code refs (otel histograms, /metrics endpoint, UsageCollector) confirmed; all deepgram, vapi, modal source figures match captures exactly; Pipecat LatencyBreakdown mechanism confirmed. Line numbers are approximate but content is present at/near cited lines."
+}

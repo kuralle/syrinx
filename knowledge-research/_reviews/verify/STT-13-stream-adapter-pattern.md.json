@@ -1,0 +1,80 @@
+{
+  "note": "STT-13-stream-adapter-pattern.md",
+  "overall": "PARTIAL",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "LiveKit StreamAdapter defined with __init__(self, *, stt, vad), VAD is a required arg with no default",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/stt/stream_adapter.py:18",
+      "verdict": "SUPPORTED",
+      "found": "line18 'class StreamAdapter(STT):' line19 'def __init__(self, *, stt: STT, vad: VAD) -> None:' (vad required, no default)",
+      "correction": ""
+    },
+    {
+      "claim": "capabilities declare interim_results=False so no partial/interim transcripts are produced",
+      "kind": "mechanism",
+      "cited": "stream_adapter.py:18 (capabilities)",
+      "verdict": "SUPPORTED",
+      "found": "line23 'interim_results=False,' within STTCapabilities(streaming=True, ...)",
+      "correction": ""
+    },
+    {
+      "claim": "emits START_OF_SPEECH on VAD trigger, END_OF_SPEECH on silence, then merges frames and feeds batch recognize, wrapping result as FINAL_TRANSCRIPT",
+      "kind": "mechanism",
+      "cited": "stream_adapter.py (_run loop)",
+      "verdict": "SUPPORTED",
+      "found": "line114 send START_OF_SPEECH; line116-120 END_OF_SPEECH; line122 utils.merge_frames(event.frames); line123 await self._wrapped_stt.recognize(...); line134-139 SpeechEvent(type=FINAL_TRANSCRIPT)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat SegmentedSTTService accumulates audio into a bytearray, runs VAD for utterance boundaries, writes a WAV per segment, submits to batch STT",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/stt_service.py:704",
+      "verdict": "SUPPORTED",
+      "found": "line704 'class SegmentedSTTService(STTService):'; line726 'self._audio_buffer = bytearray()'; line757-760 react to VADUserStarted/StoppedSpeakingFrame; line768-774 wave.open + writeframes; line780 process_generator(self.run_stt(...))",
+      "correction": ""
+    },
+    {
+      "claim": "SegmentedSTTService spans stt_service.py:710-800",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/stt_service.py:710-800",
+      "verdict": "MISCITED",
+      "found": "class def begins at line704, not 710 (710 lands mid-docstring); the relevant logic actually runs ~704-807 (process_audio_frame ends at 807)",
+      "correction": "pipecat/src/pipecat/services/stt_service.py:704-807"
+    },
+    {
+      "claim": "SegmentedSTTService is a FrameProcessor in the pipeline chain, processing frames as they arrive rather than wrapping a provider",
+      "kind": "mechanism",
+      "cited": "stt_service.py (process_frame)",
+      "verdict": "SUPPORTED",
+      "found": "line704 extends STTService (an STT FrameProcessor); line753 process_frame dispatches on VADUserStarted/StoppedSpeakingFrame; line782 process_audio_frame buffers frames as they arrive",
+      "correction": ""
+    },
+    {
+      "claim": "stop_secs is 0.2 s in current Pipecat VADParams",
+      "kind": "source_figure",
+      "cited": "Pipecat VADParams (note inline)",
+      "verdict": "SUPPORTED",
+      "found": "vad_analyzer.py:26 'VAD_STOP_SECS = 0.2'; line58 'stop_secs: float = VAD_STOP_SECS'",
+      "correction": ""
+    },
+    {
+      "claim": "the historical 0.8 s stop_secs default was lowered",
+      "kind": "mechanism",
+      "cited": "Pipecat VADParams history (note inline)",
+      "verdict": "UNVERIFIABLE",
+      "found": "No 0.8 value in current vad_analyzer.py nor in this clone's git history (git log -S 'VAD_STOP_SECS = 0.8' empty; file already at 0.2 after path-move commit a27d213). Cannot confirm a prior 0.8 default from this clone, though it is hedged as 'historical'.",
+      "correction": ""
+    },
+    {
+      "claim": "StreamAdapter is a transparent decorator (subclass of STT) wrapping any batch STT; SegmentedSTTService is a standalone processor",
+      "kind": "mechanism",
+      "cited": "stream_adapter.py:18 vs stt_service.py:704",
+      "verdict": "SUPPORTED",
+      "found": "StreamAdapter(STT) holds self._stt and exposes wrapped_stt/model/provider passthroughs (lines 33-43), stream() returns StreamAdapterWrapper(self._stt) (56-68); SegmentedSTTService(STTService) is itself the provider base",
+      "correction": ""
+    }
+  ],
+  "summary": "Note appears revised since a prior review: it now correctly states interim_results=False, no default VAD (required arg), and 0.2 s current stop_secs with the 0.8 s described only as historical. All LiveKit/Pipecat mechanism claims verified against source. One MISCITED line range (SegmentedSTTService cited 710-800; class begins at 704). The 0.2 s current value is SUPPORTED; the historical-0.8 s claim is UNVERIFIABLE from this clone (no 0.8 trace in code or git history). No WRONG claims -> overall PARTIAL."
+}

@@ -1,0 +1,80 @@
+{
+  "note": "OBS-05-eou-vs-transcription-delay.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "EOUMetrics defined at metrics/base.py:94-110 with end_of_utterance_delay, transcription_delay, on_user_turn_completed_delay",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:94",
+      "verdict": "SUPPORTED",
+      "found": "class EOUMetrics(_BaseMetrics): ... end_of_utterance_delay (98), transcription_delay (102), on_user_turn_completed_delay (107)",
+      "correction": ""
+    },
+    {
+      "claim": "end_of_utterance_delay docstring = 'time between end of speech from VAD and the decision to end the user's turn'",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:94",
+      "verdict": "SUPPORTED",
+      "found": "line 98: 'Amount of time between the end of speech from VAD and the decision to end the user's turn.'",
+      "correction": ""
+    },
+    {
+      "claim": "transcription_delay = max(last_final_transcript_time - last_speaking_time, 0); end_of_turn_delay = time.time() - last_speaking_time at audio_recognition.py:1194-1195",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:1194",
+      "verdict": "SUPPORTED",
+      "found": "1194: transcription_delay = max(last_final_transcript_time - last_speaking_time, 0)\n1195: end_of_turn_delay = time.time() - last_speaking_time",
+      "correction": ""
+    },
+    {
+      "claim": "Refuses to compute when any of three timestamps missing: 'better than providing likely wrong values' at 1185-1186",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:1185",
+      "verdict": "SUPPORTED",
+      "found": "1185-1186: 'sometimes, we can't calculate the metrics because VAD was unreliable. ... it's better than providing likely wrong values'; guard at 1187-1191 checks last_final_transcript_time, last_speaking_time, speech_start_time all not None",
+      "correction": ""
+    },
+    {
+      "claim": "OTel histograms lk.agents.turn.transcription_delay and end_of_turn_delay at otel_metrics.py:38,43",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/telemetry/otel_metrics.py:38,43",
+      "verdict": "SUPPORTED",
+      "found": "38-39: _turn_transcription_delay = ... 'lk.agents.turn.transcription_delay'; 43-44: _turn_end_of_turn_delay = ... 'lk.agents.turn.end_of_turn_delay'",
+      "correction": ""
+    },
+    {
+      "claim": "JS port mirrors fields and adds lastSpeakingTimeMs to the event at metrics/base.ts:101-121",
+      "kind": "code_ref",
+      "cited": "agents-js/agents/src/metrics/base.ts:101",
+      "verdict": "SUPPORTED",
+      "found": "101: export type EOUMetrics; 108 endOfUtteranceDelayMs; 113 transcriptionDelayMs; 117 onUserTurnCompletedDelayMs; 121 lastSpeakingTimeMs",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: 'the only thing that matters for total v2v latency is the final transcript time' (modal-v2v line 33)",
+      "kind": "source_figure",
+      "cited": "modal-v2v line 33",
+      "verdict": "SUPPORTED",
+      "found": "modal source: 'the only thing that matters for total voice-to-voice latency is the final transcript time' (in STT/Parakeet bullet). Note abbreviates voice-to-voice as v2v; quote substance exact.",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat folds both into user_turn_secs of LatencyBreakdown: 'includes VAD silence detection, STT finalization, and any turn analyzer wait' at user_bot_latency_observer.py:99-102",
+      "kind": "code_ref",
+      "cited": "_clones/pipecat/.../user_bot_latency_observer.py:99-102",
+      "verdict": "SUPPORTED",
+      "found": "97-102: 'user_turn_secs: Duration ... This includes VAD silence detection, STT finalization, and any turn analyzer wait.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram VAQI 'L' lumps endpointing+transcription into the end-to-end figure",
+      "kind": "mechanism",
+      "cited": "deepgram-ebook (no line cite)",
+      "verdict": "UNVERIFIABLE",
+      "found": "Interpretive claim with no specific line citation; not a hard code_ref. Stated as comparative framing, not a quoted figure. Did not exhaustively verify VAQI 'L' definition in the ebook.",
+      "correction": ""
+    }
+  ],
+  "summary": "All six frontmatter/inline code_refs verified SUPPORTED against the LiveKit Python + JS clones, the otel histogram definitions, and the Pipecat observer docstring. The Modal quote is present and accurate (note abbreviates 'voice-to-voice' to 'v2v'). The only soft point is the Deepgram VAQI 'L' framing, which carries no line citation and is interpretive (UNVERIFIABLE, not WRONG). No WRONG or MISCITED claims. Overall PASS."
+}

@@ -1,0 +1,112 @@
+{
+  "note": "REL-02-rapid-failure-detection.md",
+  "overall": "PASS",
+  "claims_checked": 13,
+  "claims": [
+    {
+      "claim": "Frontmatter code_ref websocket_service.py:31 points at the rapid-failure detection block",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/websocket_service.py:31",
+      "verdict": "SUPPORTED",
+      "found": "line 31-34 comment: 'Rapid failure detection: when a server accepts the WebSocket handshake but immediately closes...'",
+      "correction": ""
+    },
+    {
+      "claim": "Frontmatter code_ref :166 points at the quick-death check",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/websocket_service.py:166",
+      "verdict": "SUPPORTED",
+      "found": "line 166-169 comment 'Check if the connection died too quickly after being established...' immediately preceding the duration check",
+      "correction": ""
+    },
+    {
+      "claim": "Frontmatter code_ref :179 points at the give-up threshold check",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/websocket_service.py:179",
+      "verdict": "SUPPORTED",
+      "found": "line 179: 'if self._quick_failure_count >= self._MAX_CONSECUTIVE_QUICK_FAILURES:'",
+      "correction": ""
+    },
+    {
+      "claim": "_MIN_STABLE_CONNECTION_DURATION = 5.0 s",
+      "kind": "code_ref",
+      "cited": "websocket_service.py:31-36",
+      "verdict": "SUPPORTED",
+      "found": "line 35: '_MIN_STABLE_CONNECTION_DURATION = 5.0  # seconds'",
+      "correction": ""
+    },
+    {
+      "claim": "_MAX_CONSECUTIVE_QUICK_FAILURES = 3",
+      "kind": "code_ref",
+      "cited": "websocket_service.py:31-36",
+      "verdict": "SUPPORTED",
+      "found": "line 36: '_MAX_CONSECUTIVE_QUICK_FAILURES = 3'",
+      "correction": ""
+    },
+    {
+      "claim": "_maybe_try_reconnect measures connection_duration = now - self._last_connect_time; if < 5s increments _quick_failure_count and after 3 quick deaths reports a fatal ErrorFrame instead of reconnecting (170-189)",
+      "kind": "mechanism",
+      "cited": "websocket_service.py:170-189",
+      "verdict": "SUPPORTED",
+      "found": "line 171 'connection_duration = time.monotonic() - self._last_connect_time'; 172 '< self._MIN_STABLE_CONNECTION_DURATION'; 173 increments; 179-186 reports ErrorFrame and returns False (breaks loop). Method is _maybe_try_reconnect (def at 142).",
+      "correction": ""
+    },
+    {
+      "claim": "A connection that stays up past 5s resets the counter to 0 (line 188-189)",
+      "kind": "code_ref",
+      "cited": "websocket_service.py:188-189",
+      "verdict": "SUPPORTED",
+      "found": "line 187-189: 'else: # Connection was stable — reset the counter. self._quick_failure_count = 0'",
+      "correction": ""
+    },
+    {
+      "claim": "ConnectionClosedOK breaks the receive loop without retrying; ConnectionClosedError triggers reconnect (225-241)",
+      "kind": "mechanism",
+      "cited": "websocket_service.py:225-241",
+      "verdict": "SUPPORTED",
+      "found": "225-228 'except ConnectionClosedOK ... break'; 229-235 'except ConnectionClosedError ... _maybe_try_reconnect(...); if not should_continue: break'",
+      "correction": ""
+    },
+    {
+      "claim": "_disconnecting=True (intentional teardown) suppresses all reconnection (line 158-164)",
+      "kind": "code_ref",
+      "cited": "websocket_service.py:158-164",
+      "verdict": "SUPPORTED",
+      "found": "line 159 'if self._disconnecting:' ... line 164 'return False' (no reconnect)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram ebook describes reconnect-with-backoff (ebook 592)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 592",
+      "verdict": "SUPPORTED",
+      "found": "line 592-593: 'Streaming connections should implement reconnection logic with exponential backoff.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram ebook lists 'Authentication or Connection Failures' as a failure mode (ebook 2074-2080)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook lines 2074-2080",
+      "verdict": "SUPPORTED",
+      "found": "line 2074 heading 'Authentication or Connection Failures'; 2076 'Token lifecycle management or endpoint configuration'; 2079-2080 inspect credentials valid/scoped/refreshed and correct regional endpoints",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit caps total attempts with max_retry=16 on the worker WS",
+      "kind": "code_ref",
+      "cited": "livekit worker WS max_retry=16",
+      "verdict": "SUPPORTED",
+      "found": "agents/livekit-agents/livekit/agents/worker.py:223 'max_retry: int = 16' (WorkerOptions); :314 ctor default 16; :1090 'if retry_count >= self._max_retry:' raises in the worker WS connect loop",
+      "correction": ""
+    },
+    {
+      "claim": "Cross-note links REL-01 / REL-10 / REL-08 (not asserted as proof)",
+      "kind": "cross_note_link",
+      "cited": "[[REL-01]] [[REL-10]] [[REL-08]]",
+      "verdict": "SUPPORTED",
+      "found": "Listed only as related Links; note makes no claim these neighbors prove anything, so nothing to refute.",
+      "correction": ""
+    }
+  ],
+  "summary": "All 13 checkable assertions verified against ground truth. Every code_ref (websocket_service.py lines 31, 166, 179, and inline 35/36/158-189/225-241) matches the actual Pipecat source exactly, including the 5.0s threshold and 3-quick-failure counter, the counter-reset-on-stable behavior, the clean-close vs abrupt-close split, and _disconnecting suppression. Both Deepgram ebook citations (line 592 backoff; 2074-2080 auth/connection failure mode) are confirmed in the raw parsed PDF. LiveKit max_retry=16 on the worker WS confirmed in worker.py:223. No WRONG or MISCITED claims."
+}

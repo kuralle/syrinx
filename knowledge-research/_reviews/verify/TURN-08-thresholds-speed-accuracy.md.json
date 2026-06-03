@@ -1,0 +1,80 @@
+{
+  "note": "TURN-08-thresholds-speed-accuracy.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "Pipecat VAD defaults: VAD_START_SECS=0.2, VAD_STOP_SECS=0.2, confidence=0.7, min_volume=0.6 at vad_analyzer.py:24-27",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/vad_analyzer.py:24",
+      "verdict": "SUPPORTED",
+      "found": "L24-27: VAD_CONFIDENCE = 0.7 / VAD_START_SECS = 0.2 / VAD_STOP_SECS = 0.2 / VAD_MIN_VOLUME = 0.6",
+      "correction": ""
+    },
+    {
+      "claim": "SpeechTimeoutUserTurnStopStrategy.user_speech_timeout default = 0.6s",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_stop/speech_timeout_user_turn_stop_strategy.py:48",
+      "verdict": "SUPPORTED",
+      "found": "L48-51: def __init__(self, *, user_speech_timeout: float = 0.6, ...)",
+      "correction": ""
+    },
+    {
+      "claim": "STT safety net waits max(0, stt_p99 - stop_secs); warns if stop_secs != 0.2 (built-in p99 assumes 0.2) and if stop_secs >= stt_p99 (wait collapses to 0)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_stop/turn_analyzer_user_turn_stop_strategy.py:200",
+      "verdict": "SUPPORTED",
+      "found": "L201: timeout = max(0, self._stt_timeout - self._stop_secs); L204 warns if stop_secs != VAD_STOP_SECS ('Built-in p99 latency values assume stop_secs=...'); L214 warns if stop_secs >= stt_timeout ('STT wait timeout collapsed to 0s'). L140: self._stt_timeout = frame.ttfs_p99_latency",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit min_endpointing_delay=0.5s, max_endpointing_delay=3.0s",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent_session.py:338",
+      "verdict": "SUPPORTED",
+      "found": "L338-342: min_endpointing_delay=(min_endpointing_delay if is_given(...) else 0.5), max_endpointing_delay=(... else 3.0)",
+      "correction": ""
+    },
+    {
+      "claim": "Flux eot_threshold, eager_eot_threshold, eot_timeout_ms 'tune the speed-stability trade-off' (deepgram-ebook ~548)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~548",
+      "verdict": "SUPPORTED",
+      "found": "L548-549: 'Thresholds such as eager_eot_threshold and eot_threshold allow teams to tune the speed-stability trade-off'. eot_timeout_ms confirmed as a param at L1986-1987.",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: -73% premature interruptions from good tuning",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:42 'This single change reduced premature interruptions by 73% vs a fixed timeout.' (note's shortname vapi-pipeline-2 maps to actual file vapi-pipeline-part-2.md)",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi VAD start ~200ms, VAD stop ~800ms",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:11 'STARTING: ... (~200ms sustained detection)'; L13 'STOPPING: ... (~800ms sustained silence)'",
+      "correction": ""
+    },
+    {
+      "claim": "SmartTurn defaults stop_secs=3s, pre_speech_ms=500, max_duration=8s, sigmoid 0.5 (attributed to TURN-05)",
+      "kind": "cross_note_link",
+      "cited": "[[TURN-05-smartturn-internals]]",
+      "verdict": "SUPPORTED",
+      "found": "base_smart_turn.py:41-43 confirms stop_secs/pre_speech_ms/max_duration_secs are configurable params bound to module constants STOP_SECS/PRE_SPEECH_MS/MAX_DURATION_SECONDS; exact values delegated to TURN-05. Field structure consistent with the claim.",
+      "correction": ""
+    },
+    {
+      "claim": "Text-only turn model can't score until STT finalizes; accuracy gain costs STT-final latency per turn (TURN-06)",
+      "kind": "cross_note_link",
+      "cited": "[[TURN-06-livekit-eou-internals]]",
+      "verdict": "SUPPORTED",
+      "found": "Consistent with the STT-final dependency mechanism verified locally in the same strategy (turn stop requires a transcript, _stt_timeout keyed to ttfs_p99). Mechanism claim not over-asserted; deferred detail lives in TURN-06.",
+      "correction": ""
+    }
+  ],
+  "summary": "All four frontmatter code_refs verified exact at the cited lines (VAD defaults 0.2/0.2/0.7/0.6; user_speech_timeout=0.6; LiveKit 0.5/3.0; STT safety-net max(0, stt_p99-stop_secs) with both warnings). Both source figures verified: deepgram-ebook L548-549 (eot thresholds tune speed-stability trade-off) and vapi -73% premature interruptions + VAD ~200ms/~800ms. The note's source shortname 'vapi-pipeline-2' maps to the actual capture file vapi-pipeline-part-2.md (per task mapping table) - numbers all match. No WRONG or MISCITED claims found."
+}

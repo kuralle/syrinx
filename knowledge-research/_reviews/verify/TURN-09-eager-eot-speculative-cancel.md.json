@@ -1,0 +1,72 @@
+{
+  "note": "TURN-09-eager-eot-speculative-cancel.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "stt.py:62 shows the Ink-2 wire protocol with (turn.eager_end -> turn.resume?)* loop",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:62",
+      "verdict": "SUPPORTED",
+      "found": "connected -> turn.start -> turn.update* -> (turn.eager_end -> turn.resume?)* -> turn.end",
+      "correction": ""
+    },
+    {
+      "claim": "stt.py:164-165 register on_turn_eager_end / on_turn_resume handlers",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:164",
+      "verdict": "SUPPORTED",
+      "found": "line 164: self._register_event_handler(\"on_turn_eager_end\"); line 165: self._register_event_handler(\"on_turn_resume\")",
+      "correction": ""
+    },
+    {
+      "claim": "EagerEndOfTurn = medium confidence turn ending, begin speculative reasoning",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~542-547",
+      "verdict": "SUPPORTED",
+      "found": "EagerEndOfTurn: medium confidence turn ending, begin speculative reasoning (lines 543-544)",
+      "correction": ""
+    },
+    {
+      "claim": "TurnResumed = user continues, cancel speculative work",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~542-547",
+      "verdict": "SUPPORTED",
+      "found": "TurnResumed: user continues, cancel speculative work (line 545)",
+      "correction": ""
+    },
+    {
+      "claim": "EndOfTurn (high confidence) finalizes response",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~542-547",
+      "verdict": "SUPPORTED",
+      "found": "EndOfTurn: high confidence completion, finalize response (line 547)",
+      "correction": ""
+    },
+    {
+      "claim": "Speculative reasoning rarely diverges from the final text",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~550",
+      "verdict": "SUPPORTED",
+      "found": "Flux is designed to keep transcripts highly consistent between eager and final turn boundaries. Speculative reasoning rarely diverges from the final text. (lines 549-551)",
+      "correction": ""
+    },
+    {
+      "claim": "eager_eot_threshold and eot_threshold are two separate confidence tiers",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook (~548)",
+      "verdict": "SUPPORTED",
+      "found": "Thresholds such as eager_eot_threshold and eot_threshold allow teams to tune the speed-stability trade-off (line 548)",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi greedy inference: immediately send utterance to LLM, cancel/restart if wrong, user never hears scrapped attempt",
+      "kind": "mechanism",
+      "cited": "vapi-pipeline-2 Problem #5",
+      "verdict": "SUPPORTED",
+      "found": "Problem #5: Coordination -- Greedy Inference: when we think the user is done, immediately send their utterance to the LLM... instantly cancel and restart with the complete updated utterance. The user never hears the scrapped attempt. (lines 44-47)",
+      "correction": ""
+    }
+  ],
+  "summary": "All 8 checkable claims SUPPORTED. Two code_refs (stt.py:62 wire protocol, stt.py:164-165 event handlers) confirmed verbatim. Five deepgram-ebook figures (EagerEndOfTurn/TurnResumed/EndOfTurn definitions, eager_eot_threshold/eot_threshold, divergence statement) confirmed against raw parsed PDF at cited lines. Vapi greedy-inference quote matches the source verbatim including Problem #5 label."
+}

@@ -1,0 +1,8 @@
+{
+  "section": "Greenfield Gaps",
+  "items_checked": 8,
+  "citations_checked": 26,
+  "aligned_count": 8,
+  "findings": [],
+  "summary": "All 8 Greenfield-Gap items verified aligned. Every note ID (LAT-06/07, REL-11, OBS-03/09/10, LANG-02/03, XPORT-04, TTS-06, ARCH-11, LAT-13) exists in notes/ and supports its item. Every wiki MOC open-questions reference (lat-map, rel-map, obs-map, lang-map, xport-map, tts-map, arch-map) literally states the claimed clone-absence: 'no clone implements Vapi mean+ksigma hedging or bandit routing', 'No OSS clone isolates VAD in its own process w/ auto-respawn', 'No clone ships a rolled-up VAQI index', 'Missed-response window undefined numerically', 'Replay/load/fault-injection harnesses are not in the OSS clones', 'S2S shadow-transcription has no clone reference implementation', 'Dynamic TTS switching mid-stream is unimplemented in all clones (requires audio gap)', and 'Guardrails-before-TTS plumbing... none of the clones code paths were traced (unverified in code)'. Adversarial greps of _clones/ for hedge/bandit/thompson/ucb, vaqi, real_time_factor/rtf, VAD subprocess+respawn, fault-injection/replay harness, mid-session TTS language hot-switch, and shadow/parallel transcription found NO real counterexamples (only unrelated hits: document-review hedging-word linguistics, slng plugin name, Gemini pre-roll replay, Gladia STT code-switching detection, cloudflare tool-result races). The mu-law claim 'Pipecat's PCM pipeline transcodes at the edge' is confirmed in _clones/pipecat/src/pipecat/serializers/twilio.py:156 (pcm_to_ulaw) and :256 (ulaw_to_pcm). No MISALIGNED or MINOR findings."
+}

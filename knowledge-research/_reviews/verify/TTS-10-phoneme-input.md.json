@@ -1,0 +1,104 @@
+{
+  "note": "TTS-10-phoneme-input.md",
+  "overall": "PARTIAL",
+  "claims_checked": 12,
+  "claims": [
+    {
+      "claim": "Rime PRONOUNCE(text, word, phoneme) substitutes a word with its phoneme string",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/rime/tts.py:379-385",
+      "verdict": "SUPPORTED",
+      "found": "def PRONOUNCE(self, text, word, phoneme): ... return text.replace(word, f\"{phoneme}\") (lines 379-385), sets phonemizeBetweenBrackets=True",
+      "correction": ""
+    },
+    {
+      "claim": "Rime SPELL(text) wraps text in Rime's spell() to spell out letters",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/rime/tts.py:371-373",
+      "verdict": "SUPPORTED",
+      "found": "def SPELL(text): return f\"spell({text})\" (lines 371-373)",
+      "correction": ""
+    },
+    {
+      "claim": "AWS Polly builds <speak>...</speak> SSML",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/aws/tts.py:287-288",
+      "verdict": "SUPPORTED",
+      "found": "def _construct_ssml(self, text): ssml = \"<speak>\" (lines 287-288); closes with </speak> at 314",
+      "correction": ""
+    },
+    {
+      "claim": "AWS supports <phoneme> via lexicon_names",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/services/aws/tts.py:287-288, :135-142",
+      "verdict": "MISCITED",
+      "found": "_construct_ssml (287-318) only emits <speak>/<lang>/<prosody>, NOT <phoneme>. lexicon_names is real (def 135-142, passed as 'LexiconNames' at :345). The <phoneme> capability is a Polly SSML feature but is not shown in code; only lexicons are.",
+      "correction": "lexicon_names usage at pipecat/src/pipecat/services/aws/tts.py:345; <phoneme> not present in cited code (it is a runtime Polly SSML feature, not emitted by Pipecat)"
+    },
+    {
+      "claim": "AWS lexicon_names definition (list of pronunciation lexicons)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/aws/tts.py:135-142",
+      "verdict": "SUPPORTED",
+      "found": "lexicon_names: List of pronunciation lexicons to apply (135); lexicon_names: list[str] | None | _NotGiven (142)",
+      "correction": ""
+    },
+    {
+      "claim": "ElevenLabs has enable_ssml_parsing",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:479",
+      "verdict": "SUPPORTED",
+      "found": "line 479 docstring 'enable_ssml_parsing: Whether to parse SSML tags in text.'; field defined at 433, used at 766-767 (url += enable_ssml_parsing=...)",
+      "correction": ""
+    },
+    {
+      "claim": "Cartesia sends pronunciation_dict_id",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/tts.py:526-527",
+      "verdict": "SUPPORTED",
+      "found": "if self._settings.pronunciation_dict_id: msg[\"pronunciation_dict_id\"] = self._settings.pronunciation_dict_id (526-527)",
+      "correction": ""
+    },
+    {
+      "claim": "ElevenLabs sends pronunciation_dictionary_locators (id + version)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:188-195",
+      "verdict": "SUPPORTED",
+      "found": "class PronunciationDictionaryLocator (187) with pronunciation_dictionary_id (195) and version_id (196); actually sent to wire at 1014-1017 and 1371-1373",
+      "correction": ""
+    },
+    {
+      "claim": "Text transformers hook via add_text_transformer, applied per aggregation type before synthesis",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:561-575",
+      "verdict": "SUPPORTED",
+      "found": "def add_text_transformer(self, transform_function, aggregation_type='*') ... self._text_transforms.append((aggregation_type, transform_function)) (561-575)",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: KokoroTTS accepts phonetic symbols as input -> domain words ('Modal') always pronounced correctly",
+      "kind": "source_figure",
+      "cited": "modal-v2v L35",
+      "verdict": "SUPPORTED",
+      "found": "L35: 'Accepts phonetic symbols as input -> domain words (\"Modal\") always pronounced correctly.'",
+      "correction": ""
+    },
+    {
+      "claim": "Together lists exact pronunciation (names/products) as a core TTS capability alongside emotion tags",
+      "kind": "source_figure",
+      "cited": "together-talk L29",
+      "verdict": "SUPPORTED",
+      "found": "L29: 'Capabilities: naturalness, exact pronunciation (names/products), emotion control via digital tags (happy/angry/sad), language coverage.'",
+      "correction": ""
+    },
+    {
+      "claim": "ElevenLabs switches to normalized_alignment when a pronunciation dict is active (backs [[TTS-11-word-timestamps]])",
+      "kind": "cross_note_link",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py (prefer_normalized)",
+      "verdict": "SUPPORTED",
+      "found": "prefer_normalized=bool(self._pronunciation_dictionary_locators) at 891 and 1439; normalized_alignment/normalizedAlignment selection logic at 267-295",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and both source figures resolve correctly. One soft MISCITE: the note's 'AWS supports <phoneme> via lexicon_names' conflates a Polly SSML capability (not emitted in the cited _construct_ssml code, which only produces <speak>/<lang>/<prosody>) with lexicon_names (which IS in code, def 135-142, usage :345). Lexicons and <speak> are fully supported; <phoneme> is not shown in the cited lines. No WRONG claims."
+}

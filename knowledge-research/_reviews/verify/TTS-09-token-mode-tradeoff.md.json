@@ -1,0 +1,72 @@
+{
+  "note": "TTS-09-token-mode-tradeoff.md",
+  "overall": "PARTIAL",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "frontmatter code_ref pipecat tts_service.py:64 anchors the text-aggregation mode (SENTENCE/TOKEN) concept",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:64",
+      "verdict": "MISCITED",
+      "found": "line 64 is 'class TTSContext:' (append_to_context/push_assistant_aggregation dataclass), unrelated to aggregation mode",
+      "correction": "pipecat/src/pipecat/services/tts_service.py:80 (class TextAggregationMode) or :272-273 (default = SENTENCE)"
+    },
+    {
+      "claim": "frontmatter code_ref elevenlabs/tts.py:498 anchors the TOKEN/auto_mode latency comment",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:498",
+      "verdict": "SUPPORTED",
+      "found": "line 498 begins the comment block: '# By default, we aggregate sentences before sending to TTS. This adds # ~200-300ms of latency per sentence ... Setting text_aggregation_mode=TextAggregationMode.TOKEN streams tokens directly. To use this mode, you must set auto_mode=False ... eliminates aggregation time, but slows down ElevenLabs.'",
+      "correction": ""
+    },
+    {
+      "claim": "base_text_aggregator.py:20-25 defines SENTENCE, TOKEN, WORD modes",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/utils/text/base_text_aggregator.py:20",
+      "verdict": "SUPPORTED",
+      "found": "line 20 'class AggregationType(StrEnum):' with SENTENCE='sentence' (23), TOKEN='token' (24), WORD='word' (25)",
+      "correction": ""
+    },
+    {
+      "claim": "In TOKEN mode SimpleTextAggregator yields each token immediately with no buffering (simple_text_aggregator.py:64-67)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/utils/text/simple_text_aggregator.py:64-67",
+      "verdict": "SUPPORTED",
+      "found": "lines 64-67: 'if self._aggregation_type == AggregationType.TOKEN: / if text: / yield Aggregation(text=text, type=AggregationType.TOKEN) / return'",
+      "correction": ""
+    },
+    {
+      "claim": "auto_mode docstring: reduces latency by disabling server-side chunk scheduling and buffering, recommended for complete sentences (elevenlabs/tts.py:472-478)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:472-478",
+      "verdict": "SUPPORTED",
+      "found": "lines 472-478: 'auto_mode: Whether to enable ElevenLabs' auto mode, which reduces latency by disabling server-side chunk scheduling and buffering. Recommended when sending complete sentences or phrases. When None (default), auto mode is enabled for SENTENCE aggregation and disabled for TOKEN aggregation — because token streaming relies on the server-side chunk scheduler to accumulate enough text...'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat auto-derives auto_mode = (mode != TOKEN) (elevenlabs/tts.py:591-592)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:591-592",
+      "verdict": "SUPPORTED",
+      "found": "lines 591-592: 'if auto_mode is None: / auto_mode = self._text_aggregation_mode != TextAggregationMode.TOKEN'",
+      "correction": ""
+    },
+    {
+      "claim": "sentence aggregation adds ~200-300ms latency per sentence; TOKEN eliminates aggregation time but slows ElevenLabs (elevenlabs/tts.py:498-503)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:498-503",
+      "verdict": "SUPPORTED",
+      "found": "comment at 498-503 verbatim: '~200-300ms of latency per sentence ... To use this mode, you must set auto_mode=False. This eliminates aggregation time, but slows down ElevenLabs.'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit BufferedTokenStream enforces min_token_len/min_sentence_len floor (~20 chars), attributed to [[TTS-03-sentence-aggregation]]",
+      "kind": "cross_note_link",
+      "cited": "[[TTS-03-sentence-aggregation]]",
+      "verdict": "UNVERIFIABLE",
+      "found": "claim deferred to neighbor note TTS-03; not directly substantiated within TTS-09 and no LiveKit clone path cited here",
+      "correction": ""
+    }
+  ],
+  "summary": "All seven Pipecat code_refs in the body are accurate and the ElevenLabs comment/docstring quotes are verbatim. One frontmatter code_ref (tts_service.py:64) points at class TTSContext instead of TextAggregationMode (line 80) / default-SENTENCE logic (line 272-273) — MISCITED. together-talk is listed as the only source but the substantive numbers (200-300ms) come from the Pipecat code comment, correctly cited inline; together-talk's own 200-300ms figure is TTFT, not aggregation cost. No WRONG claims."
+}

@@ -1,0 +1,64 @@
+{
+  "note": "LAT-03-latency-ladder.md",
+  "overall": "PASS",
+  "claims_checked": 7,
+  "claims": [
+    {
+      "claim": "Together: humans respond to cues in ~300ms; >500ms you notice; 1-2s people hang up",
+      "kind": "source_figure",
+      "cited": "together-talk:6 (raw N7b1PJc7SFc.raw.json)",
+      "verdict": "SUPPORTED",
+      "found": "raw transcript: 'we respond to each other's cues in something like 300 milliseconds... taking more than 500 milliseconds to respond, you'll start to notice. If it takes a second, if it takes 2 seconds, people will just hang up.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: conversational flow breaks when latency exceeds ~1200ms, described as time for user to have a tangential thought",
+      "kind": "source_figure",
+      "cited": "vapi-latency:9",
+      "verdict": "SUPPORTED",
+      "found": "'Conversational flow breaks when latency exceeds ~1200ms (\"the rough time it takes for the user to have a tangential thought\").'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi hard-codes 1200ms latency budget per turn",
+      "kind": "source_figure",
+      "cited": "vapi-latency:9",
+      "verdict": "SUPPORTED",
+      "found": "'-> strict 1200ms latency budget per turn.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi: budget allocation - save ms in LLM reasoning -> spend on higher-fidelity TTS",
+      "kind": "source_figure",
+      "cited": "vapi-latency:9",
+      "verdict": "SUPPORTED",
+      "found": "'Treat budget as scarce resource: save ms in LLM reasoning -> spend on higher-fidelity TTS.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: natural-conversation floor can be as low as 100ms v2v",
+      "kind": "source_figure",
+      "cited": "modal-v2v:26",
+      "verdict": "SUPPORTED",
+      "found": "'Natural conversation v2v latency can be as short as 100ms.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: apps realistically target ~1s or less",
+      "kind": "source_figure",
+      "cited": "modal-v2v:26",
+      "verdict": "SUPPORTED",
+      "found": "'Apps target ~1 second or less.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal benchmarks against proprietary services' median (~1s on par with proprietary)",
+      "kind": "source_figure",
+      "cited": "modal-v2v:50",
+      "verdict": "SUPPORTED",
+      "found": "'median v2v latency of ~1 second, on par with proprietary services.'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 7 source figures verified against ground truth. together-talk numbers (300/500/1-2s) confirmed in raw YouTube JSON transcript verbatim. Vapi 1200ms budget + tangential-thought framing + TTS-tradeoff confirmed. Modal 100ms floor, ~1s target, and proprietary-median benchmark confirmed. No code_refs to check (frontmatter empty). No WRONG or MISCITED claims."
+}

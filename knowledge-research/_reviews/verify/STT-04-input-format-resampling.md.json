@@ -1,0 +1,96 @@
+{
+  "note": "STT-04-input-format-resampling.md",
+  "overall": "FAIL",
+  "claims_checked": 11,
+  "claims": [
+    {
+      "claim": "Pipecat Deepgram defaults encoding=\"linear16\"",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:300",
+      "verdict": "SUPPORTED",
+      "found": "encoding: str = \"linear16\",",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram connect query writes encoding, channels, multichannel, sample_rate(=self.sample_rate)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:569-572",
+      "verdict": "SUPPORTED",
+      "found": "kwargs[\"encoding\"]=self._encoding; kwargs[\"channels\"]=...; kwargs[\"multichannel\"]=...; kwargs[\"sample_rate\"]=str(self.sample_rate)",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida hard-codes Encoding linear16",
+      "kind": "code_ref",
+      "cited": "voice-ai/.../deepgram/deepgram.go:21-23",
+      "verdict": "SUPPORTED",
+      "found": "func (dg *deepgramOption) GetEncoding() string { return \"linear16\" }",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida opens live socket SampleRate:16000, Channels:1",
+      "kind": "code_ref",
+      "cited": "voice-ai/.../deepgram/deepgram.go:51-66",
+      "verdict": "SUPPORTED",
+      "found": "Channels: 1, ... SampleRate: 16000, (within LiveTranscriptionOptions, lines 51-66)",
+      "correction": ""
+    },
+    {
+      "claim": "Base STT sets self._sample_rate = self._init_sample_rate or frame.audio_in_sample_rate",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/stt_service.py:303",
+      "verdict": "SUPPORTED",
+      "found": "self._sample_rate = self._init_sample_rate or frame.audio_in_sample_rate",
+      "correction": ""
+    },
+    {
+      "claim": "OpenAI STT resamples each chunk via resampler.resample(audio, self.sample_rate, OPENAI_SAMPLE_RATE)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/openai/stt.py:609",
+      "verdict": "SUPPORTED",
+      "found": "audio = await self._resampler.resample(audio, self.sample_rate, OPENAI_SAMPLE_RATE)",
+      "correction": ""
+    },
+    {
+      "claim": "OpenAI realtime path automatically resampled to 24 kHz",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/openai/stt.py:446",
+      "verdict": "SUPPORTED",
+      "found": "docstring line 446: 'Automatically resampled to 24 kHz.'; OPENAI_SAMPLE_RATE = 24000 confirmed in _constants.py:9",
+      "correction": ""
+    },
+    {
+      "claim": "OpenAI fixed model rate is 24 kHz",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/openai/_constants.py:9",
+      "verdict": "SUPPORTED",
+      "found": "OPENAI_SAMPLE_RATE = 24000",
+      "correction": ""
+    },
+    {
+      "claim": "Soniox has sample_rate=16000 default at soniox/stt.py:119",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/soniox/stt.py:119",
+      "verdict": "WRONG",
+      "found": "Line 119 is `return token[\"text\"] == END_TOKEN or token[\"text\"] == FINALIZED_TOKEN` (is_end_token). Soniox `sample_rate` param defaults to None (stt.py:267 `sample_rate: int | None = None`); no 16000 default exists anywhere in the file (grep for 16000 returns nothing).",
+      "correction": "remove the soniox sample_rate=16000 claim; Soniox sample_rate default is None, not 16000, and stt.py:119 is is_end_token not a rate"
+    },
+    {
+      "claim": "Deepgram ebook: telephony 8 kHz mono mu-law/A-law PCM, browsers/mobile 16 or 48 kHz PCM",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook:514-516",
+      "verdict": "SUPPORTED",
+      "found": "'Telephony typically uses 8 kHz mono µ-law or A-law PCM, while browsers and mobile devices commonly support 16 or 48 kHz PCM.'",
+      "correction": ""
+    },
+    {
+      "claim": "Telephony mu-law decode/resample happens in serializer layer, not STT plugin",
+      "kind": "mechanism",
+      "cited": "note body (Prior-art divergence)",
+      "verdict": "SUPPORTED",
+      "found": "Consistent with pipecat AGENTS.md: 'Telephony serializers (Twilio, Plivo, ...) handle provider-specific protocols and audio encoding (e.g., µ-law)'; Deepgram/Rapida plugins declare sample_rate and do not resample in-plugin (verified no resample call in deepgram/stt.py connect path).",
+      "correction": ""
+    }
+  ],
+  "summary": "10 of 11 assertions SUPPORTED against ground truth. One WRONG: the Soniox claim (sample_rate=16000 default at soniox/stt.py:119) is false on both line and value — line 119 is is_end_token, and Soniox's sample_rate defaults to None (stt.py:267), with no 16000 anywhere in the file. All other code_refs (deepgram/stt.py:300,569-572; deepgram.go:21-23,51-66; stt_service.py:303; openai/stt.py:446,609; OPENAI_SAMPLE_RATE=24000) and the deepgram-ebook quote verified exactly."
+}

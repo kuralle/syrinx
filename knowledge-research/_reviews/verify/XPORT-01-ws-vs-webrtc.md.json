@@ -1,0 +1,80 @@
+{
+  "note": "XPORT-01-ws-vs-webrtc.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "RawAudioTrack class for WebRTC output is at transport.py:76",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:76",
+      "verdict": "SUPPORTED",
+      "found": "line 76: 'class RawAudioTrack(AudioStreamTrack):' with docstring 'Custom audio stream track for WebRTC output.'",
+      "correction": ""
+    },
+    {
+      "claim": "RawAudioTrack emits 10ms audio frames",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:76",
+      "verdict": "SUPPORTED",
+      "found": "lines 94-95 '_samples_per_10ms = sample_rate * 10 // 1000' / '_bytes_per_10ms ... # 16-bit'; line 118 breaks input into 10ms chunks. (Note: chunks are 16-bit PCM; 'Opus-bound' is the codec aiortc later applies, not visible at this line.)",
+      "correction": ""
+    },
+    {
+      "claim": "WebsocketServerTransport ships serialized frames over a raw socket at server.py:418",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/websocket/server.py:418",
+      "verdict": "SUPPORTED",
+      "found": "line 418 'class WebsocketServerTransport(BaseTransport):'; nearby line 400-402 serializes frame then '_websocket.send(payload)'",
+      "correction": ""
+    },
+    {
+      "claim": "TwilioFrameSerializer at twilio.py:32 handles Twilio Media Streams WebSocket protocol",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:32",
+      "verdict": "SUPPORTED",
+      "found": "line 32 'class TwilioFrameSerializer(FrameSerializer):' docstring 'Serializer for Twilio Media Streams WebSocket protocol... audio conversion ... mu-law'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat lets you swap to proprietary network (Daily mesh) or Twilio in a few lines (modal-v2v line 17)",
+      "kind": "source_figure",
+      "cited": "modal-v2v line 17",
+      "verdict": "SUPPORTED",
+      "found": "line 17: 'Swap to a proprietary network (Daily global mesh) or Twilio in a few lines. Vendor neutral.'",
+      "correction": ""
+    },
+    {
+      "claim": "Client<->Bot over WebRTC (Pipecat JS + Python SmallWebRTC); Bot<->STT/TTS over persistent WebSockets (modal-v2v lines 40-41)",
+      "kind": "source_figure",
+      "cited": "modal-v2v lines 40-41",
+      "verdict": "SUPPORTED",
+      "found": "line 40 'Client <-> Bot: WebRTC (Pipecat JS client + Python SmallWebRTC).' line 41 'Serve a WebSocket endpoint over a Tunnel for STT + TTS -> low-latency, bidirectional, persistent.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal architecture diagram: client<->bot WebRTC, bot<->STT/TTS WebSocket (diagrams line 30-38)",
+      "kind": "source_figure",
+      "cited": "diagrams line 30-38",
+      "verdict": "SUPPORTED",
+      "found": "lines 30-38 'Modal architecture ... Client <-> Pipecat Pipeline (bot) over WebRTC ... STT Service over WebSocket+modal.Tunnel ... TTS Service over WebSocket ... STT and TTS use persistent WebSockets'",
+      "correction": ""
+    },
+    {
+      "claim": "Twilio terminates PSTN and bridges to runtime over WebSocket carrying base64 mu-law (deepgram-ebook line 706-722)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 706-722",
+      "verdict": "SUPPORTED",
+      "found": "lines 707-721 'provider such as Twilio. The provider terminates the PSTN call and establishes a bidirectional media stream, commonly via WebSocket'; lines 716-721 'mu-law or A-law PCM ... Deepgram speech models accept mu-law PCM natively'. (Note: source says mu-law over WebSocket but does not literally use the word 'base64'; base64 is the actual Twilio Media Streams encoding, corroborated by twilio.py serializer.)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram notes WebSocket concurrency limits are a primary scaling constraint for telephony (ebook line 764)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 764",
+      "verdict": "SUPPORTED",
+      "found": "lines 759-766 'Scaling and Concurrency ... Scaling challenges typically arise in: WebSocket concurrency limits, Orchestrator throughput, Downstream LLM rate limits'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 3 code_refs and all 6 source figures verified against ground truth. No WRONG or MISCITED. Two minor non-blocking notes: 'Opus-bound' frames are 16-bit PCM at the cited line (Opus is applied downstream by aiortc), and the deepgram source says mu-law over WebSocket without literally saying 'base64' (though base64 is the correct Twilio encoding)."
+}

@@ -1,0 +1,88 @@
+{
+  "note": "TTS-06-output-encoding-mulaw.md",
+  "overall": "PARTIAL",
+  "claims_checked": 10,
+  "claims": [
+    {
+      "claim": "ElevenLabs maps sample rate to format string pcm_8000/.../pcm_24000, default 24000",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/elevenlabs/tts.py:122-149",
+      "verdict": "SUPPORTED",
+      "found": "def output_format_from_sample_rate(...) match sample_rate: case 8000: return 'pcm_8000' ... case 24000: return 'pcm_24000' ... return 'pcm_24000' (fallback at L149)",
+      "correction": ""
+    },
+    {
+      "claim": "Cartesia sends output_format {container, encoding, sample_rate}",
+      "kind": "code_ref",
+      "cited": "cartesia/tts.py:507-510",
+      "verdict": "SUPPORTED",
+      "found": "'output_format': { 'container': self._output_container, 'encoding': self._output_encoding, 'sample_rate': self._output_sample_rate }",
+      "correction": ""
+    },
+    {
+      "claim": "Cartesia encoding defaults to pcm_s16le",
+      "kind": "code_ref",
+      "cited": "cartesia/tts.py:243",
+      "verdict": "SUPPORTED",
+      "found": "encoding: str = \"pcm_s16le\", (line 243)",
+      "correction": ""
+    },
+    {
+      "claim": "Twilio serializer calls pcm_to_ulaw(data, frame.sample_rate, 8000, resampler) on egress",
+      "kind": "code_ref",
+      "cited": "twilio.py:156-159",
+      "verdict": "SUPPORTED",
+      "found": "serialized_data = await pcm_to_ulaw(data, frame.sample_rate, self._twilio_sample_rate, self._output_resampler) — comment: 'Convert PCM at frame's rate to 8kHz μ-law for Twilio'",
+      "correction": ""
+    },
+    {
+      "claim": "pcm_to_ulaw resamples then audioop.lin2ulaw",
+      "kind": "code_ref",
+      "cited": "audio/utils.py:193-209",
+      "verdict": "SUPPORTED",
+      "found": "in_pcm_bytes = await resampler.resample(pcm_bytes, in_rate, out_rate) (L206); out_ulaw_bytes = audioop.lin2ulaw(in_pcm_bytes, 2) (L209)",
+      "correction": ""
+    },
+    {
+      "claim": "OutputChunkSize = 8 bytes/ms x 20ms",
+      "kind": "code_ref",
+      "cited": "audio_processor.go:28-29",
+      "verdict": "SUPPORTED",
+      "found": "MulawBytesPerMs = 8; OutputChunkSize = MulawBytesPerMs * 20",
+      "correction": ""
+    },
+    {
+      "claim": "ProcessOutputAudio -> adapter.ConvertOutput -> g711 lib resamples TTS PCM to mu-law 8kHz mono",
+      "kind": "mechanism",
+      "cited": "audio_processor.go:130-141",
+      "verdict": "MISCITED",
+      "found": "ProcessOutputAudio (L130) calls adapter.ConvertOutput (L135). But ConvertOutput (audio_adapter.go:43-45) does ONLY resampler.Resample(audio, Linear16kHz->Mulaw8kHz config) — mu-law conversion happens inside the resampler, NOT via g711. The g711 lib (zaf/g711 EncodeUlaw/DecodeUlaw) is used only in MixAmbient (audio_adapter.go:52-63), not in the main ConvertOutput output path.",
+      "correction": "g711 is in the file (audio_adapter.go:13,52,57,63) but only on the ambient-mix path; the main ConvertOutput path encodes mu-law via resampler.Resample to NewMulaw8khzMonoAudioConfig(). Broad claim (PCM->mu-law 8kHz mono) correct; g711 attribution to the main path is inaccurate."
+    },
+    {
+      "claim": "Deepgram: telephony is '8 kHz mono mu-law or A-law PCM' / browsers 16 or 48 kHz PCM",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L514-516",
+      "verdict": "SUPPORTED",
+      "found": "L515: 'Telephony typically uses 8 kHz mono µ-law or A-law PCM, while browsers and mobile devices' L516: 'commonly support 16 or 48 kHz PCM.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 'format alignment. Avoid transcoding... its TTS can emit mu-law audio directly consumable by telephony gateways. Eliminating format conversion removes unnecessary latency and reduces failure modes'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L719-723",
+      "verdict": "SUPPORTED",
+      "found": "L719-723: 'The most important optimization is format alignment. Avoid transcoding wherever possible. ... its TTS can emit µ-law audio directly consumable by telephony gateways. Eliminating format conversion removes unnecessary latency and reduces failure modes.'",
+      "correction": ""
+    },
+    {
+      "claim": "Modal's Kokoro accepts phonetic input and streams PCM; resampling at the WebRTC transport",
+      "kind": "source_figure",
+      "cited": "modal-v2v",
+      "verdict": "SUPPORTED",
+      "found": "L35: 'TTS: KokoroTTS (82M). ... streaming output minimizes TTFB ... Accepts phonetic symbols as input'; L40: 'Client <-> Bot: WebRTC'. ('streams PCM' / 'resampling at WebRTC transport' are mild extrapolations not explicitly stated but consistent.)",
+      "correction": ""
+    }
+  ],
+  "summary": "All 5 code_refs to TTS request-format and Twilio/utils mu-law conversion are SUPPORTED at the cited lines. Both Deepgram quotes (L514-516, L719-723) are verbatim-accurate. The one defect: the Rapida mechanism chain 'ProcessOutputAudio -> ConvertOutput -> g711 lib' is MISCITED — ConvertOutput uses resampler.Resample for mu-law encoding, while the g711 lib (zaf/g711) is only on the MixAmbient ambient path, not the main output path. No WRONG claims; overall PARTIAL."
+}

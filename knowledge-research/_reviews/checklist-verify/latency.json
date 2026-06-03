@@ -1,0 +1,17 @@
+{
+  "section": "6. Latency Engineering",
+  "items_checked": 8,
+  "citations_checked": 14,
+  "aligned_count": 7,
+  "findings": [
+    {
+      "item": "Emit first-token/first-byte metrics for every provider stage (LAT-02)",
+      "kind": "code_citation",
+      "severity": "MINOR",
+      "cited": "_clones/pipecat/src/pipecat/services/tts_service.py:684-690",
+      "issue": "Cited as the Pipecat anchor for 'TTS ttfb'. Lines 684-690 of tts_service.py are inside the LLM/text-frame branch and call start_text_aggregation_metrics() / _process_text_frame() (text aggregation metrics), not TTS time-to-first-byte. The actual TTS ttfb call is await self.start_ttfb_metrics() at tts_service.py:1082 (inside TTSService._push_tts_frames, class TTSService at :107). The LAT-02 evidence note itself points to frame_processor_metrics.py:88-124 for the start_ttfb_metrics/stop_ttfb_metrics implementation, not tts_service.py:684-690. The LiveKit half of the citation (metrics/base.py:20-81, which holds LLMMetrics.ttft and TTSMetrics.ttfb) is correct.",
+      "correct": "_clones/pipecat/src/pipecat/services/tts_service.py:1082 (start_ttfb_metrics) or frame_processor_metrics.py:88-124"
+    }
+  ],
+  "summary": "Section 6 is overwhelmingly aligned. All target numbers verified against code/notes: latency ladder 300/500/1200/1-2s (LAT-03), turn split ASR~300/LLM 200-900/TTS~400 (LAT-04), co-location 75ms->5ms (LAT-08), and preemptive defaults max_speech_duration=10.0/max_retries=3 confirmed at voice/turn.py:153-154. The predict-and-scrap validation citation (agent_activity.py:2086-2111) is accurate. Source-only flags are honest: grepping the clones for hedging and bandit/thompson/epsilon routing yielded only false positives (hedge-words in a document-review example; a person named 'thompson_kevin'), so 'no OSS clone implements dynamic hedging' and 'bandit routing is source-only' hold. All 16 evidence note IDs (LAT-01..13, OBS-04/06, REL-05, TURN-09, ARCH-11) exist and support their items. One MINOR code-citation mismatch: the Pipecat anchor for TTS ttfb (LAT-02) points to a text-aggregation-metrics line range rather than the actual start_ttfb_metrics call."
+}

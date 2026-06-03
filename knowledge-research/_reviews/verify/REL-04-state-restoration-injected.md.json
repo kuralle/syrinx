@@ -1,0 +1,72 @@
+{
+  "note": "REL-04-state-restoration-injected.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "Pipecat send_with_retry reconnects then replays the in-flight failed message",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/websocket_service.py:122-138",
+      "verdict": "SUPPORTED",
+      "found": "L122 async def send_with_retry; L134 success = await self._try_reconnect(...); L138 await self._websocket.send(message)  # retry same message",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit preserves _start_time_offset across reconnect attempts so transcript timestamps stay linear",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/stt/stt.py:390-398",
+      "verdict": "SUPPORTED",
+      "found": "L390 comment 'so that returned transcripts can have linear timestamps'; L396 self._start_time_offset += time.time() - last_start_time inside retry loop; offset init once at L337=0.0, only += , never reset",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram quote: prior conversational context restored through injected state rather than restarting cold; when recovery fails communicate clearly",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 593-595",
+      "verdict": "SUPPORTED",
+      "found": "L593-595: 'When reconnection is possible, prior conversational context should be restored through injected state rather than restarting cold. When recovery fails, the system should communicate clearly rather than leaving silence.'",
+      "correction": ""
+    },
+    {
+      "claim": "Failure-mode appendix inspection target: whether state is properly restored after reconnect",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 2092",
+      "verdict": "SUPPORTED",
+      "found": "L2092: 'Connection timeout settings, reconnection backoff logic, whether state is [properly restored after reconnect]...'",
+      "correction": ""
+    },
+    {
+      "claim": "Loss of Context appendix: prior turns retained and injected into reasoning, kept above socket",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 2105-2111",
+      "verdict": "SUPPORTED",
+      "found": "L2105 'Loss of Context or Forgetting Mid-Conversation'; L2109 'How prior turns are retained and injected into reasoning.'",
+      "correction": ""
+    },
+    {
+      "claim": "Reconnect re-runs the service's own _connect_websocket() which re-sends provider config (model/language/encoding/keyterms) before resuming audio",
+      "kind": "mechanism",
+      "cited": "pipecat deepgram/stt.py + websocket_service.py:67-81",
+      "verdict": "SUPPORTED",
+      "found": "WebsocketService._reconnect_websocket (L77-78) calls _disconnect_websocket() then _connect_websocket(); deepgram _connection_handler (L631) rebuilds connect_kwargs via _build_connect_kwargs() carrying model/language/encoding/keyterm on every (re)connect",
+      "correction": ""
+    },
+    {
+      "claim": "in-flight message replay is Pipecat-specific (send_with_retry)",
+      "kind": "mechanism",
+      "cited": "websocket_service.py:122",
+      "verdict": "SUPPORTED",
+      "found": "send_with_retry present in pipecat base WebsocketService; LiveKit stt.py has no equivalent single-message replay (retry loop re-runs _run, not a buffered frame)",
+      "correction": ""
+    },
+    {
+      "claim": "Conversation/LLM history lives in orchestrator context above socket, not re-sent over recovered socket",
+      "kind": "mechanism",
+      "cited": "note narrative + ebook 2105-2111",
+      "verdict": "SUPPORTED",
+      "found": "Consistent with deepgram Loss-of-Context appendix (state persistence/memory layer separate from transport); no speech-layer clone persists LLM history on the socket. Reasonable architectural framing, not contradicted.",
+      "correction": ""
+    }
+  ],
+  "summary": "All 8 checkable assertions hold. Both frontmatter code_refs (websocket_service.py:122 send_with_retry replay; stt.py:390 _start_time_offset linear timestamps) are accurate at the cited lines. All three deepgram-ebook line cites (594, 2092, 2105-2111) match the raw parsed PDF exactly. The _connect re-sends-config mechanism is confirmed in pipecat's deepgram service (_build_connect_kwargs rebuilt every reconnect). No WRONG or MISCITED claims."
+}

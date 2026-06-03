@@ -1,0 +1,88 @@
+{
+  "note": "REL-12-sample-rate-encoding-mismatch.md",
+  "overall": "PARTIAL",
+  "claims_checked": 10,
+  "claims": [
+    {
+      "claim": "soxr_stream_resampler.py:30 provides stateful soxr resampling with quality modes VHQ/HQ/MQ/LQ/QQ",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/resamplers/soxr_stream_resampler.py:30",
+      "verdict": "SUPPORTED",
+      "found": "line 30 'class SOXRStreamAudioResampler(BaseAudioResampler)'; __init__ at line 43 documents quality presets 'VHQ' (default), 'HQ', 'MQ', 'LQ', 'QQ'",
+      "correction": ""
+    },
+    {
+      "claim": "audio/utils.py:10 provides create_stream_resampler() as a factory",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/utils.py:10",
+      "verdict": "MISCITED",
+      "found": "line 10 is the module docstring ('format conversion, volume calculation...'); create_stream_resampler() is defined at line 40, returning SOXRStreamAudioResampler",
+      "correction": "pipecat/src/pipecat/audio/utils.py:40"
+    },
+    {
+      "claim": "LiveKit room I/O lazily builds a per-call rtc.AudioResampler on first frame if track rate != pipeline rate, in _resample_frames()",
+      "kind": "code_ref",
+      "cited": "agents .../room_io/_input.py:368-386",
+      "verdict": "SUPPORTED",
+      "found": "line 368 'def _resample_frames'; lines 369-378 lazily create resampler when 'frame.sample_rate != self._sample_rate' via 'rtc.AudioResampler(input_rate=..., output_rate=...)'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat always decodes ulaw at the Twilio serializer edge via ulaw_to_pcm in deserialize(), twilio.py:256",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/twilio.py:256",
+      "verdict": "SUPPORTED",
+      "found": "line 256 'deserialized_data = await ulaw_to_pcm(payload, self._twilio_sample_rate, self._sample_rate, self._input_resampler)' inside deserialize() handling event=='media'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram lists 'Choppy, Distorted, or Unnatural Audio' originating in 'playback buffering, encoding mismatches, or network instability' (~2075-2079)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~2075-2079",
+      "verdict": "MISCITED",
+      "found": "Two-column parse: heading 'Choppy, Distorted, or Unnatural Audio' at line 2060; 'Playback buffering, encoding mismatches, or network instability.' at line 2062. Lines 2075-2079 are the 'Echo or Audio Feedback Loops' entry.",
+      "correction": "deepgram-ebook ~2060-2068"
+    },
+    {
+      "claim": "Inspection checklist: 'Consistency between audio formats across the pipeline and whether playback strategies introduce unnecessary buffering'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~2075-2079",
+      "verdict": "MISCITED",
+      "found": "Exact text found at lines 2067-2068: 'Consistency between audio formats across the pipeline and whether playback strategies introduce unnecessary buffering.'",
+      "correction": "deepgram-ebook ~2067-2068"
+    },
+    {
+      "claim": "Telephony quote: 'Telephony typically uses 8 kHz mono u-law or A-law PCM, while browsers and mobile devices commonly support 16 or 48 kHz PCM' (~510-516)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~510-516",
+      "verdict": "SUPPORTED",
+      "found": "lines 514-516: 'Telephony typically uses 8 kHz mono u-law or A-law PCM, while browsers and mobile devices commonly support 16 or 48 kHz PCM.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram advises 'skip transcoding when the provider speaks u-law natively' (~719)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~719",
+      "verdict": "SUPPORTED",
+      "found": "lines 718-721: 'The most important optimization is format alignment. Avoid transcoding wherever possible. Deepgram's speech models accept u-law PCM natively...' Note presents this as a paraphrased quote, but the substance is accurate and at the cited region.",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare's telephony bridge does inline linear-interpolation resampling (vs Pipecat/LiveKit soxr)",
+      "kind": "mechanism",
+      "cited": "cloudflare-agents (prior-art divergence)",
+      "verdict": "SUPPORTED",
+      "found": "voice-providers/twilio/src/index.ts:93 'Resample PCM audio from one sample rate to another using linear interpolation.' function resamplePCM; design/voice.md:205-206 confirms mulaw->PCM->resample 16kHz internal-PCM pipeline.",
+      "correction": ""
+    },
+    {
+      "claim": "Mechanism: 8 kHz u-law decoded as 16 kHz PCM doubles pitch/halves duration; u-law bytes treated as PCM samples produce loud static",
+      "kind": "mechanism",
+      "cited": "note inline reasoning",
+      "verdict": "SUPPORTED",
+      "found": "Standard DSP: playing samples at 2x the intended rate doubles perceived pitch and halves duration; misinterpreting 8-bit u-law companded bytes as linear 16-bit PCM yields noise. Physically correct, consistent with encoding facts confirmed in the Deepgram source.",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs resolve to real mechanisms. soxr resampler (VHQ/HQ/MQ/LQ/QQ), LiveKit lazy per-call resampler, and Twilio ulaw_to_pcm deserialize are exactly as claimed. Two line-number miscites: utils.py create_stream_resampler is at :40 not :10 (:10 is the module docstring), and the Deepgram 'Choppy/Distorted' failure-mode plus its inspection checklist are at ~2060-2068 not ~2075-2079 (two-column PDF parse offset). Both quotes themselves are verbatim-accurate. No WRONG claims; mechanism and prior-art divergence claims hold."
+}

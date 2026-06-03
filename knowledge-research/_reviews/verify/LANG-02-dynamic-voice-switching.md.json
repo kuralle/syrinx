@@ -1,0 +1,80 @@
+{
+  "note": "LANG-02-dynamic-voice-switching.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "Pipecat TTSService base class at tts_service.py:107",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:107",
+      "verdict": "SUPPORTED",
+      "found": "class TTSService(AIService): \"Base class for text-to-speech services.\"",
+      "correction": ""
+    },
+    {
+      "claim": "Mid-session voice change via TTSUpdateSettingsFrame(voice=...) handled at tts_service.py:769-773",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:769-773",
+      "verdict": "SUPPORTED",
+      "found": "elif isinstance(frame, TTSUpdateSettingsFrame): ... elif frame.delta is not None: await self._update_settings(frame.delta)",
+      "correction": ""
+    },
+    {
+      "claim": "Older set_voice at tts_service.py:445 is deprecated",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/tts_service.py:445",
+      "verdict": "SUPPORTED",
+      "found": "async def set_voice(self, voice: str): ... .. deprecated:: 0.0.104 Use ``TTSUpdateSettingsFrame(voice=...)`` instead.",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit AgentSession holds STT/LLM/TTS as session-scoped node generators at agent.py:414-519",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent.py:414-519",
+      "verdict": "SUPPORTED",
+      "found": "Agent.default.stt_node (414), llm_node (461), tts_node (485) — async generators wrapping activity.stt/llm/tts via .stream()",
+      "correction": ""
+    },
+    {
+      "claim": "AgentSession.update_agent at agent_session.py:1302 can swap the whole agent (incl TTS) mid-session, but not inside an existing streaming socket",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent_session.py:1302",
+      "verdict": "SUPPORTED",
+      "found": "def update_agent(self, agent: Agent) -> None: self._agent = agent ... if self._started: ... self._update_activity_atask = task = asyncio.create_task(self._update_activity_task(...)) — replaces agent (and its TTS) by rebuilding activity",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida Cartesia TTS creates per-session streaming context at cartesia/tts.go:186 without mid-session voice reconfiguration",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/transformer/cartesia/tts.go:186",
+      "verdict": "SUPPORTED",
+      "found": "func (ct *cartesiaTTS) Transform(ctx context.Context, in internal_type.Packet) error { ... if in.ContextId() != ct.contextId { ct.contextId = in.ContextId() ... } — per-context handling, no voice-update path",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram quote: 'Language switching mid-conversation should update voice and synthesis behavior dynamically without resetting context. The user should experience adaptation, not reconfiguration.' (~838-840)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~838-840",
+      "verdict": "SUPPORTED",
+      "found": "lines 836-838: 'Language switching mid-conversation should update voice and synthesis behavior dynamically without resetting context. The user should experience adaptation, not reconfiguration.' (two-column interleave; within a few lines of cited)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram quote: 'A multilingual agent should feel like the same character in every language. Inconsistent tone, pacing, or expressiveness breaks trust faster than minor recognition errors' (~829-831); plus 'selecting voices with similar tonal characteristics across languages' and 'maintaining consistent pacing and turn-taking behavior' (~832-835)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~829-835",
+      "verdict": "SUPPORTED",
+      "found": "lines 823-825 verbatim persona quote; line 827 'Selecting voices with similar tonal characteristics across languages'; line 829 'Maintaining consistent pacing and turn-taking behavior'",
+      "correction": ""
+    },
+    {
+      "claim": "Language Coach reference: Nova-3 Multilingual STT + dynamic Aura voice switching (Aura-2) within same call (~1429)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~1429",
+      "verdict": "SUPPORTED",
+      "found": "line 1429 'Language Coach (Multilingual and Localization Pattern)'; line 1433 'Nova 3 Multilingual + Aura-2 + LLM'; lines 1437-1439 'a multilingual, code-switching voice agent ... across languages within a single session.' The 'Aura-2 for English vs a different variant for French/Spanish' is the note's own 'e.g.' inference, not asserted by ebook.",
+      "correction": ""
+    }
+  ],
+  "summary": "Current note revision is clean. All 6 code_refs open at the cited lines and show the claimed mechanisms; the prior-art section is now accurate (Pipecat TTSUpdateSettingsFrame mid-session switch at :769-773, deprecated set_voice at :445; LiveKit update_agent at agent_session.py:1302 swaps agent/TTS but not inside an existing socket; Cartesia per-context with no voice-update path). All 3 Deepgram quote blocks verified verbatim against the raw parsed PDF (cited ~lines off by a few only due to two-column interleave). NOTE: a stale prior-version review JSON previously sat here marked FAIL/WRONG; those findings targeted earlier note wording ('fixed voice/encoding', 'No OSS clone implements mid-session TTS voice switching') that the current note no longer contains — it has since been corrected to cite :769-773 and call set_voice deprecated. No WRONG/MISCITED in the current text."
+}

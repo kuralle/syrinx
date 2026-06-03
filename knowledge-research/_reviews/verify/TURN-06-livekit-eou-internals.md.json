@@ -1,0 +1,22 @@
+{
+  "note": "TURN-06-livekit-eou-internals.md",
+  "overall": "PASS",
+  "claims_checked": 14,
+  "claims": [
+    {"claim": "base.py:151 run() / eou_probability from last logit", "kind": "code_ref", "cited": "base.py:151,169", "verdict": "SUPPORTED", "found": "def run(self, data: bytes) at :151; eou_probability = outputs[0].flatten()[-1] at :169", "correction": ""},
+    {"claim": "base.py:236 unlikely_threshold per-language from languages.json", "kind": "code_ref", "cited": "base.py:236-254", "verdict": "SUPPORTED", "found": "async def unlikely_threshold(...) at :236; return lang_data['threshold'] at :254", "correction": ""},
+    {"claim": "MAX_HISTORY_TOKENS=128 / MAX_HISTORY_TURNS=6", "kind": "code_ref", "cited": "base.py:25-26", "verdict": "SUPPORTED", "found": "MAX_HISTORY_TOKENS = 128 (:25), MAX_HISTORY_TURNS = 6 (:26)", "correction": ""},
+    {"claim": "messages[-MAX_HISTORY_TURNS:] at :280", "kind": "code_ref", "cited": "base.py:280", "verdict": "SUPPORTED", "found": "messages = messages[-MAX_HISTORY_TURNS:] at :280", "correction": ""},
+    {"claim": "strips trailing <|im_end|> EOU token", "kind": "code_ref", "cited": "base.py:90-93", "verdict": "SUPPORTED", "found": "ix = convo_text.rfind('<|im_end|>'); text = convo_text[:ix] at :91-92", "correction": ""},
+    {"claim": "override 'not recommended unless you're confident'", "kind": "code_ref", "cited": "base.py:207", "verdict": "SUPPORTED", "found": "comment :205-206 'not recommended unless you're confident in the impact.' above unlikely_threshold param :207", "correction": ""},
+    {"claim": "audio_recognition.py:1131-1135 if eou<unlikely_threshold raise to max_delay", "kind": "code_ref", "cited": "audio_recognition.py:1131,1135", "verdict": "SUPPORTED", "found": "if unlikely_threshold is not None and end_of_turn_probability < unlikely_threshold: endpointing_delay = self._endpointing.max_delay (:1131-1135)", "correction": ""},
+    {"claim": "_bounce_eou_task calls predict_end_of_turn()", "kind": "code_ref", "cited": "audio_recognition.py:1106-1135", "verdict": "SUPPORTED", "found": "async def _bounce_eou_task at :1106; await turn_detector.predict_end_of_turn(chat_ctx) at :1125; baseline endpointing_delay = min_delay at :1111", "correction": ""},
+    {"claim": "defaults min=0.5s, max=3.0s", "kind": "code_ref", "cited": "agent_session.py:339,342", "verdict": "SUPPORTED", "found": "min_endpointing_delay ... else 0.5 (:339); max_endpointing_delay ... else 3.0 (:342)", "correction": ""},
+    {"claim": "model livekit/turn-detector, model_q8.onnx, revisions v1.2.2-en / v0.4.1-intl (models.py)", "kind": "code_ref", "cited": "models.py", "verdict": "SUPPORTED", "found": "HG_MODEL='livekit/turn-detector', ONNX_FILENAME='model_q8.onnx', en='v1.2.2-en', multilingual='v0.4.1-intl'", "correction": ""},
+    {"claim": "JS EOURunnerBase.run returns eouProbability from last logit", "kind": "code_ref", "cited": "base.ts:90-105", "verdict": "SUPPORTED", "found": "async run at :90; eouProbability = probData[probData.length - 1] at :105 with comment 'should be the logits of the last token'", "correction": ""},
+    {"claim": "JS unlikelyThreshold(language) reads languages.json", "kind": "code_ref", "cited": "base.ts:206-227", "verdict": "SUPPORTED", "found": "async unlikelyThreshold(language) at :206; languages = await this.languagesFuture.await; langData.threshold at :227", "correction": ""},
+    {"claim": "text-only, no audio consumed; ONNX from input_ids only", "kind": "mechanism", "cited": "base.py:151-169", "verdict": "SUPPORTED", "found": "run() takes chat_ctx text, tokenizes, session.run(None, {'input_ids':...}); no audio input anywhere in runner", "correction": ""},
+    {"claim": "strips EOU token to remove current utterance terminator before scoring", "kind": "mechanism", "cited": "base.py:90-93 + base.ts:147-148", "verdict": "SUPPORTED", "found": "Py: convo_text[:ix] after rfind('<|im_end|>'); JS: convoText.slice(0, convoText.lastIndexOf('<|im_end|>'))", "correction": ""}
+  ],
+  "summary": "All 14 checkable assertions (frontmatter code_refs, inline file:line citations, numeric thresholds, mechanism claims) verified against the clones. Every cited line shows the claimed mechanism/value. Minor terminology note: the note labels the non-English model 'intl' while the EOUModelType literal is 'multilingual' (models.py:3), but the revision string it actually cites (v0.4.1-intl) is correct, so the claim stands."
+}

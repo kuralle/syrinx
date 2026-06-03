@@ -1,0 +1,80 @@
+{
+  "note": "BARGE-07-echo-auto-mute.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "AlwaysUserMuteStrategy returns muted whenever _bot_speaking is True",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_mute/always_user_mute_strategy.py:14",
+      "verdict": "SUPPORTED",
+      "found": "class AlwaysUserMuteStrategy at line 14; process_frame sets _bot_speaking on BotStartedSpeakingFrame/BotStoppedSpeakingFrame and `return self._bot_speaking` (lines 32-37)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat offers MuteUntilFirstBotComplete, FirstSpeech, and FunctionCall mute variants",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/turns/user_mute/ (note text)",
+      "verdict": "SUPPORTED",
+      "found": "Directory contains first_speech_user_mute_strategy.py, function_call_user_mute_strategy.py, mute_until_first_bot_complete_user_mute_strategy.py",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit suppresses false triggers via on_end_of_agent_speech(ignore_user_transcript_until=...) and backchannel_boundary cooldowns at turn start",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:295-321",
+      "verdict": "SUPPORTED",
+      "found": "line 311: def on_end_of_agent_speech(self, *, ignore_user_transcript_until: float); line 295 on_start_of_agent_speech; line 302-306 _backchannel_boundary start_cooldown call_later",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram lists 'Echo or Audio Feedback Loops' as failure mode originating in audio routing config or lack of echo cancellation",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 2071-2079",
+      "verdict": "SUPPORTED",
+      "found": "line 2071 'Echo or Audio Feedback Loops'; 2073 'Audio routing configuration or lack of echo cancellation'",
+      "correction": ""
+    },
+    {
+      "claim": "Inspect whether agent output is fed back into input stream, full-duplex configuration, and hardware echo cancellation settings; agent hearing itself can trigger response loops or distorted transcription",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 2071-2079",
+      "verdict": "SUPPORTED",
+      "found": "lines 2075-2079 verbatim: 'Whether agent output is being fed back into the input stream, full-duplex configuration, and hardware echo cancellation settings... Agent hearing itself can trigger response loops or distorted transcription'",
+      "correction": ""
+    },
+    {
+      "claim": "Rust reference agent does automatic microphone muting during playback to prevent feedback and support natural turn-taking",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 1559-1561",
+      "verdict": "SUPPORTED",
+      "found": "lines 1559-1561 verbatim: 'automatic microphone muting during playback to prevent feedback and support natural turn-taking'",
+      "correction": ""
+    },
+    {
+      "claim": "Rust agent diagram labels playback as Auto-mute mic",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 1546",
+      "verdict": "SUPPORTED",
+      "found": "line 1546 diagram: 'Playback ... (Auto-mute mic)'",
+      "correction": ""
+    },
+    {
+      "claim": "Telephony media gateway isolates inbound/outbound channels",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 2076-2077",
+      "verdict": "SUPPORTED",
+      "found": "lines 2076-2077: 'In telephony scenarios, verify that the media gateway properly isolates inbound and outbound audio channels'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit keeps mic open and relies on AEC + ignore-windows + confidence gate (mechanism contrast)",
+      "kind": "mechanism",
+      "cited": "audio_recognition.py + note reasoning",
+      "verdict": "SUPPORTED",
+      "found": "Code uses ignore_user_transcript_until window + backchannel_boundary cooldowns rather than muting input; consistent with note's 'mic stays open' claim. AlwaysUserMuteStrategy by contrast returns muted while bot speaks.",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and deepgram-ebook figures verified against ground truth. Frontmatter refs accurate (always_user_mute_strategy.py:14 is the class; audio_recognition.py:311 is on_end_of_agent_speech). All deepgram quotes are verbatim at cited lines."
+}

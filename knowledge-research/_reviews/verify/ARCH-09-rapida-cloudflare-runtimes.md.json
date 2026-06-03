@@ -1,0 +1,104 @@
+{
+  "note": "ARCH-09-rapida-cloudflare-runtimes.md",
+  "overall": "PASS",
+  "claims_checked": 12,
+  "claims": [
+    {
+      "claim": "communication.go:35 defines the Communication interface carrying Assistant/Conversation/GetHistories etc., embedding Callback + InternalCaller",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/type/communication.go:35",
+      "verdict": "SUPPORTED",
+      "found": "line 35: 'type Communication interface {' then embeds Callback (38), InternalCaller (41), Assistant() (50), Conversation() (59), GetHistories() (64)",
+      "correction": ""
+    },
+    {
+      "claim": "index.ts:1342 Agent extends partyserver Server (Durable Object base)",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/agents/src/index.ts:1342",
+      "verdict": "SUPPORTED",
+      "found": "line 1342-1346: 'export class Agent<...> extends Server<Env, Props>'; Server imported from \"partyserver\" (index.ts:40)",
+      "correction": ""
+    },
+    {
+      "claim": "Dispatcher wired with OnResolveSession/OnCreateStreamer/OnCreateTalker/OnRunTalk/OnCreateObserver/OnCompleteSession callbacks",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/socket/pipeline.go:36-83",
+      "verdict": "SUPPORTED",
+      "found": "NewDispatcher with OnResolveSession (58), OnCreateStreamer (61), OnCreateTalker (69), OnRunTalk (72), OnCreateObserver (75), OnCompleteSession (76)",
+      "correction": ""
+    },
+    {
+      "claim": "OnRunTalk calls talker.Talk(ctx, auth)",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/socket/pipeline.go:69-74",
+      "verdict": "SUPPORTED",
+      "found": "line 72-73: 'OnRunTalk: func(...) error { return talker.Talk(ctx, auth) }'",
+      "correction": ""
+    },
+    {
+      "claim": "Talk is a for{} loop pumping the conversation",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/adapters/internal/stream.go:32-34",
+      "verdict": "SUPPORTED",
+      "found": "line 32 'func (t *genericRequestor) Talk(...)', line 34 'for {', line 35 'req, err := t.streamer.Recv()'",
+      "correction": ""
+    },
+    {
+      "claim": "static options = { hibernate: true } by default",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/agents/src/index.ts:1533,1112-1166",
+      "verdict": "SUPPORTED",
+      "found": "1533: 'static options: AgentStaticOptions = { hibernate: true };'; 1112-1113 DEFAULT_AGENT_STATIC_OPTIONS hibernate: true; 1163 comment '`hibernate` defaults to `true`'",
+      "correction": ""
+    },
+    {
+      "claim": "state persists in DO storage SQL via this.ctx.storage.sql.exec",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/agents/src/index.ts:1622-1819",
+      "verdict": "SUPPORTED",
+      "found": "1622 'this.ctx.storage.sql.exec(query, ...values)'; multiple sql.exec calls through 1819",
+      "correction": ""
+    },
+    {
+      "claim": "withVoice mixin: per-connection transcriber created at call start, onTurn returns TextSource, streamed through SentenceChunker into per-sentence TTS queue",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/voice/src/voice.ts:20-22,133-162,951-989",
+      "verdict": "SUPPORTED",
+      "found": "20-23 'transcriber session is per-call — created at start_call'; 136 'onTurn(...): Promise<TextSource>'; 855 'new SentenceChunker()'; 951 enqueueSentence -> ttsQueue.push, 979 chunker.add per token",
+      "correction": ""
+    },
+    {
+      "claim": "Conversation history persisted to SQLite, maxMessageCount default 1000, historyLimit default 20",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/packages/voice/src/voice.ts:110-121",
+      "verdict": "SUPPORTED",
+      "found": "111 'historyLimit?: number; @default 20'; 115 'maxMessageCount?: number ... @default 1000'; 120 DEFAULT_HISTORY_LIMIT = 20; 121 DEFAULT_MAX_MESSAGE_COUNT = 1000",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: framework = long-running stateful process storing conversation history (STT/LLM/TTS RESTful/stateless)",
+      "kind": "source_figure",
+      "cited": "modal-one-second-voice-to-voice.md:11",
+      "verdict": "SUPPORTED",
+      "found": "line 11: 'Statefulness: LLM/STT/TTS APIs are mostly RESTful/stateless; framework = long-running stateful process storing conversation history.'",
+      "correction": ""
+    },
+    {
+      "claim": "Together: stateful long-lived connections can't kill pods arbitrarily, must drain",
+      "kind": "source_figure",
+      "cited": "together-ai-engineering-voice-agents.md:34",
+      "verdict": "SUPPORTED",
+      "found": "line 34: 'stateful long-lived connections mean you can't kill pods arbitrarily, must drain conversations to completion.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram managed runtime: state lives entirely inside provider's agent runtime over one WebSocket",
+      "kind": "source_figure",
+      "cited": "deepgram-voice-agent.parsed.md:1350-1352",
+      "verdict": "SUPPORTED",
+      "found": "1350-1352: 'Because the entire interaction runs over one persistent WebSocket, there is no separate backend orchestrator. Conversational state, timing, interruption handling, and turn management are owned by the managed agent runtime.'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 12 checkable assertions verified against ground truth: 2 frontmatter code_refs, 7 inline code_refs across Rapida Go + Cloudflare TS, and 3 source figures (modal/together/deepgram). Every cited line shows the claimed mechanism/value. No WRONG, no MISCITED."
+}

@@ -1,0 +1,64 @@
+{
+  "note": "TTS-07-output-jitter-buffer.md",
+  "overall": "PASS",
+  "claims_checked": 7,
+  "claims": [
+    {
+      "claim": "audio_processor.go:118 bufferAndSendInput accumulates input audio and drains past InputBufferThreshold via DrainIfReady",
+      "kind": "code_ref",
+      "cited": "voice-ai/.../telnyx/internal/audio_processor.go:118",
+      "verdict": "SUPPORTED",
+      "found": "func (p *AudioProcessor) bufferAndSendInput(audio []byte) { p.inputBuffer.Write(audio); audioData, ok := p.inputBuffer.DrainIfReady(InputBufferThreshold)",
+      "correction": ""
+    },
+    {
+      "claim": "OutputChunkSize = MulawBytesPerMs(8) x 20 = fixed 20ms egress chunks; ChunkDuration = 20ms (audio_processor.go:28-29)",
+      "kind": "code_ref",
+      "cited": "audio_processor.go:28-29",
+      "verdict": "SUPPORTED",
+      "found": "ChunkDuration = 20 * time.Millisecond; MulawBytesPerMs = 8; OutputChunkSize = MulawBytesPerMs * 20 (lines 26-29)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat chunk_size = int(self.sample_rate * CHUNK_SECONDS * 2) bytes 16-bit (tts_service.py:423)",
+      "kind": "code_ref",
+      "cited": "pipecat/.../tts_service.py:423",
+      "verdict": "SUPPORTED",
+      "found": "CHUNK_SECONDS = 0.5; return int(self.sample_rate * CHUNK_SECONDS * 2)  # 2 bytes/sample (lines 422-423)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat can pad with trailing silence after TTSStoppedFrame (tts_service.py:825-829)",
+      "kind": "code_ref",
+      "cited": "tts_service.py:825-829",
+      "verdict": "SUPPORTED",
+      "found": "if self._push_silence_after_stop and isinstance(frame, TTSStoppedFrame): silence_num_bytes = int(self._silence_time_s * self.sample_rate * 2); silence_frame = TTSAudioRawFrame(audio=b'\\x00' * silence_num_bytes, ...) (lines 825-829)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: short jitter buffer ~100ms smooths network variation without perceptible delay (L516-518)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L516-518",
+      "verdict": "SUPPORTED",
+      "found": "L517-519: 'synthesized speech should be streamed incrementally and buffered just enough to prevent playback gaps. A short jitter buffer around 100 milliseconds is usually sufficient to smooth minor network variation without adding perceptible delay.' Cited L516-518 is within a few lines.",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: frames should be small, 20-50 millisecond range (L511-512)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook L511-512",
+      "verdict": "SUPPORTED",
+      "found": "L511-512: 'Frame sizes in the 20-50 millisecond range strike a balance between reactivity and network efficiency.'",
+      "correction": ""
+    },
+    {
+      "claim": "InputBufferThreshold drain mechanism (DrainIfReady) confirms accumulate-then-drain input pattern",
+      "kind": "mechanism",
+      "cited": "audio_processor.go:118-120",
+      "verdict": "SUPPORTED",
+      "found": "Write then DrainIfReady(InputBufferThreshold) returns (audioData, ok); ok=false short-circuits. Threshold const = 32*60 (line 31).",
+      "correction": ""
+    }
+  ],
+  "summary": "All 4 code_refs and both deepgram source quotes verified accurate. Numbers (20ms egress chunks, ~100ms jitter, 20-50ms frames, CHUNK_SECONDS*sample_rate*2) all match ground truth. Line citations are exact or within a few lines."
+}

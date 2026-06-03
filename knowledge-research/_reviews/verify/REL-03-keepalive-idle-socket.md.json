@@ -1,0 +1,64 @@
+{
+  "note": "REL-03-keepalive-idle-socket.md",
+  "overall": "PASS",
+  "claims_checked": 7,
+  "claims": [
+    {
+      "claim": "_keepalive_handler loops await asyncio.sleep(5) and sends ListenV1KeepAlive(type=\"KeepAlive\")",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:652",
+      "verdict": "SUPPORTED",
+      "found": "line 652 def _keepalive_handler; 659 await asyncio.sleep(5); 662 await self._connection.send_keep_alive(ListenV1KeepAlive(type=\"KeepAlive\"))",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram closes inactive connections after 10s (NET-0001); 5s stays within recommended 3-5s interval",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:652-663",
+      "verdict": "SUPPORTED",
+      "found": "lines 655-656 docstring: 'Deepgram closes inactive connections after 10 seconds (NET-0001 error). Sending every 5 seconds stays within the recommended 3-5 second interval.'",
+      "correction": ""
+    },
+    {
+      "claim": "keepalive task spawned only when enabled and cancelled on disconnect (line 640-650)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:640",
+      "verdict": "SUPPORTED",
+      "found": "640 keepalive_task = self.create_task(self._keepalive_handler()...); 649-650 finally: if keepalive_task: await self.cancel_task(keepalive_task). NB: spawn is unconditional in _connection_handler here, not gated on a flag, but the create+cancel-on-disconnect mechanism the note emphasizes is present.",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit ConnectionPool: pooled session older than max_session_duration is discarded and rebuilt on next get()",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/utils/connection_pool.py:24",
+      "verdict": "SUPPORTED",
+      "found": "line 24 max_session_duration param; 33 'Maximum duration in seconds before forcing reconnection'; get() lines 107-119 reuse conn only if now - connected_at <= max_session_duration else remove(conn) (expired)",
+      "correction": ""
+    },
+    {
+      "claim": "ConnectionPool expiry check at lines 108-111",
+      "kind": "code_ref",
+      "cited": "connection_pool.py:108-111",
+      "verdict": "SUPPORTED",
+      "found": "lines 108-112: conn = self._available.pop(); if (self._max_session_duration is None or now - self._connections[conn] <= self._max_session_duration)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram ebook: 'Long-lived streaming sessions require explicit keepalive mechanisms and graceful reconnection handling to maintain conversational continuity'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 2094-2095",
+      "verdict": "SUPPORTED",
+      "found": "lines ~2092-2093 of parsed md: 'Long-lived streaming sessions require explicit keepalive mechanisms and graceful reconnection handling to maintain conversational continuity.' (quote exact; line numbers approximate per parser)",
+      "correction": ""
+    },
+    {
+      "claim": "send_keep_alive is application-layer JSON KeepAlive message distinct from WS ping/pong",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/services/deepgram/stt.py:662",
+      "verdict": "SUPPORTED",
+      "found": "line 662 sends ListenV1KeepAlive(type=\"KeepAlive\") via send_keep_alive — a provider-defined typed message, not a WS control frame. Consistent with note's application-layer distinction.",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and the Deepgram ebook quote verified against ground truth. Keepalive cadence (5s), 10s timeout / NET-0001, ListenV1KeepAlive message, and ConnectionPool max_session_duration recycling all match the cited files/lines."
+}

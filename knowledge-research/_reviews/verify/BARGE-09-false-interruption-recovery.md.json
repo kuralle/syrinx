@@ -1,0 +1,56 @@
+{
+  "note": "BARGE-09-false-interruption-recovery.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "false_interruption_timeout default is 2.0s and resume_false_interruption defaults True",
+      "kind": "code_ref",
+      "cited": "turn.py:117-125",
+      "verdict": "SUPPORTED",
+      "found": "_INTERRUPTION_DEFAULTS: { 'resume_false_interruption': True, 'false_interruption_timeout': 2.0, ... }",
+      "correction": ""
+    },
+    {
+      "claim": "_on_false_interruption: if can_pause and paused speech not done, calls audio_output.resume(), re-emits speaking state, emits AgentFalseInterruptionEvent(resumed=True)",
+      "kind": "code_ref",
+      "cited": "agent_activity.py:3669-3709",
+      "verdict": "SUPPORTED",
+      "found": "if ...['resume_false_interruption'] and (audio_output:=...audio) and audio_output.can_pause and not self._paused_speech.handle.done(): ...update_agent_state...; audio_output.resume(); resumed=True; ... emit('agent_false_interruption', AgentFalseInterruptionEvent(resumed=resumed))",
+      "correction": ""
+    },
+    {
+      "claim": "On borderline interruption it pauses (not hard-cancel) current speech and arms a false_interruption_timer",
+      "kind": "code_ref",
+      "cited": "agent_activity.py:1830-1866",
+      "verdict": "SUPPORTED",
+      "found": "if speaking is False and self._paused_speech and (timeout:=...['false_interruption_timeout']) is not None: # schedule a resume timer ... self._start_false_interruption_timer(timeout)",
+      "correction": ""
+    },
+    {
+      "claim": "If new speech was already scheduled, it drops the paused speech instead",
+      "kind": "code_ref",
+      "cited": "agent_activity.py:3669-3709",
+      "verdict": "SUPPORTED",
+      "found": "if self._paused_speech is None or (self._current_speech and self._current_speech is not self._paused_speech.handle): # already new speech is scheduled, do nothing; self._paused_speech = None; return",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram lists 'Agent Responds Too Early / Premature Interruption' tied to aggressive end-of-turn thresholds, with no resume mechanism",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 2051-2057",
+      "verdict": "SUPPORTED",
+      "found": "Agent Responds Too Early / Premature Interruption ... Usually originates in: Aggressive end-of-turn thresholds or speech boundary tuning. What to inspect: EOT threshold configuration (eot_threshold, eager_eot_threshold)... (no resume mechanism mentioned)",
+      "correction": ""
+    },
+    {
+      "claim": "Requires audio output that supports pause/resume (can_pause) not just stop",
+      "kind": "mechanism",
+      "cited": "agent_activity.py:3660-3667",
+      "verdict": "SUPPORTED",
+      "found": "_pause_enabled: return bool(...['resume_false_interruption'] and ...['false_interruption_timeout'] is not None and self._session.output.audio and self._session.output.audio.can_pause)",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and the deepgram source figure verified against ground truth. turn.py:117-125 confirms 2.0s timeout + resume default True. agent_activity.py:3669-3709 confirms the resume state machine (can_pause gate, audio_output.resume(), AgentFalseInterruptionEvent(resumed), drop-if-new-speech). agent_activity.py:1830-1866 confirms timer arming after end_of_speech. deepgram-ebook ~2051-2057 confirms the premature-interruption failure mode with no resume mechanism. No miscitations, no wrong claims."
+}

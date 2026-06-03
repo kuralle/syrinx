@@ -1,0 +1,120 @@
+{
+  "note": "REL-08-fallback-adapter-availability.md",
+  "overall": "PASS",
+  "claims_checked": 14,
+  "claims": [
+    {
+      "claim": "FallbackAdapter signature: stt list, attempt_timeout=10.0, max_retry_per_stt=1, retry_interval=5",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:41-93",
+      "verdict": "SUPPORTED",
+      "found": "class FallbackAdapter (line 41); __init__(self, stt: list[STT], *, vad=None, attempt_timeout: float = 10.0, max_retry_per_stt: int = 1, retry_interval: float = 5) lines 48-56",
+      "correction": ""
+    },
+    {
+      "claim": "_STTStatus(available, recovering_recognize_task, recovering_stream_task) per provider at line 34-39",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:34-39",
+      "verdict": "SUPPORTED",
+      "found": "@dataclass class _STTStatus: available: bool; recovering_recognize_task: asyncio.Task[None] | None; recovering_stream_task: asyncio.Task[None] | None (lines 34-39)",
+      "correction": ""
+    },
+    {
+      "claim": "_recognize_impl iterates providers, calling each only if stt_status.available or all_failed; on exception flips available=False and emits stt_availability_changed (line 211-243)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:211-243",
+      "verdict": "SUPPORTED",
+      "found": "_recognize_impl at line 211; 'if stt_status.available or all_failed' line 226; except sets stt_status.available=False and self.emit('stt_availability_changed', ...) lines 235-241",
+      "correction": ""
+    },
+    {
+      "claim": "_try_recovery spawns a background task; flips back to available=True on success (line 175-209)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:175-209",
+      "verdict": "SUPPORTED",
+      "found": "def _try_recovery (line 175); inner _recover_stt_task sets stt_status.available = True and emits available=True (lines 199-204); asyncio.create_task(_recover_stt_task(stt)) line 209",
+      "correction": ""
+    },
+    {
+      "claim": "streaming recovery probe requires non-empty FINAL_TRANSCRIPT (line 412-423)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:412-423",
+      "verdict": "SUPPORTED",
+      "found": "if ev.type == SpeechEventType.FINAL_TRANSCRIPT: if not ev.alternatives or not ev.alternatives[0].text: continue; nb_transcript += 1 (lines 412-417); then sets available=True line 422",
+      "correction": ""
+    },
+    {
+      "claim": "If all providers down, all_failed lets it try anyway, else raises APIConnectionError (line 245-247)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:245-247",
+      "verdict": "SUPPORTED",
+      "found": "all_failed computed line 220; raise APIConnectionError(f'all STTs failed ...') lines 245-247",
+      "correction": ""
+    },
+    {
+      "claim": "streaming path forwards input audio to recovering streams in parallel via _forward_input_task (line 304-328)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:304-328",
+      "verdict": "SUPPORTED",
+      "found": "async def _forward_input_task (line 304); 'for stream in list(self._recovering_streams): ... stream.push_frame(data)' lines 306-309",
+      "correction": ""
+    },
+    {
+      "claim": "DEFAULT_FALLBACK_API_CONNECT_OPTIONS = max_retry=0 (line 22-25)",
+      "kind": "code_ref",
+      "cited": "stt/fallback_adapter.py:22-25",
+      "verdict": "SUPPORTED",
+      "found": "# don't retry when using the fallback adapter / DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout) lines 22-25",
+      "correction": ""
+    },
+    {
+      "claim": "TTS FallbackAdapter with max_retry_per_tts=2, sample_rate = max(t.sample_rate), auto-resampling (tts/fallback_adapter.py:46-100)",
+      "kind": "code_ref",
+      "cited": "tts/fallback_adapter.py:46-100",
+      "verdict": "SUPPORTED",
+      "found": "class FallbackAdapter line 46; max_retry_per_tts: int = 2 line 57; 'if sample_rate is None: sample_rate = max(t.sample_rate for t in tts)' lines 79-80; resampling log lines 98-100",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit JS stt/fallback_adapter.ts:91 with attemptTimeoutMs/maxRetryPerSTT/retryIntervalMs",
+      "kind": "code_ref",
+      "cited": "agents-js/.../stt/fallback_adapter.ts:91",
+      "verdict": "SUPPORTED",
+      "found": "export class FallbackAdapter extends STT (line 91); readonly attemptTimeoutMs/maxRetryPerSTT/retryIntervalMs (lines 93-95)",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi runs multiple STT providers with automatic fallback if primary fails (vapi-pipeline-2 §3)",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 §3",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:33 'Multiple STT providers with **automatic fallback** if primary fails; handle provider-specific quirks while keeping consistent behavior.' (actual file is vapi-pipeline-part-2.md, not vapi-pipeline-2.md)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 'define fallback behaviors when upstream services degrade so callers never experience unexplained silence' (ebook 769-770)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook 769-770",
+      "verdict": "SUPPORTED",
+      "found": "deepgram-voice-agent.parsed.md lines 769-770 (right column): 'For critical flows, define fallback behaviors when upstream services degrade so callers never experience unexplained silence.'",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat has no single FallbackAdapter class; app code catches push_error and switches services (cross-note REL-06)",
+      "kind": "cross_note_link",
+      "cited": "[[REL-06-graceful-degradation-layered]]",
+      "verdict": "UNVERIFIABLE",
+      "found": "Asserted as contrast, not as proof carried by the neighbor note; spot-check of Pipecat absence of a FallbackAdapter class not performed in this pass. Plausible (no such class found in AGENTS context) but not independently grepped here.",
+      "correction": ""
+    },
+    {
+      "claim": "max_retry=0 inside the wrapper is the retry strategy; adapter owns retry (mechanism)",
+      "kind": "mechanism",
+      "cited": "stt/fallback_adapter.py:22-25 + 226-243",
+      "verdict": "SUPPORTED",
+      "found": "DEFAULT_FALLBACK_API_CONNECT_OPTIONS max_retry=0 (line 23) is the default conn_options for recognize()/stream() (lines 254, 262); iteration over providers with availability gating is the retry mechanism (lines 224-243)",
+      "correction": ""
+    }
+  ],
+  "summary": "All 13 checkable code_refs and source figures verified against ground truth. STT FallbackAdapter signature, _STTStatus dataclass, availability-gated iteration, background recovery with FINAL_TRANSCRIPT probe, all_failed retry-all, APIConnectionError, forward-input warming, and max_retry=0 default all confirmed at cited lines. TTS twin (max_retry_per_tts=2, sample_rate=max(...), resampling) confirmed. JS class at ts:91 confirmed. Vapi line 33 and Deepgram lines 769-770 quotes confirmed verbatim. Only the Pipecat cross-note contrast left UNVERIFIABLE (asserted, not independently grepped). No WRONG or MISCITED claims."
+}

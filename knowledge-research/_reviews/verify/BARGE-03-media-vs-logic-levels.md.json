@@ -1,0 +1,80 @@
+{
+  "note": "BARGE-03-media-vs-logic-levels.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "frontmatter code_ref agent_activity.py:1279 interrupts background/current/queued SpeechHandles (media/playout level)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent_activity.py:1279",
+      "verdict": "SUPPORTED",
+      "found": "1279 interrupted_speeches = self._interrupt_background_speeches(force=force); 1281-1287 current_speech.interrupt + speech_q loop",
+      "correction": ""
+    },
+    {
+      "claim": "frontmatter code_ref base_output.py:538 handle_interruptions flushes media",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/base_output.py:538",
+      "verdict": "SUPPORTED",
+      "found": "538 async def handle_interruptions(self, _: InterruptionFrame): ... cancels clock/video task, drains/cancels audio task and recreates it",
+      "correction": ""
+    },
+    {
+      "claim": "_cancel_preemptive_generation() at agent_activity.py:1275 is the logic-level cancel",
+      "kind": "code_ref",
+      "cited": "agent_activity.py:1275",
+      "verdict": "SUPPORTED",
+      "found": "1275 self._cancel_preemptive_generation()",
+      "correction": ""
+    },
+    {
+      "claim": "_rt_session.interrupt() also fires in interrupt()",
+      "kind": "code_ref",
+      "cited": "agent_activity.py (interrupt body)",
+      "verdict": "SUPPORTED",
+      "found": "1289-1290 if self._rt_session is not None: self._rt_session.interrupt()",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat protects in-flight tool results via UninterruptibleFrame (e.g. FunctionCallResultFrame) at tts_service.py:916-918",
+      "kind": "code_ref",
+      "cited": "tts_service.py:916-918",
+      "verdict": "SUPPORTED",
+      "found": "916-918 '# Drops non-UninterruptibleFrame items while keeping uninterruptible ones (e.g. FunctionCallResultFrame) that must not be lost mid-flight.' self._serialization_queue.reset()",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram two-level rule: Media stop/mute outbound audio; Logic cancel pending reasoning/tool execution (~739-741)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 739-741",
+      "verdict": "SUPPORTED",
+      "found": "739 'Barge-in must be enforced at two levels:' 740 'Media: Stop or mute outbound audio the moment inbound speech resumes' 741 'Logic: Cancel or invalidate any pending reasoning or tool execution'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram pseudocode on_user_started_speaking(): cancel_active_action(); stop_tts_playback(); emit_state('Listening') (~649-652)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 649-652",
+      "verdict": "SUPPORTED",
+      "found": "649 on_user_started_speaking(): 650 cancel_active_action() 651 stop_tts_playback() 652 emit_state(“Listening”)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 'Long-running or asynchronous actions should always be cancelable or safely ignored if they become irrelevant' (~637-638)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 637-638",
+      "verdict": "SUPPORTED",
+      "found": "637-638 'Long-running or asynchronous actions should always be cancelable or safely ignored if they become irrelevant.'",
+      "correction": ""
+    },
+    {
+      "claim": "interrupt() reaches both media (SpeechHandle playout) and logic (preemptive gen + rt_session) levels",
+      "kind": "mechanism",
+      "cited": "agent_activity.py:1268-1303",
+      "verdict": "SUPPORTED",
+      "found": "interrupt() body: _cancel_preemptive_generation (logic), interrupt speeches (media playout), _rt_session.interrupt (logic) all in one method",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and Deepgram source quotes verified verbatim. Both frontmatter refs (agent_activity.py:1279, base_output.py:538), the inline refs (1275, tts_service.py:916-918), and all three Deepgram citations (739-741, 649-652, 637-638) match ground truth exactly. PASS."
+}

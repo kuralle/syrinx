@@ -1,0 +1,96 @@
+{
+  "note": "ARCH-03-system-vs-data-frame-ordering.md",
+  "overall": "PASS",
+  "claims_checked": 11,
+  "claims": [
+    {
+      "claim": "FrameProcessorQueue is asyncio.PriorityQueue tagging SystemFrame HIGH_PRIORITY=1, else LOW_PRIORITY=2, with monotonic counters for FIFO within band",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/processors/frame_processor.py:119",
+      "verdict": "SUPPORTED",
+      "found": "class FrameProcessorQueue(asyncio.PriorityQueue): HIGH_PRIORITY=1; LOW_PRIORITY=2; __high_counter/__low_counter; put() checks isinstance(frame, SystemFrame)",
+      "correction": ""
+    },
+    {
+      "claim": "Two tasks: input task processes SystemFrame inline, forwards non-system to __process_queue handled by separate task",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/processors/frame_processor.py:996",
+      "verdict": "SUPPORTED",
+      "found": "__input_frame_task_handler: if isinstance(frame, SystemFrame): await self.__process_frame(...); elif self.__process_queue: await self.__process_queue.put(...). Then __process_frame_task_handler handles process queue.",
+      "correction": ""
+    },
+    {
+      "claim": "InterruptionFrame is a SystemFrame",
+      "kind": "code_ref",
+      "cited": "frames.py:951",
+      "verdict": "SUPPORTED",
+      "found": "class InterruptionFrame(SystemFrame): 'Frame pushed to interrupt the pipeline.'",
+      "correction": ""
+    },
+    {
+      "claim": "UserStartedSpeakingFrame is a SystemFrame",
+      "kind": "code_ref",
+      "cited": "frames.py:962",
+      "verdict": "SUPPORTED",
+      "found": "class UserStartedSpeakingFrame(SystemFrame): 'Frame indicating that the user turn has started.'",
+      "correction": ""
+    },
+    {
+      "claim": "Semantic contract: DataFrames 'cancelled by user interruptions', SystemFrames 'not affected by user interruptions'",
+      "kind": "code_ref",
+      "cited": "frames.py:96-112",
+      "verdict": "SUPPORTED",
+      "found": "SystemFrame docstring (l99): 'are not affected by user interruptions.' DataFrame docstring (l110-111): 'Data frames are cancelled by user interruptions.'",
+      "correction": ""
+    },
+    {
+      "claim": "UninterruptibleFrame mixin marks DataFrames that must survive interruption (e.g. EndFrame, FunctionCallResultFrame)",
+      "kind": "code_ref",
+      "cited": "frames.py:136-147,715",
+      "verdict": "SUPPORTED",
+      "found": "l136-147 UninterruptibleFrame mixin: 'data or control frames... preserved during interruptions'. l715 FunctionCallResultFrame(DataFrame, UninterruptibleFrame). NOTE: EndFrame is class EndFrame(ControlFrame, UninterruptibleFrame) at l1582 - a ControlFrame not DataFrame; the note's 'marks DataFrames' phrasing is slightly imprecise (mixin doc says 'data or control'), but the example list and cited mixin/715 lines are correct.",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi barge-in sequence must complete in under 100ms: VAD event -> abort LLM -> stop TTS -> clear buffers",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2.md:49-54",
+      "verdict": "SUPPORTED",
+      "found": "l49 'Interruption (barge-in) sequence — must complete in under 100ms:' l50 VAD detects speech start; l51 LLM request aborted; l52 TTS generation stops immediately; l53 Audio buffers cleared. (Actual file is vapi-pipeline-part-2.md; vapi-pipeline-2 is the source shortname.)",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram on_user_started_speaking(): cancel_active_action(); stop_tts_playback()",
+      "kind": "source_figure",
+      "cited": "deepgram-voice-agent.parsed.md:649-652",
+      "verdict": "SUPPORTED",
+      "found": "l649 on_user_started_speaking(): l650 cancel_active_action() l651 stop_tts_playback() l652 emit_state(“Listening”)",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit has explicit interrupt() that cancels preemptive generation",
+      "kind": "code_ref",
+      "cited": "agents/.../agent_activity.py:1268",
+      "verdict": "SUPPORTED",
+      "found": "def interrupt(self, *, force=False) -> asyncio.Future[None]: 'Interrupt the current speech generation and any queued speeches.' calls self._cancel_preemptive_generation()",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit on_end_of_turn is synchronous (non-cancellable) hook plus preemptive-generation cancellation",
+      "kind": "code_ref",
+      "cited": "agents/.../agent_activity.py:1921-1930",
+      "verdict": "SUPPORTED",
+      "found": "def on_end_of_turn(...) -> bool: comment 'This method is sync to avoid it being cancelled by the AudioRecognition'; calls self._cancel_preemptive_generation()",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram/orchestration treats user speech as higher-priority signal than pending actions (mechanism framing)",
+      "kind": "mechanism",
+      "cited": "deepgram-voice-agent.parsed.md:646",
+      "verdict": "SUPPORTED",
+      "found": "l646 'this means treating user speech as a higher-priority signal than pending actions' - consistent with note's priority framing",
+      "correction": ""
+    }
+  ],
+  "summary": "All 11 checkable assertions verified against ground truth. Two pipecat code_refs (119, 996) accurately describe the priority-queue + two-task mechanism. All frames.py citations (96-112, 136-147, 715, 951, 962) match. Source figures (Vapi <100ms barge-in sequence, Deepgram on_user_started_speaking) match exactly. LiveKit divergence citations (1268, 1921-1930) accurately describe sync on_end_of_turn + interrupt() + preemptive cancellation. Only nit: note calls EndFrame a 'DataFrame' in the UninterruptibleFrame example, but EndFrame is a ControlFrame (frames.py:1582); the mixin doc itself says 'data or control frames', so this is a minor imprecision, not a wrong citation. No WRONG findings."
+}

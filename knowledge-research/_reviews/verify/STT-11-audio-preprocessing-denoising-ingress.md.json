@@ -1,0 +1,120 @@
+{
+  "note": "STT-11-audio-preprocessing-denoising-ingress.md",
+  "overall": "PASS",
+  "claims_checked": 14,
+  "summary": "All 14 checkable assertions verified against ground truth. 5 frontmatter code_refs all SUPPORTED at or within a few lines of cited locations (note frontmatter line numbers are now accurate: viva_filter.py:58 and rnnoise_denoiser.go:41 are the actual class/func locations). All 7 Vapi Problem-#2 figures (3s/20ms windows, 85th pct, 100ms exp smoothing, media detection, 500ms grace, -35dB fallback, quieter-than-speaker quote) match _sources/blogs/vapi-pipeline-part-2.md verbatim. Cloudflare 'no denoiser' confirmed by grep returning no matches across the cloudflare-agents clone. One minor imprecision (not downgrading): note prose says RNNoise 'always resamples to 48 kHz' but code only resamples when input != 48kHz; it always TARGETS 48kHz, and the code comment literally says 'RNNoise always requires 48kHz.' Source shortname vapi-pipeline-2 resolves to the file named vapi-pipeline-part-2.md.",
+  "claims": [
+    {
+      "claim": "Pipecat KrispVivaFilter(BaseAudioFilter), default noise_suppression_level=100, frame_duration=10ms",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/filters/krisp_viva_filter.py:35",
+      "verdict": "SUPPORTED",
+      "found": "class KrispVivaFilter(BaseAudioFilter): at L33; __init__ defaults frame_duration: int = 10 (L44), noise_suppression_level: int = 100 (L45). Cited L35 is inside the class docstring, within window.",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat RNNoiseFilter, requires 48kHz, default resampler_quality=QQ for lowest latency",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/filters/rnnoise_filter.py:30",
+      "verdict": "SUPPORTED",
+      "found": "class RNNoiseFilter(BaseAudioFilter): at L30; resampler_quality: SoxrQuality = 'QQ' (L39) 'Defaults to QQ (Quick) for lowest latency'; '# RNNoise always requires 48kHz.' self._rnnoise = RNNoise(sample_rate=48000) (L69-70)",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]), plugs into AudioInputOptions.noise_cancellation",
+      "kind": "code_ref",
+      "cited": "agents/livekit-plugins/livekit-plugins-krisp/livekit/plugins/krisp/viva_filter.py:58",
+      "verdict": "SUPPORTED",
+      "found": "class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]): at L58; docstring 'used directly with the noise_cancellation parameter in AudioInputOptions or RoomInputOptions'; example shows noise_cancellation=processor in AudioInputOptions (L84)",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida GetDenoiser() switches on microphone.denoising.provider: krisp->Krisp, default->rn_noise",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/denoiser/denoiser.go:27",
+      "verdict": "SUPPORTED",
+      "found": "func GetDenoiser(...) at L27; provider, _ := options.GetString(DenoiserOptionsKeyProvider) key='microphone.denoising.provider' (L23); switch case KRISP -> NewKrispDenoiser, default -> NewRnnoiseDenoiser (L29-34)",
+      "correction": ""
+    },
+    {
+      "claim": "Rapida RNNoise denoiser config is 48kHz linear16 (NewRnnoiseDenoiser at :41, config at 72-74)",
+      "kind": "code_ref",
+      "cited": "voice-ai/api/assistant-api/internal/denoiser/internal/rn_noise/rnnoise_denoiser.go:41,72-74",
+      "verdict": "SUPPORTED",
+      "found": "func NewRnnoiseDenoiser(...) at L41; denoiserConfig: &protos.AudioConfig{ SampleRate: 48000, AudioFormat: protos.AudioConfig_LINEAR16 } (L72-74)",
+      "correction": ""
+    },
+    {
+      "claim": "Baseline tracking: RMS amplitude over 3-second rolling windows in 20ms chunks",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (vapi-pipeline-part-2.md:21)",
+      "verdict": "SUPPORTED",
+      "found": "L21: 'Baseline Tracking: RMS amplitude over 3-second rolling windows using 20ms chunks.'",
+      "correction": ""
+    },
+    {
+      "claim": "85th percentile of audio-level distribution becomes filtering threshold",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:22)",
+      "verdict": "SUPPORTED",
+      "found": "L22: 'Dynamic Thresholds: 85th percentile of audio-level distribution as filtering threshold.'",
+      "correction": ""
+    },
+    {
+      "claim": "baseline updated every 100ms via exponential smoothing",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:23)",
+      "verdict": "SUPPORTED",
+      "found": "L23: 'Continuous Adaptation: update baseline every 100ms via exponential smoothing.'",
+      "correction": ""
+    },
+    {
+      "claim": "media detection -> more aggressive filtering with auto-adjusted baseline offset",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:24-25)",
+      "verdict": "SUPPORTED",
+      "found": "L24 'Media Detection: switch to more aggressive filtering when consistent background audio detected.' + L25 'baseline offsets auto-adjust when TV/music detected.'",
+      "correction": ""
+    },
+    {
+      "claim": "500ms grace period prevents clipping the start of words",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:25)",
+      "verdict": "SUPPORTED",
+      "found": "L25: 'Add 500ms grace period to avoid cutting off the start of words.'",
+      "correction": ""
+    },
+    {
+      "claim": "static fallback at -35 dB acts as a floor",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:25)",
+      "verdict": "SUPPORTED",
+      "found": "L25: 'Static fallback thresholds ~-35dB'",
+      "correction": ""
+    },
+    {
+      "claim": "quote: 'background speech is typically quieter than the primary speaker'",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 Problem #2 (:25)",
+      "verdict": "SUPPORTED",
+      "found": "L25: 'Core insight: background speech is typically quieter than the primary speaker.'",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare ships no denoiser; voice-providers bridge telephony without preprocessing",
+      "kind": "mechanism",
+      "cited": "note line 14 (cloudflare-agents/voice-providers)",
+      "verdict": "SUPPORTED",
+      "found": "voice-providers dir holds telnyx/deepgram/elevenlabs/twilio; grep -ril 'denois|noise_cancel|rnnoise|krisp' across cloudflare clone returned zero matches",
+      "correction": ""
+    },
+    {
+      "claim": "RNNoise always resamples to 48 kHz since RNNoise requires sample_rate=48000",
+      "kind": "mechanism",
+      "cited": "note line 14 / rnnoise_filter.py",
+      "verdict": "SUPPORTED",
+      "found": "rnnoise_filter.py L69-70 '# RNNoise always requires 48kHz.' RNNoise(sample_rate=48000); L77 'if self._sample_rate != 48000' enables resampling. Minor: resampling only when input != 48kHz, but target is always 48kHz.",
+      "correction": ""
+    }
+  ]
+}

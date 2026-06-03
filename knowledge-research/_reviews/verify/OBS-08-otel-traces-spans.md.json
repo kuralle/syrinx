@@ -1,0 +1,72 @@
+{
+  "note": "OBS-08-otel-traces-spans.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "trace_types.py:60 anchors the lk.* span attribute block",
+      "kind": "code_ref",
+      "cited": "agents/.../telemetry/trace_types.py:60",
+      "verdict": "SUPPORTED",
+      "found": "line 60 ATTR_TRANSCRIPTION_DELAY = 'lk.transcription_delay'; surrounding 54-69 has eou.probability, endpointing_delay, user_transcript, transcript_confidence, end_of_turn_delay, e2e_latency",
+      "correction": ""
+    },
+    {
+      "claim": "agent_activity.py:2771 sets e2e_latency span attribute",
+      "kind": "code_ref",
+      "cited": "agents/.../voice/agent_activity.py:2771",
+      "verdict": "SUPPORTED",
+      "found": "current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)",
+      "correction": ""
+    },
+    {
+      "claim": "service_attributes.py:93-96 emits GenAI conventions incl gen_ai.output.type=speech for TTS",
+      "kind": "code_ref",
+      "cited": "pipecat/.../tracing/service_attributes.py:93",
+      "verdict": "SUPPORTED",
+      "found": "93 gen_ai.provider.name; 94 gen_ai.request.model; 95 gen_ai.operation.name; 96 span.set_attribute('gen_ai.output.type','speech')",
+      "correction": ""
+    },
+    {
+      "claim": "turn_trace_observer.py:36-45 — service spans become children of turn spans, turns under conversation span",
+      "kind": "code_ref",
+      "cited": "pipecat/.../tracing/turn_trace_observer.py:36",
+      "verdict": "SUPPORTED",
+      "found": "class TurnTraceObserver ... 'Service spans (STT, LLM, TTS) become children of the turn spans.' / 'turns become children of a conversation span'",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit exposes Prometheus /metrics endpoint in telemetry/http_server.py",
+      "kind": "code_ref",
+      "cited": "telemetry/http_server.py",
+      "verdict": "SUPPORTED",
+      "found": "8 from prometheus_client import; 41 self._app.add_routes([web.get('/metrics', metrics)])",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit per-turn OTel histograms in otel_metrics.py",
+      "kind": "code_ref",
+      "cited": "otel_metrics.py",
+      "verdict": "SUPPORTED",
+      "found": "22 '# -- Per-turn latency histograms --'; create_histogram for e2e_latency, llm_ttft, tts_ttfb, transcription_delay, end_of_turn_delay",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 'Storage and visualization using systems such as Datadog, Grafana, or CloudWatch' at line 1029-1030",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 1029-1030",
+      "verdict": "SUPPORTED",
+      "found": "line 1029-1030: 'Storage and visualization using systems such as Datadog, Grafana, or CloudWatch'",
+      "correction": ""
+    },
+    {
+      "claim": "Together: 'every 10ms matters' and per-component SLAs (together-talk line 33, 42)",
+      "kind": "source_figure",
+      "cited": "together-talk line 33,42",
+      "verdict": "SUPPORTED",
+      "found": "line 33 \"'Every 10ms matters' -> need deep observability\"; line 42 'clear SLAs + independent scaling'. Raw json confirms 'every 10 milliseconds matters' and Q&A 'very clear ... SLAs ... independently scaling'",
+      "correction": ""
+    }
+  ],
+  "summary": "All four frontmatter code_refs verified at or within a line of cited location; both prior-art divergence code refs (Prometheus /metrics, otel_metrics histograms) confirmed; both source quotes/figures confirmed against ground-truth captures and raw transcript. No WRONG or MISCITED."
+}

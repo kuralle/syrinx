@@ -1,0 +1,120 @@
+{
+  "note": "OBS-09-replay-load-fault-injection.md",
+  "overall": "PASS",
+  "claims_checked": 14,
+  "claims": [
+    {
+      "claim": "InterruptionMetrics class is defined in metrics/base.py:166 (overlay data for turn-level diagnostics: num_interruptions, detection_delay, etc.)",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:166",
+      "verdict": "SUPPORTED",
+      "found": "class InterruptionMetrics(_BaseMetrics): ... num_interruptions: int / num_backchannels: int / detection_delay: float",
+      "correction": ""
+    },
+    {
+      "claim": "audio_recognition.py:1185 enforces a 'refuse to compute on unreliable VAD' rule keeping the distribution clean",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:1185",
+      "verdict": "SUPPORTED",
+      "found": "# sometimes, we can't calculate the metrics because VAD was unreliable. // in this case, we just ignore the calculation, it's better than providing likely wrong values",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: 'Traditional QA assumes identical inputs yield identical outputs. Voice agents violate this by design'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 972-974",
+      "verdict": "SUPPORTED",
+      "found": "Traditional QA assumes that identical inputs yield identical outputs. Voice agents violate this assumption by design.",
+      "correction": ""
+    },
+    {
+      "claim": "goal is 'measure outcome distributions and improve their consistency'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 953-955",
+      "verdict": "SUPPORTED",
+      "found": "to measure outcome distributions and improve their consistency.",
+      "correction": ""
+    },
+    {
+      "claim": "Replay testing quote: 'Reprocess recorded audio through new builds to isolate timing regressions while holding input constant.'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 992-997",
+      "verdict": "SUPPORTED",
+      "found": "Replay testing: Reprocess recorded audio through new builds to isolate timing regressions while holding input constant.",
+      "correction": ""
+    },
+    {
+      "claim": "Load/stress: 'Simulate concurrent sessions and track tail latency rather than averages.'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 992-997",
+      "verdict": "SUPPORTED",
+      "found": "Load and stress testing: Simulate concurrent sessions and track tail latency rather than averages, since worst-case delays dominate user perception.",
+      "correction": ""
+    },
+    {
+      "claim": "Fault injection: 'Introduce controlled failures such as delayed reasoning or dropped synthesis to confirm graceful recovery.'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 979-983",
+      "verdict": "SUPPORTED",
+      "found": "Fault injection: Introduce controlled failures such as delayed reasoning or dropped synthesis to confirm graceful recovery.",
+      "correction": ""
+    },
+    {
+      "claim": "Turn-level diagnostics: 'Visualize UserStoppedSpeaking to AgentStartedSpeaking intervals and overlay interruption events to pinpoint orchestration bottlenecks.'",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 979-983",
+      "verdict": "SUPPORTED",
+      "found": "Turn-level diagnostics: Visualize UserStoppedSpeaking to AgentStartedSpeaking intervals and overlay interruption events to pinpoint orchestration bottlenecks.",
+      "correction": ""
+    },
+    {
+      "claim": "Probabilistic regression: many sessions under varied conditions, compare metric distributions across versions to detect drift",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 992-997",
+      "verdict": "SUPPORTED",
+      "found": "Probabilistic regression: Run many sessions under varied conditions and compare metric distributions across versions to detect drift.",
+      "correction": ""
+    },
+    {
+      "claim": "Releases gate on tolerance bands (max acceptable VAQI deltas / missed-response rates) over a fixed library of representative test calls",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 984-986, 1007-1008",
+      "verdict": "SUPPORTED",
+      "found": "Well-run teams maintain a fixed library of representative test calls and enforce tolerance bands, such as maximum acceptable VAQI deltas or missed-response rates ... release should advance only after key indicators such as VAQI, missed-response rate ... meet predefined thresholds.",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram outsources large-scale probabilistic/semantic eval to Coval",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 968,984,991",
+      "verdict": "SUPPORTED",
+      "found": "teams often pair this telemetry with tools from Coval, which specializes in probabilistic testing and multi-turn agent evaluation. ... In large-scale benchmarks conducted with Coval ... Coval supports this layer through a mix of automated checks and human-in-the-loop review.",
+      "correction": ""
+    },
+    {
+      "claim": "Modal: record conversation client-side, run Pyannote (Precision-2) diarization to recover each speaker's turn boundaries, then compute v2v latency eCDFs across deployments",
+      "kind": "source_figure",
+      "cited": "modal-v2v line 46-47",
+      "verdict": "SUPPORTED",
+      "found": "Use Pyannote (Precision-2) for speaker diarization to find start/end of each speaker's turns -> compute/aggregate v2v latency. > IMAGE (voice-ai-results.webp): v2v latency eCDFs across deployments.",
+      "correction": ""
+    },
+    {
+      "claim": "Frontmatter code_ref metrics/base.py:166 resolves to InterruptionMetrics",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/metrics/base.py:166",
+      "verdict": "SUPPORTED",
+      "found": "Line 166: class InterruptionMetrics(_BaseMetrics):",
+      "correction": ""
+    },
+    {
+      "claim": "Frontmatter code_ref audio_recognition.py:1185 resolves to the VAD-unreliable comment guarding metric computation",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/audio_recognition.py:1185",
+      "verdict": "SUPPORTED",
+      "found": "Line 1185 comment + subsequent guard requiring last_final_transcript_time / last_speaking_time / speech_start_time all non-None before computing delays.",
+      "correction": ""
+    }
+  ],
+  "summary": "All 14 checkable assertions verified against ground truth. Both LiveKit code_refs land exactly on the cited lines (InterruptionMetrics at base.py:166; the VAD-unreliable guard at audio_recognition.py:1185). All deepgram-ebook quotes are verbatim and at the cited line ranges (the parsed PDF interleaves two columns, so 979-983 legitimately contains both fault-injection and turn-level-diagnostics text). Modal Pyannote Precision-2 + eCDF claim matches line 46-47. PASS."
+}

@@ -1,0 +1,56 @@
+{
+  "note": "REL-11-vad-separate-process-respawn.md",
+  "overall": "FAIL",
+  "claims_checked": 6,
+  "claims": [
+    {
+      "claim": "Vapi: VAD runs in separate process, audio via stdin/stdout pipes, ASCII probability scores, auto-respawn without dropping conversation (vapi-pipeline-2 line 16)",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2 §1 line 16 (_sources/blogs/vapi-pipeline-part-2.md)",
+      "verdict": "SUPPORTED",
+      "found": "'VAD runs in a separate process. Audio flows between processes via stdin/stdout pipes, probability scores returned as ASCII strings. When the process fails, the system automatically respawns it without dropping the conversation.' — exact match at the Reliability paragraph",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat's analogous primitive is its IPC layer at src/pipecat/ipc/proc_pool.py",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/ipc/proc_pool.py",
+      "verdict": "WRONG",
+      "found": "No ipc/ directory exists anywhere in pipecat; no proc_pool.py and no multiprocessing/process-pool code in src/pipecat. The path src/pipecat/ipc/proc_pool.py does not exist. proc_pool.py only exists in LiveKit at agents/livekit-agents/livekit/agents/ipc/proc_pool.py — the note copied LiveKit's path onto pipecat.",
+      "correction": "Remove the pipecat IPC/proc_pool claim. Pipecat has no IPC process-pool layer. The only proc_pool.py in the clones is LiveKit's: _clones/agents/livekit-agents/livekit/agents/ipc/proc_pool.py"
+    },
+    {
+      "claim": "Pipecat has TaskManager task supervision",
+      "kind": "code_ref",
+      "cited": "TaskManager (no path given in note)",
+      "verdict": "SUPPORTED",
+      "found": "class TaskManager exists at _clones/pipecat/src/pipecat/utils/asyncio/task_manager.py",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat runs VAD as an in-process FrameProcessor at src/pipecat/audio/vad/, not a separate OS process",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/vad/",
+      "verdict": "MISCITED",
+      "found": "src/pipecat/audio/vad/ contains VADAnalyzer(ABC) (vad_analyzer.py:62) plus silero/krisp/aic analyzers — these are analyzer classes, not a FrameProcessor. The actual FrameProcessor wrapping VAD is at src/pipecat/processors/audio/vad_processor.py. The core mechanism claim (VAD runs in-process, not a separate OS process) is correct.",
+      "correction": "The FrameProcessor lives at pipecat/src/pipecat/processors/audio/vad_processor.py; the cited audio/vad/ dir holds the analyzer ABC (vad_analyzer.py). Mechanism (in-process) is accurate."
+    },
+    {
+      "claim": "LiveKit runs jobs in a process pool at ipc/proc_pool.py, at job granularity not per-component",
+      "kind": "code_ref",
+      "cited": "ipc/proc_pool.py (LiveKit, relative)",
+      "verdict": "SUPPORTED",
+      "found": "_clones/agents/livekit-agents/livekit/agents/ipc/proc_pool.py exists, alongside supervised_proc.py, job_proc_executor.py, proc_client.py — confirming job-granularity process pooling with supervision.",
+      "correction": ""
+    },
+    {
+      "claim": "Mechanism: separate VAD process buys per-component crash isolation + GIL relief, paying IPC/stdin-stdout serialization cost",
+      "kind": "mechanism",
+      "cited": "note Detail/Prior-art divergence (synthesis from vapi quote)",
+      "verdict": "SUPPORTED",
+      "found": "Reasonable synthesis directly grounded in the vapi source's separate-process + stdin/stdout + respawn statement; GIL/IPC-cost framing is interpretive but standard and not contradicted by source.",
+      "correction": ""
+    }
+  ],
+  "summary": "Vapi source quote (line 16) is verbatim-accurate. LiveKit proc_pool path SUPPORTED. The note's central code claim is WRONG: it attributes an IPC layer 'src/pipecat/ipc/proc_pool.py' to Pipecat, but Pipecat has no ipc/ directory and no proc_pool.py at all — that path is LiveKit's, copied onto Pipecat. The Pipecat VAD FrameProcessor is MISCITED (it's processors/audio/vad_processor.py, not the audio/vad/ analyzer dir), though the in-process mechanism claim holds. overall=FAIL due to the fabricated Pipecat IPC path."
+}

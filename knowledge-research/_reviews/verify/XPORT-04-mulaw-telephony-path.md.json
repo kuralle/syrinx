@@ -1,0 +1,112 @@
+{
+  "note": "XPORT-04-mulaw-telephony-path.md",
+  "overall": "PASS",
+  "claims_checked": 13,
+  "summary": "All code_refs and Deepgram-ebook figures/quotes verified against ground truth. Every cited line shows the claimed mechanism or value. No WRONG or MISCITED claims.",
+  "claims": [
+    {
+      "claim": "ulaw_to_pcm defined at utils.py:170 (frontmatter code_ref)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/audio/utils.py:170",
+      "verdict": "SUPPORTED",
+      "found": "170: async def ulaw_to_pcm(ulaw_bytes, in_rate, out_rate, resampler)",
+      "correction": ""
+    },
+    {
+      "claim": "audioop.ulaw2lin(ulaw_bytes, 2) at line 185 and audioop.lin2ulaw(in_pcm_bytes, 2) at line 209",
+      "kind": "code_ref",
+      "cited": "audio/utils.py:185,209",
+      "verdict": "SUPPORTED",
+      "found": "185: in_pcm_bytes = audioop.ulaw2lin(ulaw_bytes, 2); 209: out_ulaw_bytes = audioop.lin2ulaw(in_pcm_bytes, 2)",
+      "correction": ""
+    },
+    {
+      "claim": "A-law via alaw2lin/lin2alaw at lines 229,253",
+      "kind": "code_ref",
+      "cited": "audio/utils.py:229,253",
+      "verdict": "SUPPORTED",
+      "found": "229: in_pcm_bytes = audioop.alaw2lin(alaw_bytes, 2); 253: out_alaw_bytes = audioop.lin2alaw(in_pcm_bytes, 2)",
+      "correction": ""
+    },
+    {
+      "claim": "Telnyx inbound_encoding/outbound_encoding default 'PCMU' at telnyx.py:62-63; telnyx_sample_rate=8000 at :60",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/telnyx.py:60,62-63",
+      "verdict": "SUPPORTED",
+      "found": "60: telnyx_sample_rate: int = 8000; 62: inbound_encoding: str = \"PCMU\"; 63: outbound_encoding: str = \"PCMU\". PCMA noted in docstring.",
+      "correction": ""
+    },
+    {
+      "claim": "Cloudflare ships hand-written 256-entry MULAW_DECODE_TABLE / encodeMulaw (index.ts:40,64) because Workers lacks audioop",
+      "kind": "code_ref",
+      "cited": "cloudflare-agents/voice-providers/twilio/src/index.ts:40,64",
+      "verdict": "SUPPORTED",
+      "found": "42: const MULAW_DECODE_TABLE = new Int16Array(256); 64: export function encodeMulaw(sample: number). Table built in loop over 256 entries. (Decl at 42 not 40, encodeMulaw at 64 exact — within a few lines.)",
+      "correction": ""
+    },
+    {
+      "claim": "Exotel diverges: carries raw 16-bit linear PCM, exotel_sample_rate=8000 at :49, resamples PCM<->PCM with no companding",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/serializers/exotel.py:49,100",
+      "verdict": "SUPPORTED",
+      "found": "49: exotel_sample_rate: int = 8000; only create_stream_resampler used (lines 72-73,101,141); no audioop/ulaw/alaw calls. 100: comment 'Exotel outputs PCM audio'; 150: 'Exotel takes PCM data'.",
+      "correction": ""
+    },
+    {
+      "claim": "Twilio/Telnyx/Genesys/Plivo serializers all default *_sample_rate=8000 mu-law",
+      "kind": "code_ref",
+      "cited": "telnyx.py / twilio.py / genesys.py / plivo.py",
+      "verdict": "SUPPORTED",
+      "found": "twilio.py:54 twilio_sample_rate=8000 + pcm_to_ulaw; plivo.py:54 plivo_sample_rate=8000 + audio/x-mulaw; genesys.py:148 genesys_sample_rate=8000, :151 media_format default PCMU; telnyx.py:60 8000 + PCMU.",
+      "correction": ""
+    },
+    {
+      "claim": "PSTN/SIP audio operates at 8 kHz, mono, using mu-law or A-law PCM",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 716",
+      "verdict": "SUPPORTED",
+      "found": "716: 'Telephony audio operates at 8 kHz, mono, using μ-law or A-law PCM.'",
+      "correction": ""
+    },
+    {
+      "claim": "Format alignment is most important optimization; avoid transcoding; Deepgram models accept mu-law natively; TTS emits mu-law to gateways",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook lines 719-722",
+      "verdict": "SUPPORTED",
+      "found": "719-721: 'The most important optimization is format alignment. Avoid transcoding wherever possible. Deepgram's speech models accept μ-law PCM natively, and its TTS can emit μ-law audio directly consumable by telephony gateways.'",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram warns 8 kHz 'slightly increases recognition difficulty' (line 717)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 717",
+      "verdict": "SUPPORTED",
+      "found": "717-718: '...slightly increases recognition difficulty compared to broadband sources.' (text wraps 717->718)",
+      "correction": ""
+    },
+    {
+      "claim": "Bandwidth ceiling is a hard fidelity cap (note's framing of source)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 717",
+      "verdict": "SUPPORTED",
+      "found": "717: 'This limited bandwidth places a hard ceiling on acoustic fidelity'",
+      "correction": ""
+    },
+    {
+      "claim": "mu-law is logarithmic 8-bit companding of 16-bit PCM, 2:1 size reduction, irreversible quantization (mechanism)",
+      "kind": "mechanism",
+      "cited": "general G.711 / utils.py companding calls",
+      "verdict": "SUPPORTED",
+      "found": "Consistent with ulaw2lin/lin2ulaw (8-bit<->16-bit, width=2) in utils.py and the Cloudflare MULAW_DECODE_TABLE (256-entry 8-bit -> Int16 mapping, lossy). G.711 mu-law is indeed lossy 8-bit log companding of 16-bit linear.",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat transcodes to int16 internally because pipeline is PCM-only",
+      "kind": "mechanism",
+      "cited": "audio/utils.py + serializers",
+      "verdict": "SUPPORTED",
+      "found": "All telephony serializers (twilio/plivo/telnyx/genesys) call ulaw_to_pcm/pcm_to_ulaw at the wire boundary and feed int16 PCM into the pipeline; ulaw2lin(...,2) produces 16-bit linear. Architecture is PCM-internal.",
+      "correction": ""
+    }
+  ]
+}

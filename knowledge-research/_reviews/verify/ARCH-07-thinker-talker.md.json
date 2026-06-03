@@ -1,0 +1,80 @@
+{
+  "note": "ARCH-07-thinker-talker.md",
+  "overall": "PARTIAL",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "Frontmatter code_ref: agent_activity.py:1133 is the _generate_reply re-entry",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/agent_activity.py:1133",
+      "verdict": "SUPPORTED",
+      "found": "1133: def _generate_reply(",
+      "correction": ""
+    },
+    {
+      "claim": "agent_activity.py:2914 is the tool-response re-entry generation",
+      "kind": "code_ref",
+      "cited": "agents/.../agent_activity.py:2914",
+      "verdict": "SUPPORTED",
+      "found": "2914: tool_response_task = self._create_speech_task( self._pipeline_reply_task(...) under fnc_executed_ev._reply_required",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit max_tool_steps=3 default in agent_session.py:232",
+      "kind": "code_ref",
+      "cited": "agents/.../agent_session.py:232",
+      "verdict": "SUPPORTED",
+      "found": "232: max_tool_steps: int = 3,",
+      "correction": ""
+    },
+    {
+      "claim": "Together thinker-talker: small LLM emits filler + one tool call to bigger model -> TTS (together:43)",
+      "kind": "source_figure",
+      "cited": "together-ai-engineering-voice-agents.md:43",
+      "verdict": "SUPPORTED",
+      "found": "43: Thinker–talker pattern: small LLM handles the live conversation, emits filler (\"let me think about it\") + issues one tool call to a much bigger model (full tools, more guardrails) → cleaner response → TTS.",
+      "correction": ""
+    },
+    {
+      "claim": "Guardrails after LLM generation, before TTS because 'you can't take back spoken words' (together:42)",
+      "kind": "source_figure",
+      "cited": "together-ai-engineering-voice-agents.md:42",
+      "verdict": "SUPPORTED",
+      "found": "42: guardrails after LLM generation, before TTS — because \"you can't take back spoken words\" → must catch violations before TTS is invoked.",
+      "correction": ""
+    },
+    {
+      "claim": "Streaming budget forces model-size sweet spot of 8-30B (together:24)",
+      "kind": "source_figure",
+      "cited": "together:24",
+      "verdict": "MISCITED",
+      "found": "Claim is TRUE but at line 23: 'model size sweet spot: 8–30B params.' Line 24 is the '### TTS (voice)' header.",
+      "correction": "together-ai-engineering-voice-agents.md:23"
+    },
+    {
+      "claim": "ElevenLabs Immediate Mode + pre-tool speech emits 'Let me check that for you' while tool runs in parallel, auto-extending filler (el-orchestration:29)",
+      "kind": "source_figure",
+      "cited": "elevenlabs-orchestration-engine.md:29",
+      "verdict": "SUPPORTED",
+      "found": "29: Immediate Mode ... Combined with pre-tool speech, agent first emits a brief acknowledgement (\"Let me check that for you\") ... while the tool runs in parallel ... For slower tools the platform automatically extends these filler messages to match the expected wait time.",
+      "correction": ""
+    },
+    {
+      "claim": "ElevenLabs guardrails operate outside the agent's prompt / enforcement layer (el-orchestration:49)",
+      "kind": "source_figure",
+      "cited": "elevenlabs-orchestration-engine.md:49",
+      "verdict": "SUPPORTED",
+      "found": "49: Operate outside the agent's prompt logic — enforcement layer that can't be bypassed by model/user input.",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram Think->Act injects 'a brief acknowledgment' if reasoning exceeds short threshold (646-648); pseudocode loop think/function_call/emit_state AgentThinking/execute/update_context/speak(respond) (612-632)",
+      "kind": "source_figure",
+      "cited": "deepgram-voice-agent.parsed.md:612-632, 646-648",
+      "verdict": "SUPPORTED",
+      "found": "646-648: 'If reasoning or execution exceeds a short threshold, inject a brief acknowledgment.' Pseudocode in 608-632 region: decision = llm.think(...); if decision.type == 'function_call': emit_state('AgentThinking'); execute_function; update_context; speak(llm.respond(...)); else: speak(decision.text). (PDF parse columns interleaved but all content present.)",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs (agent_activity.py:1133, :2914; agent_session.py:232 max_tool_steps=3) and all Together/ElevenLabs/Deepgram source figures verified. One off-by-one miscite: 8-30B sweet spot is at together:23 not :24 (line 24 is a section header). No WRONG claims."
+}

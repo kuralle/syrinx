@@ -1,0 +1,80 @@
+{
+  "note": "TURN-04-flux-event-model.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "code_ref frontmatter: stt.py:60 documents server-driven turn protocol connected->turn.start->turn.update*->(turn.eager_end->turn.resume?)*->turn.end",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:60",
+      "verdict": "SUPPORTED",
+      "found": "lines 60-63: 'The server drives the conversation:: connected -> turn.start -> turn.update* -> (turn.eager_end -> turn.resume?)* -> turn.end -> ...'",
+      "correction": ""
+    },
+    {
+      "claim": "code_ref frontmatter: stt.py:162 registers the 5 turn event handlers on_turn_start/update/eager_end/resume/end",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:162",
+      "verdict": "SUPPORTED",
+      "found": "lines 162-166: _register_event_handler('on_turn_start'), ('on_turn_update'), ('on_turn_eager_end'), ('on_turn_resume'), ('on_turn_end')",
+      "correction": ""
+    },
+    {
+      "claim": "Transcripts cumulative per turn, no is_final flag and no finalize command (stt.py:65)",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/services/cartesia/turns/stt.py:65",
+      "verdict": "SUPPORTED",
+      "found": "lines 65-66: 'Transcripts are cumulative per turn; there is no ``is_final`` flag and no ``finalize`` command'",
+      "correction": ""
+    },
+    {
+      "claim": "Flux emits four events StartOfTurn/EagerEndOfTurn/TurnResumed/EndOfTurn with the described semantics (deepgram ~542-547)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 542-547",
+      "verdict": "SUPPORTED",
+      "found": "lines 542-547: 'StartOfTurn: user begins speaking, cancel playback / EagerEndOfTurn: medium confidence turn ending, begin speculative reasoning / TurnResumed: user continues, cancel speculative work / EndOfTurn: high confidence completion, finalize response'",
+      "correction": ""
+    },
+    {
+      "claim": "Four events appear again in appendix (deepgram ~1989-1994)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 1989-1994",
+      "verdict": "SUPPORTED",
+      "found": "lines 1989-1994: StartOfTurn / Update / EagerEndOfTurn medium-confidence end (speculative) / TurnResumed / EndOfTurn high-confidence end",
+      "correction": ""
+    },
+    {
+      "claim": "Tuning params eager_eot_threshold, eot_threshold, eot_timeout_ms (deepgram ~1986, 1994)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 1986, 1994",
+      "verdict": "SUPPORTED",
+      "found": "line 1986-1987: 'model=flux, language, encoding, sample_rate, eot_threshold, eager_eot_threshold, eot_timeout_ms'. Note cites ~1986 and ~1994; both within the appendix Flux block.",
+      "correction": ""
+    },
+    {
+      "claim": "Quote: Flux designed to keep transcripts highly consistent between eager and final boundaries; speculative reasoning rarely diverges from final text (~549)",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook ~line 549",
+      "verdict": "SUPPORTED",
+      "found": "lines 549-551: 'Flux is designed to keep transcripts highly consistent between eager and final turn boundaries. Speculative reasoning rarely diverges from the final text.'",
+      "correction": ""
+    },
+    {
+      "claim": "Flux collapses ASR+VAD into one conversational model emitting deterministic turn events (mechanism)",
+      "kind": "mechanism",
+      "cited": "deepgram-ebook ~line 539-540",
+      "verdict": "SUPPORTED",
+      "found": "lines 539-540: 'Flux simplifies this layer by collapsing traditional ASR and VAD stacks into a single conversational model that emits deterministic turn events'",
+      "correction": ""
+    },
+    {
+      "claim": "If adopting Flux/Ink-2-turns must not run own VAD endpointing or desync (single source of truth)",
+      "kind": "mechanism",
+      "cited": "deepgram-ebook ~line 557-561",
+      "verdict": "SUPPORTED",
+      "found": "lines 558-561: 'downstream VAD and turn logic should be disabled. Redundant detection introduces desynchronization, leading to premature responses... Flux should be the single source of truth for conversational boundaries.'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 9 checkable assertions verified against ground truth. Both frontmatter code_refs (stt.py:60, :162) and the inline stt.py:65 citation match the Cartesia Ink-2 STT clone exactly. All deepgram-ebook source figures (542-547, 1986, 1989-1994, ~549) match the raw parsed PDF verbatim or near-verbatim. The note's elided quote is faithful. PASS."
+}

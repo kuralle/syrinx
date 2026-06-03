@@ -1,0 +1,72 @@
+{
+  "note": "XPORT-06-jitter-buffer-playback.md",
+  "overall": "PASS",
+  "claims_checked": 8,
+  "claims": [
+    {
+      "claim": "LiveKit room output uses rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200) = 200ms playout queue",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/room_io/_output.py:45",
+      "verdict": "SUPPORTED",
+      "found": "self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat WS server computes _send_interval = (audio_chunk_size / sample_rate) / 2 to pace sends, comment 'emulate an audio device'",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/websocket/server.py:306",
+      "verdict": "SUPPORTED",
+      "found": "self._send_interval = (self.audio_chunk_size / self.sample_rate) / 2 (line 306); comment 'we want to block to emulate an audio device, this is what the send interval is' at lines 270-273",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat WebRTC RawAudioTrack.recv computes wait = start + timestamp/sample_rate - now and sleeps to clock frames to wall time",
+      "kind": "code_ref",
+      "cited": "pipecat/src/pipecat/transports/smallwebrtc/transport.py:135",
+      "verdict": "SUPPORTED",
+      "found": "wait = self._start + (self._timestamp / self._sample_rate) - time.time() (line 135); if wait > 0: await asyncio.sleep(wait)",
+      "correction": ""
+    },
+    {
+      "claim": "LiveKit pre-connect audio buffer with max_delta_s=1.0 staleness guard, replayed once subscribed",
+      "kind": "code_ref",
+      "cited": "agents/livekit-agents/livekit/agents/voice/room_io/_pre_connect_audio.py:22,79",
+      "verdict": "SUPPORTED",
+      "found": "line 22: def __init__(self, room, *, timeout, max_delta_s: float = 1.0); line 79: if (delta := time.time() - buf.timestamp) > self._max_delta_s: ... 'pre-connect audio buffer is too old'. Frontmatter :21 = class PreConnectAudioHandler: (within range).",
+      "correction": ""
+    },
+    {
+      "claim": "Deepgram: short jitter buffer around 100 milliseconds is usually sufficient to smooth minor network variation without adding perceptible delay",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 517-518",
+      "verdict": "SUPPORTED",
+      "found": "lines 517-519: 'synthesized speech should be streamed incrementally and buffered just enough to prevent playback gaps. A short jitter buffer around 100 milliseconds is usually sufficient to smooth minor network variation without adding perceptible delay.'",
+      "correction": ""
+    },
+    {
+      "claim": "PSTN adds an unavoidable 100-200 ms RTT floor",
+      "kind": "source_figure",
+      "cited": "deepgram-ebook line 724",
+      "verdict": "SUPPORTED",
+      "found": "lines 724-725: 'Even with optimal alignment, PSTN interactions typically add 100-200 milliseconds of round-trip delay.' (the number wraps onto line 725; 724 is within a few lines)",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat has no separate jitter-buffer object; WS relies on send-side pacing + client buffer, WebRTC uses aiortc/Opus buffer",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/transports/websocket/server.py:306 + transport.py:135",
+      "verdict": "SUPPORTED",
+      "found": "WS pacing via _send_interval sleep (server.py); WebRTC recv() sleeps to wall-clock the frames (transport.py); no dedicated jitter-buffer class observed in these transport files.",
+      "correction": ""
+    },
+    {
+      "claim": "Send-side pacing prevents flooding because TCP socket would otherwise dump all TTS at once",
+      "kind": "mechanism",
+      "cited": "pipecat/src/pipecat/transports/websocket/server.py:270-290",
+      "verdict": "SUPPORTED",
+      "found": "comment lines 269-273: 'write_audio_frame() is called quickly ... since this is just a network connection we would be sending it to[o] quickly. Instead, we want to block to emulate an audio device'",
+      "correction": ""
+    }
+  ],
+  "summary": "All 4 code_refs and both Deepgram source figures verified against ground truth. Every cited line shows the claimed mechanism/value. PSTN 100-200ms number wraps from line 724 to 725 (within range, not a miscitation). No WRONG or MISCITED claims."
+}

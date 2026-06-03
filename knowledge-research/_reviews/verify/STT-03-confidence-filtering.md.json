@@ -1,0 +1,80 @@
+{
+  "note": "STT-03-confidence-filtering.md",
+  "overall": "PASS",
+  "claims_checked": 9,
+  "claims": [
+    {
+      "claim": "Rapida reads listen.threshold and if Confidence < v emits low_confidence event then return nil, skipping STT processing",
+      "kind": "code_ref",
+      "cited": "voice-ai/.../deepgram/internal/stt_callback.go:60-78",
+      "verdict": "SUPPORTED",
+      "found": "line 60 'if v, err := d.options.GetFloat64(\"listen.threshold\")...'; line 61 'if alternative.Confidence < v'; line 69 'type: low_confidence'; line 77 'return nil'",
+      "correction": ""
+    },
+    {
+      "claim": "_calculate_average_confidence computes average per-word confidence",
+      "kind": "code_ref",
+      "cited": "pipecat/.../flux/base.py:613-627",
+      "verdict": "SUPPORTED",
+      "found": "line 613 'def _calculate_average_confidence'; line 627 'return sum(confidences) / len(confidences)'",
+      "correction": ""
+    },
+    {
+      "claim": "Only pushes TranscriptionFrame if average_confidence > min_confidence, else logs 'below min_confidence threshold' and drops",
+      "kind": "code_ref",
+      "cited": "pipecat/.../flux/base.py:664-689",
+      "verdict": "SUPPORTED",
+      "found": "line 672 'average_confidence > min_confidence'; line 676 push_frame(TranscriptionFrame); line 688 'Transcription confidence below min_confidence threshold'. Frontmatter cites :664 which is the '# Compute the average confidence' comment inside _handle_end_of_turn; the gate itself is at 671-672, well within the window.",
+      "correction": ""
+    },
+    {
+      "claim": "should_interrupt flag is the code-level interrupt tier; only a real turn-start triggers broadcast_interruption()",
+      "kind": "code_ref",
+      "cited": "pipecat/.../flux/base.py:593",
+      "verdict": "SUPPORTED",
+      "found": "line 593 'if self._should_interrupt:'; line 594 'await self.broadcast_interruption()' inside _handle_start_of_turn",
+      "correction": ""
+    },
+    {
+      "claim": "Pipecat classic Deepgram path does no confidence gate - forwards every non-empty interim/final",
+      "kind": "code_ref",
+      "cited": "deepgram/stt.py:695",
+      "verdict": "SUPPORTED",
+      "found": "line 695 'if len(transcript) > 0:' then pushes TranscriptionFrame with no confidence comparison; no min_confidence gate in _on_message",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi partial filter: only higher-confidence transcripts can interrupt the AI while it's speaking",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2:27-33",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:31 'only higher-confidence transcripts can interrupt the AI while it's speaking'. (Source filename is vapi-pipeline-part-2.md; note shortname 'vapi-pipeline-2' maps correctly per task table.)",
+      "correction": ""
+    },
+    {
+      "claim": "single-letter artifacts and common false positives filtered out",
+      "kind": "source_figure",
+      "cited": "vapi-pipeline-2:27-33",
+      "verdict": "SUPPORTED",
+      "found": "vapi-pipeline-part-2.md:32 'Edge Case Handling: single-letter artifacts and common false positives filtered out.'",
+      "correction": ""
+    },
+    {
+      "claim": "Vapi confidence filter has 3 outputs: Discard (conf<X), Keep (X<conf<Y), Interrupt (conf>Y)",
+      "kind": "source_figure",
+      "cited": "diagrams:21-25",
+      "verdict": "SUPPORTED",
+      "found": "_diagram-observations.md:22-25 'Confidence Filter with 3 outputs: Discard (conf < X), Keep (X < conf < Y), Interrupt (conf > Y) - only high-confidence partials may barge-in'",
+      "correction": ""
+    },
+    {
+      "claim": "Cross-note BARGE-06 is the barge-in safety valve for interrupt-on-high-confidence tier",
+      "kind": "cross_note_link",
+      "cited": "[[BARGE-06-confidence-gated-interruption]]",
+      "verdict": "UNVERIFIABLE",
+      "found": "Note references the neighbor as a 'see also'; does not assert the neighbor proves a specific fact. Not spot-checked.",
+      "correction": ""
+    }
+  ],
+  "summary": "All code_refs and source figures verified against ground truth. Both Pipecat Flux refs, the Rapida Go gate, the classic Deepgram no-gate path, and all three Vapi/diagram source quotes are accurate. Minor: frontmatter cites flux/base.py:664 (the compute-average comment) rather than the gate line 671-672, but both sit inside the cited _handle_end_of_turn window so the mechanism claim is sound."
+}
