@@ -1,6 +1,6 @@
 # VE-01 — End-to-end audio round-trip (tracer bullet)
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — commits 48b9e0e, 8052cc8, c8221eb, 4c0ab94, ee2936d; see `../reconcile/VE-01-bridge.md` + `.handoff/session-ve01-audio-round-trip-close.md`)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§1 Audio Transport**, **§2 STT Ingestion**, **§5 TTS Egress** (core items only)
 
 ## What to build
