@@ -1,6 +1,6 @@
 # VE-06 — Reliability (the speech path never fails silently)
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Essentials shipped — VE-06.1/.4/.5 done (v2: bfcc3dd, 05cbee2, c6cea25); VE-06.2/.3/.6 (replay, fallback adapters, degradation) carried to VE-08. See .handoff/session-ve06-reliability-close.md
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§7 Reliability**
 
 ## What to build
