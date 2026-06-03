@@ -442,6 +442,28 @@ export interface ConversationMetricPacket extends VoicePacket {
   readonly value: string;
 }
 
+export type TurnBoundaryKind =
+  | "user_started_speaking"
+  | "user_stopped_speaking"
+  | "agent_thinking"
+  | "agent_started_speaking"
+  | "agent_audio_done"
+  | "interruption";
+
+export interface TurnBoundaryEventPacket extends VoicePacket {
+  readonly kind: "obs.turn_boundary";
+  readonly boundary: TurnBoundaryKind;
+  readonly sessionId: string;
+  readonly speechId: string;
+  readonly requestId?: string;
+  /** Monotonic ms (performance.timeOrigin + performance.now()) — immune to wall-clock jumps. */
+  readonly monotonicMs: number;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly region?: string;
+  readonly cancelled?: boolean;
+}
+
 export interface PipelineErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly kind: "pipeline.error";
   readonly component: "pipeline";
@@ -505,3 +527,6 @@ export type AnyErrorPacket =
   | LlmErrorPacket
   | PipelineErrorPacket
   | InitializationFailedPacket;
+
+/** Observability packets (Background route). */
+export type ObservabilityPacket = ConversationMetricPacket | TurnBoundaryEventPacket;
