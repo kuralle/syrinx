@@ -56,7 +56,7 @@ describe("DeepgramTTSPlugin", () => {
   it("streams sentences as Speak messages and ends the turn on Flushed", async () => {
     const received: Array<Record<string, unknown>> = [];
     const endpointUrl = await createLocalServer((socket, requestUrl, authHeader) => {
-      expect(requestUrl).toContain("model=aura-asteria-en");
+      expect(requestUrl).toContain("model=aura-2-thalia-en");
       expect(requestUrl).toContain("encoding=linear16");
       expect(requestUrl).toContain("container=none");
       expect(authHeader).toBe("Token test-deepgram-key");

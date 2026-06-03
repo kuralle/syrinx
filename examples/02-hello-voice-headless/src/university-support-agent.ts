@@ -184,7 +184,7 @@ function createTtsPlugin(provider: UniversitySupportTtsProvider): VoicePlugin {
 function deepgramTtsConfig(): PluginConfig {
   return {
     api_key: requireEnv("DEEPGRAM_API_KEY"),
-    model: process.env["SYRINX_DEEPGRAM_TTS_MODEL"]?.trim() || "aura-asteria-en",
+    model: process.env["SYRINX_DEEPGRAM_TTS_MODEL"]?.trim() || "aura-2-thalia-en",
     sample_rate: 24000,
     retry_max_attempts: 2,
   };
@@ -194,7 +194,7 @@ function cartesiaTtsConfig(): PluginConfig {
   return {
     api_key: requireEnv("CARTESIA_API_KEY"),
     voice_id: process.env["CARTESIA_VOICE_ID"]?.trim() || "694f9389-aac1-45b6-b726-9d9369183238",
-    model_id: process.env["SYRINX_CARTESIA_MODEL_ID"]?.trim() || "sonic-2-2025-03-07",
+    model_id: process.env["SYRINX_CARTESIA_MODEL_ID"]?.trim() || "sonic-3",
     sample_rate: 16000,
     language: "en",
     retry_max_attempts: 2,
@@ -204,7 +204,7 @@ function cartesiaTtsConfig(): PluginConfig {
 function geminiTtsConfig(interactive: boolean): PluginConfig {
   return {
     api_key: requireEnv("GOOGLE_GENERATIVE_AI_API_KEY"),
-    model: process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-2.5-flash-preview-tts",
+    model: process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-3.1-flash-tts-preview",
     voice_name: process.env["SYRINX_GEMINI_TTS_VOICE"]?.trim() || "Kore",
     retry_max_attempts: interactive ? 2 : 4,
     retry_base_delay_ms: 500,

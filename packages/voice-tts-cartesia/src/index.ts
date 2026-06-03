@@ -35,7 +35,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private conn: WebSocketConnection | null = null;
   private apiKey = "";
   private voiceId = "c2ac25f9-ecc4-4f56-9095-651354df60c0";
-  private modelId = "sonic-2-2025-03-07";
+  private modelId = "sonic-3";
   private endpointUrl = "wss://api.cartesia.ai/tts/websocket";
   private apiVersion = "2024-06-10";
   private sampleRate = 16000;
@@ -336,9 +336,10 @@ function isErrorStatusCode(value: unknown): boolean {
 function cartesiaProviderError(msg: Record<string, unknown>): Error {
   const title = typeof msg["title"] === "string" ? msg["title"] : "Cartesia TTS provider error";
   const message = typeof msg["message"] === "string" ? msg["message"] : "";
+  const error = typeof msg["error"] === "string" ? msg["error"] : "";
   const errorCode = typeof msg["error_code"] === "string" ? msg["error_code"] : "";
   const statusCode = typeof msg["status_code"] === "number" ? `status ${String(msg["status_code"])}` : "";
-  const details = [message, errorCode, statusCode].filter((part) => part.length > 0).join(" ");
+  const details = [message, error, errorCode, statusCode].filter((part) => part.length > 0).join(" ");
   return new Error(details ? `${title}: ${details}` : title);
 }
 

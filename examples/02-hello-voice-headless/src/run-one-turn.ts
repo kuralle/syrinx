@@ -26,7 +26,7 @@ import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
 const require = createRequire(import.meta.url);
 const { WaveFile } = require("wavefile") as typeof import("wavefile");
 
-export const DEFAULT_MODEL = "gemini-2.5-flash";
+export const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 
 const SAMPLES_PER_FRAME = 320;
 const DEFAULT_FIXTURE_PATH =
@@ -224,7 +224,7 @@ async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<Hea
         api_key: process.env["DEEPGRAM_API_KEY"],
         sample_rate: 16000,
         endpointing: 600,
-        model: "nova-2",
+        model: "nova-3",
         language: "en-US",
       },
       vad: { threshold: 0.01 },
@@ -236,7 +236,7 @@ async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<Hea
       tts: {
         api_key: process.env["CARTESIA_API_KEY"],
         voice_id: ext.voiceId ?? DEFAULT_VOICE_ID,
-        model_id: "sonic-2-2025-03-07",
+        model_id: "sonic-3",
         sample_rate: 16000,
         language: "en",
       },
