@@ -76,6 +76,8 @@ interface SmartPbxMessage {
   readonly event?: string;
   readonly start?: SmartPbxStartPayload;
   readonly media?: { readonly payload?: string };
+  readonly dtmf?: { readonly digit?: string };
+  readonly digit?: string;
 }
 
 type SmartPbxCodec = "g711_ulaw" | "pcm16" | "opus";
@@ -286,7 +288,30 @@ export async function createSmartPbxMediaStreamServer(
         session.close().catch(() => undefined);
         return;
       }
-      if (message.event === "dtmf") return;
+      if (message.event === "dtmf") {
+        if (state.stopped) return;
+        const rawDigit = message.dtmf?.digit ?? message.digit ?? "";
+        const digit = parseDtmfDigit(rawDigit);
+        if (!digit) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: state.contextId,
+            timestampMs: Date.now(),
+            name: "dtmf.unparsed",
+            value: rawDigit,
+          });
+          return;
+        }
+        session.bus.push(Route.Critical, {
+          kind: "dtmf.received",
+          contextId: state.contextId,
+          timestampMs: Date.now(),
+          digit,
+          provider: "smartpbx",
+          rawDigit,
+        });
+        return;
+      }
       throw new Error(`Unsupported SmartPBX AI Provider event: ${String(message.event)}`);
     },
 
@@ -353,12 +378,24 @@ export async function createSmartPbxMediaStreamServer(
   };
 }
 
+type SmartPbxDtmfDigit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "*" | "#";
+
+const DTMF_DIGITS = new Set<SmartPbxDtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
+
+function parseDtmfDigit(raw: string): SmartPbxDtmfDigit | null {
+  const trimmed = raw.trim();
+  if (trimmed.length !== 1 || !DTMF_DIGITS.has(trimmed as SmartPbxDtmfDigit)) return null;
+  return trimmed as SmartPbxDtmfDigit;
+}
+
 function parseSmartPbxMessage(value: Record<string, unknown>): SmartPbxMessage {
   const start = optionalRecord(value.start, "SmartPBX start");
   const media = optionalRecord(value.media, "SmartPBX media");
+  const dtmf = optionalRecord(value.dtmf, "SmartPBX dtmf");
   const mediaFormat = optionalRecord(start?.mediaFormat, "SmartPBX start.mediaFormat");
   return {
     event: requiredString(value.event, "SmartPBX event"),
+    digit: optionalString(value.digit, "SmartPBX digit"),
     start: start
       ? {
           callId: optionalString(start.callId, "SmartPBX start.callId"),
@@ -375,6 +412,7 @@ function parseSmartPbxMessage(value: Record<string, unknown>): SmartPbxMessage {
         }
       : undefined,
     media: media ? { payload: optionalString(media.payload, "SmartPBX media.payload") } : undefined,
+    dtmf: dtmf ? { digit: optionalString(dtmf.digit, "SmartPBX dtmf.digit") } : undefined,
   };
 }
 

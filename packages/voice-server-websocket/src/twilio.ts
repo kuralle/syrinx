@@ -84,6 +84,7 @@ interface TwilioMediaMessage {
     readonly timestamp?: string;
   };
   readonly mark?: { readonly name?: string };
+  readonly dtmf?: { readonly digit?: string };
 }
 
 interface TwilioConnectionState {
@@ -334,7 +335,30 @@ export async function createTwilioMediaStreamServer(
         });
         return;
       }
-      if (event === "dtmf") return;
+      if (event === "dtmf") {
+        if (state.stopped) return;
+        const rawDigit = message.dtmf?.digit ?? "";
+        const digit = parseDtmfDigit(rawDigit);
+        if (!digit) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: state.contextId,
+            timestampMs: Date.now(),
+            name: "dtmf.unparsed",
+            value: rawDigit,
+          });
+          return;
+        }
+        session.bus.push(Route.Critical, {
+          kind: "dtmf.received",
+          contextId: state.contextId,
+          timestampMs: Date.now(),
+          digit,
+          provider: "twilio",
+          rawDigit,
+        });
+        return;
+      }
       throw new Error(`Unsupported Twilio Media Streams event: ${String(event)}`);
     },
 
@@ -401,10 +425,21 @@ export async function createTwilioMediaStreamServer(
   };
 }
 
+type TwilioDtmfDigit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "*" | "#";
+
+const DTMF_DIGITS = new Set<TwilioDtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
+
+function parseDtmfDigit(raw: string): TwilioDtmfDigit | null {
+  const trimmed = raw.trim();
+  if (trimmed.length !== 1 || !DTMF_DIGITS.has(trimmed as TwilioDtmfDigit)) return null;
+  return trimmed as TwilioDtmfDigit;
+}
+
 function parseTwilioMessage(value: Record<string, unknown>): TwilioMediaMessage {
   const start = optionalRecord(value.start, "Twilio start");
   const media = optionalRecord(value.media, "Twilio media");
   const mark = optionalRecord(value.mark, "Twilio mark");
+  const dtmf = optionalRecord(value.dtmf, "Twilio dtmf");
   const mediaFormat = optionalRecord(start?.mediaFormat, "Twilio start.mediaFormat");
   return {
     event: requiredString(value.event, "Twilio event"),
@@ -432,6 +467,7 @@ function parseTwilioMessage(value: Record<string, unknown>): TwilioMediaMessage 
         }
       : undefined,
     mark: mark ? { name: optionalString(mark.name, "Twilio mark.name") } : undefined,
+    dtmf: dtmf ? { digit: optionalString(dtmf.digit, "Twilio dtmf.digit") } : undefined,
   };
 }
 
