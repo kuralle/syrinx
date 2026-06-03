@@ -521,6 +521,7 @@ export class VoiceAgentSession {
   }
 
   private handleSttInterim(pkt: SttInterimPacket): void {
+    this.turnArbiter.noteInterimEvidence(pkt.text);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_partial", {
       tsMs: pkt.timestampMs,

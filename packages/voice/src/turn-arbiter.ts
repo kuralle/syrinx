@@ -25,6 +25,40 @@ type TurnInterruptionState =
 
 type PendingTurnInterruption = Extract<TurnInterruptionState, { kind: "pending" }>;
 
+const BACKCHANNELS = new Set([
+  "yeah",
+  "yep",
+  "yup",
+  "uh huh",
+  "uhhuh",
+  "uh-huh",
+  "mhm",
+  "mm hmm",
+  "mm-hmm",
+  "mmhmm",
+  "okay",
+  "ok",
+  "right",
+  "sure",
+  "uh",
+  "um",
+  "hmm",
+  "i see",
+  "got it",
+  "gotcha",
+  "oh",
+]);
+
+function isBackchannel(text: string): boolean {
+  const norm = text
+    .toLowerCase()
+    .replace(/[^a-z\s'-]/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!norm) return false;
+  return BACKCHANNELS.has(norm);
+}
+
 export interface TurnArbiterDeps {
   readonly bus: PipelineBus;
   readonly primarySpeakerGate: PrimarySpeakerGate;
@@ -34,8 +68,13 @@ export interface TurnArbiterDeps {
 
 export class TurnArbiter {
   private turnInterruption: TurnInterruptionState = { kind: "idle" };
+  private latestInterimText = "";
 
   constructor(private readonly deps: TurnArbiterDeps) {}
+
+  noteInterimEvidence(text: string): void {
+    this.latestInterimText = text;
+  }
 
   onSpeechStarted(pkt: VadSpeechStartedPacket, interruptedContextId: string): void {
     const { minInterruptionMs, bus, primarySpeakerGate } = this.deps;
@@ -113,6 +152,7 @@ export class TurnArbiter {
 
   clear(): void {
     this.turnInterruption = { kind: "idle" };
+    this.latestInterimText = "";
   }
 
   private pendingFor(userContextId: string): PendingTurnInterruption | null {
@@ -159,6 +199,10 @@ export class TurnArbiter {
     }
 
     const sustainedMs = nowMs - pending.firstSpeechMs;
+    if (this.latestInterimText && isBackchannel(this.latestInterimText)) {
+      this.suppress(pending, "interrupt.suppressed_backchannel", sustainedMs);
+      return;
+    }
     this.turnInterruption = { kind: "idle" };
     gate.resetBargeInWindow();
 
@@ -181,6 +225,7 @@ export class TurnArbiter {
       make.metric(pending.interruptedContextId, "interrupt.latency_ms", String(sustainedMs)),
     );
     this.emitInterruptDetected(pending.interruptedContextId);
+    this.latestInterimText = "";
   }
 
   private suppress(
@@ -199,5 +244,6 @@ export class TurnArbiter {
       Route.Background,
       make.metric(pending.interruptedContextId, metricName, String(durationMs)),
     );
+    this.latestInterimText = "";
   }
 }
