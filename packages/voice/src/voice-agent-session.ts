@@ -130,6 +130,13 @@ export interface VoiceAgentSessionConfig {
    */
   ttsStallMs?: number;
   /**
+   * Max ms of silence on inbound user audio while the session is Ready before a
+   * recoverable transport warning is emitted. Continuous streams (telephony, open
+   * mic) should set this; push-to-talk / headless sessions leave at 0 (disabled).
+   * Default: 0.
+   */
+  inputCadenceTimeoutMs?: number;
+  /**
    * Spoken fallback when the reasoning (LLM) layer fails a turn with a recoverable
    * error. "Never fail silently" (Deepgram guide Ch3): rather than ending the turn in
    * unexplained silence, the agent speaks this line via the normal TTS path (which is
@@ -201,6 +208,7 @@ export class VoiceAgentSession {
   private firstLlmDeltaReceived = new Set<string>();
   private readonly vaqiMissedResponseMs: number;
   private readonly ttsStallMs: number;
+  private readonly inputCadenceTimeoutMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private turnUserStoppedAtMs = new Map<string, number>();
   private speakerEnrollmentContextId: string | null = null;
@@ -227,6 +235,7 @@ export class VoiceAgentSession {
     });
     this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;
     this.ttsStallMs = config.ttsStallMs ?? 15000;
+    this.inputCadenceTimeoutMs = config.inputCadenceTimeoutMs ?? 0;
     this.errorFallbackText = config.errorFallbackText ?? "Sorry, I'm having trouble right now. Could you try again?";
 
     // Debug events
@@ -275,6 +284,7 @@ export class VoiceAgentSession {
       sttForceFinalizeTimeoutMs: this.sttForceFinalizeTimeoutMs,
       vaqiMissedResponseMs: this.vaqiMissedResponseMs,
       ttsStallMs: this.ttsStallMs,
+      inputCadenceTimeoutMs: this.inputCadenceTimeoutMs,
       getSessionState: () => this._state,
       isGenerationInterrupted: (contextId) => this.interruptedGenerationContextIds.has(contextId),
       onVaqiMissedResponseFired: (contextId) => {
@@ -509,6 +519,8 @@ export class VoiceAgentSession {
       data: { context_id: pkt.contextId, bytes: String(pkt.audio.length) },
       timestampMs: pkt.timestampMs,
     });
+
+    this.watchdogs.scheduleInputCadenceWatchdog(pkt.contextId);
   }
 
   private handleSttAudio(pkt: SpeechToTextAudioPacket): void {

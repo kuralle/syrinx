@@ -30,6 +30,7 @@ import type {
   VadSpeechActivityPacket,
   LlmErrorPacket,
   TtsErrorPacket,
+  PipelineErrorPacket,
 } from "./packets.js";
 import {
   BYSTANDER_SPEAKER_TONE_HZ,
@@ -1479,6 +1480,132 @@ describe("VoiceAgentSession", () => {
     expect(metrics).not.toContain("tts.stall_detected");
 
     await closeSession(session);
+  });
+
+  it("test:input_stall_emits_recovery — fires recoverable pipeline.error and metric when inbound audio stalls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const session = new VoiceAgentSession({ plugins: {}, inputCadenceTimeoutMs: 2000 });
+    const metrics: string[] = [];
+    const pipelineErrors: Array<{ category: string; isRecoverable: boolean; message: string }> = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+    session.bus.on("pipeline.error", (pkt) => {
+      const err = pkt as PipelineErrorPacket;
+      pipelineErrors.push({
+        category: err.category,
+        isRecoverable: err.isRecoverable,
+        message: err.cause.message,
+      });
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3, 4]),
+      } satisfies UserAudioReceivedPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(metrics).not.toContain("input.cadence_stall_ms");
+      expect(pipelineErrors).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(metrics).toContain("input.cadence_stall_ms");
+      expect(pipelineErrors).toEqual([
+        expect.objectContaining({
+          category: "network_timeout",
+          isRecoverable: true,
+          message: "inbound audio stalled",
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
+  });
+
+  it("test:cadence_reset_on_audio — inbound audio before the window resets the cadence watchdog", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const session = new VoiceAgentSession({ plugins: {}, inputCadenceTimeoutMs: 2000 });
+    const metrics: string[] = [];
+    const pipelineErrors: PipelineErrorPacket[] = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+    session.bus.on("pipeline.error", (pkt) => {
+      pipelineErrors.push(pkt as PipelineErrorPacket);
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3, 4]),
+      } satisfies UserAudioReceivedPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1500);
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([5, 6, 7, 8]),
+      } satisfies UserAudioReceivedPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(metrics).not.toContain("input.cadence_stall_ms");
+      expect(pipelineErrors).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
+  });
+
+  it("does not arm the input cadence watchdog when inputCadenceTimeoutMs is 0", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: string[] = [];
+    const pipelineErrors: PipelineErrorPacket[] = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+    session.bus.on("pipeline.error", (pkt) => {
+      pipelineErrors.push(pkt as PipelineErrorPacket);
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3, 4]),
+      } satisfies UserAudioReceivedPacket);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(metrics).not.toContain("input.cadence_stall_ms");
+      expect(pipelineErrors).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
   });
 
   it("tells the recorder to truncate queued assistant audio on barge-in", async () => {
