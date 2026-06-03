@@ -87,6 +87,13 @@ export function wireTelephonyOutboundPipeline(args: {
       playout.clear();
       callbacks.onClear?.();
       callbacks.onInterrupt(interrupt.contextId);
+      session.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: interrupt.contextId,
+        timestampMs: Date.now(),
+        name: `${callbacks.carrierLabel}.interrupt_onset_to_media_silent_ms`,
+        value: String(Math.max(0, Date.now() - interrupt.timestampMs)),
+      });
     }),
     session.bus.on("tts.audio", (pkt) => {
       const audioPacket = pkt as TextToSpeechAudioPacket;

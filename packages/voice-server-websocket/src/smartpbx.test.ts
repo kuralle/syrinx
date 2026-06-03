@@ -667,6 +667,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     expect(sent.some((message) => message.event === "clear")).toBe(false);
     expect(metrics).toEqual([
       expect.objectContaining({ name: "smartpbx.interrupt_no_playback_clear" }),
+      expect.objectContaining({ name: "smartpbx.interrupt_onset_to_media_silent_ms" }),
     ]);
 
     session.bus.push(Route.Main, {
@@ -686,6 +687,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     expect(sent.filter((message) => message.event === "media")).toHaveLength(1);
     expect(metrics).toEqual([
       expect.objectContaining({ name: "smartpbx.interrupt_no_playback_clear" }),
+      expect.objectContaining({ name: "smartpbx.interrupt_onset_to_media_silent_ms" }),
     ]);
 
     client.close();

@@ -890,14 +890,23 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
+    this.bus.push(
+      Route.Background,
+      make.metric(
+        pkt.contextId,
+        "interrupt.onset_to_logic_cancel_ms",
+        String(Math.max(0, Date.now() - pkt.timestampMs)),
+      ),
+    );
+
     // Stop idle timeout
     this.bus.push(Route.Critical, make.stopIdleTimeout(pkt.contextId, Date.now(), true));
 
     this.bus.push(Route.Critical, make.recordAssistantTruncate(pkt.contextId, Date.now()));
 
     // Interrupt TTS, then LLM
-    this.bus.push(Route.Critical, make.interruptTts(pkt.contextId, Date.now()));
-    this.bus.push(Route.Critical, make.interruptLlm(pkt.contextId, Date.now()));
+    this.bus.push(Route.Critical, make.interruptTts(pkt.contextId, pkt.timestampMs));
+    this.bus.push(Route.Critical, make.interruptLlm(pkt.contextId, pkt.timestampMs));
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {

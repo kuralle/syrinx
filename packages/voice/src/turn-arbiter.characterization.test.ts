@@ -228,7 +228,10 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
     expect(interrupts).toEqual([
       expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
     ]);
-    expect(pairs).toEqual([{ name: "vaqi.interruption", value: "1" }]);
+    expect(pairs).toEqual([
+      { name: "vaqi.interruption", value: "1" },
+      { name: "interrupt.onset_to_logic_cancel_ms", value: "0" },
+    ]);
 
     await closeSession(session);
   });

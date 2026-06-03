@@ -19,6 +19,8 @@ import type {
   TextToSpeechPlayoutProgressPacket,
   TextToSpeechTextPacket,
   InterruptTtsPacket,
+  InterruptLlmPacket,
+  InterruptionDetectedPacket,
   VadSpeechEndedPacket,
   UserAudioReceivedPacket,
   UserInputPacket,
@@ -862,6 +864,50 @@ describe("VoiceAgentSession", () => {
       expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
     ]);
     expect(metrics).toContain("interrupt.committed_after_ms");
+
+    await closeSession(session);
+  });
+
+  it("emits interrupt.onset_to_logic_cancel_ms and stamps interrupt.tts/llm with detected onset", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const onsetMetrics: Array<{ name: string; value: string }> = [];
+    const ttsInterrupts: InterruptTtsPacket[] = [];
+    const llmInterrupts: InterruptLlmPacket[] = [];
+
+    await session.start();
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string; value: string };
+      if (metric.name === "interrupt.onset_to_logic_cancel_ms") onsetMetrics.push(metric);
+    });
+    session.bus.on("interrupt.tts", (pkt) => {
+      ttsInterrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("interrupt.llm", (pkt) => {
+      llmInterrupts.push(pkt as InterruptLlmPacket);
+    });
+
+    const onset = 1_700_000_000_000;
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "assistant-turn",
+      timestampMs: onset,
+      source: "vad",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(onsetMetrics).toEqual([
+      expect.objectContaining({
+        name: "interrupt.onset_to_logic_cancel_ms",
+        value: expect.stringMatching(/^\d+$/),
+      }),
+    ]);
+    expect(Number(onsetMetrics[0]!.value)).toBeGreaterThanOrEqual(0);
+    expect(ttsInterrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn", timestampMs: onset }),
+    ]);
+    expect(llmInterrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.llm", contextId: "assistant-turn", timestampMs: onset }),
+    ]);
 
     await closeSession(session);
   });
