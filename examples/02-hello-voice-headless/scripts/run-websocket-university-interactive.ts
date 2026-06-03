@@ -113,13 +113,22 @@ async function main(): Promise<void> {
     const evaluation = evaluateConversation(turns);
     const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
+    const sttFinalPool = positiveDeltas(turns, (turn) => turn.sttFinalAtMs - turn.speechEndedAtMs);
+    const llmTtftPool = positiveDeltas(turns, (turn) => turn.firstAgentAtMs - turn.sttFinalAtMs);
+    const ttsTtfbPool = positiveDeltas(turns, (turn) => turn.firstAudioAtMs - turn.firstAgentAtMs);
+    logStagePercentilePool("STT-final", turns, sttFinalPool);
+    logStagePercentilePool("LLM-TTFT", turns, llmTtftPool);
+    logStagePercentilePool("TTS-TTFB", turns, ttsTtfbPool);
+    console.log("playout-start percentiles omitted: no playout-start timestamp captured in InteractiveTurnCapture");
     const baseline = {
       scenario: "websocket_university_student_relations_interactive",
       generatedAt: new Date().toISOString(),
       fixtureProvider: "mixed-wav-fixtures",
+      sttModel: process.env["SYRINX_DEEPGRAM_MODEL"]?.trim() || "nova-3",
       llmModel: process.env["SYRINX_LLM_MODEL"]?.trim() || "gemini-3.1-flash-lite",
       ttsProvider: "cartesia",
       ttsModel: process.env["SYRINX_CARTESIA_MODEL_ID"]?.trim() || "sonic-3",
+      region: "unknown",
       transport: "websocket",
       inputSampleRateHz: INPUT_SAMPLE_RATE,
       outputSampleRateHz: OUTPUT_SAMPLE_RATE,
@@ -136,6 +145,15 @@ async function main(): Promise<void> {
         voiceToVoiceP50Ms: percentile(positiveVoiceToVoiceMs(turns), 50),
         voiceToVoiceP95Ms: percentile(positiveVoiceToVoiceMs(turns), 95),
         voiceToVoiceP99Ms: percentile(positiveVoiceToVoiceMs(turns), 99),
+        sttFinalP50Ms: percentile(sttFinalPool, 50),
+        sttFinalP95Ms: percentile(sttFinalPool, 95),
+        sttFinalP99Ms: percentile(sttFinalPool, 99),
+        llmTtftP50Ms: percentile(llmTtftPool, 50),
+        llmTtftP95Ms: percentile(llmTtftPool, 95),
+        llmTtftP99Ms: percentile(llmTtftPool, 99),
+        ttsTtfbP50Ms: percentile(ttsTtfbPool, 50),
+        ttsTtfbP95Ms: percentile(ttsTtfbPool, 95),
+        ttsTtfbP99Ms: percentile(ttsTtfbPool, 99),
       },
       turns: turns.map((turn) => ({
         id: turn.id,
@@ -602,6 +620,28 @@ function finalizeTurnMetrics(turns: readonly InteractiveTurnCapture[]): void {
 
 function positiveVoiceToVoiceMs(turns: readonly InteractiveTurnCapture[]): number[] {
   return turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
+}
+
+function positiveDeltas(
+  turns: readonly InteractiveTurnCapture[],
+  fn: (turn: InteractiveTurnCapture) => number,
+): number[] {
+  return turns.map(fn).filter((value) => value > 0);
+}
+
+function logStagePercentilePool(
+  stage: string,
+  turns: readonly InteractiveTurnCapture[],
+  pool: readonly number[],
+): void {
+  const excluded = turns.length - pool.length;
+  if (pool.length === 0) {
+    console.log(`excluded all ${String(turns.length)} turn(s) from ${stage} percentiles (empty positive pool)`);
+    return;
+  }
+  if (excluded > 0) {
+    console.log(`excluded ${String(excluded)} turn(s) from ${stage} percentiles (non-positive ${stage})`);
+  }
 }
 
 function buildTurnLatencyMs(turn: InteractiveTurnCapture): Record<string, number> {
