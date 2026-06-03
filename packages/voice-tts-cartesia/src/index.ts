@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
+  type AudioFormat,
   type PluginConfig,
   type RetryConfig,
   type TextToSpeechAudioPacket,
@@ -15,6 +16,8 @@ import {
   type TtsWordTimestamp,
   type TtsErrorPacket,
   type VoicePlugin,
+  assertAudioFormat,
+  assertAudioPayload,
   categorizeTtsError,
   isRecoverable,
   optionalStringConfig,
@@ -48,6 +51,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   // count to avoid per-chunk Math.round drift on long turns.
   private contextAudioSampleCount = new Map<string, number>();
   private disposers: Array<() => void> = [];
+  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -59,6 +63,8 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.sampleRate = (config["sample_rate"] as number) ?? this.sampleRate;
     this.language = optionalStringConfig(config, "language") ?? this.language;
     this.retryConfig = readRetryConfig(config);
+    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
+    assertAudioFormat(this.audioFormat);
 
     this.conn = new WebSocketConnection({
       url: () => {
@@ -231,6 +237,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (typeof msg["data"] === "string" && msg["data"].length > 0) {
       try {
         const audioBytes = decodeStrictBase64(msg["data"], "Cartesia TTS provider audio data");
+        assertAudioPayload(this.audioFormat, new Uint8Array(audioBytes));
         const audioPacket: TextToSpeechAudioPacket = {
           kind: "tts.audio",
           contextId,

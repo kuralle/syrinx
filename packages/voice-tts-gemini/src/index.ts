@@ -12,9 +12,12 @@
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
+  type AudioFormat,
   type VoicePlugin,
   type PluginConfig,
   type TextToSpeechEndPacket,
+  assertAudioFormat,
+  assertAudioPayload,
   requireStringConfig,
   optionalStringConfig,
   categorizeTtsError,
@@ -61,6 +64,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private textByContextId = new Map<string, string>();
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
+  private readonly audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: SAMPLE_RATE, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -69,6 +73,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
     this.voiceName = optionalStringConfig(config, "voice_name") ?? DEFAULT_VOICE;
     this.timeoutMs = readPositiveInteger(config["timeout_ms"], 45_000);
     this.retryConfig = readRetryConfig(config);
+    assertAudioFormat(this.audioFormat);
 
     // Accumulate streaming text deltas; Gemini TTS returns chunked audio for
     // complete text, not true token-by-token low-latency streaming.
@@ -193,6 +198,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
       if (part.inlineData?.data && part.inlineData.mimeType?.startsWith("audio/")) {
         const audioBytes = Buffer.from(part.inlineData.data, "base64");
         const audioUint8 = new Uint8Array(audioBytes);
+        assertAudioPayload(this.audioFormat, audioUint8);
 
         this.bus?.push(Route.Main, {
           kind: "tts.audio",

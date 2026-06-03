@@ -5,6 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   PipelineBusImpl,
   Route,
+  type SttErrorPacket,
   type SttInterimPacket,
   type SttResultPacket,
   type ConversationMetricPacket,
@@ -83,7 +84,7 @@ describe("GoogleSTTPlugin", () => {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
-      audio: new Uint8Array([1, 2, 3]),
+      audio: new Uint8Array([1, 2, 3, 4]),
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -142,12 +143,57 @@ describe("GoogleSTTPlugin", () => {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
-      audio: new Uint8Array([9, 8, 7]),
+      audio: new Uint8Array([9, 8, 7, 6]),
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(connections).toBeGreaterThanOrEqual(2);
-    expect(receivedAudio).toEqual([Buffer.from([9, 8, 7])]);
+    expect(receivedAudio).toEqual([Buffer.from([9, 8, 7, 6])]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits stt.error for odd-length PCM16 without throwing into the bus pump", async () => {
+    const receivedAudio: Buffer[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) receivedAudio.push(data as Buffer);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const errors: SttErrorPacket[] = [];
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-bad",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "stt.error",
+        contextId: "turn-bad",
+        component: "stt",
+        cause: expect.objectContaining({
+          message: expect.stringMatching(/even number of bytes/i),
+        }),
+      }),
+    ]);
+    expect(receivedAudio).toEqual([]);
 
     await plugin.close();
     bus.stop();

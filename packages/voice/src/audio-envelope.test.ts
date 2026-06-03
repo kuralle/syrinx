@@ -3,11 +3,14 @@
 import { describe, expect, it } from "vitest";
 import {
   SYRINX_AUDIO_ENVELOPE_MAGIC,
+  assertAudioFormat,
+  assertAudioPayload,
   decodeSyrinxAudioEnvelope,
   encodeSyrinxAudioEnvelope,
   hasSyrinxAudioEnvelope,
 } from "./audio-envelope.js";
 import type { SyrinxAudioEnvelopeHeader } from "./audio-envelope.js";
+import type { AudioFormat } from "./packets.js";
 
 describe("Syrinx binary audio envelope", () => {
   it("round-trips audio metadata and payload", () => {
@@ -111,6 +114,26 @@ describe("Syrinx binary audio envelope", () => {
     }, new Uint8Array(37));
 
     expect(decodeSyrinxAudioEnvelope(encoded).header.encoding).toBe("opus");
+  });
+
+  it("assertAudioPayload rejects odd-byte PCM16 and empty opus/mulaw", () => {
+    const pcmFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
+    expect(() => assertAudioPayload(pcmFormat, new Uint8Array([1, 2, 3]))).toThrow(/even number of bytes/);
+    expect(() => assertAudioPayload(pcmFormat, new Uint8Array())).not.toThrow();
+
+    const opusFormat: AudioFormat = { encoding: "opus", sampleRateHz: 16000, channels: 1 };
+    expect(() => assertAudioPayload(opusFormat, new Uint8Array())).toThrow(/must not be empty/);
+    expect(() => assertAudioPayload(opusFormat, new Uint8Array([1]))).not.toThrow();
+
+    const mulawFormat: AudioFormat = { encoding: "mulaw", sampleRateHz: 8000, channels: 1 };
+    expect(() => assertAudioPayload(mulawFormat, new Uint8Array())).toThrow(/must not be empty/);
+    expect(() => assertAudioPayload(mulawFormat, new Uint8Array([1, 2, 3]))).not.toThrow();
+  });
+
+  it("assertAudioFormat rejects non-mono and invalid sample rates", () => {
+    expect(() => assertAudioFormat({ encoding: "pcm_s16le", sampleRateHz: 16000, channels: 2 as 1 })).toThrow(/mono/);
+    expect(() => assertAudioFormat({ encoding: "pcm_s16le", sampleRateHz: 0, channels: 1 })).toThrow(/sampleRateHz/);
+    expect(() => assertAudioFormat({ encoding: "pcm_s16le", sampleRateHz: 1.5, channels: 1 })).toThrow(/sampleRateHz/);
   });
 
   it("rejects invalid envelopes before encoding them", () => {

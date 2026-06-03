@@ -17,8 +17,11 @@
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
+  type AudioFormat,
   type VoicePlugin,
   type PluginConfig,
+  assertAudioFormat,
+  assertAudioPayload,
   requireStringConfig,
   optionalStringConfig,
   categorizeSttError,
@@ -64,6 +67,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
   private closed = false;
   private reconnecting = false;
   private retryConfig: RetryConfig = readRetryConfig({});
+  private readonly audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -77,6 +81,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
     this.closed = false;
 
     this.recognizerPath = `projects/${this.projectId}/locations/global/recognizers/_`;
+    assertAudioFormat(this.audioFormat);
     await this.connectWithRetry();
 
     // Listen for STT audio on the bus
@@ -93,6 +98,13 @@ export class GoogleSTTPlugin implements VoicePlugin {
   }
 
   async sendAudio(audio: Uint8Array): Promise<void> {
+    if (audio.byteLength === 0) return;
+    try {
+      assertAudioPayload(this.audioFormat, audio);
+    } catch (err) {
+      this.emitError(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
     await this.waitUntilReady();
     const ws = this.webSocket;
     if (!ws || ws.readyState !== ws.OPEN) {
