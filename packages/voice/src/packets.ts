@@ -245,6 +245,16 @@ export interface TurnChangePacket extends VoicePacket {
   readonly reason: string;
 }
 
+export type DtmfDigit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "*" | "#";
+
+export interface DtmfReceivedPacket extends VoicePacket {
+  readonly kind: "dtmf.received";
+  readonly digit: DtmfDigit;
+  readonly provider: "twilio" | "telnyx" | "smartpbx";
+  /** Raw carrier-reported digit string, for diagnostics. */
+  readonly rawDigit: string;
+}
+
 // =============================================================================
 // LLM Pipeline Packets
 // =============================================================================

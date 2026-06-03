@@ -1238,4 +1238,139 @@ describe("createTelnyxMediaStreamServer", () => {
 
     await server.close();
   });
+
+  it("test:dtmf_typed_per_carrier emits dtmf.received for Telnyx DTMF", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: Array<{ kind: string; digit: string; provider: string; rawDigit: string; contextId: string }> = [];
+    session.bus.on("dtmf.received", (pkt) => {
+      dtmfReceived.push(pkt as unknown as { kind: string; digit: string; provider: string; rawDigit: string; contextId: string });
+    });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      stream_id: "telnyx-stream",
+      dtmf: { digit: "5" },
+    }));
+    await waitForCondition(() => dtmfReceived.length === 1);
+
+    expect(dtmfReceived).toEqual([
+      expect.objectContaining({
+        kind: "dtmf.received",
+        digit: "5",
+        provider: "telnyx",
+        rawDigit: "5",
+        contextId: "telnyx-call-control-test",
+      }),
+    ]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("test:dtmf_bypasses_speech_path: Telnyx DTMF during playout emits no audio, VAD, STT, or interrupt packets", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: unknown[] = [];
+    const speechPath: unknown[] = [];
+    const speechKinds = [
+      "user.audio_received",
+      "stt.audio",
+      "vad.audio",
+      "vad.speech_started",
+      "vad.speech_ended",
+      "vad.speech_activity",
+      "interrupt.detected",
+      "interrupt.tts",
+      "interrupt.llm",
+      "interrupt.stt",
+    ] as const;
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+    for (const kind of speechKinds) {
+      session.bus.on(kind, (pkt) => { speechPath.push(pkt); });
+    }
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      outputSampleRateHz: 16000,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart()));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "telnyx-call-control-test",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
+    });
+    client.send(JSON.stringify({
+      event: "dtmf",
+      stream_id: "telnyx-stream",
+      dtmf: { digit: "*" },
+    }));
+    await waitForCondition(() => dtmfReceived.length === 1);
+
+    expect(dtmfReceived).toEqual([
+      expect.objectContaining({
+        kind: "dtmf.received",
+        digit: "*",
+        provider: "telnyx",
+        rawDigit: "*",
+      }),
+    ]);
+    expect(speechPath).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("emits dtmf.unparsed for invalid Telnyx DTMF digits", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    const dtmfReceived: unknown[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart()));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      stream_id: "telnyx-stream",
+      dtmf: { digit: "A" },
+    }));
+    await waitForCondition(() => metrics.some((metric) => metric.name === "dtmf.unparsed"));
+
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      name: "dtmf.unparsed",
+      value: "A",
+      contextId: "telnyx-call-control-test",
+    }));
+    expect(dtmfReceived).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
 });

@@ -1099,4 +1099,139 @@ describe("createTwilioMediaStreamServer", () => {
 
     await server.close();
   });
+
+  it("test:dtmf_typed_per_carrier emits dtmf.received for Twilio DTMF", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: Array<{ kind: string; digit: string; provider: string; rawDigit: string; contextId: string }> = [];
+    session.bus.on("dtmf.received", (pkt) => {
+      dtmfReceived.push(pkt as unknown as { kind: string; digit: string; provider: string; rawDigit: string; contextId: string });
+    });
+
+    const server = registerServer(await createTwilioMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    client.send(JSON.stringify(twilioStart()));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      streamSid: "MZ-test-stream",
+      dtmf: { digit: "5" },
+    }));
+    await waitForCondition(() => dtmfReceived.length === 1);
+
+    expect(dtmfReceived).toEqual([
+      expect.objectContaining({
+        kind: "dtmf.received",
+        digit: "5",
+        provider: "twilio",
+        rawDigit: "5",
+        contextId: "twilio-CA-test-call",
+      }),
+    ]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("test:dtmf_bypasses_speech_path: Twilio DTMF during playout emits no audio, VAD, STT, or interrupt packets", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: unknown[] = [];
+    const speechPath: unknown[] = [];
+    const speechKinds = [
+      "user.audio_received",
+      "stt.audio",
+      "vad.audio",
+      "vad.speech_started",
+      "vad.speech_ended",
+      "vad.speech_activity",
+      "interrupt.detected",
+      "interrupt.tts",
+      "interrupt.llm",
+      "interrupt.stt",
+    ] as const;
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+    for (const kind of speechKinds) {
+      session.bus.on(kind, (pkt) => { speechPath.push(pkt); });
+    }
+
+    const server = registerServer(await createTwilioMediaStreamServer({
+      port: 0,
+      outputSampleRateHz: 16000,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    client.send(JSON.stringify(twilioStart()));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "twilio-CA-test-call",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(320)),
+      sampleRateHz: 16000,
+    });
+    client.send(JSON.stringify({
+      event: "dtmf",
+      streamSid: "MZ-test-stream",
+      dtmf: { digit: "#" },
+    }));
+    await waitForCondition(() => dtmfReceived.length === 1);
+
+    expect(dtmfReceived).toEqual([
+      expect.objectContaining({
+        kind: "dtmf.received",
+        digit: "#",
+        provider: "twilio",
+        rawDigit: "#",
+      }),
+    ]);
+    expect(speechPath).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+
+  it("emits dtmf.unparsed for invalid Twilio DTMF digits", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    const dtmfReceived: unknown[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+
+    const server = registerServer(await createTwilioMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    client.send(JSON.stringify(twilioStart()));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      streamSid: "MZ-test-stream",
+      dtmf: { digit: "invalid" },
+    }));
+    await waitForCondition(() => metrics.some((metric) => metric.name === "dtmf.unparsed"));
+
+    expect(metrics).toContainEqual(expect.objectContaining({
+      kind: "metric.conversation",
+      name: "dtmf.unparsed",
+      value: "invalid",
+      contextId: "twilio-CA-test-call",
+    }));
+    expect(dtmfReceived).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
 });

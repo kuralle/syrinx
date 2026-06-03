@@ -10,6 +10,8 @@
 import { ErrorCategory } from "./packets.js";
 import type {
   ConversationMetricPacket,
+  DtmfDigit,
+  DtmfReceivedPacket,
   RecordUserAudioPacket,
   RecordAssistantAudioDataPacket,
   RecordAssistantAudioTruncatePacket,
@@ -33,6 +35,24 @@ import type {
   StopIdleTimeoutPacket,
   ModeSwitchRequestedPacket,
 } from "./packets.js";
+
+const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
+
+export function parseDtmfDigit(raw: string): DtmfDigit | null {
+  const trimmed = raw.trim();
+  if (trimmed.length !== 1 || !DTMF_DIGITS.has(trimmed as DtmfDigit)) return null;
+  return trimmed as DtmfDigit;
+}
+
+export function dtmfReceived(
+  contextId: string,
+  timestampMs: number,
+  digit: DtmfDigit,
+  provider: DtmfReceivedPacket["provider"],
+  rawDigit: string,
+): DtmfReceivedPacket {
+  return { kind: "dtmf.received", contextId, timestampMs, digit, provider, rawDigit };
+}
 
 export function metric(
   contextId: string,

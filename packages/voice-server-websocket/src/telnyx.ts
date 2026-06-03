@@ -90,6 +90,7 @@ interface TelnyxMediaMessage {
     readonly timestamp?: string;
   };
   readonly mark?: { readonly name?: string };
+  readonly dtmf?: { readonly digit?: string };
 }
 
 interface PendingTelnyxMediaFrame {
@@ -354,7 +355,30 @@ export async function createTelnyxMediaStreamServer(
         });
         return;
       }
-      if (event === "dtmf") return;
+      if (event === "dtmf") {
+        if (state.stopped) return;
+        const rawDigit = message.dtmf?.digit ?? "";
+        const digit = parseDtmfDigit(rawDigit);
+        if (!digit) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: state.contextId,
+            timestampMs: Date.now(),
+            name: "dtmf.unparsed",
+            value: rawDigit,
+          });
+          return;
+        }
+        session.bus.push(Route.Critical, {
+          kind: "dtmf.received",
+          contextId: state.contextId,
+          timestampMs: Date.now(),
+          digit,
+          provider: "telnyx",
+          rawDigit,
+        });
+        return;
+      }
       throw new Error(`Unsupported Telnyx Media Streaming event: ${String(event)}`);
     },
 
@@ -421,10 +445,21 @@ export async function createTelnyxMediaStreamServer(
   };
 }
 
+type TelnyxDtmfDigit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "*" | "#";
+
+const DTMF_DIGITS = new Set<TelnyxDtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
+
+function parseDtmfDigit(raw: string): TelnyxDtmfDigit | null {
+  const trimmed = raw.trim();
+  if (trimmed.length !== 1 || !DTMF_DIGITS.has(trimmed as TelnyxDtmfDigit)) return null;
+  return trimmed as TelnyxDtmfDigit;
+}
+
 function parseTelnyxMessage(value: Record<string, unknown>): TelnyxMediaMessage {
   const start = optionalRecord(value.start, "Telnyx start");
   const media = optionalRecord(value.media, "Telnyx media");
   const mark = optionalRecord(value.mark, "Telnyx mark");
+  const dtmf = optionalRecord(value.dtmf, "Telnyx dtmf");
   const mediaFormat = optionalRecord(start?.media_format, "Telnyx start.media_format");
   return {
     event: requiredString(value.event, "Telnyx event"),
@@ -453,6 +488,7 @@ function parseTelnyxMessage(value: Record<string, unknown>): TelnyxMediaMessage 
         }
       : undefined,
     mark: mark ? { name: optionalString(mark.name, "Telnyx mark.name") } : undefined,
+    dtmf: dtmf ? { digit: optionalString(dtmf.digit, "Telnyx dtmf.digit") } : undefined,
   };
 }
 
