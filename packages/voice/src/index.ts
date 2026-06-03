@@ -108,6 +108,12 @@ export {
   InMemoryMetricsExporter,
 } from "./observability.js";
 
+export {
+  ObservabilityObserver,
+  type ObservabilityObserverDeps,
+  type ObservabilityDims,
+} from "./observability-observer.js";
+
 // PipelineBus
 export { PipelineBusImpl, Route, type PipelineBus, type PipelineBusConfig, type PacketHandler } from "./pipeline-bus.js";
 
