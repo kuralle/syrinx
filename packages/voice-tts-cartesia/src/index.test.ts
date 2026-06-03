@@ -305,6 +305,55 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("surfaces Cartesia error field text in tts.error cause.message", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        socket.send(JSON.stringify({
+          type: "error",
+          context_id: msg.context_id,
+          status_code: 400,
+          done: true,
+          error: "Model sunsetted: The requested model has been sunsetted and is no longer available.",
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const errors: TtsErrorPacket[] = [];
+    bus.on("tts.error", (pkt) => {
+      errors.push(pkt as TtsErrorPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "bad-model",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-x",
+      timestampMs: Date.now(),
+      text: "This will fail.",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "tts.error",
+        contextId: "turn-x",
+        component: "tts",
+      }),
+    ]);
+    expect(errors[0]!.cause.message).toContain("Model sunsetted");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("turns malformed provider messages into TTS errors instead of throwing from the websocket listener", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", () => {

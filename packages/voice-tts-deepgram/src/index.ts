@@ -47,7 +47,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
   private apiKey = "";
-  private model = "aura-asteria-en";
+  private model = "aura-2-thalia-en";
   private endpointUrl = "wss://api.deepgram.com/v1/speak";
   private sampleRate = 24000;
   private retryConfig: RetryConfig = readRetryConfig({});

@@ -36,7 +36,7 @@ async function synthesizeFixture(text: string, voiceId: string): Promise<Uint8Ar
 
     ws.on("open", () => {
       ws.send(JSON.stringify({
-        model_id: "sonic-2-2025-03-07",
+        model_id: "sonic-3",
         transcript: text,
         voice: { mode: "id", id: voiceId },
         output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: 16000 },

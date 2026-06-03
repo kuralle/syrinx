@@ -43,7 +43,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private apiKey: string = "";
   private sampleRate: number = 16000;
-  private model: string = "nova-2";
+  private model: string = "nova-3";
   private language: string = "en-US";
   private endpointing: number = 300;
   private endpointUrl: string = "wss://api.deepgram.com/v1/listen";
@@ -93,7 +93,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.bus = bus;
     this.apiKey = requireStringConfig(config, "api_key");
     this.sampleRate = (config["sample_rate"] as number) ?? 16000;
-    this.model = optionalStringConfig(config, "model") ?? "nova-2";
+    this.model = optionalStringConfig(config, "model") ?? "nova-3";
     this.language = optionalStringConfig(config, "language") ?? "en-US";
     this.endpointing = (config["endpointing"] as number) ?? 300;
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.deepgram.com/v1/listen";

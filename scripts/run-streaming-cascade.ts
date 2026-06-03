@@ -219,7 +219,7 @@ async function streamingTurn(transcript: string): Promise<{
 
           // Forward delta to Cartesia with continue:true
           cartesiaWs.send(JSON.stringify({
-            model_id: "sonic-2-2025-03-07",
+            model_id: "sonic-3",
             transcript: text,
             voice: { mode: "id", id: CARTESIA_VOICE_ID },
             output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: 16000 },
@@ -234,7 +234,7 @@ async function streamingTurn(transcript: string): Promise<{
 
   // Flush: signal end of text stream
   cartesiaWs.send(JSON.stringify({
-    model_id: "sonic-2-2025-03-07",
+    model_id: "sonic-3",
     transcript: "",
     voice: { mode: "id", id: CARTESIA_VOICE_ID },
     output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: 16000 },

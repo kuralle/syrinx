@@ -112,7 +112,7 @@ async function synthesizeInputFixture(): Promise<void> {
 
     ws.on("open", () => {
       ws.send(JSON.stringify({
-        model_id: "sonic-2-2025-03-07",
+        model_id: "sonic-3",
         transcript: INPUT_TEXT,
         voice: { mode: "id", id: process.env["CARTESIA_VOICE_ID"]?.trim() ?? DEFAULT_VOICE_ID },
         output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: 16000 },
@@ -232,7 +232,7 @@ async function main(): Promise<void> {
           api_key: process.env["DEEPGRAM_API_KEY"],
           sample_rate: 16000,
           endpointing: 700,
-          model: "nova-2",
+          model: "nova-3",
           language: "en-US",
           smart_format: true,
         },
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
         tts: {
           api_key: process.env["CARTESIA_API_KEY"],
           voice_id: process.env["CARTESIA_VOICE_ID"]?.trim() || DEFAULT_VOICE_ID,
-          model_id: "sonic-2-2025-03-07",
+          model_id: "sonic-3",
           sample_rate: 16000,
           language: "en",
         },
