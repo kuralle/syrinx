@@ -1,6 +1,6 @@
 # VE-04 — Telephony leg (PSTN/SIP via carrier)
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — commits 5c41d9e, fa47815, 574a985; see `.handoff/session-ve04-telephony-close.md`)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§1 (telephony items)**, **§9 (DTMF)**
 
 ## What to build
