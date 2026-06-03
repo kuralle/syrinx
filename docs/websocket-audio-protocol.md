@@ -2,6 +2,12 @@
 
 Syrinx websocket transports keep provider and client quirks at the transport edge. The engine receives mono PCM16 at the configured kernel sample rate, currently 16 kHz by default, and emits assistant audio as mono PCM16 unless a telephony adapter converts it.
 
+## Client Media Mode (current)
+
+The production browser media path is **WebSocket transport** carrying audio frames — `syrinx.audio.v1` binary envelopes (Opus or PCM16) by default, JSON base64 for scripted clients. There is no WebRTC peer connection: the browser client opens a single WebSocket and streams envelope frames over it. Output jitter is absorbed on the **client** by `AudioJitterBuffer` (default `targetBufferMs` 100 ms, in the 100–200 ms design band); outbound frames are paced server-side at `targetFrameDurationMs` (20 ms default, advertised in `ready`). The server-side `maxQueuedOutputAudioMs` bound is a generation overflow valve, not a playout jitter buffer.
+
+Native **WebRTC / WebTransport is a future option** behind the client transport seam (`voice-client-browser` `transport`), deferred to VE-08. VE-01 (the audio round-trip tracer) does not assume or require WebRTC — WebSocket+Opus is the accepted tracer-bullet media mode.
+
 ## Browser Websocket
 
 Default path: `/ws`
@@ -21,6 +27,7 @@ The server sends a `ready` message after session startup:
     "outputSampleRateHz": 16000,
     "encoding": "pcm_s16le",
     "channels": 1,
+    "targetFrameDurationMs": 20,
     "binaryEnvelope": "syrinx.audio.v1",
     "rawBinaryInput": false,
     "maxInboundMessageBytes": 2097152
