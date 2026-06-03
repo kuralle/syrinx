@@ -7,7 +7,6 @@ Move a card by editing this file (cut/paste the row between columns) and the iss
 ## 📋 Backlog
 | ID | Slice | Tier | Type | Blocked by |
 |----|-------|------|------|-----------|
-| [VE-02](issues/VE-02-turn-taking.md) | Turn-taking & endpointing | T0 | AFK | VE-01 |
 | [VE-03](issues/VE-03-barge-in.md) | Barge-in / interruption | T0 | AFK | VE-01, VE-02 |
 | [VE-04](issues/VE-04-telephony-leg.md) | Telephony leg (PSTN/SIP) | T0 | AFK | VE-01 |
 | [VE-05](issues/VE-05-latency-metrics.md) | Latency budget & per-stage metrics | T0 | AFK | VE-01 |
@@ -32,6 +31,7 @@ _(empty)_
 |----|-------|------|------|-----------|
 | [VE-00](issues/VE-00-gap-analysis.md) | **Gap analysis — reconcile checklist vs Syrinx code** | Foundation | HITL | none |
 | [VE-01](issues/VE-01-audio-round-trip.md) | **End-to-end audio round-trip (tracer bullet)** — providers current, AudioFormat contract, ready-frame targetFrameDurationMs, live 3-turn v2v (commits 48b9e0e→ee2936d) | T0 | AFK | VE-00 |
+| [VE-02](issues/VE-02-turn-taking.md) | **Turn-taking & endpointing** — single-owner invariant (dedup guard), four-state VAD, EOU budget metrics (commits bed7bb7, 2e21f7a, e6e0567) | T0 | AFK | VE-01 |
 
 ---
 

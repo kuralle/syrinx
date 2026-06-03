@@ -1,6 +1,6 @@
 # VE-02 — Turn-taking & endpointing
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — commits bed7bb7, 2e21f7a, e6e0567; see `.handoff/session-ve02-turn-taking-close.md`)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§3 Turn-Taking & Endpointing**
 
 ## What to build
