@@ -20,3 +20,6 @@ VE-01 (and VE-03 for clear-on-interrupt).
 
 ## Key references
 notes: XPORT-04/07/08/11, TTS-06; wiki/xport-map.
+
+## Current state (Syrinx)
+Twilio/Telnyx/SmartPBX carrier WebSocket bridges with µ-law/PCM/Opus edge conversion and clear/mark playout exist; DTMF is currently ignored instead of routed as typed control. See [`../reconcile/VE-04-bridge.md`](../reconcile/VE-04-bridge.md).

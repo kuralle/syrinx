@@ -1,0 +1,91 @@
+{
+  "bridge": "VE-01 Bridge — End-to-End Audio Round Trip",
+  "citations_checked": 11,
+  "absence_claims_checked": 6,
+  "aligned_count": 9,
+  "overall": "PARTIAL",
+  "findings": [
+    {
+      "claim": "Implementation approach: touch audio-envelope.ts for reusable AudioFormat metadata and validation; pseudocode assertAudioPayload checks channels===1, pcm16 even bytes, opus non-empty",
+      "kind": "absence_claim",
+      "verdict": "WRONG",
+      "cited": "packages/voice/src/audio-envelope.ts (listed as file to add AudioFormat validation)",
+      "found": "audio-envelope.ts already contains validateSyrinxAudioEnvelope (lines 71-111) doing exactly the proposed checks: header.channels !== 1 throws (line 81-83), opus payload byteLength===0 throws (line 96-99), PCM16 audio.byteLength % 2 !== 0 throws (line 102-104), sampleRateHz positive-integer validation (line 75-77), plus durationMs-vs-payload consistency (line 105-110). encode/decode envelope functions also exist. The bridge's assertAudioPayload pseudocode substantially duplicates existing validateSyrinxAudioEnvelope without acknowledging it.",
+      "impact": "skip-needed-work",
+      "correction": "Most of the proposed per-byte AudioFormat validation already exists as validateSyrinxAudioEnvelope in audio-envelope.ts. VE-01.1 should be reframed as 'expose/reuse the existing envelope validation as a shared AudioFormat contract' rather than building it net-new. The genuinely-missing piece is the per-adapter declared-vs-actual format assertion (VE-01.2), which does not exist."
+    },
+    {
+      "claim": "AC + approach: server ready frames need input/output sample rate, encoding, channels (ready-frame capability negotiation to be built)",
+      "kind": "absence_claim",
+      "verdict": "WRONG",
+      "cited": "packages/voice-server-websocket/src/index.ts (touch for ready-frame capability negotiation); AC line 60",
+      "found": "The ready frame already emits an audio block (index.ts:295-312) containing inputSampleRateHz, outputSampleRateHz, encoding: 'opus', supportedInputCodecs: ['pcm_s16le','opus'], channels: 1, binaryEnvelope, rawBinaryInput, maxInboundMessageBytes. Of the AC's required fields, only 'target frame duration' is absent (outboundFrameDurationMs exists as server config at index.ts:142 default 20ms but is NOT surfaced in the ready frame).",
+      "impact": "skip-needed-work",
+      "correction": "Ready-frame sample-rate/encoding/channels/codec negotiation is ALREADY implemented (index.ts:302-311). The only net-new ready-frame work is adding target frame duration to the audio block, plus the test asserting clients cannot silently switch sample rate. Bridge over-states this as net-new negotiation."
+    },
+    {
+      "claim": "Current state: VoiceAgentSession fans inbound audio to VAD/STT/EOS/recorder (voice-agent-session.ts:472)",
+      "kind": "state_citation",
+      "verdict": "SUPPORTED",
+      "cited": "packages/voice/src/voice-agent-session.ts:472",
+      "found": "handleUserAudio at line 472 pushes make.recordUserAudio, make.vadAudio, make.sttAudio, make.eosAudio (lines 476-482). Exact.",
+      "impact": "none",
+      "correction": ""
+    },
+    {
+      "claim": "Current state: browser transport normalizes inbound audio to user.audio_received (index.ts:599)",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "packages/voice-server-websocket/src/index.ts:599",
+      "found": "Line 599 is the 'if (isBinary)' opening of handleClientMessage; the actual session.bus.push of kind:'user.audio_received' is at index.ts:615-620. Mechanism present within ±25 lines.",
+      "impact": "citation-precision",
+      "correction": "The user.audio_received push is at index.ts:615, not 599 (599 is the enclosing handler entry)."
+    },
+    {
+      "claim": "Current state: telephony transport normalizes inbound audio to user.audio_received (twilio.ts:303)",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "packages/voice-server-websocket/src/twilio.ts:303",
+      "found": "Line 303 is decodeStrictBase64(payload,...); the user.audio_received push is at twilio.ts:307-312 (after mu-law decode + resample). Mechanism present within range.",
+      "impact": "citation-precision",
+      "correction": "The user.audio_received push is at twilio.ts:307; line 303 only decodes base64."
+    },
+    {
+      "claim": "Current state: Deepgram STT streams audio with KeepAlive/Finalize (index.ts:257)",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "packages/voice-stt-deepgram/src/index.ts:257",
+      "found": "Line 257 is the comment + sendAudio() (lines 257-269) which streams immediately. The Finalize mechanism (forceFinalize/requestProviderFinalize) is at lines 272-279. KeepAlive is configured at line 109/131-132. The 257 cite covers streaming send; Finalize is nearby (272).",
+      "impact": "citation-precision",
+      "correction": "sendAudio (streaming) at 257; forceFinalize at 272; KeepAlive config at 109/131. All within the package, slightly split from the single cited line."
+    },
+    {
+      "claim": "Gap: TTS egress lacks a true 24kHz default (per-provider deviation)",
+      "kind": "number",
+      "verdict": "SUPPORTED",
+      "cited": "Gap section, no line cited",
+      "found": "Confirmed deviation: voice-tts-cartesia default sampleRate = 16000 (cartesia/src/index.ts:41), voice-tts-deepgram default 24000 (deepgram-tts/src/index.ts:52), voice-tts-gemini fixed SAMPLE_RATE = 24000 (gemini/src/index.ts:48). No uniform 24kHz default — Cartesia (the baseline TTS) defaults to 16kHz. Bridge claim is accurate.",
+      "impact": "none",
+      "correction": ""
+    },
+    {
+      "claim": "Gap: output buffering not bounded in 100-200ms band; AC wants interactive defaults within 100-200ms",
+      "kind": "number",
+      "verdict": "SUPPORTED",
+      "cited": "Gap section; AC line 61 (no code line cited)",
+      "found": "Confirmed: DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000 (30s) in all four servers (index.ts:143, twilio.ts:108, telnyx.ts:126, smartpbx.ts:100). Current default is 150x the proposed upper bound. Gap is real; bridge does not over-claim here.",
+      "impact": "none",
+      "correction": ""
+    },
+    {
+      "claim": "Gap: baseline-v2.json shows missing STT/TTS result (baseline-v2.json:1)",
+      "kind": "state_citation",
+      "verdict": "SUPPORTED",
+      "cited": "baseline-v2.json:1",
+      "found": "baseline-v2.json turns all show actualTranscript: \"\", sttLatencyMs: 0, ttsTTFBMs: 0, ttsChunks: 0, transcriptFidelity: \"missing\", truncated: true. transport: 'headless-direct'. Confirms the missing STT/TTS result the bridge describes.",
+      "impact": "none",
+      "correction": ""
+    }
+  ],
+  "summary": "Bridge's 'Current state' picture is accurate; all spine citations land on or within a few lines of the cited mechanism (599->615, 303->307, 257->272 are citation-precision only). The two substantive problems are skip-needed-work over-claims of the GAP: (1) audio-envelope.ts ALREADY implements validateSyrinxAudioEnvelope with channels===1 / opus-non-empty / PCM16-even-byte / sampleRate checks that the bridge's assertAudioPayload pseudocode duplicates as if net-new; (2) the WebSocket ready frame ALREADY emits inputSampleRateHz/outputSampleRateHz/encoding/supportedInputCodecs/channels (index.ts:302-311) — only 'target frame duration' is actually missing from it, yet the bridge frames ready-frame capability negotiation as to-be-built. The genuinely-net-new work (per-adapter declared-vs-actual format assertion VE-01.2, tightening the 30000ms queue default to 100-200ms, live tracer-bullet replacing baseline-v2.json's empty transcripts, and adding frame-duration to the ready frame) is correctly identified and correctly absent from current code. Overall PARTIAL: no build-wrong-thing, but two gap items are partly already built and should be reframed as reuse rather than greenfield."
+}

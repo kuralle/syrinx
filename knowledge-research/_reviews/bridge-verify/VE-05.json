@@ -1,0 +1,28 @@
+{
+  "bridge": "VE-05 Bridge — Latency Budget & Per-Stage Metrics",
+  "citations_checked": 5,
+  "absence_claims_checked": 7,
+  "aligned_count": 10,
+  "overall": "PASS",
+  "findings": [
+    {
+      "claim": "WBS VE-05.4 names scripts/run-tracer-bullet.ts as the percentile-aggregation target",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "scripts/run-tracer-bullet.ts",
+      "found": "scripts/ contains run-full-cascade.ts, run-kernel-benchmark.ts, run-streaming-cascade.ts, analyze-overlap.mjs, stitch-conversation.mjs — there is NO run-tracer-bullet.ts. The bridge hedges with 'or new script', so the reference is non-binding, but the named file does not exist.",
+      "impact": "citation-precision",
+      "correction": "No scripts/run-tracer-bullet.ts exists. The live-benchmark scripts are scripts/run-kernel-benchmark.ts / run-full-cascade.ts / run-streaming-cascade.ts; percentile work would extend one of those or be a genuinely new script."
+    },
+    {
+      "claim": "Missing: monotonic time source (for latency metrics)",
+      "kind": "absence_claim",
+      "verdict": "SUPPORTED",
+      "cited": "Missing: monotonic time source",
+      "found": "Latency/turn metrics use Date.now()/packet timestampMs (Date.now()). performance.now() DOES exist but only at packages/voice/src/init-chain.ts:70-73 for init-duration timing — not for turn latency. The narrow absence claim (no monotonic source in latency metrics) holds; noting the codebase is not entirely without performance.now().",
+      "impact": "none",
+      "correction": "Absence claim stands for latency metrics. Implementers should know performance.now() already appears in init-chain.ts:70 and can be reused."
+    }
+  ],
+  "summary": "Bridge's picture of Syrinx's current state is accurate. All 5 state citations verified: turn-metrics.ts:91 (wire() records VAD-end/STT-final/LLM-delta/TTS-byte/playout events) and :43 (buildBrowserMetricsMessage computes sttMs/llmTTFTMs/ttsTTFBMs/e2eMs) are correct; voice-agent-session.ts:792 emits vaqi.latency_ms = firstTtsAudioByteMs - userStoppedMs (raw VAD speech end set at :602, no hangover correction) — matching the 'PARTIAL canonical v2v' framing; scripts/run-kernel-benchmark.ts:1 collects live STT/LLM/TTS timings. All 7 absence claims verified by grep: no P95/P99/percentile/histogram, no latency budget config, no endpointing-vs-transcription metric split, no region/provider/model dimensions (ConversationMetricPacket at packets.ts:417 is just name/value strings), and no cancelled flag on latency metrics (cancelledContexts in TTS adapters is for dropping late audio, not a latency-metric field; filler.cancelled is a separate event). Provider adapter dirs (voice-bridge-aisdk, voice-stt-*, voice-tts-*) exist as named; voice-agent-session-util.ts hosts VoiceSessionWatchdogs/VAQI. Only imperfections: WBS VE-05.4 names a non-existent scripts/run-tracer-bullet.ts (hedged as 'or new script', non-load-bearing), and the monotonic-source absence is true for latency metrics though performance.now() exists at init-chain.ts:70. No WRONG/build-wrong-thing findings."
+}

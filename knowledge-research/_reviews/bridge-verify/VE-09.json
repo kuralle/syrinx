@@ -1,0 +1,19 @@
+{
+  "bridge": "VE-09-bridge.md — Greenfield Gaps (design-first backlog of net-new systems)",
+  "citations_checked": 4,
+  "absence_claims_checked": 9,
+  "aligned_count": 12,
+  "overall": "PARTIAL",
+  "findings": [
+    {
+      "claim": "Syrinx 'does not implement ... VAQI rollup ... missed-response windows'; VE-09.4 child RFC must define I/M/L formula AND missed-response window as net-new",
+      "kind": "absence_claim",
+      "verdict": "WRONG",
+      "cited": "Current-state para line 5 ('does not implement ... VAQI rollup, missed-response windows') and WBS VE-09.4 'Formula and missed-response window approved'",
+      "found": "Missed-response window IS implemented: voice-agent-session.ts:215 `this.vaqiMissedResponseMs = config.vaqiMissedResponseMs ?? 4000;`, armed via voice-agent-session-util.ts:113 startVaqiMissedResponseTimer which fires `vaqi.missed_response` metric (util.ts:125). VAQI constituents also already emit: `vaqi.interruption` (turn-arbiter.ts:48,109,178) and `vaqi.latency_ms` (voice-agent-session.ts:799). Only the rollup/score formula (combining I/M/L into one VAQI number) is genuinely absent — grep for vaqi.*score/rollup/computeVaqi returned nothing.",
+      "impact": "skip-needed-work",
+      "correction": "Narrow VE-09.4 to the missing piece — the VAQI ROLLUP FORMULA (I/M/L -> single score) and tolerance bands. The missed-response window already exists (vaqiMissedResponseMs, default 4000ms, voice-agent-session.ts:215) and the three constituents already emit as metrics. The RFC should consume the existing window/metrics, not re-spec them as net-new."
+    }
+  ],
+  "summary": "All four state citations are SUPPORTED (run-streaming-cascade.ts:1, turn-metrics.ts:43, voice-agent-session-util.ts:113, voice-vad-silero/src/index.ts:35 all present and accurate). Most absence claims hold after adversarial grep: no hedge/hedging, no bandit, no choosePrimary/nextFastest/EndpointHealth/provider histogram (the only 'router' is an HTTP upgrade router, unrelated), no VAD subprocess/fork/spawn/respawn, no guardrail/classifier/moderation, no multilingual/voiceMap/language-switch, no replay/fault-injection harness, no S2S/shadow audit transcription. The µ-law claim survives a nuance check: encode/decode transcode exists (packages/voice/src/audio/mulaw.ts) but no native µ-law PASSTHROUGH path — telephony decodes to PCM16 — so 'no µ-law passthrough' is defensible. The make.injectMessage helper in the guardrail pseudocode exists (packet-factories.ts:134); make.ttsTextApproved does not, but that is acceptable for proposed-system pseudocode. One material problem: the bridge over-claims VAQI absence — the missed-response window (4000ms default) and all three VAQI constituent metrics already exist; only the rollup formula is missing. PARTIAL: VE-09.4's scope should be narrowed so the team does not re-build the existing missed-response window."
+}

@@ -22,3 +22,6 @@ VE-05, VE-07 (these depend on the observability/latency telemetry existing first
 
 ## Key references
 notes: LAT-06/07, REL-11, ARCH-11, LAT-13, OBS-03/09; the "Greenfield Gaps" + "Open questions" sections of every `wiki/*-map.md`.
+
+## Current state (Syrinx)
+Only seed telemetry/scripts and VAQI constituents exist; dynamic hedging, bandit routing, VAD subprocess isolation, pre-TTS guardrails, VAQI rollup, full replay/fault harness, dynamic multilingual switching, µ-law passthrough, and S2S audit remain design-first greenfield work. See [`../reconcile/VE-09-bridge.md`](../reconcile/VE-09-bridge.md).

@@ -1,0 +1,9 @@
+{
+  "bridge": "VE-02 Bridge — Turn-Taking & Endpointing",
+  "citations_checked": 6,
+  "absence_claims_checked": 4,
+  "aligned_count": 10,
+  "overall": "PASS",
+  "findings": [],
+  "summary": "All 6 state citations are SUPPORTED at/near the cited lines: VAD emitVadState (voice-vad-silero:146), Pipecat handleSpeechEnded (voice-turn-pipecat:256) and finalize/eos.turn_complete (:417), Deepgram EOS-on-final (voice-stt-deepgram:249) and opt-in fallback (:307), session handleTurnComplete->userInput (voice-agent-session:606). All 4 absence claims confirmed by grep: no four-state VAD enum (only `speaking: boolean` at vad-silero:42 plus silence-frame hangover), no session-level endpointOwner/TurnTakingConfig anywhere, no TurnBoundaryOwner in packets.ts, and turn-metrics.ts has sttMs/llmTTFTMs/ttsTTFBMs/e2eMs but no VAD-stop-hangover/endpoint-delay/EOU-budget sum. handleUserAudio (voice-agent-session:481) unconditionally fans audio to eos.audio, confirming the non-owner-aware baseline. Deepgram emitEosOnFinal defaults true (:105), a per-plugin flag, not a session invariant -- consistent with the bridge's PARTIAL framing. Note: a session-level TurnArbiter exists (voice/src/turn-arbiter.ts) but it governs barge-in/interruption commitment, not endpoint ownership, so it does not contradict the bridge's gap. baseline-v2.json exists. No WRONG/MISCITED claims found."
+}

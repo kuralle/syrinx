@@ -1,0 +1,146 @@
+# Syrinx Voice Engine Gap Analysis
+
+## Executive Summary
+
+This reconciliation traces Syrinx's speech-in/speech-out path through `packages/` and compares it against `knowledge-research/PRODUCTION-CHECKLIST.md`. Current state across the checklist rows below is approximately **13% DONE / 44% PARTIAL / 43% MISSING / 0% N/A**.
+
+The five highest-leverage gaps are:
+
+1. **Canonical latency/SLO backbone is not production-grade yet.** Syrinx computes browser turn metrics from bus timestamps, but not monotonic per-provider histograms, P95/P99 SLOs, region/provider/model tags, or OTel/Prometheus export (`packages/voice-server-websocket/src/turn-metrics.ts:43`, `packages/voice-server-websocket/src/turn-metrics.ts:80`).
+2. **Turn ownership is configurable by convention, not enforced by the session contract.** Deepgram can emit `eos.turn_complete` itself while Pipecat EOS can also own finalization (`packages/voice-stt-deepgram/src/index.ts:249`, `packages/voice-turn-pipecat/src/index.ts:423`).
+3. **Provider fallback/degradation is still adapter-by-adapter.** Provider sockets reconnect, but there is no STT/TTS fallback adapter with availability events and background recovery probes (`packages/voice-ws/src/index.ts:244`, not found for `*_availability_changed`).
+4. **Barge-in is structurally present but not fully verified.** Critical interruption cancels TTS/LLM and clears playout (`packages/voice/src/voice-agent-session.ts:848`, `packages/voice-server-websocket/src/outbound-playout-pipeline.ts:83`), but there is no measured onset-to-silence/onset-to-cancel probe, false-interruption resume, or STT/backchannel-based interruption gate.
+5. **Greenfield differentiators are mostly absent.** Dynamic hedging, bandit routing, supervised VAD subprocess, pre-TTS guardrail, VAQI rollup, S2S audit shadow transcription, and dynamic multilingual voice switching are not implemented.
+
+Architectural conflicts to preserve in the follow-up plans:
+
+- **Checklist assumes WebRTC for browser clients; Syrinx's browser path is WebSocket with optional Opus envelopes.** The server advertises WebSocket audio capabilities (`packages/voice-server-websocket/src/index.ts:295`) and the client transport is `WebSocketClientTransport` (`packages/voice-client-browser/src/websocket-transport.ts:9`); no WebRTC stack exists in `packages/`.
+- **Checklist assumes one explicit turn-boundary owner per mode; Syrinx currently fans every user audio frame to VAD, STT, and EOS in parallel.** The fan-out is unconditional (`packages/voice/src/voice-agent-session.ts:476`), so provider-owned EOT requires a hard mode contract, not just plugin config.
+- **Checklist targets 16 kHz STT ingress and 24 kHz TTS egress defaults; Syrinx's browser server defaults output to 16 kHz while Deepgram TTS defaults to 24 kHz and Cartesia to 16 kHz.** Evidence: `packages/voice-server-websocket/src/index.ts:159`, `packages/voice-tts-deepgram/src/index.ts:52`, `packages/voice-tts-cartesia/src/index.ts:41`.
+
+## End-to-End Flow Trace
+
+1. Browser/telephony transport receives audio and normalizes it into `user.audio_received`: browser JSON/binary frames are decoded/resampled in `packages/voice-server-websocket/src/index.ts:599`, `packages/voice-server-websocket/src/index.ts:614`; Twilio decodes PCMU and resamples to the engine rate in `packages/voice-server-websocket/src/twilio.ts:303`; SmartPBX does the same for PCMU/PCM/Opus in `packages/voice-server-websocket/src/smartpbx.ts:270`.
+2. `VoiceAgentSession` fans each audio packet to recorder, VAD, STT, and EOS packets (`packages/voice/src/voice-agent-session.ts:472`).
+3. VAD emits `vad.speech_started/activity/ended` from Silero (`packages/voice-vad-silero/src/index.ts:146`), while Pipecat SmartTurn/semantic EOS listens to VAD and STT and emits `eos.turn_complete` (`packages/voice-turn-pipecat/src/index.ts:256`, `packages/voice-turn-pipecat/src/index.ts:417`).
+4. STT adapters stream provider audio: Deepgram is session-long with Finalize and KeepAlive (`packages/voice-stt-deepgram/src/index.ts:111`, `packages/voice-stt-deepgram/src/index.ts:257`); Google sends config once and streams audio over its socket (`packages/voice-stt-google/src/index.ts:194`, `packages/voice-stt-google/src/index.ts:95`).
+5. `eos.turn_complete` becomes `user.input` in the session (`packages/voice/src/voice-agent-session.ts:606`, `packages/voice/src/voice-agent-session.ts:632`), and AI SDK bridge listens to `eos.turn_complete` concurrently to stream LLM deltas (`packages/voice-bridge-aisdk/src/index.ts:91`).
+6. The session sentence-buffers `llm.delta` into `tts.text` and flushes the tail on `llm.done` (`packages/voice/src/voice-agent-session.ts:705`, `packages/voice/src/voice-agent-session.ts:717`).
+7. TTS adapters emit `tts.audio`: Cartesia streams per context with timestamps (`packages/voice-tts-cartesia/src/index.ts:100`, `packages/voice-tts-cartesia/src/index.ts:231`); Deepgram streams raw PCM over `/v1/speak` (`packages/voice-tts-deepgram/src/index.ts:72`, `packages/voice-tts-deepgram/src/index.ts:208`); Gemini synthesizes complete text and returns chunks (`packages/voice-tts-gemini/src/index.ts:73`, `packages/voice-tts-gemini/src/index.ts:160`).
+8. Outbound playout resamples/chunks/encodes and paces frames (`packages/voice-server-websocket/src/outbound-playout-pipeline.ts:91`, `packages/voice-server-websocket/src/paced-playout.ts:35`), with interrupt clear paths for browser/Twilio/Telnyx and playout progress events (`packages/voice-server-websocket/src/index.ts:534`, `packages/voice-server-websocket/src/twilio.ts:246`, `packages/voice-server-websocket/src/playout-progress.ts:27`).
+
+## Checklist Reconciliation
+
+| Checklist item | State | Syrinx evidence | Gap | Owning VE | Priority |
+|---|---|---|---|---|---|
+| §1 WebRTC for browser/mobile; WebSocket for provider/telephony | PARTIAL | Browser/client uses `WebSocketClientTransport` (`packages/voice-client-browser/src/websocket-transport.ts:9`); server creates routed WS (`packages/voice-server-websocket/src/index.ts:145`); Twilio WS exists (`packages/voice-server-websocket/src/twilio.ts:115`) | No WebRTC media client stack; browser path is WS+Opus envelope | VE-01 | P1 |
+| §1 int16 mono PCM internally; isolate 8 kHz µ-law to telephony | DONE | Core packet says raw PCM16 mono 16 kHz (`packages/voice/src/packets.ts:109`); Twilio decodes/encodes µ-law at edge (`packages/voice-server-websocket/src/twilio.ts:303`, `packages/voice-server-websocket/src/twilio.ts:199`) | None for PCM/µ-law isolation; defaults vary for TTS output rate | VE-01/VE-04 | P0 |
+| §1 declare/assert actual encoding/sample_rate on STT/TTS handshakes | PARTIAL | Deepgram STT URL declares linear16/sample rate (`packages/voice-stt-deepgram/src/index.ts:114`); Deepgram TTS declares encoding/sample rate (`packages/voice-tts-deepgram/src/index.ts:74`) | No central `AudioFormat` assertion binding declared socket format to bytes; Google hard-codes 16 kHz in config (`packages/voice-stt-google/src/index.ts:199`) | VE-01 | P0 |
+| §1 stateful edge resampling | DONE | Streaming resampler retains history (`packages/voice/src/audio/resample.ts:111`); browser/Twilio use per-connection resampler maps (`packages/voice-server-websocket/src/index.ts:133`, `packages/voice-server-websocket/src/twilio.ts:102`) | No inactivity reset; acceptable unless click artifacts are measured | VE-01/VE-04 | P1 |
+| §1 fixed small outbound chunks/re-chunk TTS frames | DONE | Default outbound frame duration is 20 ms (`packages/voice-server-websocket/src/index.ts:142`); browser chunks by frame bytes (`packages/voice-server-websocket/src/index.ts:527`); playout queue paces by frame duration (`packages/voice-server-websocket/src/paced-playout.ts:24`) | None for current transports | VE-01 | P0 |
+| §1 bounded playout jitter buffer and real-time pacing | PARTIAL | Browser jitter buffer defaults to 100 ms (`packages/voice-client-browser/src/audio.ts:167`); server playout queue is bounded/paced (`packages/voice-server-websocket/src/paced-playout.ts:35`) | Server max queued output defaults to 30 s, too high for interruption-latency budget (`packages/voice-server-websocket/src/index.ts:143`) | VE-01/VE-03 | P0 |
+| §1 telephony serializers with stream identity, µ-law, DTMF, clear-on-interrupt | PARTIAL | Twilio outbound includes `streamSid` media and clear (`packages/voice-server-websocket/src/twilio.ts:209`, `packages/voice-server-websocket/src/twilio.ts:249`); media is µ-law (`packages/voice-server-websocket/src/twilio.ts:201`) | DTMF is ignored, not routed as typed control (`packages/voice-server-websocket/src/twilio.ts:337`) | VE-04 | P0 |
+| §1 output silence and provider keepalives when idle | PARTIAL | Deepgram STT KeepAlive every 3 s default (`packages/voice-stt-deepgram/src/index.ts:67`, `packages/voice-stt-deepgram/src/index.ts:131`); host WS heartbeat exists (`packages/voice-server-websocket/src/transport-host.ts:186`) | No output silence tail on idle; TTS KeepAlive is 10 s, not provider-recommended 3-5 s for all legs | VE-04/VE-06 | P1 |
+| §1 WebRTC Opus/FEC deliberately configured | MISSING | Browser Opus downlink is supported over the Syrinx envelope (`packages/voice-server-websocket/src/index.ts:512`) | No WebRTC stack or Opus FEC negotiation found | VE-01/VE-08 | P2 |
+| §1 DTMF outside STT as typed control event | PARTIAL | Twilio/Telnyx/SmartPBX return on `dtmf` events (`packages/voice-server-websocket/src/twilio.ts:337`, `packages/voice-server-websocket/src/telnyx.ts:357`, `packages/voice-server-websocket/src/smartpbx.ts:289`) | DTMF is dropped; no DTMF packet/control event found | VE-04 | P0 |
+| §2 persistent streaming STT default | DONE | Deepgram holds one session-long socket and streams audio (`packages/voice-stt-deepgram/src/index.ts:69`, `packages/voice-stt-deepgram/src/index.ts:257`) | Make provider selection explicit in app factories | VE-01 | P0 |
+| §2 typed interim/preflight/final; finals only to agent | PARTIAL | Packets have `stt.interim`, `stt.result`, `eos.turn_complete` (`packages/voice/src/packets.ts:157`, `packages/voice/src/packets.ts:162`, `packages/voice/src/packets.ts:185`) | No preflight/eager type; session emits `user_input_final` on both `stt.result` and EOS (`packages/voice/src/voice-agent-session.ts:516`, `packages/voice/src/voice-agent-session.ts:606`) | VE-01/VE-02 | P0 |
+| §2 low-confidence STT filtering | PARTIAL | Deepgram threshold drops and emits metric (`packages/voice-stt-deepgram/src/index.ts:211`) | Google STT has no threshold gate (`packages/voice-stt-google/src/index.ts:231`); no clarify-turn behavior | VE-01/VE-06 | P1 |
+| §2 resample ingress to STT declared rate | DONE | Server resamples incoming browser audio to engine input rate before `user.audio_received` (`packages/voice-server-websocket/src/index.ts:655`); Deepgram declares same sample rate (`packages/voice-stt-deepgram/src/index.ts:95`) | Needs central format assertion | VE-01 | P0 |
+| §2 keyterm/keyword boosting | MISSING | not found | No provider config path for keyword/keyterm boosting | VE-08 | P2 |
+| §2 500 ms pre-roll before VAD start | MISSING | not found | VAD confirmation can clip first syllables; no pre-roll buffer/replay into STT | VE-02/VE-08 | P1 |
+| §2 non-streaming STT StreamAdapter fallback | MISSING | not found | No VAD-gated batch STT adapter behind same interface | VE-06 | P1 |
+| §2 stateful STT fallback adapter/recovery probes | MISSING | not found | No provider availability state or background recovery probes | VE-06 | P0 |
+| §3 hysteretic VAD state machine | PARTIAL | Silero uses `speaking` boolean plus silence frame hangover (`packages/voice-vad-silero/src/index.ts:42`, `packages/voice-vad-silero/src/index.ts:146`) | Not explicit QUIET/STARTING/SPEAKING/STOPPING with asymmetric start/stop states | VE-02 | P1 |
+| §3 endpoint/STT-final/VAD-stop as one budget | PARTIAL | Turn metrics derive STT and e2e deltas (`packages/voice-server-websocket/src/turn-metrics.ts:43`) | No configured turn budget or hangover-corrected `UserStoppedSpeaking` anchor | VE-05 | P0 |
+| §3 semantic/contextual EOT plus rule/timer fallback | DONE | Pipecat EOS fuses SmartTurn probability and semantic completeness with fallback timers (`packages/voice-turn-pipecat/src/index.ts:256`, `packages/voice-turn-pipecat/src/index.ts:334`) | None for SmartTurn mode | VE-02 | P0 |
+| §3 disable redundant downstream VAD/endpointing when provider owns EOT | PARTIAL | Deepgram can emit EOS on final (`packages/voice-stt-deepgram/src/index.ts:249`) and Pipecat can emit EOS (`packages/voice-turn-pipecat/src/index.ts:423`) | No enforced session-mode single-owner contract | VE-02 | P0 |
+| §3 eager EOT as speculative signal only | MISSING | not found | No preflight/eager EOT packet or predict-and-scrap cache | VE-08 | P1 |
+| §3 backchannel classification separate from interruptions | PARTIAL | Semantic scorer labels backchannels (`packages/voice-turn-pipecat/src/semantic-completeness.ts:51`) | TurnArbiter interruption gate uses duration/primary speaker only, not STT backchannel classification (`packages/voice/src/turn-arbiter.ts:150`) | VE-03/VE-08 | P1 |
+| §3 benchmark VAD providers | MISSING | not found | Only Silero plugin exists; no benchmark harness | VE-08 | P2 |
+| §4 full-duplex input/output during speech | DONE | Session keeps routing incoming audio while TTS is active and uses TTS playout only to decide interruption (`packages/voice/src/voice-agent-session.ts:472`, `packages/voice/src/voice-agent-session.ts:571`) | Browser echo/AEC posture still undefined | VE-03 | P0 |
+| §4 high-priority interruption lane | DONE | PipelineBus drains Critical before Main (`packages/voice/src/pipeline-bus.ts:23`, `packages/voice/src/pipeline-bus.ts:276`); interruptions push Critical packets (`packages/voice/src/voice-agent-session.ts:866`) | None structurally | VE-03 | P0 |
+| §4 cancel logic and media together | PARTIAL | Interrupt handler marks generation interrupted and pushes `interrupt.tts`/`interrupt.llm` (`packages/voice/src/voice-agent-session.ts:848`, `packages/voice/src/voice-agent-session.ts:870`) | Does not interrupt STT; no measured onset-to-silent/onset-to-cancel | VE-03 | P0 |
+| §4 selective flush preserving control frames | PARTIAL | Playout clear runs on interrupt (`packages/voice-server-websocket/src/outbound-playout-pipeline.ts:83`); queued control can be enqueued separately (`packages/voice-server-websocket/src/paced-playout.ts:49`) | Clear is whole-queue; no interruptible/uninterruptible frame taxonomy | VE-03 | P1 |
+| §4 gate interruption by duration/confidence/backchannel | PARTIAL | TurnArbiter gates by sustained duration and primary speaker (`packages/voice/src/turn-arbiter.ts:56`, `packages/voice/src/primary-speaker-gate.ts:76`) | No STT confidence/backchannel classification gate; default duration is 280 ms (`packages/voice/src/voice-agent-session.ts:207`) | VE-03/VE-08 | P1 |
+| §4 assistant history as spoken prefix | PARTIAL | AI SDK bridge truncates history using TTS word timestamps and playout progress when present (`packages/voice-bridge-aisdk/src/index.ts:313`, `packages/voice-bridge-aisdk/src/index.ts:333`) | Browser path has no playout progress; fallback may include queued/unheard text (`packages/voice-bridge-aisdk/src/index.ts:323`) | VE-03 | P0 |
+| §4 false-interruption pause/resume | MISSING | not found | Only destructive flush/cancel path exists | VE-08 | P1 |
+| §5 streaming TTS | PARTIAL | Cartesia sends streaming `continue: true` (`packages/voice-tts-cartesia/src/index.ts:100`); Deepgram streams `Speak` (`packages/voice-tts-deepgram/src/index.ts:110`) | Gemini TTS is full-text/non-streaming (`packages/voice-tts-gemini/src/index.ts:73`); TTFA/TTFB not emitted by providers | VE-01 | P0 |
+| §5 sentence/clause TTS aggregation | DONE | Session emits complete voice text and flushes tail (`packages/voice/src/voice-agent-session.ts:705`, `packages/voice/src/voice-text.ts:18`) | Later pacing refinements remain | VE-01 | P0 |
+| §5 first sentence immediate; later batches paced by remaining audio | PARTIAL | First complete segment is sent as soon as available (`packages/voice/src/voice-agent-session.ts:708`) | No stream pacer against remaining playout/audio debt | VE-08 | P1 |
+| §5 TTS RTF < 1 under load | MISSING | not found | No RTF gauge or concurrency/load alert | VE-09 | P1 |
+| §5 transport-native audio / avoid telephony transcoding | PARTIAL | Telephony edge encodes µ-law (`packages/voice-server-websocket/src/twilio.ts:199`); Deepgram TTS supports declared sample rate (`packages/voice-tts-deepgram/src/index.ts:74`) | No native µ-law passthrough STT/TTS benchmark/path | VE-04/VE-09 | P1 |
+| §5 interruptible/cancellation-safe TTS | DONE | Cartesia sends per-context cancel (`packages/voice-tts-cartesia/src/index.ts:188`); Deepgram sends Clear (`packages/voice-tts-deepgram/src/index.ts:145`) | Cancelled latency exclusion still missing | VE-03/VE-05 | P0 |
+| §5 TTS word/char timestamps to playback-timed frames | PARTIAL | Cartesia emits cumulative `tts.word_timestamps` (`packages/voice-tts-cartesia/src/index.ts:243`) and transport emits progress (`packages/voice-server-websocket/src/playout-progress.ts:27`) | Only Cartesia word timestamps; no char alignment reassembly/provider audit | VE-03/VE-08 | P1 |
+| §5 pronunciation controls | MISSING | not found | No pronunciation dictionary/transformer | VE-08 | P2 |
+| §6 v2v headline P95/P99 | PARTIAL | Browser metrics emit `e2eMs` per turn (`packages/voice-server-websocket/src/turn-metrics.ts:43`) | No P95/P99 SLO aggregation/dashboard | VE-05/VE-07 | P0 |
+| §6 first-token/first-byte metrics with monotonic timing/cancel flags | PARTIAL | Turn metrics capture first LLM delta and first TTS audio (`packages/voice-server-websocket/src/turn-metrics.ts:103`, `packages/voice-server-websocket/src/turn-metrics.ts:109`) | Uses `Date.now`, no cancellation flags, no provider-stage histograms | VE-05 | P0 |
+| §6 explicit STT/endpoint/LLM/TTS/network budget | MISSING | not found | No budget config/enforcement | VE-05 | P0 |
+| §6 co-location as independent budget line | MISSING | not found | No provider region metadata or cross-region hop measurement | VE-09 | P2 |
+| §6 preemptive generation predict-and-scrap | MISSING | not found | No speculative LLM cache/validation | VE-08 | P1 |
+| §6 dynamic hedging | MISSING | not found | Requires per-endpoint histograms first | VE-09 | P1 |
+| §6 bandit routing by tail health | MISSING | not found | Requires availability/latency metrics first | VE-09 | P2 |
+| §6 pre-TTS guardrail latency budget | MISSING | not found | No pre-TTS classifier stage | VE-09 | P0 |
+| §7 reconnect WS with bounded backoff/post-connect verification | PARTIAL | Shared `WebSocketConnection` reconnects and verifies (`packages/voice-ws/src/index.ts:244`, `packages/voice-ws/src/index.ts:272`) | Default retry cap is 2 s, not 10 s (`packages/voice/src/retry.ts:9`); no failed-frame replay | VE-06 | P0 |
+| §7 rapid post-handshake failure breaker | DONE | Quick failure window/count defaults 5 s and 3 (`packages/voice-ws/src/index.ts:81`, `packages/voice-ws/src/index.ts:251`) | None | VE-06 | P0 |
+| §7 re-inject config and replay failed in-flight frame | PARTIAL | Reconnect URL rebuilds provider config (`packages/voice-stt-deepgram/src/index.ts:112`) and stale state is discarded (`packages/voice-stt-deepgram/src/index.ts:136`) | No replay of failed audio/control frame; timestamps not explicitly monotonic across reconnect | VE-06 | P0 |
+| §7 heartbeat/input watchdogs with recovery | PARTIAL | STT force-finalize watchdog (`packages/voice/src/voice-agent-session-util.ts:94`) and TTS stall watchdog (`packages/voice/src/voice-agent-session-util.ts:135`) exist | No 1 s pipeline heartbeat/10 s alarm or 0.5 s input audio recovery watchdog | VE-06 | P1 |
+| §7 graceful degradation per speech layer | PARTIAL | LLM recoverable error speaks fallback (`packages/voice/src/voice-agent-session.ts:902`) | STT low confidence does not clarify; TTS failure has no fallback voice/canned clip | VE-06 | P0 |
+| §7 drain on shutdown | PARTIAL | Server graceful close drains outbound handles before close (`packages/voice-server-websocket/src/index.ts:365`, `packages/voice-server-websocket/src/outbound-playout-pipeline.ts:125`) | Drain deadline defaults 10 s, then sessions are closed; no 30 min active-call drain or SIGTERM worker policy | VE-06 | P1 |
+| §7 bounded queues/load-aware admission | PARTIAL | Bus Main/Background queues bounded (`packages/voice/src/pipeline-bus.ts:76`); transport admission limit exists (`packages/voice-server-websocket/src/transport-host.ts:29`) | Audio input queue/window not separately bounded; output queue default 30 s | VE-06 | P1 |
+| §7 Deepgram failure-mode runbook | MISSING | not found | No incident classification runbook in repo code/docs beyond provider guide | VE-06 | P2 |
+| §7 STT/TTS fallback adapters availability events/recovery | MISSING | not found | No provider fallback adapter layer | VE-06 | P0 |
+| §8 canonical turn-boundary event stream | PARTIAL | Session emits legacy boundary events (`packages/voice/src/voice-agent-session.ts:142`) and debug event stream (`packages/voice/src/voice-agent-session.ts:219`) | No single typed canonical event stream with session/speech/request ids for all stages | VE-07 | P0 |
+| §8 canonical v2v = AgentStartedSpeaking - UserStoppedSpeaking | PARTIAL | Turn metrics compute e2e from first playout/byte minus speech end (`packages/voice-server-websocket/src/turn-metrics.ts:50`) | `UserStoppedSpeaking` is VAD timestamp, not raw silence minus hangover; no P95/P99 aggregation | VE-05/VE-07 | P0 |
+| §8 separate transcription_delay from EOU delay | PARTIAL | `sttMs` derives STT final minus speech end (`packages/voice-server-websocket/src/turn-metrics.ts:47`) | No separate endpointing delay field; no refusal on unreliable VAD timestamps | VE-05/VE-07 | P0 |
+| §8 per-stage histograms/traces with tags | MISSING | not found | No Prometheus/OTel exporter or provider/model/region tags | VE-07 | P0 |
+| §8 VAQI constituents | PARTIAL | Metrics for interruption, latency, missed response exist (`packages/voice/src/turn-arbiter.ts:178`, `packages/voice/src/voice-agent-session.ts:797`, `packages/voice/src/voice-agent-session-util.ts:113`) | No rollup, tolerance bands, or backchannel-separated interruption metric | VE-07/VE-09 | P1 |
+| §8 replay/load/fault-injection diagnostics | PARTIAL | Live scripts and baseline exist (`scripts/run-streaming-cascade.ts:1`, `baseline-v2.json:1`) | Scripts are not integrated harnesses with P95/P99/fault assertions; baseline currently shows missing STT/TTS | VE-09 | P1 |
+| §8 synthetic probes/RUM | MISSING | not found | No scheduled probes or RUM pipeline | VE-07/VE-09 | P2 |
+| §9 unified multilingual STT streams | PARTIAL | Transcript packet carries optional language (`packages/voice/src/packets.ts:162`); Deepgram pushes configured language (`packages/voice-stt-deepgram/src/index.ts:397`) | No detected language/confidence propagation; language is fixed config | VE-08/VE-09 | P2 |
+| §9 language metadata through transcript/LLM/TTS selection | PARTIAL | `user.input` includes language (`packages/voice/src/packets.ts:201`); Cartesia TTS has fixed language config (`packages/voice-tts-cartesia/src/index.ts:60`) | No automatic TTS voice/language switching or LLM language routing | VE-08/VE-09 | P2 |
+| §9 denoising/preprocessing before VAD/STT | MISSING | Packet types exist for denoise (`packages/voice/src/packets.ts:120`) | No denoiser plugin or routing before VAD/STT | VE-08 | P1 |
+| §9 persona/pacing/pronunciation consistency across languages | MISSING | not found | No localization/pacing/pronunciation controls | VE-08/VE-09 | P2 |
+| Tier-1 eager EOT/preemptive generation | MISSING | not found | Needs speculative packets and predict-and-scrap validation | VE-08 | P1 |
+| Tier-1 dynamic hedging/bandit routing | MISSING | not found | Needs per-endpoint histograms and provider router | VE-09 | P1 |
+| Tier-1 backchannel vs interruption + false resume | PARTIAL | Backchannel label exists (`packages/voice-turn-pipecat/src/semantic-completeness.ts:51`) | Not integrated into active interruption gate/resume | VE-08 | P1 |
+| Tier-1 VAD benchmarking/supervised subprocess | MISSING | not found | No provider benchmark or subprocess supervisor | VE-08/VE-09 | P2 |
+| Tier-1 VAQI rollup/load/fault harness/synthetic/RUM | PARTIAL | Constituents and scripts exist (`packages/voice/src/voice-agent-session-util.ts:125`, `scripts/analyze-overlap.mjs:1`) | No aggregate formula, production harness, probes, or alerts | VE-07/VE-09 | P1 |
+| Tier-1 multilingual voice switching | MISSING | not found | Needs language metadata + voice map + warm switching | VE-09 | P2 |
+| Tier-1 µ-law passthrough | MISSING | not found | Telephony always decodes/resamples/encodes at edge | VE-09 | P1 |
+| Tier-1 Opus FEC verification | MISSING | not found | No WebRTC negotiation or FEC verification | VE-08 | P2 |
+| Greenfield dynamic hedging and bandit routing | MISSING | not found | Net-new provider router over telemetry | VE-09 | P1 |
+| Greenfield supervised VAD subprocess with auto-respawn | MISSING | VAD runs in-process (`packages/voice-vad-silero/src/index.ts:35`) | Net-new supervisor boundary | VE-09 | P2 |
+| Greenfield VAQI rollup and missed-response window | PARTIAL | Missed-response timer defaults to 4000 ms (`packages/voice/src/voice-agent-session.ts:117`, `packages/voice/src/voice-agent-session-util.ts:113`) | Rollup formula and tolerance bands missing | VE-09 | P1 |
+| Greenfield replay/load/fault harness | PARTIAL | Scripts exist (`scripts/run-full-cascade.ts:1`, `scripts/analyze-overlap.mjs:1`) | No deterministic replay/fault injection with P95/P99 gates | VE-09 | P1 |
+| Greenfield dynamic multilingual voice switching | MISSING | not found | Net-new voice switching contract | VE-09 | P2 |
+| Greenfield µ-law passthrough | MISSING | not found | Net-new telephony/provider passthrough mode | VE-09 | P1 |
+| Greenfield S2S audit shadow transcription | MISSING | not found | Net-new parallel audit transcript path | VE-09 | P2 |
+| Greenfield pre-TTS guardrail placement | MISSING | not found | Net-new budgeted classifier before `tts.text` | VE-09 | P0 |
+
+## Numbers Card Mapping
+
+| Number / target | Syrinx state | Evidence | Owner |
+|---|---|---|---|
+| 16 kHz internal STT rate | DONE | Core audio packet documents 16 kHz PCM (`packages/voice/src/packets.ts:109`); Deepgram default 16 kHz (`packages/voice-stt-deepgram/src/index.ts:45`) | VE-01 |
+| 24 kHz internal TTS default | PARTIAL | Deepgram TTS defaults 24 kHz (`packages/voice-tts-deepgram/src/index.ts:52`); Cartesia defaults 16 kHz (`packages/voice-tts-cartesia/src/index.ts:41`) | VE-01 |
+| WebRTC/Opus 48 kHz 20 ms FEC | MISSING | Opus over WS exists, WebRTC/FEC not found | VE-08 |
+| Telephony 8 kHz µ-law | DONE | Twilio default 8 kHz and µ-law conversion (`packages/voice-server-websocket/src/twilio.ts:105`, `packages/voice-server-websocket/src/twilio.ts:303`) | VE-04 |
+| Audio frame size 10-50 ms, prefer 20 ms | DONE | Default outbound 20 ms (`packages/voice-server-websocket/src/index.ts:142`, `packages/voice-server-websocket/src/twilio.ts:107`) | VE-01 |
+| Jitter buffer 100-200 ms | PARTIAL | Browser jitter buffer defaults 100 ms (`packages/voice-client-browser/src/audio.ts:175`); server queue defaults 30 s (`packages/voice-server-websocket/src/index.ts:143`) | VE-01/VE-03 |
+| Deepgram keepalive 3-5 s | DONE for STT | STT default 3000 ms (`packages/voice-stt-deepgram/src/index.ts:67`) | VE-06 |
+| VAD defaults 0.7/0.2s/0.2s/min volume | PARTIAL | Silero threshold default 0.5, min silence 200 ms (`packages/voice-vad-silero/src/index.ts:43`) | VE-02 |
+| VAD pre-roll 500 ms | MISSING | not found | VE-08 |
+| SmartTurn fallback net | PARTIAL | SmartTurn defaults 250 ms finalize, 2000 ms max/fallback (`packages/voice-turn-pipecat/src/index.ts:118`) | VE-02 |
+| Interruption min duration 0.5 s / false resume 2 s | PARTIAL | Syrinx default min interruption 280 ms (`packages/voice/src/voice-agent-session.ts:207`) and no resume | VE-03/VE-08 |
+| Barge-in <100 ms sequence | MISSING | No onset-to-silent/onset-to-cancel instrumentation found | VE-03 |
+| TTS pacing first sentence immediate, later <=5s remaining | PARTIAL | First complete text emitted immediately (`packages/voice/src/voice-agent-session.ts:708`); no later pacer | VE-08 |
+| TTS RTF <1 | MISSING | not found | VE-09 |
+| Human v2v ladder and P95/P99 SLOs | MISSING | Per-turn e2e only (`packages/voice-server-websocket/src/turn-metrics.ts:43`) | VE-05/VE-07 |
+| Co-location 75 ms -> 5 ms | MISSING | not found | VE-09 |
+| Pipeline heartbeat 1 s / alarm 10 s | MISSING | not found | VE-06 |
+| Input audio watchdog 0.5 s | MISSING | not found | VE-06 |
+| Rapid failure breaker 3 under 5 s | DONE | Defaults match (`packages/voice-ws/src/index.ts:81`) | VE-06 |
+| Reconnect backoff cap ~10 s | PARTIAL | Default cap is 2000 ms (`packages/voice/src/retry.ts:9`) | VE-06 |
+| Drain timeout 30 min | PARTIAL | Max session duration 30 min, graceful close drain default 10 s (`packages/voice-server-websocket/src/index.ts:138`, `packages/voice-server-websocket/src/index.ts:366`) | VE-06 |
+| STT fallback attempt timeout 10 s | MISSING | not found | VE-06 |

@@ -1,0 +1,28 @@
+{
+  "bridge": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/knowledge-research/build/reconcile/VE-06-bridge.md",
+  "citations_checked": 11,
+  "absence_claims_checked": 7,
+  "aligned_count": 9,
+  "overall": "PARTIAL",
+  "findings": [
+    {
+      "claim": "Gap/WBS VE-06.5: long-running call drain policy is missing — 'Implement drain policy ... New sessions rejected during drain; active session finishes or deadline forces close ... tests cover graceful and forced paths'",
+      "kind": "absence_claim",
+      "verdict": "WRONG",
+      "cited": "Gap line 11 'long-running call drain policy'; WBS VE-06.5; AC 'SIGTERM/close path stops new sessions and drains active calls according to a configured deadline; tests cover graceful and forced paths'",
+      "found": "Graceful drain policy already exists and is tested. packages/voice-server-websocket/src/index.ts:362-388 implements close({graceful, drainDeadlineMs}): drains every active socket via gracefulCloseRegistry -> drainAndClose(socket, deadline), then force-terminates at the deadline (else branch terminate()). drainAndClose defined at packages/voice-server-websocket/src/outbound-playout-pipeline.ts:24,125 and per-socket registration at index.ts:234-254 (force terminate at deadline via setTimeout). Full test suite packages/voice-server-websocket/src/graceful-drain.test.ts (WT-04) covers both paths: 'graceful close drains pending paced audio before sending 1001' (line 159) and 'graceful close force-terminates at drainDeadlineMs for wedged consumers' (line 205). drainDeadlineMs default 10_000 across telnyx.ts:403, twilio.ts:383, smartpbx.ts:335, index.ts:366. transport-host.ts:50 exposes drainDeadlineMs.",
+      "impact": "skip-needed-work",
+      "correction": "The drain mechanism + graceful/forced-path tests already exist (index.ts:362, outbound-playout-pipeline.ts:125, graceful-drain.test.ts). The ONLY genuine gap is signal wiring: no process.on('SIGTERM'|'SIGINT') anywhere in packages/scripts/apps invokes close({graceful}). Narrow VE-06.5 to 'wire SIGTERM/SIGINT to existing close({graceful, drainDeadlineMs})' rather than building drain from scratch. Note: 'New sessions rejected during drain' is also partly covered — closing flag at index.ts:357-364 makes close idempotent, though admission-during-drain rejection is not explicitly gated."
+    },
+    {
+      "claim": "Gap/WBS VE-06.4: 'active heartbeat ... watchdogs with recovery' missing; 'Add heartbeat/input watchdog recovery'",
+      "kind": "absence_claim",
+      "verdict": "WRONG",
+      "cited": "Gap line 11 'active heartbeat/input-audio watchdogs with recovery'; WBS VE-06.4 'Add heartbeat/input watchdog recovery'",
+      "found": "A WebSocket heartbeat already exists: packages/voice-server-websocket/src/websocket-lifecycle.ts:28 startWebSocketHeartbeat(socket, heartbeatIntervalMs, disposers), wired in transport-host.ts:186 startWebSocketHeartbeat(socket, config.heartbeatIntervalMs, disposers). DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000 in index.ts:136, twilio.ts:109, smartpbx.ts:101, telnyx.ts:128. Also an app-level audio heartbeat packet exists: packages/voice/src/packets.ts:146 ('Heartbeat emitted on every audio chunk during active speech. EOS uses this to extend its timer.').",
+      "impact": "skip-needed-work",
+      "correction": "Transport-level heartbeat (dead-socket ping/terminate) already exists at websocket-lifecycle.ts:28 / transport-host.ts:186 (30s default). Genuinely missing is the INPUT-AUDIO cadence watchdog (no user.audio_received-cadence watchdog with recovery action) and a 'recovery action not just metric' behavior. Reframe VE-06.4 as 'add input-audio cadence watchdog + recovery actions', not 'add heartbeat' — heartbeat the mechanism is present."
+    }
+  ],
+  "summary": "All 11 state_citations check out (voice-ws:50/244, retry.ts:9 default 250/2000, stt-deepgram:111/136 discardProviderStateForReconnect, tts cartesia:63 / deepgram:72, session-util:94 STT force-finalize / :135 TTS stall, session.ts:902-905 maybeSpeakErrorFallback LLM-only, transport-host:29 admission, pipeline-bus:76 bounded queues). Genuine gaps confirmed: no FallbackAdapter/provider-fallback, no healthProbe/recovery probes, no replay/onBeforeSend re-injection, no SIGTERM wiring, low-confidence STT only emits stt_low_confidence metric (deepgram:220) with no clarification path. Two absence_claims over-claim missing work: (1) graceful call DRAIN policy with graceful+forced tests already exists (close({graceful}) + drainAndClose + graceful-drain.test.ts WT-04) — only SIGTERM wiring is missing; (2) WebSocket HEARTBEAT already exists (startWebSocketHeartbeat, 30s default) — only the input-audio cadence watchdog + recovery action is missing. PARTIAL: building these from scratch would duplicate shipped code; narrow the WBS rows."
+}

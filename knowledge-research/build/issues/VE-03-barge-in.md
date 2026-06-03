@@ -22,3 +22,6 @@ VE-01, VE-02.
 
 ## Key references
 notes: BARGE-01..09, TTS-08/11, TURN-11; wiki/barge-map.
+
+## Current state (Syrinx)
+Critical interrupt routing, TTS/LLM cancellation, playout clear, and approximate spoken-prefix history exist; missing work is measurement, backchannel/confidence gating, selective flush, browser playout precision, and false-interruption resume. See [`../reconcile/VE-03-bridge.md`](../reconcile/VE-03-bridge.md).

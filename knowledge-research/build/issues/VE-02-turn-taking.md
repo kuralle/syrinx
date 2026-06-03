@@ -21,3 +21,6 @@ VE-01.
 
 ## Key references
 notes: TURN-01..10; wiki/turn-map.
+
+## Current state (Syrinx)
+SmartTurn/semantic EOS and Silero VAD exist, but single turn-boundary ownership is not enforced when provider finalization and Pipecat EOS are both registered. See [`../reconcile/VE-02-bridge.md`](../reconcile/VE-02-bridge.md).

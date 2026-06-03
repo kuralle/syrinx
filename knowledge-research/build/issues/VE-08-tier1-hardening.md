@@ -21,3 +21,6 @@ VE-02, VE-03 (and VE-05 to measure the preemptive-gen win).
 
 ## Key references
 notes: LAT-09/10/11, TURN-09/11, STT-11/12, XPORT-10/12, LANG-01..04, TTS-10; wiki/lat-map, lang-map.
+
+## Current state (Syrinx)
+Backchannel labels, latency filler, word timestamps, and language fields exist as partial primitives; eager EOT, denoising/AEC, false-resume, VAD benchmarks, pronunciation controls, dynamic voice switching, and Opus/FEC verification still need child slices. See [`../reconcile/VE-08-bridge.md`](../reconcile/VE-08-bridge.md).

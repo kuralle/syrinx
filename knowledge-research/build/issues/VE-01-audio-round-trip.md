@@ -21,3 +21,6 @@ VE-00 (gap analysis re-scopes this).
 
 ## Key references
 notes: XPORT-01..06, STT-01/02/04/10, TTS-01/02/03/05; wiki/xport-map, stt-map, tts-map.
+
+## Current state (Syrinx)
+Pipeline spine exists (WS/browser/telephony ingress -> session fan-out -> streaming STT -> LLM bridge -> streaming TTS -> paced playout), but VE-01 must close audio-format assertions, interactive playout bounds, and live non-empty baseline proof. See [`../reconcile/VE-01-bridge.md`](../reconcile/VE-01-bridge.md).

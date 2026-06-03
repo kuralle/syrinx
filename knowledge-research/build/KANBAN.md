@@ -20,7 +20,7 @@ Move a card by editing this file (cut/paste the row between columns) and the iss
 ## 🟢 Ready
 | ID | Slice | Tier | Type | Blocked by |
 |----|-------|------|------|-----------|
-| [VE-00](issues/VE-00-gap-analysis.md) | **Gap analysis — reconcile checklist vs Syrinx code** | Foundation | HITL | none |
+_(empty)_
 
 ## 🔨 In Progress
 _(empty)_
@@ -29,7 +29,9 @@ _(empty)_
 _(empty)_
 
 ## ✅ Done
-_(empty)_
+| ID | Slice | Tier | Type | Blocked by |
+|----|-------|------|------|-----------|
+| [VE-00](issues/VE-00-gap-analysis.md) | **Gap analysis — reconcile checklist vs Syrinx code** | Foundation | HITL | none |
 
 ---
 

@@ -22,3 +22,6 @@ VE-01.
 
 ## Key references
 notes: REL-01..13; wiki/rel-map. Deepgram failure-mode catalog (REL-10) as the incident runbook.
+
+## Current state (Syrinx)
+Shared provider WebSocket reconnect, quick-failure detection, keepalive, some watchdogs, admission limits, and LLM fallback speech exist; provider fallback adapters, frame replay, heartbeat/input recovery, STT/TTS degradation, and long-call drain remain open. See [`../reconcile/VE-06-bridge.md`](../reconcile/VE-06-bridge.md).

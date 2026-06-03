@@ -1,0 +1,29 @@
+{
+  "bridge": "VE-04 Bridge — Telephony Leg",
+  "citations_checked": 13,
+  "absence_claims_checked": 4,
+  "aligned_count": 15,
+  "overall": "PARTIAL",
+  "findings": [
+    {
+      "claim": "Telnyx WebSocket server exists at telnyx.ts:115",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "packages/voice-server-websocket/src/telnyx.ts:115",
+      "found": "Line 115 is a state field `lastInboundMediaTimestampMs: number | null;`. The `export async function createTelnyxMediaStreamServer(` is at line 134.",
+      "impact": "citation-precision",
+      "correction": "packages/voice-server-websocket/src/telnyx.ts:134"
+    },
+    {
+      "claim": "Telnyx has a reorder buffer (telnyx.ts:328)",
+      "kind": "state_citation",
+      "verdict": "MISCITED",
+      "cited": "packages/voice-server-websocket/src/telnyx.ts:328",
+      "found": "Line 328 is `emitTelnyxMediaFrame(...)` (the no-chunk path). The reorder-buffer mechanism is `rememberTelnyxMediaChunk(...)` at line 330; the buffer field `inboundMediaReorderBuffer` is at line 114 and `flushTelnyxMediaReorderBuffer` at line 294/335.",
+      "impact": "citation-precision",
+      "correction": "packages/voice-server-websocket/src/telnyx.ts:330 (reorder enqueue), :114 (buffer field), :294 (flush)"
+    }
+  ],
+  "summary": "VE-04 bridge is substantially accurate. Verified SUPPORTED: twilio.ts:115 (server), :246 (clear on interrupt), :287/:290 (start validate), :303/:306/:308 (decode mu-law, resample, user.audio_received), :198/:201/:209 (resample/encode/send streamSid), :337 DTMF ignored; telnyx.ts:343 mark, :357 DTMF ignored; smartpbx.ts:107 server, :289 DTMF ignored. Absence claims all hold: no `dtmf.received` packet kind anywhere (only the three `if (event === \"dtmf\") return;` stubs), no mu-law passthrough, deepgram adapter has no mu-law/g711 encoding (edge transcode confirmed). All named implementation-target files exist (voice/src/packets.ts, packet-factories.ts, outbound-playout-pipeline.ts, voice-stt-deepgram/src/index.ts) and wireTelephonyOutboundPipeline + PacedPlayoutQueue back the 20ms pacing claim. Only two telnyx line-number imprecisions found; nothing that would cause the team to build the wrong thing or skip needed work.",
+  "findings_count": 2
+}

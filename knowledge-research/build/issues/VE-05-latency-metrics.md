@@ -20,3 +20,6 @@ VE-01.
 
 ## Key references
 notes: LAT-01..12, OBS-02/04/05; wiki/lat-map, obs-map.
+
+## Current state (Syrinx)
+Per-turn browser metrics exist for speech end, STT final, first LLM delta, first TTS byte, and playout, but there is no monotonic provider-stage metric backbone, cancellation flagging, P95/P99 aggregation, or explicit budget. See [`../reconcile/VE-05-bridge.md`](../reconcile/VE-05-bridge.md).

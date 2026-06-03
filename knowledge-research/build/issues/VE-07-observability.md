@@ -20,3 +20,6 @@ VE-05.
 
 ## Key references
 notes: OBS-01..11; wiki/obs-map.
+
+## Current state (Syrinx)
+Bus packet/debug streams, browser turn metrics, and VAQI constituents exist, but not a typed canonical observability stream with tagged histograms, OTel spans, SLOs, alerts, synthetic probes, or RUM. See [`../reconcile/VE-07-bridge.md`](../reconcile/VE-07-bridge.md).
