@@ -21,7 +21,7 @@ import {
   categorizeTtsError,
   isRecoverable,
   optionalStringConfig,
-  readRetryConfig,
+  readProviderRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
@@ -43,7 +43,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private apiVersion = "2024-06-10";
   private sampleRate = 16000;
   private language = "en";
-  private retryConfig: RetryConfig = readRetryConfig({});
+  private retryConfig: RetryConfig = readProviderRetryConfig({});
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
   // Cumulative PCM16 mono samples already received per context. Cartesia's
@@ -62,7 +62,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.apiVersion = optionalStringConfig(config, "cartesia_version") ?? this.apiVersion;
     this.sampleRate = (config["sample_rate"] as number) ?? this.sampleRate;
     this.language = optionalStringConfig(config, "language") ?? this.language;
-    this.retryConfig = readRetryConfig(config);
+    this.retryConfig = readProviderRetryConfig(config);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 

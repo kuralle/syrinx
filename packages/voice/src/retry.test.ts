@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { readRetryConfig, retryDelayMs, retryDelayWithJitterMs, waitForRetryDelay } from "./retry.js";
+import { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, readProviderRetryConfig, readRetryConfig, retryDelayMs, retryDelayWithJitterMs, waitForRetryDelay } from "./retry.js";
 
 describe("retry helpers", () => {
   it("reads bounded retry config from plugin config", () => {
@@ -54,5 +54,21 @@ describe("retry helpers", () => {
     controller.abort();
     await expect(wait).rejects.toMatchObject({ name: "AbortError" });
     vi.useRealTimers();
+  });
+
+  it("voice-provider profile keeps fast first reconnect but raises the backoff cap", () => {
+    // Fast first reconnect (no multi-second floor → no dead air on transient blips)...
+    expect(retryDelayMs(1, VOICE_PROVIDER_RETRY_CONFIG)).toBe(250);
+    expect(retryDelayMs(1, VOICE_PROVIDER_RETRY_CONFIG)).toBe(DEFAULT_RETRY_CONFIG.baseDelayMs);
+    // ...but a patient cap for persistent provider failure (vs the 2s default).
+    expect(retryDelayMs(10, VOICE_PROVIDER_RETRY_CONFIG)).toBe(10_000);
+    expect(VOICE_PROVIDER_RETRY_CONFIG.maxAttempts).toBeGreaterThan(DEFAULT_RETRY_CONFIG.maxAttempts);
+  });
+
+  it("readProviderRetryConfig defaults to the voice-provider profile but honors overrides", () => {
+    expect(readProviderRetryConfig({})).toEqual(VOICE_PROVIDER_RETRY_CONFIG);
+    expect(readProviderRetryConfig({ retry_max_delay_ms: 3000 }).maxDelayMs).toBe(3000);
+    // The plain default profile is unchanged (intra-turn low-latency retries).
+    expect(readRetryConfig({})).toEqual(DEFAULT_RETRY_CONFIG);
   });
 });

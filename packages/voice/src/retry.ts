@@ -12,11 +12,37 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
   maxDelayMs: 2000,
 };
 
+/**
+ * Retry profile for long-lived voice-provider WebSockets (STT/TTS).
+ *
+ * Keeps the SAME fast first reconnect as the default (~125-250 ms) so a transient
+ * blip during a live call recovers without dead air, but raises the backoff cap to
+ * 10 s and allows more attempts so a persistent provider failure (rate limit /
+ * outage) is retried patiently instead of giving up after ~2 s. This intentionally
+ * does NOT use a multi-second *floor* (a 4 s first-retry would mean seconds of dead
+ * air on a live call); "every 10 ms matters" applies to the first reconnect, patient
+ * backoff applies only after repeated failures.
+ */
+export const VOICE_PROVIDER_RETRY_CONFIG: RetryConfig = {
+  maxAttempts: 6,
+  baseDelayMs: 250,
+  maxDelayMs: 10_000,
+};
+
 export function readRetryConfig(config: Record<string, unknown>): RetryConfig {
+  return readRetryConfigWithDefaults(config, DEFAULT_RETRY_CONFIG);
+}
+
+/** Read retry config for a voice-provider WebSocket; defaults to the patient-backoff profile. */
+export function readProviderRetryConfig(config: Record<string, unknown>): RetryConfig {
+  return readRetryConfigWithDefaults(config, VOICE_PROVIDER_RETRY_CONFIG);
+}
+
+function readRetryConfigWithDefaults(config: Record<string, unknown>, defaults: RetryConfig): RetryConfig {
   return {
-    maxAttempts: readPositiveInteger(config["retry_max_attempts"], DEFAULT_RETRY_CONFIG.maxAttempts),
-    baseDelayMs: readPositiveInteger(config["retry_base_delay_ms"], DEFAULT_RETRY_CONFIG.baseDelayMs),
-    maxDelayMs: readPositiveInteger(config["retry_max_delay_ms"], DEFAULT_RETRY_CONFIG.maxDelayMs),
+    maxAttempts: readPositiveInteger(config["retry_max_attempts"], defaults.maxAttempts),
+    baseDelayMs: readPositiveInteger(config["retry_base_delay_ms"], defaults.baseDelayMs),
+    maxDelayMs: readPositiveInteger(config["retry_max_delay_ms"], defaults.maxDelayMs),
   };
 }
 

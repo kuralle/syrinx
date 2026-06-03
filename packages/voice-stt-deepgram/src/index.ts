@@ -28,7 +28,7 @@ import {
   assertAudioPayload,
   requireStringConfig,
   optionalStringConfig,
-  readRetryConfig,
+  readProviderRetryConfig,
   categorizeSttError,
   isRecoverable,
 } from "@asyncdot/voice";
@@ -133,7 +133,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       },
       headers: { Authorization: `Token ${this.apiKey}` },
       socketFactory: this.socketFactory,
-      retry: readRetryConfig(config),
+      retry: readProviderRetryConfig(config),
       keepAliveIntervalMs: this.keepAliveIntervalMs,
       keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
       onMessage: (data) => {

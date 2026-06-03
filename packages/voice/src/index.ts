@@ -108,7 +108,7 @@ export { type VoicePlugin, type PluginConfig, requireStringConfig, optionalStrin
 export { categorizeSttError, categorizeTtsError, categorizeLlmError, isRecoverable, isFatalError } from "./error-handler.js";
 
 // Retry helpers
-export { DEFAULT_RETRY_CONFIG, readRetryConfig, retryDelayMs, waitForRetryDelay, type RetryConfig } from "./retry.js";
+export { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, readRetryConfig, readProviderRetryConfig, retryDelayMs, waitForRetryDelay, type RetryConfig } from "./retry.js";
 
 // Idle timeout
 export { IdleTimeoutManager, type IdleTimeoutConfig, DEFAULT_IDLE_TIMEOUT_CONFIG } from "./idle-timeout.js";
