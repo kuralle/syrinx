@@ -1,10 +1,10 @@
 {
   "scenario": "websocket_university_student_relations_interactive",
-  "generatedAt": "2026-05-30T15:25:55.067Z",
+  "generatedAt": "2026-06-03T12:33:20.395Z",
   "fixtureProvider": "mixed-wav-fixtures",
-  "llmModel": "gemini-2.5-flash",
+  "llmModel": "gemini-3.1-flash-lite",
   "ttsProvider": "cartesia",
-  "ttsModel": "sonic-2-2025-03-07",
+  "ttsModel": "sonic-3",
   "transport": "websocket",
   "inputSampleRateHz": 16000,
   "outputSampleRateHz": 16000,
@@ -12,94 +12,110 @@
   "postTtsDrainMs": 500,
   "turnCount": 3,
   "latencyMs": {
-    "avgSttFinalAfterSpeechEnd": 982,
-    "avgVadSpeechEndAfterAudioEnd": 657,
-    "avgLlmTimeToFirstText": 3876,
-    "avgTtsTimeToFirstAudio": 386,
-    "avgSpeechEndToFirstAssistantAudio": 5244,
-    "avgVadSpeechEndToFirstAssistantAudio": 4587
+    "avgSttFinalAfterSpeechEnd": -7528,
+    "avgVadSpeechEndAfterAudioEnd": 608,
+    "avgLlmTimeToFirstText": 5336,
+    "avgTtsTimeToFirstAudio": 312,
+    "avgSpeechEndToFirstAssistantAudio": -1880,
+    "avgVadSpeechEndToFirstAssistantAudio": -2487,
+    "voiceToVoiceP50Ms": 2832,
+    "voiceToVoiceP95Ms": 2832
   },
   "turns": [
     {
       "id": "interactive-01",
       "fixtureId": "review-late-add",
       "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
-      "sttFinal": "Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline, and what form I should submit.",
-      "agentReply": "Yes, you can still add Biology 101, but it requires a Late Add Petition. You will need to submit the Late Add Petition form, which requires approvals from your course instructor, academic advisor, and the registrar.",
+      "sttFinal": "Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline,",
+      "agentReply": "You can submit a Late Add Petition through the Student Relations portal to request enrollment in Biology 101. Please route the form to your instructor, the advising desk, and the registrar for approval.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 8963,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 10124,
-      "audioBytes": 323964,
+      "assistantAudioMs": 11001,
+      "audioBytes": 65751,
+      "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1120,
-        "vadSpeechEndAfterAudioEnd": 758,
-        "llmTimeToFirstText": 4522,
-        "ttsTimeToFirstAudio": 376,
-        "speechEndToFirstAssistantAudio": 6018,
-        "vadSpeechEndToFirstAssistantAudio": 5260,
-        "turnWallClock": 20203
+        "sttFinalAfterSpeechEnd": -109,
+        "vadSpeechEndAfterAudioEnd": 752,
+        "llmTimeToFirstText": 3282,
+        "ttsTimeToFirstAudio": 333,
+        "speechEndToFirstAssistantAudio": 3506,
+        "vadSpeechEndToFirstAssistantAudio": 2754,
+        "turnWallClock": 24014
       }
     },
     {
       "id": "interactive-02",
       "fixtureId": "02-registration-holds",
       "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "agentReply": "I can confirm that you do not have any active registration holds that would block your late add petition. You can proceed with submitting the Late Add Petition form.",
+      "sttFinal": "Thanks. That makes sense. Before I start the petition,",
+      "agentReply": "I have checked your account and you do not have any active registration holds. You are clear to proceed with submitting your Late Add Petition.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16451,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 7477,
-      "audioBytes": 239258,
+      "assistantAudioMs": 6962,
+      "audioBytes": 42049,
+      "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1031,
-        "vadSpeechEndAfterAudioEnd": 679,
-        "llmTimeToFirstText": 3566,
-        "ttsTimeToFirstAudio": 389,
-        "speechEndToFirstAssistantAudio": 4986,
-        "vadSpeechEndToFirstAssistantAudio": 4307,
-        "turnWallClock": 26104
+        "sttFinalAfterSpeechEnd": -11853,
+        "vadSpeechEndAfterAudioEnd": 607,
+        "llmTimeToFirstText": 6362,
+        "ttsTimeToFirstAudio": 296,
+        "speechEndToFirstAssistantAudio": -5195,
+        "vadSpeechEndToFirstAssistantAudio": -5802,
+        "turnWallClock": 19222
       }
     },
     {
       "id": "interactive-03",
       "fixtureId": "10-lab-fee",
       "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
-      "sttFinal": "Does BIOLOGY one hundred one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar the petition because that changes how I plan my payment.",
-      "agentReply": "Yes, Biology 101 has an $85 lab fee. This fee will be posted to your account after the registrar processes your Late Add Petition.",
+      "sttFinal": "Does BIOLOGY one hundred one have a separate lab",
+      "agentReply": "Yes, Biology 101 includes an $85 lab fee that will be posted to your account once the registrar processes your late add. Please ensure you have sufficient funds available to cover this charge upon approval.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 14691,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 1,
-      "assistantAudioMs": 7198,
-      "audioBytes": 230340,
+      "assistantAudioMs": 10826,
+      "audioBytes": 67246,
+      "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 794,
-        "vadSpeechEndAfterAudioEnd": 535,
-        "llmTimeToFirstText": 3541,
-        "ttsTimeToFirstAudio": 393,
-        "speechEndToFirstAssistantAudio": 4728,
-        "vadSpeechEndToFirstAssistantAudio": 4193,
-        "turnWallClock": 23784
+        "sttFinalAfterSpeechEnd": -10621,
+        "vadSpeechEndAfterAudioEnd": 464,
+        "llmTimeToFirstText": 6364,
+        "ttsTimeToFirstAudio": 307,
+        "speechEndToFirstAssistantAudio": -3950,
+        "vadSpeechEndToFirstAssistantAudio": -4414,
+        "turnWallClock": 22352
       }
     }
   ],
-  "diagnostics": [],
+  "diagnostics": [
+    "voice-to-voice P50=2832ms",
+    "voice-to-voice P95=2832ms",
+    "voice-to-voice P50 2832ms exceeds 800ms SLO band",
+    "voice-to-voice P95 2832ms exceeds 800ms SLO band",
+    "interactive-02 STT transcript missed fixture term hold",
+    "interactive-03 STT transcript missed fixture term fee"
+  ],
   "artifacts": {
-    "runDir": "test/performance/runs/websocket-university-interactive-2026-05-30T15-24-43-059Z",
-    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-05-30T15-24-43-059Z/manifest.json"
+    "runDir": "test/performance/runs/websocket-university-interactive-2026-06-03T12-32-08-696Z",
+    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-06-03T12-32-08-696Z/manifest.json"
   },
   "qualityGate": {
-    "passed": true,
-    "failures": []
+    "passed": false,
+    "failures": [
+      "interactive-01 STT finalized before input audio ended",
+      "interactive-02 STT finalized before input audio ended",
+      "interactive-03 STT finalized before input audio ended"
+    ]
   }
 }
