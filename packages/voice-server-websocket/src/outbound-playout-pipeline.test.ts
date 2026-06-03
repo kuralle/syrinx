@@ -61,6 +61,37 @@ function wireTestPipeline(socket: WebSocket): {
   return { session, handle, disposers };
 }
 
+describe("wireTelephonyOutboundPipeline.interrupt.tts", () => {
+  it("clears playout and emits interrupt_onset_to_media_silent_ms", async () => {
+    const socket = createMockSocket();
+    const { session, disposers } = wireTestPipeline(socket);
+    const mediaSilentMetrics: Array<{ name: string; value: string }> = [];
+
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string; value: string };
+      if (metric.name === "test.interrupt_onset_to_media_silent_ms") mediaSilentMetrics.push(metric);
+    });
+
+    const onset = Date.now() - 25;
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "turn-drain",
+      timestampMs: onset,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mediaSilentMetrics).toEqual([
+      expect.objectContaining({
+        name: "test.interrupt_onset_to_media_silent_ms",
+        value: expect.stringMatching(/^\d+$/),
+      }),
+    ]);
+    expect(Number(mediaSilentMetrics[0]!.value)).toBeGreaterThanOrEqual(0);
+
+    for (const dispose of disposers) dispose();
+  });
+});
+
 describe("wireTelephonyOutboundPipeline.drainAndClose", () => {
   it("resolves immediately when the playout queue is idle", async () => {
     const socket = createMockSocket();
