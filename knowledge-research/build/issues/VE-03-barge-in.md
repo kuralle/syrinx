@@ -1,6 +1,6 @@
 # VE-03 — Barge-in / interruption
 
-**Type:** AFK · **Tier:** Tier-0 · **Status:** Backlog
+**Type:** AFK · **Tier:** Tier-0 · **Status:** Done (v2 — commits 2968a2b, dad711a, a9137ce, 6447166; see `.handoff/session-ve03-barge-in-close.md`)
 **Master document:** [`../../PRODUCTION-CHECKLIST.md`](../../PRODUCTION-CHECKLIST.md) → **§4 Barge-In / Interruption**
 
 ## What to build
