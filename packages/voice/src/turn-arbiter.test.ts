@@ -287,6 +287,101 @@ describe("TurnArbiter", () => {
     expect(metrics).toContain("interrupt.committed_after_ms");
   });
 
+  it("suppresses backchannel interim at commit (test:backchannel_suppressed)", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.noteInterimEvidence("uh huh");
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_backchannel");
+    expect(metrics).not.toContain("interrupt.committed_after_ms");
+  });
+
+  it("commits real interruption when interim is not a backchannel (test:real_interrupt_not_suppressed)", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.noteInterimEvidence("wait stop");
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toHaveLength(1);
+    expect(interrupts[0]!.contextId).toBe("assistant-turn");
+    expect(metrics).toContain("interrupt.committed_after_ms");
+    expect(metrics).not.toContain("interrupt.suppressed_backchannel");
+  });
+
+  it("commits sustained speech without interim evidence unchanged", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toHaveLength(1);
+    expect(metrics).not.toContain("interrupt.suppressed_backchannel");
+  });
+
   it("locks profile on idle speech end", async () => {
     const gate = new PrimarySpeakerGate();
     const { arbiter } = await createArbiter(280, gate);
