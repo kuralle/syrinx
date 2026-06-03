@@ -287,3 +287,16 @@ SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @asyncdot-example/02-hello-voic
 ```
 
 This smoke uses live Deepgram, Gemini, Cartesia, and the recorder while emulating each provider websocket locally. It waits for paced carrier playout to drain before stop/hangup so recorder artifacts represent audio that reached the carrier boundary.
+
+## Telephony output queue, barge-in & idle behaviour
+
+All three carrier servers (Twilio, Telnyx, SmartPBX) share the paced outbound pipeline, so their queue, barge-in, and idle semantics are identical:
+
+- **Output queue (`maxQueuedOutputAudioMs`, default 30,000 ms) is an overflow safety valve, not a jitter buffer.** TTS streams faster than realtime, so the paced queue holds generated-ahead audio that is paced to the carrier at the 20 ms frame cadence. The large default bounds memory/runaway, not interactive latency. Overflow closes the socket (`1013`) and records `<carrier>.overflow_playout_cleared_ms`.
+- **Barge-in clears the queue instantly**, so queue depth does NOT affect barge-in latency. On `interrupt.tts` the pipeline calls `clearInterruptible()`, dropping all interruptible (audio) frames immediately while retaining any frame explicitly marked uninterruptible; speech is never replayed. Barge-in cost is therefore the onset→media-silent path, measured by `interrupt.onset_to_media_silent_ms` and `<carrier>.interrupt_onset_to_media_silent_ms`, independent of how much audio was queued.
+- **Bounded pacing delay is observable** via `<carrier>.pacer_deadline_miss` (ms a paced frame was late beyond the 5 ms tolerance).
+- **Idle keepalive:** each carrier socket runs a WebSocket heartbeat ping (`heartbeatIntervalMs`, default 30,000 ms) via the shared transport host; unresponsive sockets are torn down on the normal disconnect path (queued playout cleared, recorder truncated). Carriers that require explicit silence frames during idle are handled at their adapter boundary.
+
+## DTMF
+
+Carrier `dtmf` events are surfaced as typed `dtmf.received` packets (`digit` normalized to `0-9`/`*`/`#`, plus `provider` and the raw `rawDigit` for diagnostics) on the Critical route. **DTMF never enters the speech path** — it is never decoded as audio, never pushed as `user.audio_received`/`stt.audio`/`vad.*`, and never triggers `interrupt.*`/barge-in. The engine stays policy-neutral: applications subscribe to `dtmf.received` and decide what a digit means (IVR entry, interrupt-on-`#`, etc.). An unparseable carrier digit emits a `dtmf.unparsed` metric rather than failing silently.
