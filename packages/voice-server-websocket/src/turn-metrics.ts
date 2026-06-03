@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import {
+  type ConversationMetricPacket,
+  type EndOfSpeechPacket,
   type InterruptTtsPacket,
   type LlmDeltaPacket,
   type PipelineBus,
@@ -14,6 +16,8 @@ import {
 export interface TurnTimestampState {
   speechEndMs: number;
   sttFinalMs: number;
+  eosMs: number;
+  vadStopHangoverMs: number;
   textReadyMs: number;
   firstAudioByteMs: number;
   firstAudioPlayedMs: number;
@@ -33,6 +37,12 @@ export interface BrowserMetricsMessage {
   readonly llmTTFTMs?: number;
   readonly ttsTTFBMs?: number;
   readonly e2eMs?: number;
+  readonly eouBudgetMs?: {
+    readonly vadStopHangoverMs?: number;
+    readonly sttFinalDelayMs?: number;
+    readonly endpointDelayMs?: number;
+    readonly totalMs?: number;
+  };
 }
 
 function positiveDelta(endMs: number, startMs: number): number | undefined {
@@ -50,6 +60,27 @@ export function buildBrowserMetricsMessage(
   const e2eFromPlayout = positiveDelta(timestamps.firstAudioPlayedMs, timestamps.speechEndMs);
   const e2eFromByte = positiveDelta(timestamps.firstAudioByteMs, timestamps.speechEndMs);
 
+  const sttFinalDelayMs = positiveDelta(timestamps.sttFinalMs, timestamps.speechEndMs);
+  const endpointDelayMs = positiveDelta(timestamps.eosMs, timestamps.sttFinalMs);
+  const vadStopHangoverMs =
+    timestamps.vadStopHangoverMs > 0 ? timestamps.vadStopHangoverMs : undefined;
+  const eouTotalMs =
+    (vadStopHangoverMs ?? 0) +
+      (positiveDelta(timestamps.eosMs, timestamps.speechEndMs) ?? sttFinalDelayMs ?? 0) ||
+    undefined;
+  const eouBudgetMs =
+    vadStopHangoverMs !== undefined ||
+    sttFinalDelayMs !== undefined ||
+    endpointDelayMs !== undefined ||
+    eouTotalMs !== undefined
+      ? {
+          ...(vadStopHangoverMs !== undefined ? { vadStopHangoverMs } : {}),
+          ...(sttFinalDelayMs !== undefined ? { sttFinalDelayMs } : {}),
+          ...(endpointDelayMs !== undefined ? { endpointDelayMs } : {}),
+          ...(eouTotalMs !== undefined ? { totalMs: eouTotalMs } : {}),
+        }
+      : undefined;
+
   return {
     type: "metrics",
     turnId,
@@ -63,6 +94,7 @@ export function buildBrowserMetricsMessage(
     ...(llmTTFTMs !== undefined ? { llmTTFTMs } : {}),
     ...(ttsTTFBMs !== undefined ? { ttsTTFBMs } : {}),
     ...(e2eFromPlayout !== undefined ? { e2eMs: e2eFromPlayout } : e2eFromByte !== undefined ? { e2eMs: e2eFromByte } : {}),
+    ...(eouBudgetMs !== undefined ? { eouBudgetMs } : {}),
   };
 }
 
@@ -70,6 +102,8 @@ function emptyTurnState(): TurnTimestampState {
   return {
     speechEndMs: 0,
     sttFinalMs: 0,
+    eosMs: 0,
+    vadStopHangoverMs: 0,
     textReadyMs: 0,
     firstAudioByteMs: 0,
     firstAudioPlayedMs: 0,
@@ -99,6 +133,19 @@ export class TurnMetricsTracker {
         const result = pkt as SttResultPacket;
         const state = this.turnState(result.contextId);
         if (state.sttFinalMs === 0) state.sttFinalMs = result.timestampMs;
+      }),
+      this.bus.on("metric.conversation", (pkt) => {
+        const metric = pkt as ConversationMetricPacket;
+        if (metric.name !== "vad.stop_hangover_ms") return;
+        const hangoverMs = Number(metric.value);
+        if (Number.isNaN(hangoverMs)) return;
+        const state = this.turnState(metric.contextId);
+        if (state.vadStopHangoverMs === 0) state.vadStopHangoverMs = hangoverMs;
+      }),
+      this.bus.on("eos.turn_complete", (pkt) => {
+        const eos = pkt as EndOfSpeechPacket;
+        const state = this.turnState(eos.contextId);
+        if (state.eosMs === 0) state.eosMs = eos.timestampMs;
       }),
       this.bus.on("llm.delta", (pkt) => {
         const delta = pkt as LlmDeltaPacket;
