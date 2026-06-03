@@ -54,6 +54,7 @@ export * from "./twilio.js";
 export * from "./telnyx.js";
 export * from "./smartpbx.js";
 export * from "./session-store.js";
+export { installGracefulShutdown, type GracefulClosable } from "./websocket-lifecycle.js";
 
 export interface VoiceWebSocketServerOptions {
   readonly server?: HttpServer;
