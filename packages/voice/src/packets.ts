@@ -103,6 +103,18 @@ export interface InitializationCompletedPacket extends VoicePacket {
 }
 
 // =============================================================================
+// Audio format contract
+// =============================================================================
+
+export interface AudioFormat {
+  readonly encoding: "pcm_s16le" | "mulaw" | "opus";
+  readonly sampleRateHz: number;
+  readonly channels: 1;
+  /** Target frame duration for paced output, when known. */
+  readonly frameDurationMs?: number;
+}
+
+// =============================================================================
 // Input Pipeline Packets (user audio → transcript)
 // =============================================================================
 

@@ -20,9 +20,12 @@
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
+  type AudioFormat,
   type VoicePlugin,
   type PluginConfig,
   type SttErrorPacket,
+  assertAudioFormat,
+  assertAudioPayload,
   requireStringConfig,
   optionalStringConfig,
   readRetryConfig,
@@ -88,6 +91,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     firstSentAtMs: number;
     lastSentAtMs: number;
   }>();
+  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -107,6 +111,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
     this.finalizeTimeoutFallback = (config["finalize_timeout_fallback"] as boolean) ?? false;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
+    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
+    assertAudioFormat(this.audioFormat);
 
     // One session-long socket, managed (reconnect + KeepAlive) by WebSocketConnection.
     this.conn = new WebSocketConnection({
@@ -258,6 +264,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   async sendAudio(audio: Uint8Array, contextId = this.currentContextId): Promise<boolean> {
     if (audio.byteLength === 0) return true;
     try {
+      assertAudioPayload(this.audioFormat, audio);
       if (!this.conn) throw new Error("Deepgram STT is not connected");
       await this.conn.ensureReady();
       this.conn.send(audio);

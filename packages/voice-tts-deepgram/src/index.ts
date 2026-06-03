@@ -18,12 +18,15 @@
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
+  type AudioFormat,
   type PluginConfig,
   type RetryConfig,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TtsErrorPacket,
   type VoicePlugin,
+  assertAudioFormat,
+  assertAudioPayload,
   categorizeTtsError,
   isRecoverable,
   optionalStringConfig,
@@ -60,6 +63,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
   private disposers: Array<() => void> = [];
+  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 24000, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -68,6 +72,8 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
     this.sampleRate = readPositiveInteger(config["sample_rate"], this.sampleRate);
     this.retryConfig = readRetryConfig(config);
+    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
+    assertAudioFormat(this.audioFormat);
 
     this.conn = new WebSocketConnection({
       url: () => {
@@ -213,11 +219,18 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     const buf = this.carry.byteLength === 0 ? frame : concatBytes(this.carry, frame);
     const evenLen = buf.byteLength - (buf.byteLength % 2);
     if (evenLen > 0) {
+      const audio = buf.subarray(0, evenLen);
+      try {
+        assertAudioPayload(this.audioFormat, audio);
+      } catch (err) {
+        this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
       const packet: TextToSpeechAudioPacket = {
         kind: "tts.audio",
         contextId,
         timestampMs: Date.now(),
-        audio: buf.subarray(0, evenLen),
+        audio,
         sampleRateHz: this.sampleRate,
       };
       this.bus?.push(Route.Main, packet);

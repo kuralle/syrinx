@@ -6,6 +6,7 @@
 
 // Core types
 export {
+  type AudioFormat,
   type VoicePacket,
   type AsyncPacket,
   type VoiceErrorPacket,
@@ -122,6 +123,8 @@ export { type ConversationEvent, createConversationEventStream } from "./convers
 export {
   SYRINX_AUDIO_ENVELOPE_NAME,
   SYRINX_AUDIO_ENVELOPE_MAGIC,
+  assertAudioFormat,
+  assertAudioPayload,
   encodeSyrinxAudioEnvelope,
   decodeSyrinxAudioEnvelope,
   hasSyrinxAudioEnvelope,

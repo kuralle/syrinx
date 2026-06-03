@@ -462,6 +462,62 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("emits tts.error for odd-length PCM16 provider audio without throwing into the bus pump", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        socket.send(JSON.stringify({
+          type: "chunk",
+          context_id: msg.context_id,
+          data: Buffer.from(new Uint8Array([1, 2, 3])).toString("base64"),
+          done: false,
+          status_code: 206,
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const errors: TtsErrorPacket[] = [];
+    bus.on("tts.audio", (pkt) => {
+      audio.push(pkt as TextToSpeechAudioPacket);
+    });
+    bus.on("tts.error", (pkt) => {
+      errors.push(pkt as TtsErrorPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-odd-pcm",
+      timestampMs: Date.now(),
+      text: "Trigger odd PCM.",
+    });
+    await waitForCondition(() => errors.length > 0);
+
+    expect(audio).toEqual([]);
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "tts.error",
+        contextId: "turn-odd-pcm",
+        component: "tts",
+        cause: expect.objectContaining({
+          message: expect.stringMatching(/even number of bytes/i),
+        }),
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("ignores the empty-data flush_done acknowledgement instead of treating it as malformed audio", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {
@@ -882,7 +938,7 @@ describe("CartesiaTTSPlugin", () => {
   });
 
   it("derives word-timestamp offsets from cumulative sample count without per-chunk rounding drift", async () => {
-    const chunkBytes = 333;
+    const chunkBytes = 334;
     const chunkCount = 120;
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {

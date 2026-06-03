@@ -1050,4 +1050,49 @@ describe("DeepgramSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("emits stt.error for odd-length PCM16 without throwing into the bus pump", async () => {
+    const receivedAudio: Buffer[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) receivedAudio.push(data as Buffer);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const errors: SttErrorPacket[] = [];
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-bad-pcm",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3]),
+    });
+    await waitFor(errors);
+
+    expect(errors).toEqual([
+      expect.objectContaining({
+        kind: "stt.error",
+        contextId: "turn-bad-pcm",
+        component: "stt",
+        cause: expect.objectContaining({
+          message: expect.stringMatching(/even number of bytes/i),
+        }),
+      }),
+    ]);
+    expect(receivedAudio).toEqual([]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
 });

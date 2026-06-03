@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+import type { AudioFormat } from "./packets.js";
+
 export const SYRINX_AUDIO_ENVELOPE_NAME = "syrinx.audio.v1" as const;
 export const SYRINX_AUDIO_ENVELOPE_MAGIC = new Uint8Array([83, 89, 82, 88, 65, 49, 10]);
 
@@ -17,6 +19,31 @@ export interface SyrinxAudioEnvelopeHeader {
 export interface SyrinxAudioEnvelope {
   readonly header: SyrinxAudioEnvelopeHeader;
   readonly audio: Uint8Array;
+}
+
+export function assertAudioFormat(format: AudioFormat): void {
+  if (format.channels !== 1) throw new Error("audio must be mono");
+  if (!Number.isInteger(format.sampleRateHz) || format.sampleRateHz <= 0) {
+    throw new Error("sampleRateHz must be a positive integer");
+  }
+}
+
+export function assertAudioPayload(format: AudioFormat, audio: Uint8Array): void {
+  if (format.encoding === "opus") {
+    if (audio.byteLength === 0) {
+      throw new Error("opus payload must not be empty");
+    }
+    return;
+  }
+  if (format.encoding === "mulaw") {
+    if (audio.byteLength === 0) {
+      throw new Error("mulaw payload must not be empty");
+    }
+    return;
+  }
+  if (audio.byteLength % 2 !== 0) {
+    throw new Error("PCM16 payload must contain an even number of bytes");
+  }
 }
 
 export function encodeSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: Uint8Array): Uint8Array {
@@ -78,9 +105,6 @@ function validateSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: U
   if (header.encoding && header.encoding !== "pcm_s16le" && header.encoding !== "opus") {
     throw new Error(`Unsupported Syrinx binary audio encoding: ${header.encoding}`);
   }
-  if (header.channels && header.channels !== 1) {
-    throw new Error(`Unsupported Syrinx binary audio channel count: ${String(header.channels)}`);
-  }
   if (header.sequence !== undefined && !isNonNegativeInteger(header.sequence)) {
     throw new Error("Syrinx binary audio envelope sequence must be a non-negative integer");
   }
@@ -93,16 +117,16 @@ function validateSyrinxAudioEnvelope(header: SyrinxAudioEnvelopeHeader, audio: U
   if (header.byteLength !== undefined && header.byteLength !== audio.byteLength) {
     throw new Error("Syrinx binary audio envelope byteLength does not match payload");
   }
-  if (header.encoding === "opus") {
-    if (audio.byteLength === 0) {
-      throw new Error("Syrinx binary audio envelope opus payload must not be empty");
-    }
-    return;
-  }
-  if (audio.byteLength % 2 !== 0) {
-    throw new Error("Syrinx binary audio envelope PCM16 payload must contain an even number of bytes");
-  }
-  if (header.durationMs !== undefined) {
+
+  const format: AudioFormat = {
+    encoding: header.encoding === "opus" ? "opus" : "pcm_s16le",
+    sampleRateHz: header.sampleRateHz,
+    channels: header.channels ?? 1,
+  };
+  assertAudioFormat(format);
+  assertAudioPayload(format, audio);
+
+  if (format.encoding !== "opus" && header.durationMs !== undefined) {
     const expectedDurationMs = Math.round((audio.byteLength / 2 / header.sampleRateHz) * 1000);
     if (Math.abs(header.durationMs - expectedDurationMs) > 1) {
       throw new Error("Syrinx binary audio envelope durationMs does not match payload and sampleRateHz");

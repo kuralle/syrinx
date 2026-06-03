@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as voice from "@asyncdot/voice";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   PipelineBusImpl,
@@ -201,6 +202,52 @@ describe("DeepgramTTSPlugin", () => {
     const allBytes = Buffer.concat(audio.map((a) => Buffer.from(a.audio)));
     expect(allBytes).toEqual(Buffer.from([0x11, 0x22, 0x33, 0x44]));
     expect(audio.every((a) => a.audio.byteLength % 2 === 0)).toBe(true);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits tts.error when received PCM fails structural validation", async () => {
+    const payloadSpy = vi.spyOn(voice, "assertAudioPayload").mockImplementationOnce(() => {
+      throw new Error("PCM16 payload must contain an even number of bytes");
+    });
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "Speak") {
+          socket.send(Buffer.from([1, 2, 3, 4]), { binary: true });
+        }
+        if (msg["type"] === "Flush") {
+          socket.send(JSON.stringify({ type: "Flushed", sequence_id: 0 }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const errors: TtsErrorPacket[] = [];
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+    bus.on("tts.error", (pkt) => { errors.push(pkt as TtsErrorPacket); });
+
+    await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-bad", timestampMs: Date.now(), text: "Bad framing." });
+    await waitForCondition(() => errors.length > 0);
+
+    expect(audio).toEqual([]);
+    expect(errors[0]).toEqual(
+      expect.objectContaining({
+        kind: "tts.error",
+        contextId: "turn-bad",
+        component: "tts",
+        cause: expect.objectContaining({
+          message: "PCM16 payload must contain an even number of bytes",
+        }),
+      }),
+    );
+    payloadSpy.mockRestore();
 
     await plugin.close();
     bus.stop();
