@@ -305,6 +305,7 @@ export async function createVoiceWebSocketServer(
           encoding: "opus",
           supportedInputCodecs: ["pcm_s16le", "opus"],
           channels: 1,
+          targetFrameDurationMs: outboundFrameDurationMs,
           binaryEnvelope: binaryAudioEnvelope ? SYRINX_AUDIO_ENVELOPE_NAME : undefined,
           rawBinaryInput,
           maxInboundMessageBytes: config.maxInboundMessageBytes,
