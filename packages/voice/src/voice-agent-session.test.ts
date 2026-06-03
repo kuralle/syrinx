@@ -1887,4 +1887,114 @@ describe("VoiceAgentSession", () => {
 
     await closeSession(session);
   });
+
+  describe("endpointingOwner invariant (VE-02)", () => {
+    it("throws for unsupported endpointingOwner in constructor", () => {
+      expect(
+        () =>
+          new VoiceAgentSession({
+            plugins: {},
+            endpointingOwner: "bogus" as "provider_stt",
+          }),
+      ).toThrow("Unsupported endpointingOwner: bogus");
+    });
+
+    it("with owner unset still fans user audio to eos.audio (back-compat)", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      await session.start();
+
+      const eosPackets: EndOfSpeechAudioPacket[] = [];
+      session.bus.on("eos.audio", (pkt) => {
+        eosPackets.push(pkt as EndOfSpeechAudioPacket);
+      });
+
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-bc",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([1, 2, 3]),
+      } satisfies UserAudioReceivedPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(eosPackets).toHaveLength(1);
+
+      await closeSession(session);
+    });
+
+    it("with provider_stt owner does not fan eos.audio but routes EOS to one user.input", async () => {
+      const session = new VoiceAgentSession({
+        plugins: {},
+        endpointingOwner: "provider_stt",
+      });
+      const eosPackets: EndOfSpeechAudioPacket[] = [];
+      const userInputs: UserInputPacket[] = [];
+
+      await session.start();
+      session.bus.on("eos.audio", (pkt) => {
+        eosPackets.push(pkt as EndOfSpeechAudioPacket);
+      });
+      session.bus.on("user.input", (pkt) => {
+        userInputs.push(pkt as UserInputPacket);
+      });
+
+      session.bus.push(Route.Main, {
+        kind: "user.audio_received",
+        contextId: "turn-stt",
+        timestampMs: Date.now(),
+        audio: new Uint8Array([9, 8, 7]),
+      } satisfies UserAudioReceivedPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(eosPackets).toHaveLength(0);
+
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: "turn-stt",
+        timestampMs: Date.now(),
+        text: "from provider",
+        transcripts: [],
+      } satisfies EndOfSpeechPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(userInputs).toHaveLength(1);
+      expect(userInputs[0]!.text).toBe("from provider");
+
+      await closeSession(session);
+    });
+
+    it("drops duplicate eos.turn_complete for same contextId with eos.duplicate_dropped metric", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const userInputs: UserInputPacket[] = [];
+      const duplicateMetrics: Array<{ name: string; value: string }> = [];
+
+      await session.start();
+      session.bus.on("user.input", (pkt) => {
+        userInputs.push(pkt as UserInputPacket);
+      });
+      session.bus.on("metric.conversation", (pkt) => {
+        const m = pkt as unknown as { name: string; value: string };
+        if (m.name === "eos.duplicate_dropped") {
+          duplicateMetrics.push({ name: m.name, value: m.value });
+        }
+      });
+
+      const eosPacket: EndOfSpeechPacket = {
+        kind: "eos.turn_complete",
+        contextId: "turn-dup",
+        timestampMs: Date.now(),
+        text: "once",
+        transcripts: [],
+      };
+      session.bus.push(Route.Main, eosPacket);
+      session.bus.push(Route.Main, eosPacket);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(userInputs).toHaveLength(1);
+      expect(userInputs[0]!.text).toBe("once");
+      expect(duplicateMetrics).toEqual([{ name: "eos.duplicate_dropped", value: "1" }]);
+
+      await closeSession(session);
+    });
+  });
 });
