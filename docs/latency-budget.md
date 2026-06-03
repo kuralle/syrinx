@@ -21,7 +21,20 @@ Optimize **P95/P99, not the mean** — "every 10 ms matters." The canonical head
 ## Enforcement
 `smoke:websocket-interactive` already emits an SLO-band warning when v2v P50/P95 exceed 800 ms (see the run's `qualityGate.failures`). The speech-in/out stages (STT-final, TTS-TTFB) are within budget; the v2v gap is the LLM leg, which is outside VE-01..05 speech scope. Reducing it (smaller/faster model, speculative TTS start on partial LLM text, hedging) is product/LLM work, not speech-engine work.
 
+## SLO definitions (VE-07.4)
+
+Computed from the `MetricsExporter` histograms emitted by `ObservabilityObserver` (VE-07.3), tagged by session/speech id, provider, model, region, and `cancelled`. Cancelled (barge-in) turns are excluded from the latency SLOs and counted toward interruption success instead.
+
+| SLO | Definition | Target | Source |
+|---|---|---|---|
+| **v2v P95** | `v2v_ms` (user_stopped_speaking → agent_started_speaking), non-cancelled | ≤ 800 ms (warn band) | `v2v_ms` histogram |
+| **v2v P99** | as above, P99 | ≤ 1500 ms | `v2v_ms` histogram |
+| **Interruption success** | fraction of `interruption` boundaries that reach media-silent within the onset budget | ≥ 95% | `interrupt.onset_to_media_silent_ms` (VE-03.1) |
+| **Speech-path error rate** | `stt.error` + `tts.error` + `vad.error` + transport errors per turn (LLM excluded — out of speech scope) | < 1% of turns | error packets / turn count |
+
+These are definitions + targets, not a deployed alerting stack — the export backend (Prometheus/OTel) is an optional implementation package per the VE-07 bridge; `InMemoryMetricsExporter` + `reconstructTurnTimeline` cover local/test/incident drill-down (VE-07.5).
+
 ## Where the numbers come from
-- Per-stage timings: `TurnMetricsTracker` (`packages/voice-server-websocket/src/turn-metrics.ts`) + the interactive smoke harness.
+- Per-stage timings: `TurnMetricsTracker` (`packages/voice-server-websocket/src/turn-metrics.ts`) + the interactive smoke harness + the `obs.turn_boundary` histograms (VE-07.3).
 - EOU sub-budget (VAD stop hangover + STT-final delay + endpoint delay + sum): `eouBudgetMs` (VE-02.3).
-- Carried to VE-07 (observability): monotonic time source + `cancelled` flag + per-provider stage instrumentation, so cancelled attempts never pollute these histograms and metrics are exportable.
+- Monotonic time source + `cancelled` flag: `observability.ts` `monotonicNowMs` + `ObservabilityObserver` (VE-07), so cancelled attempts never pollute the latency histograms and metrics are exporter-agnostic.
