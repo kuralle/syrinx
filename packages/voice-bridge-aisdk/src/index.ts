@@ -68,8 +68,10 @@ export class AISDKBridgePlugin implements VoicePlugin {
   // G25: word-level timestamps from TTS plugin (cumulative from context audio start).
   private wordTimestampsByContext = new Map<string, TtsWordTimestamp[]>();
   // G25: latest playout position (ms from context audio start) from the paced transport.
-  // Present only when a paced transport (telnyx/twilio/smartpbx) is wired; headless/
-  // browser paths have no tts.playout_progress and fall back to spokenByContext.
+  // Present whenever a paced transport is wired — this includes the browser WebSocket
+  // path (it routes through the shared paced playout pipeline + PlayoutProgressEmitter)
+  // as well as telnyx/twilio/smartpbx. Only headless-direct (no playout clock) falls
+  // back to spokenByContext.
   private playedOutMsByContext = new Map<string, number>();
 
   constructor(private readonly streamFactory?: AISDKStreamFactory) {}
