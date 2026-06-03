@@ -30,7 +30,7 @@ import {
   categorizeTtsError,
   isRecoverable,
   optionalStringConfig,
-  readRetryConfig,
+  readProviderRetryConfig,
   requireStringConfig,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
@@ -53,7 +53,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private model = "aura-2-thalia-en";
   private endpointUrl = "wss://api.deepgram.com/v1/speak";
   private sampleRate = 24000;
-  private retryConfig: RetryConfig = readRetryConfig({});
+  private retryConfig: RetryConfig = readProviderRetryConfig({});
   // Deepgram's speak socket has no per-message context id, but the engine
   // synthesizes one turn at a time, so the audio streaming back belongs to the
   // turn currently being spoken. carry holds an odd trailing PCM byte across
@@ -71,7 +71,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.model = optionalStringConfig(config, "model") ?? this.model;
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
     this.sampleRate = readPositiveInteger(config["sample_rate"], this.sampleRate);
-    this.retryConfig = readRetryConfig(config);
+    this.retryConfig = readProviderRetryConfig(config);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
