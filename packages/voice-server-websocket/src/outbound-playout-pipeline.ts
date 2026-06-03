@@ -84,7 +84,7 @@ export function wireTelephonyOutboundPipeline(args: {
       const interrupt = pkt as InterruptTtsPacket;
       interruptedContextIds.add(interrupt.contextId);
       playoutProgress.discard(interrupt.contextId);
-      playout.clear();
+      playout.clearInterruptible();
       callbacks.onClear?.();
       callbacks.onInterrupt(interrupt.contextId);
       session.bus.push(Route.Background, {
