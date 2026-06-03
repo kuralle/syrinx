@@ -106,6 +106,8 @@ export {
   type MetricsExporter,
   noopMetricsExporter,
   InMemoryMetricsExporter,
+  reconstructTurnTimeline,
+  type TurnTimelineStep,
 } from "./observability.js";
 
 export {
