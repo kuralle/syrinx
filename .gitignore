@@ -12,3 +12,9 @@ research-notes/
 # Delegation + worker scratch (not deliverables)
 .handoff/
 .antigravitycli/
+
+# Voice-engine knowledge-research: never commit the cloned upstream repos (306MB, own .git)
+# or the raw copyrighted source PDF (the parsed .md text is kept as provenance).
+knowledge-research/_clones/
+knowledge-research/_sources/pdf/*.pdf
+knowledge-research/_sources/blogs/img/
