@@ -167,6 +167,8 @@ describe("createVoiceWebSocketServer", () => {
     const [client, ready] = await openBrowserClientAndReadReady(websocketUrl(address.port));
     expect(ready).toMatchObject({ type: "ready", turnId: "turn-test", resumed: false });
     expect(ready.audio.rawBinaryInput).toBe(false);
+    // Ready frame advertises the target output frame duration so clients can size playout. (VE-01.3)
+    expect(ready.audio.targetFrameDurationMs).toBe(20);
     const errorMessage = new Promise<any>((resolve) => {
       client.on("message", (data, isBinary) => {
         if (isBinary) return;
