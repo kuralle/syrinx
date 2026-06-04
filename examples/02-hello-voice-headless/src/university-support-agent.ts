@@ -152,7 +152,7 @@ export function createUniversitySupportPluginConfig(
       semantic_defer_fallback_ms: interactive ? 4500 : 4000,
     },
     bridge: {
-      api_key: requireEnv("GOOGLE_GENERATIVE_AI_API_KEY"),
+      api_key: requireEnv("OPENAI_API_KEY"),
       model: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
       system_prompt: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
       tools: studentRelationsTools,

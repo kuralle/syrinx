@@ -238,7 +238,7 @@ async function main(): Promise<void> {
         },
         vad: { threshold: 0.01 },
         bridge: {
-          api_key: process.env["GOOGLE_GENERATIVE_AI_API_KEY"],
+          api_key: process.env["OPENAI_API_KEY"],
           model: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
           system_prompt: UNIVERSITY_SUPPORT_PROMPT,
           tools: supportTools,

@@ -26,7 +26,7 @@ import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
 const require = createRequire(import.meta.url);
 const { WaveFile } = require("wavefile") as typeof import("wavefile");
 
-export const DEFAULT_MODEL = "gemini-3.1-flash-lite";
+export const DEFAULT_MODEL = "gpt-4.1-mini";
 
 const SAMPLES_PER_FRAME = 320;
 const DEFAULT_FIXTURE_PATH =
@@ -116,10 +116,7 @@ export function coerceGoogleGenAiKey(): void {
 export function listMissingVoiceHeadlessEnvKeys(): string[] {
   const missing: string[] = [];
   if (!process.env["DEEPGRAM_API_KEY"]?.trim()) missing.push("DEEPGRAM_API_KEY");
-  coerceGoogleGenAiKey();
-  if (!process.env["GOOGLE_GENERATIVE_AI_API_KEY"]?.trim()) {
-    missing.push("GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY");
-  }
+  if (!process.env["OPENAI_API_KEY"]?.trim()) missing.push("OPENAI_API_KEY");
   if (!process.env["CARTESIA_API_KEY"]?.trim()) missing.push("CARTESIA_API_KEY");
   return missing;
 }
@@ -230,7 +227,7 @@ async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<Hea
       },
       vad: { threshold: 0.01 },
       bridge: {
-        api_key: process.env["GOOGLE_GENERATIVE_AI_API_KEY"],
+        api_key: process.env["OPENAI_API_KEY"],
         model: ext.model ?? DEFAULT_MODEL,
         system_prompt: ext.systemPrompt ?? DEFAULT_SYSTEM_LINES.join("\n"),
       },
