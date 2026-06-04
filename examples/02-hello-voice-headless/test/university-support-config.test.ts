@@ -6,6 +6,7 @@ import { createUniversitySupportPluginConfig } from "../src/university-support-a
 describe("university support interactive endpointing config", () => {
   it("keeps browser-interactive endpointing semantic and non-VAD-finalizing", () => {
     process.env["DEEPGRAM_API_KEY"] = "test-deepgram";
+    process.env["OPENAI_API_KEY"] = "test-openai";
     process.env["GOOGLE_GENERATIVE_AI_API_KEY"] = "test-google";
     const config = createUniversitySupportPluginConfig({
       inputSampleRate: 16000,

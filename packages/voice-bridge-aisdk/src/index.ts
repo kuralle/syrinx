@@ -7,7 +7,7 @@
 // into the bus. Handles LLM interrupts via AbortController.
 
 import type { PipelineBus } from "@asyncdot/voice";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAI } from "@ai-sdk/openai";
 import {
   streamText,
   stepCountIs,
@@ -40,7 +40,7 @@ export type AISDKStreamFactory = (request: {
 export class AISDKBridgePlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private apiKey: string = "";
-  private model: string = "gemini-2.5-flash";
+  private model: string = "gpt-4.1-mini";
   private systemPrompt: string = "You are a helpful voice assistant.";
   private tools: AISDKBridgeTools | undefined;
   private toolChoice: ToolChoice<ToolSet> | undefined;
@@ -79,7 +79,7 @@ export class AISDKBridgePlugin implements VoicePlugin {
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
     this.apiKey = requireStringConfig(config, "api_key");
-    this.model = (config["model"] as string) ?? "gemini-2.5-flash";
+    this.model = (config["model"] as string) ?? "gpt-4.1-mini";
     this.systemPrompt = (config["system_prompt"] as string) ?? "You are a helpful voice assistant.";
     this.tools = readToolsConfig(config["tools"]);
     this.toolChoice = readToolChoiceConfig(config["tool_choice"]);
@@ -267,9 +267,9 @@ export class AISDKBridgePlugin implements VoicePlugin {
       return;
     }
 
-    const google = createGoogleGenerativeAI({ apiKey: this.apiKey });
+    const openai = createOpenAI({ apiKey: this.apiKey });
     const result = streamText({
-      model: google(this.model),
+      model: openai(this.model),
       system: this.systemPrompt,
       messages,
       tools: this.tools,

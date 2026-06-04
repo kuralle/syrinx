@@ -420,7 +420,7 @@ function interruptLlm(contextId: string): InterruptLlmPacket {
 function baseConfig(): Record<string, unknown> {
   return {
     api_key: "test-key",
-    model: "gemini-test",
+    model: "gpt-test",
     system_prompt: "test",
     retry_max_attempts: 1,
     timeout_ms: 1000,
