@@ -28,9 +28,11 @@ export interface ObservabilityObserverDeps {
 }
 
 type BoundaryTimes = Partial<Record<TurnBoundaryKind, number>>;
+type StageDims = Partial<ObservabilityDims> & { cancelled?: boolean };
 
 export class ObservabilityObserver {
   private readonly boundaryTimes = new Map<string, BoundaryTimes>();
+  private readonly stageDims = new Map<string, StageDims>();
   private readonly agentStartedEmitted = new Set<string>();
   private readonly unsubscribes: Array<() => void> = [];
 
@@ -70,6 +72,7 @@ export class ObservabilityObserver {
     for (const unsub of this.unsubscribes) unsub();
     this.unsubscribes.length = 0;
     this.boundaryTimes.clear();
+    this.stageDims.clear();
     this.agentStartedEmitted.clear();
   }
 
@@ -86,11 +89,14 @@ export class ObservabilityObserver {
   }
 
   private onTurnComplete(pkt: EndOfSpeechPacket): void {
+    const provider = pkt.transcripts[0]?.provider;
+    if (provider) this.mergeStageDims(this.speechId(pkt.contextId), provider);
     this.emitBoundary(this.speechId(pkt.contextId), "agent_thinking");
   }
 
   private onTtsAudio(pkt: TextToSpeechAudioPacket): void {
     const id = pkt.contextId;
+    if (pkt.provider) this.mergeStageDims(id, pkt.provider);
     if (this.agentStartedEmitted.has(id)) return;
     this.agentStartedEmitted.add(id);
     this.emitBoundary(id, "agent_started_speaking");
@@ -101,6 +107,10 @@ export class ObservabilityObserver {
   }
 
   private onInterruptDetected(pkt: InterruptionDetectedPacket): void {
+    this.stageDims.set(this.speechId(pkt.contextId), {
+      ...this.stageDims.get(this.speechId(pkt.contextId)),
+      cancelled: true,
+    });
     this.emitBoundary(this.speechId(pkt.contextId), "interruption", true);
   }
 
@@ -112,13 +122,14 @@ export class ObservabilityObserver {
       this.boundaryTimes.set(speechId, times);
     }
 
+    const dims = this.dimsFor(speechId, cancelled);
     const tags = {
       sessionId: this.deps.sessionId,
       speechId,
-      provider: this.deps.dims.provider,
-      model: this.deps.dims.model,
-      region: this.deps.dims.region,
-      cancelled: cancelled ? "true" : "false",
+      provider: dims.provider,
+      model: dims.model,
+      region: dims.region,
+      cancelled: dims.cancelled ? "true" : "false",
     };
 
     if (boundary === "agent_started_speaking") {
@@ -149,11 +160,36 @@ export class ObservabilityObserver {
         sessionId: this.deps.sessionId,
         speechId,
         monotonicMs: now,
-        provider: this.deps.dims.provider,
-        model: this.deps.dims.model,
-        region: this.deps.dims.region,
-        cancelled: cancelled || undefined,
+        provider: dims.provider,
+        model: dims.model,
+        region: dims.region,
+        cancelled: dims.cancelled || undefined,
       }),
     );
   }
+
+  private mergeStageDims(speechId: string, provider: Record<string, unknown>): void {
+    const current = this.stageDims.get(speechId) ?? {};
+    this.stageDims.set(speechId, {
+      ...current,
+      provider: readString(provider["name"], readString(provider["provider"], current.provider)),
+      model: readString(provider["model"], current.model),
+      region: readString(provider["region"], current.region),
+      cancelled: typeof provider["cancelled"] === "boolean" ? provider["cancelled"] : current.cancelled,
+    });
+  }
+
+  private dimsFor(speechId: string, cancelled: boolean): Required<ObservabilityDims> & { cancelled: boolean } {
+    const stage = this.stageDims.get(speechId) ?? {};
+    return {
+      provider: stage.provider ?? this.deps.dims.provider,
+      model: stage.model ?? this.deps.dims.model,
+      region: stage.region ?? this.deps.dims.region,
+      cancelled: cancelled || stage.cancelled === true,
+    };
+  }
+}
+
+function readString(value: unknown, fallback: string | undefined): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
 }

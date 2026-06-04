@@ -19,7 +19,7 @@
 
 import { PipelineBusImpl, Route, type PipelineBus } from "./pipeline-bus.js";
 import { runInitChain, runFinalizeChain, type InitStep } from "./init-chain.js";
-import type { VoicePlugin, PluginConfig } from "./plugin-contract.js";
+import type { VoicePlugin, PluginConfig, EndpointingOwner } from "./plugin-contract.js";
 import { IdleTimeoutManager, type IdleTimeoutConfig } from "./idle-timeout.js";
 import { ModeSwitcher } from "./mode-switcher.js";
 import { createConversationEventStream, type ConversationEvent } from "./conversation-event.js";
@@ -147,9 +147,8 @@ export interface VoiceAgentSessionConfig {
    */
   errorFallbackText?: string;
   /**
-   * Which component owns turn boundary (EOS) for this session. When set, gates
-   * `eos.audio` fan-out and complements the session-level duplicate-EOS guard.
-   * Unset preserves legacy behavior (all fan-outs + dedup guard only).
+   * Which component owns turn boundary (EOS) for this session. Defaults to
+   * provider STT ownership; Smart Turn sessions must opt in explicitly.
    */
   endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
   readonly metricsExporter?: MetricsExporter;
@@ -225,7 +224,7 @@ export class VoiceAgentSession {
   private firstTtsAudioFired = new Set<string>();
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
-  private readonly endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
+  private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
   private lastFinalizedContextId = "";
 
   constructor(config: VoiceAgentSessionConfig) {
@@ -233,7 +232,7 @@ export class VoiceAgentSession {
     if (owner !== undefined && owner !== "provider_stt" && owner !== "smart_turn" && owner !== "timer") {
       throw new Error(`Unsupported endpointingOwner: ${owner}`);
     }
-    this.endpointingOwner = owner;
+    this.endpointingOwner = owner ?? "provider_stt";
     this.config = config;
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
@@ -469,6 +468,9 @@ export class VoiceAgentSession {
     this.bus.on("vad.audio", this.handleVadAudioForSpeakerGate.bind(this));
 
     // EOS
+    this.bus.on("turn.change", () => {
+      this.lastFinalizedContextId = "";
+    });
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
     this.bus.on("eos.interim", this.handleEosInterim.bind(this));
 
@@ -580,6 +582,7 @@ export class VoiceAgentSession {
 
   private handleSttResult(pkt: SttResultPacket): void {
     this.watchdogs.clearSttForceFinalizeIfContext(pkt.contextId);
+    this.turnArbiter.noteInterimEvidence(pkt.text, pkt.confidence);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -615,6 +618,8 @@ export class VoiceAgentSession {
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
+    this.lastFinalizedContextId = "";
+
     if (this.latencyFiller.isFillerOnly(this.currentTurnId)) {
       this.cancelLatencyFillerTurn(this.currentTurnId, pkt.timestampMs);
     }
@@ -1035,8 +1040,10 @@ export class VoiceAgentSession {
 
   private buildInitChain(): void {
     const steps: InitStep[] = [];
+    this.applyEndpointingOwnerInvariant();
 
     for (const [name, plugin] of this.plugins) {
+      if (!this.shouldInitializePlugin(plugin)) continue;
       steps.push({
         name,
         stage: pluginStage(name),
@@ -1073,6 +1080,37 @@ export class VoiceAgentSession {
     });
 
     this.initSteps = orderedPluginSteps;
+  }
+
+  private applyEndpointingOwnerInvariant(): void {
+    if (this.endpointingOwner === "timer") return;
+    const owner: EndpointingOwner = this.endpointingOwner;
+    const finalizers = [...this.plugins.entries()]
+      .filter(([, plugin]) => plugin.endpointingCapability !== undefined);
+    const enabledFinalizers = finalizers
+      .filter(([, plugin]) => plugin.endpointingCapability?.owner === owner);
+    if (finalizers.length > 0 && enabledFinalizers.length !== 1) {
+      throw new Error(
+        `endpointingOwner=${owner} requires exactly one registered ${owner} EOS finalizer; found ${String(enabledFinalizers.length)}`,
+      );
+    }
+    for (const [name, plugin] of finalizers) {
+      if (plugin.endpointingCapability?.owner === owner) continue;
+      const disabled = plugin.endpointingCapability?.disableConfig;
+      if (!disabled) continue;
+      this.config.plugins[name] = {
+        ...(this.config.plugins[name] ?? {}),
+        ...disabled,
+      };
+    }
+  }
+
+  private shouldInitializePlugin(plugin: VoicePlugin): boolean {
+    const capability = plugin.endpointingCapability;
+    if (!capability) return true;
+    if (this.endpointingOwner === "timer") return false;
+    if (capability.owner === "smart_turn") return capability.owner === this.endpointingOwner;
+    return true;
   }
 
   // =========================================================================

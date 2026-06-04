@@ -14,6 +14,7 @@ import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
   createTwilioMediaStreamServer,
+  installGracefulShutdown,
 } from "@asyncdot/voice-server-websocket";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
@@ -119,12 +120,7 @@ export async function main(): Promise<void> {
     },
   };
 
-  process.once("SIGINT", () => {
-    void reviewServer.close({ graceful: true, drainDeadlineMs: 10_000 }).finally(() => process.exit(0));
-  });
-  process.once("SIGTERM", () => {
-    void reviewServer.close({ graceful: true, drainDeadlineMs: 10_000 }).finally(() => process.exit(0));
-  });
+  installGracefulShutdown(reviewServer, { drainDeadlineMs: 10_000, onClosed: () => process.exit(0) });
 }
 
 function handleHttpRequest(args: {

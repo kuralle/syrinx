@@ -50,7 +50,7 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
   private history: ModelMessage[] = [];
-  private abortController: AbortController | null = null;
+  private activeGeneration: { contextId: string; controller: AbortController } | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
   // G2/G25: per-turn state so a barged-in turn is remembered as what the user HEARD,
@@ -133,9 +133,12 @@ export class AISDKBridgePlugin implements VoicePlugin {
       // history to the spoken prefix (G2/G25), so the model isn't left believing it
       // said words the user never heard (nor amnesiac about the exchange).
       bus.on("interrupt.llm", (pkt: unknown) => {
-        this.abortController?.abort();
-        this.abortController = null;
-        this.commitInterruptedHistory((pkt as { contextId: string }).contextId);
+        const contextId = (pkt as { contextId: string }).contextId;
+        if (this.activeGeneration?.contextId === contextId) {
+          this.activeGeneration.controller.abort();
+          this.activeGeneration = null;
+        }
+        this.commitInterruptedHistory(contextId);
       }),
     );
   }
@@ -147,103 +150,113 @@ export class AISDKBridgePlugin implements VoicePlugin {
 
     // Handlers are concurrent, so a new turn can begin while a prior generation is
     // still in flight. Supersede it: abort the previous controller before starting.
-    this.abortController?.abort();
-    this.abortController = new AbortController();
-    const signal = this.abortController.signal;
+    this.activeGeneration?.controller.abort();
+    const controller = new AbortController();
+    this.activeGeneration = { contextId, controller };
+    const signal = controller.signal;
 
     let reply = "";
     let emittedDelta = false;
+    let committed = false;
 
-    for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
-      try {
-        let finishReason: FinishReason | null = null;
-        let rawFinishReason: string | undefined;
-        for await (const part of withStreamIdleTimeout(this.streamResponse(userText, signal), this.timeoutMs, signal)) {
-          if (signal.aborted) return;
-          if (part.type === "text-delta") {
-            reply += part.text;
-            emittedDelta = true;
+    try {
+      for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
+        try {
+          let finishReason: FinishReason | null = null;
+          let rawFinishReason: string | undefined;
+          for await (const part of withStreamIdleTimeout(this.streamResponse(userText, signal), this.timeoutMs, signal)) {
+            if (signal.aborted) return;
+            if (part.type === "text-delta") {
+              reply += part.text;
+              emittedDelta = true;
 
-            this.bus.push(Route.Main, {
-              kind: "llm.delta",
-              contextId,
-              timestampMs: Date.now(),
-              text: part.text,
-            });
-          } else if (part.type === "tool-call") {
-            this.bus.push(Route.Main, {
-              kind: "llm.tool_call",
-              contextId,
-              timestampMs: Date.now(),
-              toolId: part.toolCallId,
-              toolName: part.toolName,
-              toolArgs: toRecord(part.input),
-            });
-          } else if (part.type === "tool-result") {
-            this.bus.push(Route.Main, {
-              kind: "llm.tool_result",
-              contextId,
-              timestampMs: Date.now(),
-              toolId: part.toolCallId,
-              toolName: part.toolName,
-              result: stringifyToolOutput(part.output),
-            });
-          } else if (part.type === "tool-error") {
-            throw part.error instanceof Error ? part.error : new Error(`Tool ${part.toolName} failed`);
-          } else if (part.type === "error") {
-            throw part.error instanceof Error ? part.error : new Error(String(part.error));
-          } else if (part.type === "finish-step") {
-            this.recordFinishReason(contextId, "llm.finish_step_reason", part.finishReason, part.rawFinishReason);
-            if (part.finishReason === "error" || part.finishReason === "content-filter") {
-              throw new Error(`AI SDK provider step failed: ${formatFinishReason(part.finishReason, part.rawFinishReason)}`);
+              this.bus.push(Route.Main, {
+                kind: "llm.delta",
+                contextId,
+                timestampMs: Date.now(),
+                text: part.text,
+              });
+            } else if (part.type === "tool-call") {
+              this.bus.push(Route.Main, {
+                kind: "llm.tool_call",
+                contextId,
+                timestampMs: Date.now(),
+                toolId: part.toolCallId,
+                toolName: part.toolName,
+                toolArgs: toRecord(part.input),
+              });
+            } else if (part.type === "tool-result") {
+              this.bus.push(Route.Main, {
+                kind: "llm.tool_result",
+                contextId,
+                timestampMs: Date.now(),
+                toolId: part.toolCallId,
+                toolName: part.toolName,
+                result: stringifyToolOutput(part.output),
+              });
+            } else if (part.type === "tool-error") {
+              throw part.error instanceof Error ? part.error : new Error(`Tool ${part.toolName} failed`);
+            } else if (part.type === "error") {
+              throw part.error instanceof Error ? part.error : new Error(String(part.error));
+            } else if (part.type === "finish-step") {
+              this.recordFinishReason(contextId, "llm.finish_step_reason", part.finishReason, part.rawFinishReason);
+              if (part.finishReason === "error" || part.finishReason === "content-filter") {
+                throw new Error(`AI SDK provider step failed: ${formatFinishReason(part.finishReason, part.rawFinishReason)}`);
+              }
+            } else if (part.type === "finish") {
+              finishReason = part.finishReason;
+              rawFinishReason = part.rawFinishReason;
+              this.recordFinishReason(contextId, "llm.finish_reason", part.finishReason, part.rawFinishReason);
             }
-          } else if (part.type === "finish") {
-            finishReason = part.finishReason;
-            rawFinishReason = part.rawFinishReason;
-            this.recordFinishReason(contextId, "llm.finish_reason", part.finishReason, part.rawFinishReason);
           }
-        }
 
-        validateFinalFinishReason(finishReason, rawFinishReason);
+          validateFinalFinishReason(finishReason, rawFinishReason);
 
-        // Interrupted as generation finished — the interrupt handler owns the history
-        // for this turn (spoken prefix); don't commit the full reply or emit llm.done.
-        if (signal.aborted) return;
+          // Interrupted as generation finished — the interrupt handler owns the history
+          // for this turn (spoken prefix); don't commit the full reply or emit llm.done.
+          if (signal.aborted) return;
 
-        this.bus.push(Route.Main, {
-          kind: "llm.done",
-          contextId,
-          timestampMs: Date.now(),
-          text: reply,
-        });
-        this.rememberTurn(userText, reply, contextId);
-        return;
-      } catch (err) {
-        if (signal.aborted) return;
-        const category = categorizeLlmError(err);
-        const recoverable = isRecoverable(category);
-        if (!recoverable || emittedDelta || attempt >= this.retryConfig.maxAttempts) {
-          this.bus.push(Route.Critical, {
-            kind: "llm.error",
+          this.bus.push(Route.Main, {
+            kind: "llm.done",
             contextId,
             timestampMs: Date.now(),
-            component: "bridge" as const,
-            category,
-            cause: err instanceof Error ? err : new Error(String(err)),
-            isRecoverable: recoverable,
+            text: reply,
           });
+          this.rememberTurn(userText, reply, contextId);
+          committed = true;
           return;
-        }
+        } catch (err) {
+          if (signal.aborted) return;
+          const category = categorizeLlmError(err);
+          const recoverable = isRecoverable(category);
+          if (!recoverable || emittedDelta || attempt >= this.retryConfig.maxAttempts) {
+            this.bus.push(Route.Critical, {
+              kind: "llm.error",
+              contextId,
+              timestampMs: Date.now(),
+              component: "bridge" as const,
+              category,
+              cause: err instanceof Error ? err : new Error(String(err)),
+              isRecoverable: recoverable,
+            });
+            return;
+          }
 
-        this.bus.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId,
-          timestampMs: Date.now(),
-          name: "llm.retry",
-          value: String(attempt + 1),
-        });
-        await waitForRetryDelay(attempt, this.retryConfig, signal);
+          this.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId,
+            timestampMs: Date.now(),
+            name: "llm.retry",
+            value: String(attempt + 1),
+          });
+          await waitForRetryDelay(attempt, this.retryConfig, signal);
+        }
       }
+    } finally {
+      if (this.activeGeneration?.controller === controller) {
+        this.activeGeneration = null;
+      }
+      if (!committed) this.clearTurnState(contextId);
     }
   }
 
@@ -290,7 +303,8 @@ export class AISDKBridgePlugin implements VoicePlugin {
   }
 
   async close(): Promise<void> {
-    this.abortController?.abort();
+    this.activeGeneration?.controller.abort();
+    this.activeGeneration = null;
     for (const dispose of this.disposers.splice(0)) dispose();
     this.spokenByContext.clear();
     this.turnUserText.clear();

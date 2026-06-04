@@ -20,16 +20,17 @@ import {
   type AudioFormat,
   type VoicePlugin,
   type PluginConfig,
+  type SttErrorPacket,
   assertAudioFormat,
   assertAudioPayload,
   requireStringConfig,
   optionalStringConfig,
   categorizeSttError,
   isRecoverable,
-  readRetryConfig,
-  waitForRetryDelay,
-  type RetryConfig,
+  readProviderRetryConfig,
 } from "@asyncdot/voice";
+import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
+import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 // =============================================================================
 // Types
@@ -50,24 +51,29 @@ interface GCPConfig {
 // =============================================================================
 
 export class GoogleSTTPlugin implements VoicePlugin {
+  readonly endpointingCapability = {
+    owner: "provider_stt" as const,
+    disableConfig: {
+      emit_eos_on_final: false,
+    },
+  };
+
+  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+
   private bus: PipelineBus | null = null;
+  private conn: WebSocketConnection | null = null;
   private apiKey: string = "";
   private projectId: string = "";
   private languageCode: string = "en-US";
   private model: string = "latest_long";
   private endpointUrl: string | undefined;
-  private abortController: AbortController | null = null;
-  private webSocket: import("ws").WebSocket | null = null;
-  private ready = false;
-  private connResolver: (() => void) | null = null;
-  private connRejecter: ((err: Error) => void) | null = null;
   private currentContextId = "";
   private disposers: Array<() => void> = [];
   private recognizerPath = "";
-  private closed = false;
-  private reconnecting = false;
-  private retryConfig: RetryConfig = readRetryConfig({});
-  private readonly audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
+  private sampleRate = 16000;
+  private confidenceThreshold = 0;
+  private emitEosOnFinal = true;
+  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -76,15 +82,35 @@ export class GoogleSTTPlugin implements VoicePlugin {
     this.languageCode = optionalStringConfig(config, "language") ?? "en-US";
     this.model = optionalStringConfig(config, "model") ?? "latest_long";
     this.endpointUrl = optionalStringConfig(config, "endpoint_url");
-    this.retryConfig = readRetryConfig(config);
-    this.abortController = new AbortController();
-    this.closed = false;
+    this.sampleRate = (config["sample_rate"] as number) ?? 16000;
+    this.confidenceThreshold = (config["confidence_threshold"] as number) ?? 0;
+    this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
 
     this.recognizerPath = `projects/${this.projectId}/locations/global/recognizers/_`;
+    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
-    await this.connectWithRetry();
+    this.conn = new WebSocketConnection({
+      url: () => {
+        return this.endpointUrl ??
+          `wss://speech.googleapis.com/v2/${this.recognizerPath}:streamingRecognize?key=${this.apiKey}`;
+      },
+      socketFactory: this.socketFactory,
+      retry: readProviderRetryConfig(config),
+      replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
+      onReplay: (event, count) => {
+        this.pushMetric(this.currentContextId, `stt.google.reconnect_replay_${event}`, String(count));
+      },
+      onReadyBeforeReplay: () => this.sendConfig(),
+      onMessage: (data) => this.handleMessage(data),
+      onConnectionLost: (err) => {
+        this.emitError(err);
+      },
+      onUnrecoverable: (err) => {
+        this.emitError(err);
+      },
+    });
+    await this.conn.connect();
 
-    // Listen for STT audio on the bus
     this.disposers.push(
       bus.on("stt.audio", async (pkt: unknown) => {
         const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
@@ -101,106 +127,19 @@ export class GoogleSTTPlugin implements VoicePlugin {
     if (audio.byteLength === 0) return;
     try {
       assertAudioPayload(this.audioFormat, audio);
+      if (!this.conn) throw new Error("Google STT is not connected");
+      await this.conn.ensureReady();
+      this.conn.send(audio);
     } catch (err) {
       this.emitError(err instanceof Error ? err : new Error(String(err)));
-      return;
     }
-    await this.waitUntilReady();
-    const ws = this.webSocket;
-    if (!ws || ws.readyState !== ws.OPEN) {
-      throw new Error("Google STT WebSocket is not open");
-    }
-    ws.send(audio);
   }
 
   async close(): Promise<void> {
-    this.closed = true;
-    this.abortController?.abort();
     for (const dispose of this.disposers.splice(0)) dispose();
-    if (this.webSocket) {
-      this.webSocket.close();
-      this.webSocket = null;
-    }
+    await this.conn?.close();
+    this.conn = null;
     this.bus = null;
-    this.ready = false;
-    this.connResolver = null;
-    this.connRejecter = null;
-  }
-
-  private async connectWithRetry(): Promise<void> {
-    for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt++) {
-      try {
-        await this.connect();
-        return;
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        const category = categorizeSttError(error);
-        const recoverable = isRecoverable(category);
-        this.emitError(error, recoverable ? category : category);
-        if (!recoverable || attempt >= this.retryConfig.maxAttempts || this.closed) {
-          throw error;
-        }
-        this.emitRetryMetric(attempt, category);
-        await waitForRetryDelay(attempt, this.retryConfig, this.abortController?.signal);
-      }
-    }
-  }
-
-  private async connect(): Promise<void> {
-    const { default: WebSocket } = await import("ws");
-    const url = this.endpointUrl ??
-      `wss://speech.googleapis.com/v2/${this.recognizerPath}:streamingRecognize?key=${this.apiKey}`;
-    const ws = new WebSocket(url);
-    this.webSocket = ws;
-    this.ready = false;
-
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Google STT WebSocket connect timeout"));
-      }, 10_000);
-
-      ws.once("open", () => {
-        clearTimeout(timeout);
-        this.ready = true;
-        this.sendConfig();
-        this.connResolver?.();
-        this.connResolver = null;
-        this.connRejecter = null;
-        resolve();
-      });
-
-      ws.once("error", (err: Error) => {
-        clearTimeout(timeout);
-        this.ready = false;
-        reject(err);
-      });
-    });
-
-    ws.on("message", (data: import("ws").RawData) => {
-      this.handleMessage(data);
-    });
-
-    ws.on("error", (err: Error) => {
-      this.ready = false;
-      this.connRejecter?.(err);
-      this.connResolver = null;
-      this.connRejecter = null;
-      const category = categorizeSttError(err);
-      this.emitError(err, category);
-      if (isRecoverable(category)) {
-        void this.reconnect();
-      }
-    });
-
-    ws.on("close", () => {
-      this.ready = false;
-      this.connRejecter?.(new Error("Google STT WebSocket closed before ready"));
-      this.connResolver = null;
-      this.connRejecter = null;
-      if (!this.closed && !this.reconnecting) {
-        void this.reconnect();
-      }
-    });
   }
 
   private sendConfig(): void {
@@ -210,7 +149,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
         config: {
           explicitDecodingConfig: {
             encoding: "LINEAR16",
-            sampleRateHertz: 16000,
+            sampleRateHertz: this.sampleRate,
             audioChannelCount: 1,
           },
           languageCodes: [this.languageCode],
@@ -225,12 +164,13 @@ export class GoogleSTTPlugin implements VoicePlugin {
         },
       },
     };
-    this.webSocket?.send(JSON.stringify(configMsg));
+    this.conn?.send(JSON.stringify(configMsg));
   }
 
-  private handleMessage(data: import("ws").RawData): void {
+  private handleMessage(data: SocketData): void {
+    if (typeof data !== "string") return;
     try {
-      const msg = JSON.parse(data.toString());
+      const msg = JSON.parse(data);
       const results = msg.results;
       if (!Array.isArray(results) || results.length === 0) return;
 
@@ -242,6 +182,11 @@ export class GoogleSTTPlugin implements VoicePlugin {
         if (!text) continue;
         const confidence = alt.confidence ?? 0;
 
+        if (this.confidenceThreshold > 0 && confidence < this.confidenceThreshold) {
+          this.pushMetric(this.currentContextId, "stt_low_confidence", String(confidence));
+          continue;
+        }
+
         if (result.isFinal === true) {
           this.bus?.push(Route.Main, {
             kind: "stt.result",
@@ -250,14 +195,17 @@ export class GoogleSTTPlugin implements VoicePlugin {
             text,
             confidence,
             language: this.languageCode,
+            provider: { name: "google", model: this.model, region: "global" },
           });
-          this.bus?.push(Route.Main, {
-            kind: "eos.turn_complete",
-            contextId: this.currentContextId,
-            timestampMs: Date.now(),
-            text,
-            transcripts: [],
-          });
+          if (this.emitEosOnFinal) {
+            this.bus?.push(Route.Main, {
+              kind: "eos.turn_complete",
+              contextId: this.currentContextId,
+              timestampMs: Date.now(),
+              text,
+              transcripts: [],
+            });
+          }
         } else {
           this.bus?.push(Route.Main, {
             kind: "stt.interim",
@@ -272,42 +220,8 @@ export class GoogleSTTPlugin implements VoicePlugin {
     }
   }
 
-  private async waitUntilReady(): Promise<void> {
-    if (this.ready) return;
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Google STT WebSocket connect timeout"));
-      }, 10_000);
-      this.connResolver = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      this.connRejecter = (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      };
-    });
-  }
-
-  private async reconnect(): Promise<void> {
-    if (this.closed || this.reconnecting) return;
-    this.reconnecting = true;
-    try {
-      this.webSocket?.close();
-    } catch {
-      // best effort
-    }
-    try {
-      await this.connectWithRetry();
-    } catch {
-      // stt.error already emitted; session error policy handles fatal state.
-    } finally {
-      this.reconnecting = false;
-    }
-  }
-
   private emitError(error: Error, category = categorizeSttError(error)): void {
-    this.bus?.push(Route.Critical, {
+    const packet: SttErrorPacket = {
       kind: "stt.error",
       contextId: this.currentContextId,
       timestampMs: Date.now(),
@@ -315,16 +229,17 @@ export class GoogleSTTPlugin implements VoicePlugin {
       category,
       cause: error,
       isRecoverable: isRecoverable(category),
-    });
+    };
+    this.bus?.push(Route.Critical, packet);
   }
 
-  private emitRetryMetric(attempt: number, category: string): void {
+  private pushMetric(contextId: string, name: string, value: string): void {
     this.bus?.push(Route.Background, {
       kind: "metric.conversation",
-      contextId: this.currentContextId,
+      contextId,
       timestampMs: Date.now(),
-      name: "stt.retry",
-      value: `google:${category}:${attempt}`,
+      name,
+      value,
     });
   }
 }

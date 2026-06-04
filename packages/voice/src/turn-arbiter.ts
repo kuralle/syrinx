@@ -69,11 +69,13 @@ export interface TurnArbiterDeps {
 export class TurnArbiter {
   private turnInterruption: TurnInterruptionState = { kind: "idle" };
   private latestInterimText = "";
+  private latestInterimConfidence: number | null = null;
 
   constructor(private readonly deps: TurnArbiterDeps) {}
 
-  noteInterimEvidence(text: string): void {
+  noteInterimEvidence(text: string, confidence?: number): void {
     this.latestInterimText = text;
+    this.latestInterimConfidence = typeof confidence === "number" ? confidence : null;
   }
 
   onSpeechStarted(pkt: VadSpeechStartedPacket, interruptedContextId: string): void {
@@ -153,6 +155,7 @@ export class TurnArbiter {
   clear(): void {
     this.turnInterruption = { kind: "idle" };
     this.latestInterimText = "";
+    this.latestInterimConfidence = null;
   }
 
   private pendingFor(userContextId: string): PendingTurnInterruption | null {
@@ -199,6 +202,10 @@ export class TurnArbiter {
     }
 
     const sustainedMs = nowMs - pending.firstSpeechMs;
+    if (this.latestInterimConfidence !== null && this.latestInterimConfidence < 0.5) {
+      this.suppress(pending, "interrupt.suppressed_low_confidence", sustainedMs);
+      return;
+    }
     if (this.latestInterimText && isBackchannel(this.latestInterimText)) {
       this.suppress(pending, "interrupt.suppressed_backchannel", sustainedMs);
       return;
@@ -226,6 +233,7 @@ export class TurnArbiter {
     );
     this.emitInterruptDetected(pending.interruptedContextId);
     this.latestInterimText = "";
+    this.latestInterimConfidence = null;
   }
 
   private suppress(
@@ -245,5 +253,6 @@ export class TurnArbiter {
       make.metric(pending.interruptedContextId, metricName, String(durationMs)),
     );
     this.latestInterimText = "";
+    this.latestInterimConfidence = null;
   }
 }

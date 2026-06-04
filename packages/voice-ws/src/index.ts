@@ -73,6 +73,8 @@ export interface WebSocketConnectionOptions {
   readonly onConnectionLost?: (err: Error) => void;
   /** Called before each reconnect attempt so the consumer can drop stale provider state. */
   readonly onReconnecting?: () => void;
+  /** Called after the socket is open/verified and before replay frames flush. */
+  readonly onReadyBeforeReplay?: () => void;
   readonly onReconnected?: () => void;
   /** Called when reconnection is abandoned (quick-failure loop or attempts exhausted). */
   readonly onUnrecoverable?: (err: Error) => void;
@@ -116,6 +118,8 @@ export class WebSocketConnection {
   async connect(): Promise<void> {
     this.closed = false;
     await this.openSocket();
+    this.opts.onReadyBeforeReplay?.();
+    this.flushReplay();
   }
 
   get isReady(): boolean {
@@ -243,7 +247,6 @@ export class WebSocketConnection {
         this.ready = true;
         this.lastConnectAtMs = Date.now();
         this.startKeepAlive();
-        this.flushReplay();
         this.connResolver?.();
         this.connResolver = null;
         this.connRejecter = null;
@@ -319,6 +322,8 @@ export class WebSocketConnection {
         try {
           await this.openSocket();
           if (this.socket && (await this.socket.verify(VERIFY_TIMEOUT_MS))) {
+            this.opts.onReadyBeforeReplay?.();
+            this.flushReplay();
             this.opts.onReconnected?.();
             return;
           }

@@ -156,6 +156,52 @@ describe("PipecatEOSPlugin", () => {
     await started;
   });
 
+  it("does not max-finalize an early provider final while VAD still reports active speech", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 10 });
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-early-final",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-early-final",
+      timestampMs: Date.now(),
+      text: "first half",
+      confidence: 0.9,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(completions).toEqual([]);
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-early-final",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        kind: "eos.turn_complete",
+        contextId: "turn-early-final",
+        text: "first half",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("does not complete a turn for an incomplete smart-turn pause", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
@@ -191,7 +237,7 @@ describe("PipecatEOSPlugin", () => {
       kind: "stt.result",
       contextId: "turn-3",
       timestampMs: Date.now(),
-      text: "whether the petition is approved",
+      text: "whether the petition is approved.",
       confidence: 0.95,
     });
     bus.push(Route.Main, {
@@ -204,7 +250,7 @@ describe("PipecatEOSPlugin", () => {
     expect(completions).toEqual([
       expect.objectContaining({
         contextId: "turn-3",
-        text: "I need to know whether the petition is approved",
+        text: "I need to know whether the petition is approved.",
       }),
     ]);
 
@@ -524,6 +570,12 @@ describe("PipecatEOSPlugin", () => {
 
     await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 0 });
     bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "review-turn",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
       kind: "stt.result",
       contextId: "review-turn",
       timestampMs: Date.now(),
@@ -610,6 +662,50 @@ describe("PipecatEOSPlugin", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 35));
     expect(completions).toHaveLength(1);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not force-finalize semantic defer while speech is active again", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 250,
+      semantic_defer_fallback_ms: 30,
+      incomplete_fallback_ms: 2000,
+      max_delay_ms: 0,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-defer-active",
+      timestampMs: Date.now(),
+      text: "I need to know",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "turn-defer-active",
+      timestampMs: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-defer-active",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(completions).toEqual([]);
 
     await plugin.close();
     bus.stop();

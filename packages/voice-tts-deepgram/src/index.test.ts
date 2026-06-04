@@ -105,6 +105,60 @@ describe("DeepgramTTSPlugin", () => {
     await started;
   });
 
+  it("emits tts.end when Deepgram streams audio but never acknowledges Flush", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        received.push(msg);
+        if (msg["type"] === "Speak") socket.send(Buffer.from([5, 6, 7, 8]), { binary: true });
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    const ends: TextToSpeechEndPacket[] = [];
+    const metrics: Array<{ name?: string; value?: string; contextId?: string }> = [];
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+    bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
+    bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as { name?: string; value?: string; contextId?: string };
+      metrics.push(metric);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-deepgram-key",
+      endpoint_url: endpointUrl,
+      finish_timeout_ms: 20,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-timeout", timestampMs: Date.now(), text: "Finish me." });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-timeout", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1);
+
+    expect(received).toEqual([
+      expect.objectContaining({ type: "Speak", text: "Finish me." }),
+      expect.objectContaining({ type: "Flush" }),
+    ]);
+    expect(audio).toEqual([
+      expect.objectContaining({
+        contextId: "turn-timeout",
+        audio: new Uint8Array([5, 6, 7, 8]),
+      }),
+    ]);
+    expect(ends).toEqual([expect.objectContaining({ contextId: "turn-timeout" })]);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      contextId: "turn-timeout",
+      name: "tts.deepgram.finish_timeout",
+      value: "20",
+    }));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("sends Clear and drops further audio on interruption", async () => {
     const received: Array<Record<string, unknown>> = [];
     let socketRef: WebSocket | null = null;

@@ -46,10 +46,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
   private retryConfig: RetryConfig = readProviderRetryConfig({});
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
-  // Cumulative PCM16 mono samples already received per context. Cartesia's
-  // word_timestamps start at 0 per response message; offsets derive from sample
-  // count to avoid per-chunk Math.round drift on long turns.
-  private contextAudioSampleCount = new Map<string, number>();
+  private finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposers: Array<() => void> = [];
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
@@ -63,6 +60,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.sampleRate = (config["sample_rate"] as number) ?? this.sampleRate;
     this.language = optionalStringConfig(config, "language") ?? this.language;
     this.retryConfig = readProviderRetryConfig(config);
+    const finishTimeoutMs = readNonNegativeInteger(config["finish_timeout_ms"], 2000);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
@@ -75,6 +73,10 @@ export class CartesiaTTSPlugin implements VoicePlugin {
       headers: { "X-API-Key": this.apiKey },
       socketFactory: this.socketFactory,
       retry: this.retryConfig,
+      replayBufferSize: (config["replay_buffer_size"] as number) ?? 32,
+      onReplay: (event, count) => {
+        this.emitMetric("", `tts.cartesia.reconnect_replay_${event}`, String(count));
+      },
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data) => this.handleProviderMessage(data),
       onConnectionLost: (err) => this.failActiveContexts(err),
@@ -93,6 +95,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           this.emitEnd(donePkt.contextId);
           return;
         }
+        if (finishTimeoutMs > 0) this.scheduleFinishTimeout(donePkt.contextId, finishTimeoutMs);
         await this.finishContext(donePkt.contextId);
       }),
       bus.on("interrupt.tts", () => {
@@ -166,7 +169,8 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
-    this.contextAudioSampleCount.clear();
+    for (const timer of this.finishTimers.values()) clearTimeout(timer);
+    this.finishTimers.clear();
     await this.conn?.close();
     this.conn = null;
     this.bus = null;
@@ -195,7 +199,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     if (!contextId) return;
     this.cancelledContexts.add(contextId);
     this.activeContexts.delete(contextId);
-    this.contextAudioSampleCount.delete(contextId);
+    this.clearFinishTimeout(contextId);
     await this.trySend(
       JSON.stringify({
         context_id: contextId,
@@ -225,10 +229,14 @@ export class CartesiaTTSPlugin implements VoicePlugin {
 
     if (msg["type"] === "error" || isErrorStatusCode(msg["status_code"])) {
       this.activeContexts.delete(contextId);
-      this.contextAudioSampleCount.delete(contextId);
+      this.clearFinishTimeout(contextId);
       this.emitError(contextId, cartesiaProviderError(msg));
       if (msg["done"] === true) this.emitEnd(contextId);
       return;
+    }
+
+    if (msg["type"] === "timestamps") {
+      this.emitWordTimestamps(contextId, msg["word_timestamps"]);
     }
 
     // Cartesia audio arrives as non-empty base64 `data`. Control frames such as
@@ -244,57 +252,17 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           timestampMs: Date.now(),
           audio: new Uint8Array(audioBytes),
           sampleRateHz: this.sampleRate,
+          provider: { name: "cartesia", model: this.modelId, region: "global", cancelled: false },
         };
         this.bus?.push(Route.Main, audioPacket);
-
-        // Emit word timestamps for this chunk, offset to be cumulative from the
-        // start of the context's audio. Cartesia timestamps start at 0 per response
-        // message (per-chunk relative); we add the pre-existing context offset to
-        // make them absolute so callers can compare against a playout position.
-        const priorSamples = this.contextAudioSampleCount.get(contextId) ?? 0;
-        const chunkOffsetMs = Math.floor((priorSamples * 1000) / this.sampleRate);
-        const wtRaw = msg["word_timestamps"];
-        if (wtRaw !== null && typeof wtRaw === "object") {
-          const wt = wtRaw as { words?: unknown };
-          const rawWords = Array.isArray(wt["words"]) ? wt["words"] : [];
-          const words: TtsWordTimestamp[] = [];
-          for (const w of rawWords) {
-            if (
-              typeof w === "object" && w !== null &&
-              typeof (w as Record<string, unknown>)["word"] === "string" &&
-              typeof (w as Record<string, unknown>)["start"] === "number" &&
-              typeof (w as Record<string, unknown>)["end"] === "number"
-            ) {
-              const entry = w as { word: string; start: number; end: number };
-              words.push({
-                word: entry.word,
-                startMs: Math.round(entry.start * 1000) + chunkOffsetMs,
-                endMs: Math.round(entry.end * 1000) + chunkOffsetMs,
-              });
-            }
-          }
-          if (words.length > 0) {
-            const tsPacket: TextToSpeechWordTimestampsPacket = {
-              kind: "tts.word_timestamps",
-              contextId,
-              timestampMs: Date.now(),
-              words,
-            };
-            this.bus?.push(Route.Main, tsPacket);
-          }
-        }
-
-        const chunkSamples = audioBytes.length / 2;
-        this.contextAudioSampleCount.set(contextId, priorSamples + chunkSamples);
       } catch (err) {
         this.activeContexts.delete(contextId);
-        this.contextAudioSampleCount.delete(contextId);
         this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
       }
     }
     if (msg["done"] === true) {
       this.activeContexts.delete(contextId);
-      this.contextAudioSampleCount.delete(contextId);
+      this.clearFinishTimeout(contextId);
       this.emitEnd(contextId);
     }
   }
@@ -313,10 +281,38 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     this.bus?.push(Route.Critical, packet);
   }
 
+  private scheduleFinishTimeout(contextId: string, timeoutMs: number): void {
+    this.clearFinishTimeout(contextId);
+    const timer = setTimeout(() => {
+      this.finishTimers.delete(contextId);
+      if (!this.activeContexts.has(contextId)) return;
+      this.emitMetric(contextId, "tts.cartesia.finish_timeout", String(timeoutMs));
+      this.activeContexts.delete(contextId);
+      this.emitEnd(contextId);
+    }, timeoutMs);
+    this.finishTimers.set(contextId, timer);
+  }
+
+  private clearFinishTimeout(contextId: string): void {
+    const timer = this.finishTimers.get(contextId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.finishTimers.delete(contextId);
+  }
+
+  private emitMetric(contextId: string, name: string, value: string): void {
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name,
+      value,
+    });
+  }
+
   private failActiveContexts(err: Error): void {
     const contextIds = [...this.activeContexts];
     this.activeContexts.clear();
-    this.contextAudioSampleCount.clear();
     if (contextIds.length === 0) {
       this.emitError("", err);
       return;
@@ -333,6 +329,34 @@ export class CartesiaTTSPlugin implements VoicePlugin {
       timestampMs: Date.now(),
     };
     this.bus?.push(Route.Main, packet);
+  }
+
+  private emitWordTimestamps(contextId: string, value: unknown): void {
+    if (!contextId || value === null || typeof value !== "object") return;
+    const raw = value as Record<string, unknown>;
+    const rawWords = Array.isArray(raw["words"]) ? raw["words"] : [];
+    const rawStarts = Array.isArray(raw["start"]) ? raw["start"] : [];
+    const rawEnds = Array.isArray(raw["end"]) ? raw["end"] : [];
+    const count = Math.min(rawWords.length, rawStarts.length, rawEnds.length);
+    const words: TtsWordTimestamp[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const word = rawWords[i];
+      const start = rawStarts[i];
+      const end = rawEnds[i];
+      if (typeof word !== "string" || typeof start !== "number" || typeof end !== "number") continue;
+      words.push({
+        word,
+        startMs: Math.round(start * 1000),
+        endMs: Math.round(end * 1000),
+      });
+    }
+    if (words.length === 0) return;
+    this.bus?.push(Route.Main, {
+      kind: "tts.word_timestamps",
+      contextId,
+      timestampMs: Date.now(),
+      words,
+    });
   }
 }
 
@@ -360,4 +384,10 @@ function decodeStrictBase64(value: string, name: string): Buffer {
     throw new Error(`${name} must be valid base64`);
   }
   return decoded;
+}
+
+function readNonNegativeInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const integer = Math.floor(value);
+  return integer >= 0 ? integer : fallback;
 }

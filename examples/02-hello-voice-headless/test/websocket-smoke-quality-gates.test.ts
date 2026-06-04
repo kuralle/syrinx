@@ -115,6 +115,7 @@ describe("websocket smoke quality gates", () => {
         speechStartedAtMs: 10,
         speechStartedCount: 1,
         audioEndedAtMs: 1000,
+        firstSpeechEndedAtMs: 1200,
         speechEndedAtMs: 1200,
         speechEndedCount: 1,
         sttFinalAtMs: 1400,

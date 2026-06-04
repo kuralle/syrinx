@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, readProviderRetryConfig, readRetryConfig, retryDelayMs, retryDelayWithJitterMs, waitForRetryDelay } from "./retry.js";
+import { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_OUTAGE_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, readProviderRetryConfig, readRetryConfig, retryDelayMs, retryDelayWithJitterMs, waitForRetryDelay } from "./retry.js";
 
 describe("retry helpers", () => {
   it("reads bounded retry config from plugin config", () => {
@@ -69,6 +69,15 @@ describe("retry helpers", () => {
     expect(readProviderRetryConfig({})).toEqual(VOICE_PROVIDER_RETRY_CONFIG);
     expect(readProviderRetryConfig({ retry_max_delay_ms: 3000 }).maxDelayMs).toBe(3000);
     // The plain default profile is unchanged (intra-turn low-latency retries).
+    expect(readRetryConfig({})).toEqual(DEFAULT_RETRY_CONFIG);
+  });
+
+  it("offers a provider-outage profile with a 4s floor and 10s cap", () => {
+    expect(retryDelayMs(1, VOICE_PROVIDER_OUTAGE_RETRY_CONFIG)).toBe(4_000);
+    expect(retryDelayMs(2, VOICE_PROVIDER_OUTAGE_RETRY_CONFIG)).toBe(8_000);
+    expect(retryDelayMs(3, VOICE_PROVIDER_OUTAGE_RETRY_CONFIG)).toBe(10_000);
+    expect(readProviderRetryConfig({ retry_profile: "provider_outage" })).toEqual(VOICE_PROVIDER_OUTAGE_RETRY_CONFIG);
+    expect(readProviderRetryConfig({ retry_profile: "provider_outage", retry_base_delay_ms: 5000 }).baseDelayMs).toBe(5000);
     expect(readRetryConfig({})).toEqual(DEFAULT_RETRY_CONFIG);
   });
 });

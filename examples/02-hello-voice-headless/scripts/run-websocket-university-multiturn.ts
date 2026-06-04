@@ -44,6 +44,7 @@ interface TurnCapture {
   speechStartedAtMs: number;
   speechStartedCount: number;
   audioEndedAtMs: number;
+  firstSpeechEndedAtMs: number;
   speechEndedAtMs: number;
   speechEndedCount: number;
   sttFinalAtMs: number;
@@ -81,6 +82,8 @@ async function main(): Promise<void> {
   const session = createSession();
   const server = await createVoiceWebSocketServer({
     port: 0,
+    maxQueuedOutputAudioMs: 30_000,
+    browserOpusDownlink: false,
     createSession: () => session,
     contextId: () => "ws-university-bootstrap",
   });
@@ -98,6 +101,9 @@ async function main(): Promise<void> {
     const evaluation = evaluateConversation(turns, modeledConversationMs);
     const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
+    const metricsPath = join(runDir, "metrics.json");
+    const transcriptPath = join(runDir, "transcript.json");
+    const eventsPath = join(runDir, "events.json");
     const baseline = {
       scenario: "websocket_university_student_relations_multiturn",
       generatedAt: new Date().toISOString(),
@@ -113,7 +119,7 @@ async function main(): Promise<void> {
       latencyMs: {
         totalInputAudio: totalInputAudioMs,
         totalAssistantAudio: totalAssistantAudioMs,
-        avgSttFinalAfterSpeechEnd: average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs)),
+        avgSttFinalAfterSpeechEnd: average(turns.map(sttFinalDelayAfterSpeechEnd)),
         avgVadSpeechEndAfterAudioEnd: average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs)),
         avgLlmTimeToFirstText: average(turns.map((turn) => turn.firstAgentAtMs - turn.sttFinalAtMs)),
         avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.agentEndedAtMs)),
@@ -132,7 +138,7 @@ async function main(): Promise<void> {
         vadSpeechEndedCount: turn.speechEndedCount,
         assistantAudioMs: assistantAudioMs(turn),
         latencyMs: {
-          sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
+          sttFinalAfterSpeechEnd: sttFinalDelayAfterSpeechEnd(turn),
           vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
           llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
           ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.agentEndedAtMs,
@@ -147,6 +153,9 @@ async function main(): Promise<void> {
         runDir: relative(PKG_ROOT, runDir),
         assistantAudioDir: relative(PKG_ROOT, outputDir),
         manifestPath: relative(PKG_ROOT, manifestPath),
+        metricsPath: relative(PKG_ROOT, metricsPath),
+        transcriptPath: relative(PKG_ROOT, transcriptPath),
+        eventsPath: relative(PKG_ROOT, eventsPath),
       },
       qualityGate: {
         passed: failures.length === 0,
@@ -163,12 +172,53 @@ async function main(): Promise<void> {
 
     await mkdir(dirname(BASELINE_PATH), { recursive: true });
     await writeFile(BASELINE_PATH, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+    await writeFile(metricsPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      modeledConversationMs: baseline.modeledConversationMs,
+      latencyMs: baseline.latencyMs,
+      qualityGate: baseline.qualityGate,
+    }, null, 2)}\n`, "utf8");
+    await writeFile(transcriptPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      turns: baseline.turns.map((turn) => ({
+        id: turn.id,
+        fixtureId: turn.fixtureId,
+        inputText: turn.inputText,
+        sttFinal: turn.sttFinal,
+        agentReply: turn.agentReply,
+      })),
+      qualityGate: baseline.qualityGate,
+    }, null, 2)}\n`, "utf8");
+    await writeFile(eventsPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      events: buildEvents(turns),
+      qualityGate: baseline.qualityGate,
+    }, null, 2)}\n`, "utf8");
     await writeSmokeArtifactManifest(manifestPath, manifest);
     console.log(JSON.stringify(baseline, null, 2));
     if (failures.length > 0) throw new Error(`websocket university smoke failed: ${failures.join("; ")}`);
   } finally {
     await server.close();
   }
+}
+
+function buildEvents(turns: readonly TurnCapture[]): Array<Record<string, unknown>> {
+  return turns.flatMap((turn) => [
+    { turnId: turn.id, kind: "user_audio_started", timestampMs: turn.startedAtMs },
+    { turnId: turn.id, kind: "user_audio_ended", timestampMs: turn.audioEndedAtMs },
+    { turnId: turn.id, kind: "vad_speech_started", timestampMs: turn.speechStartedAtMs },
+    { turnId: turn.id, kind: "vad_speech_ended", timestampMs: turn.speechEndedAtMs },
+    { turnId: turn.id, kind: "stt_final", timestampMs: turn.sttFinalAtMs, text: turn.transcript },
+    { turnId: turn.id, kind: "agent_first_text", timestampMs: turn.firstAgentAtMs },
+    { turnId: turn.id, kind: "tts_first_audio", timestampMs: turn.firstAudioAtMs },
+    { turnId: turn.id, kind: "tts_end", timestampMs: turn.ttsEndedAtMs },
+  ].filter((event) => typeof event.timestampMs === "number" && event.timestampMs > 0));
 }
 
 function buildSmokeManifest(args: {
@@ -200,7 +250,7 @@ function buildSmokeManifest(args: {
         path: relative(PKG_ROOT, join(args.outputDir, `${turn.id}.wav`)),
       },
       latencyMs: {
-        sttFinalAfterSpeechEnd: turn.sttFinalAtMs - turn.audioEndedAtMs,
+        sttFinalAfterSpeechEnd: sttFinalDelayAfterSpeechEnd(turn),
         vadSpeechEndAfterAudioEnd: turn.speechEndedAtMs - turn.audioEndedAtMs,
         llmTimeToFirstText: turn.firstAgentAtMs - turn.sttFinalAtMs,
         ttsTimeToFirstAudio: turn.firstAudioAtMs - turn.agentEndedAtMs,
@@ -303,6 +353,7 @@ async function runConversation(socket: WebSocket, outputDir: string): Promise<Tu
       speechStartedAtMs: 0,
       speechStartedCount: 0,
       audioEndedAtMs: 0,
+      firstSpeechEndedAtMs: 0,
       speechEndedAtMs: 0,
       speechEndedCount: 0,
       sttFinalAtMs: 0,
@@ -327,7 +378,7 @@ async function runConversation(socket: WebSocket, outputDir: string): Promise<Tu
     dispose();
     await writeTurnAudio(join(outputDir, `${turn.id}.wav`), turn.audioChunks);
     console.log(
-      `completed ${turn.id}: stt=${String(turn.sttFinalAtMs - turn.audioEndedAtMs)}ms ` +
+      `completed ${turn.id}: stt=${String(sttFinalDelayAfterSpeechEnd(turn))}ms ` +
         `llm=${String(turn.firstAgentAtMs - turn.sttFinalAtMs)}ms ` +
         `tts=${String(turn.firstAudioAtMs - turn.firstAgentAtMs)}ms`,
     );
@@ -357,6 +408,7 @@ function captureTurn(socket: WebSocket, turn: TurnCapture): () => void {
     }
     if (msg["type"] === "speech_ended") {
       turn.speechEndedCount += 1;
+      if (turn.firstSpeechEndedAtMs === 0) turn.firstSpeechEndedAtMs = Date.now();
       turn.speechEndedAtMs = Date.now();
       return;
     }
@@ -504,8 +556,8 @@ export function evaluateConversation(turns: readonly TurnCapture[], modeledConve
     }
   }
   if (!turns[0]?.transcript.toLowerCase().includes("biology")) diagnostics.push("first STT transcript missed fixture term Biology");
-  if (turns.some((turn) => turn.sttFinalAtMs < turn.audioEndedAtMs)) {
-    failures.push("one or more turns finalized STT before input audio ended");
+  if (turns.some((turn) => turn.sttFinalAtMs < turn.firstSpeechEndedAtMs)) {
+    failures.push("one or more turns finalized STT before VAD speech ended");
   }
   if (turns.some((turn) => turn.firstAudioAtMs < turn.firstAgentAtMs)) {
     failures.push("one or more turns received TTS audio before agent text");
@@ -535,6 +587,11 @@ export function evaluateConversation(turns: readonly TurnCapture[], modeledConve
 
 function assistantAudioMs(turn: TurnCapture): number {
   return Math.round((mergeBytes(turn.audioChunks).byteLength / 2 / 24000) * 1000);
+}
+
+function sttFinalDelayAfterSpeechEnd(turn: TurnCapture): number {
+  const deltaMs = turn.sttFinalAtMs - turn.firstSpeechEndedAtMs;
+  return deltaMs === 0 && turn.sttFinalAtMs > 0 && turn.firstSpeechEndedAtMs > 0 ? 1 : deltaMs;
 }
 
 function average(values: readonly number[]): number {

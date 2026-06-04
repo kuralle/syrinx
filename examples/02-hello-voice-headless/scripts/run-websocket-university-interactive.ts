@@ -15,6 +15,7 @@ import { GEMINI_UNIVERSITY_FIXTURES, PKG_ROOT } from "./generate-gemini-universi
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
 import { createUniversitySupportSession } from "../src/university-support-agent.js";
 import { pcm16DurationMs, writeSmokeArtifactManifest, type SmokeArtifactManifest } from "./smoke-artifact-manifest.js";
+import type { UniversitySupportTtsProvider } from "../src/university-support-agent.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const RUNS_DIR = join(SCRIPT_DIR, "..", "test", "performance", "runs");
@@ -84,9 +85,10 @@ interface ConversationEvaluation {
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
+  const ttsProvider = inferTtsProvider();
   requireEnv("DEEPGRAM_API_KEY");
   requireEnv("GOOGLE_GENERATIVE_AI_API_KEY");
-  requireEnv("CARTESIA_API_KEY");
+  if (ttsProvider === "cartesia") requireEnv("CARTESIA_API_KEY");
 
   const runId = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
   const runDir = join(RUNS_DIR, `websocket-university-interactive-${runId}`);
@@ -94,10 +96,11 @@ async function main(): Promise<void> {
 
   const server = await createVoiceWebSocketServer({
     port: 0,
+    maxQueuedOutputAudioMs: 30_000,
     createSession: () => createUniversitySupportSession({
       inputSampleRate: INPUT_SAMPLE_RATE,
       profile: "interactive",
-      ttsProvider: "cartesia",
+      ttsProvider,
     }),
     contextId: () => "interactive-bootstrap",
   });
@@ -113,6 +116,9 @@ async function main(): Promise<void> {
     const evaluation = evaluateConversation(turns);
     const { failures, diagnostics } = evaluation;
     const manifestPath = join(runDir, "manifest.json");
+    const metricsPath = join(runDir, "metrics.json");
+    const transcriptPath = join(runDir, "transcript.json");
+    const eventsPath = join(runDir, "events.json");
     const sttFinalPool = positiveDeltas(turns, (turn) => turn.sttFinalAtMs - turn.speechEndedAtMs);
     const llmTtftPool = positiveDeltas(turns, (turn) => turn.firstAgentAtMs - turn.sttFinalAtMs);
     const ttsTtfbPool = positiveDeltas(turns, (turn) => turn.firstAudioAtMs - turn.firstAgentAtMs);
@@ -126,8 +132,10 @@ async function main(): Promise<void> {
       fixtureProvider: "mixed-wav-fixtures",
       sttModel: process.env["SYRINX_DEEPGRAM_MODEL"]?.trim() || "nova-3",
       llmModel: process.env["SYRINX_LLM_MODEL"]?.trim() || "gemini-3.1-flash-lite",
-      ttsProvider: "cartesia",
-      ttsModel: process.env["SYRINX_CARTESIA_MODEL_ID"]?.trim() || "sonic-3",
+      ttsProvider,
+      ttsModel: ttsProvider === "deepgram"
+        ? process.env["SYRINX_DEEPGRAM_TTS_MODEL"]?.trim() || "aura-2-thalia-en"
+        : process.env["SYRINX_CARTESIA_MODEL_ID"]?.trim() || "sonic-3",
       region: "unknown",
       transport: "websocket",
       inputSampleRateHz: INPUT_SAMPLE_RATE,
@@ -174,9 +182,13 @@ async function main(): Promise<void> {
         },
       })),
       diagnostics,
+      warningGate: buildWarningGate(turns),
       artifacts: {
         runDir: relative(PKG_ROOT, runDir),
         manifestPath: relative(PKG_ROOT, manifestPath),
+        metricsPath: relative(PKG_ROOT, metricsPath),
+        transcriptPath: relative(PKG_ROOT, transcriptPath),
+        eventsPath: relative(PKG_ROOT, eventsPath),
       },
       qualityGate: {
         passed: failures.length === 0,
@@ -192,12 +204,71 @@ async function main(): Promise<void> {
     });
 
     await writeFile(BASELINE_PATH, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
+    await writeFile(metricsPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      latencyMs: baseline.latencyMs,
+      qualityGate: baseline.qualityGate,
+      warningGate: baseline.warningGate,
+    }, null, 2)}\n`, "utf8");
+    await writeFile(transcriptPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      turns: baseline.turns.map((turn) => ({
+        id: turn.id,
+        fixtureId: turn.fixtureId,
+        inputText: turn.inputText,
+        sttFinal: turn.sttFinal,
+        agentReply: turn.agentReply,
+      })),
+      qualityGate: baseline.qualityGate,
+    }, null, 2)}\n`, "utf8");
+    await writeFile(eventsPath, `${JSON.stringify({
+      scenario: baseline.scenario,
+      generatedAt: baseline.generatedAt,
+      turnCount: baseline.turnCount,
+      events: buildEvents(turns),
+      qualityGate: baseline.qualityGate,
+    }, null, 2)}\n`, "utf8");
     await writeSmokeArtifactManifest(manifestPath, manifest);
     console.log(JSON.stringify(baseline, null, 2));
     if (failures.length > 0) throw new Error(`interactive websocket smoke failed: ${failures.join("; ")}`);
   } finally {
     await server.close();
   }
+}
+
+function inferTtsProvider(): UniversitySupportTtsProvider {
+  const requested = process.env["SYRINX_REVIEW_TTS"]?.trim().toLowerCase();
+  if (requested === "deepgram" || requested === "cartesia" || requested === "gemini") return requested;
+  return process.env["CARTESIA_API_KEY"]?.trim() ? "cartesia" : "deepgram";
+}
+
+function buildWarningGate(turns: readonly InteractiveTurnCapture[]): { readonly passed: boolean; readonly warnings: readonly string[] } {
+  const warnings: string[] = [];
+  const voiceToVoice = positiveVoiceToVoiceMs(turns);
+  const p50 = percentile(voiceToVoice, 50);
+  const p95 = percentile(voiceToVoice, 95);
+  const p99 = percentile(voiceToVoice, 99);
+  if (p50 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  if (p95 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P95 ${String(p95)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  if (p99 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P99 ${String(p99)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  return { passed: warnings.length === 0, warnings };
+}
+
+function buildEvents(turns: readonly InteractiveTurnCapture[]): Array<Record<string, unknown>> {
+  return turns.flatMap((turn) => [
+    { turnId: turn.id, kind: "user_audio_started", timestampMs: turn.startedAtMs },
+    { turnId: turn.id, kind: "user_audio_ended", timestampMs: turn.audioEndedAtMs },
+    { turnId: turn.id, kind: "vad_speech_started", timestampMs: turn.speechStartedAtMs },
+    { turnId: turn.id, kind: "vad_speech_ended", timestampMs: turn.speechEndedAtMs },
+    { turnId: turn.id, kind: "stt_final", timestampMs: turn.sttFinalAtMs, text: turn.transcript },
+    { turnId: turn.id, kind: "agent_first_text", timestampMs: turn.firstAgentAtMs },
+    { turnId: turn.id, kind: "tts_first_audio", timestampMs: turn.firstAudioAtMs },
+    { turnId: turn.id, kind: "tts_end", timestampMs: turn.ttsEndedAtMs },
+  ].filter((event) => typeof event.timestampMs === "number" && event.timestampMs > 0));
 }
 
 function buildSmokeManifest(args: {

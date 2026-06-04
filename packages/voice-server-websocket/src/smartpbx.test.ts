@@ -294,7 +294,8 @@ describe("createSmartPbxMediaStreamServer", () => {
     const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("opus", 48000)));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForCondition(() => session.state === "ready");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const outbound = readJsonMatching(client, (message) => message.event === "media");
     session.bus.push(Route.Main, {
       kind: "tts.audio",
@@ -488,6 +489,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 1250,
       createSession: () => session,
     }));
     const address = server.address();
@@ -551,6 +553,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();

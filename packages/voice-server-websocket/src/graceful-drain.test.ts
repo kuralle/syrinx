@@ -162,6 +162,7 @@ describe("graceful connection draining (WT-04)", () => {
       port: 0,
       outboundFrameDurationMs: 20,
       outputSampleRateHz: 8000,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     });
     activeServers.push(server);
@@ -208,6 +209,7 @@ describe("graceful connection draining (WT-04)", () => {
       port: 0,
       outboundFrameDurationMs: 20,
       outputSampleRateHz: 8000,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     });
     activeServers.push(server);

@@ -319,6 +319,38 @@ describe("TurnArbiter", () => {
     expect(metrics).not.toContain("interrupt.committed_after_ms");
   });
 
+  it("suppresses low-confidence speech evidence with a distinct metric", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.noteInterimEvidence("I need help", 0.21);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_low_confidence");
+    expect(metrics).not.toContain("interrupt.committed_after_ms");
+  });
+
   it("commits real interruption when interim is not a backchannel (test:real_interrupt_not_suppressed)", async () => {
     const { bus, ttsPlayout, arbiter } = await createArbiter(280);
     const metrics = metricNames(bus);

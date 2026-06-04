@@ -141,7 +141,7 @@ const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
-const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 30_000;
+const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 200;
 
 export async function createVoiceWebSocketServer(
   options: VoiceWebSocketServerOptions,
@@ -412,6 +412,7 @@ function wireBrowserSessionEvents(
   streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
+  const speechEndedSent = new Set<string>();
   let currentContextId = "";
 
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
@@ -426,12 +427,17 @@ function wireBrowserSessionEvents(
     sendJson(socket, { type: "speech_started", turnId: event.turnId }, maxBufferedAmountBytes);
   });
   onSession("user_stopped_speaking", (event) => {
+    speechEndedSent.add(event.turnId);
     sendJson(socket, { type: "speech_ended", turnId: event.turnId }, maxBufferedAmountBytes);
   });
   onSession("user_input_partial", (event) => {
     sendJson(socket, { type: "stt_chunk", turnId: event.turnId, transcript: event.text }, maxBufferedAmountBytes);
   });
   onSession("user_input_final", (event) => {
+    if (!speechEndedSent.has(event.turnId)) {
+      speechEndedSent.add(event.turnId);
+      sendJson(socket, { type: "speech_ended", turnId: event.turnId }, maxBufferedAmountBytes);
+    }
     sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence }, maxBufferedAmountBytes);
   });
   disposers.push(

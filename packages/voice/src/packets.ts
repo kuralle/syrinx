@@ -308,6 +308,7 @@ export interface TextToSpeechAudioPacket extends VoicePacket {
   readonly audio: Uint8Array;
   /** Source sample rate for the PCM payload. */
   readonly sampleRateHz: number;
+  readonly provider?: Record<string, unknown>;
 }
 
 export interface TextToSpeechEndPacket extends VoicePacket {

@@ -8,7 +8,7 @@ import {
   type SttErrorPacket,
   type SttInterimPacket,
   type SttResultPacket,
-  type ConversationMetricPacket,
+  type EndOfSpeechPacket,
 } from "@asyncdot/voice";
 import { GoogleSTTPlugin } from "./index.js";
 
@@ -108,28 +108,25 @@ describe("GoogleSTTPlugin", () => {
 
   it("reconnects after a recoverable socket close before sending later audio", async () => {
     let connections = 0;
-    const receivedAudio: Buffer[] = [];
+    const receivedFrames: Array<{ connection: number; kind: "config" | "audio"; payload: unknown }> = [];
     const endpointUrl = await createLocalServer((socket) => {
       connections++;
+      const connection = connections;
       if (connections === 1) {
         socket.close();
         return;
       }
       socket.on("message", (data, isBinary) => {
         if (isBinary) {
-          receivedAudio.push(data as Buffer);
+          receivedFrames.push({ connection, kind: "audio", payload: Buffer.from(data as Buffer) });
+        } else {
+          receivedFrames.push({ connection, kind: "config", payload: JSON.parse(data.toString()) });
         }
       });
     });
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
     const plugin = new GoogleSTTPlugin();
-    const retries: ConversationMetricPacket[] = [];
-    bus.on("metric.conversation", (pkt) => {
-      if ((pkt as ConversationMetricPacket).name === "stt.retry") {
-        retries.push(pkt as ConversationMetricPacket);
-      }
-    });
 
     await plugin.initialize(bus, {
       api_key: "test",
@@ -148,7 +145,81 @@ describe("GoogleSTTPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(connections).toBeGreaterThanOrEqual(2);
-    expect(receivedAudio).toEqual([Buffer.from([9, 8, 7, 6])]);
+    expect(receivedFrames).toEqual([
+      expect.objectContaining({ connection: 2, kind: "config" }),
+      expect.objectContaining({ connection: 2, kind: "audio", payload: Buffer.from([9, 8, 7, 6]) }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("uses configured sample_rate in the audio contract and Google decoding config", async () => {
+    const configs: any[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) configs.push(JSON.parse(data.toString()));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      sample_rate: 8000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(configs[0]?.streamingConfig?.config?.explicitDecodingConfig?.sampleRateHertz).toBe(8000);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("suppresses EOS when Smart Turn ownership disables provider finalization", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            alternatives: [{ transcript: "hello world", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const eos: EndOfSpeechPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("eos.turn_complete", (pkt) => {
+      eos.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      emit_eos_on_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-no-eos",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(finals).toHaveLength(1);
+    expect(eos).toEqual([]);
 
     await plugin.close();
     bus.stop();
