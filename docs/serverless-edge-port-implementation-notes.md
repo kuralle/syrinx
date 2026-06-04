@@ -66,8 +66,13 @@ Verification Notes
 - `edge.ts` exposes a runtime-agnostic `EdgeRecorder` sink (taps `user.audio_received` +
   `tts.audio`, `finalize()` on close) — no storage types in the transport layer.
 - `voice-server-workers/r2-recorder.ts` `R2EdgeRecorder` buffers PCM16 (memory-capped) and
-  on call end writes `user.wav` + `assistant.wav` + `manifest.json` to the `RECORDINGS` R2
-  bucket. Wired optionally in the DO (only when the bucket is bound). `GET /recordings?sessionId=`
+  on call end writes to the `RECORDINGS` R2 bucket:
+  - `conversation.wav` — the **full conversation in one stereo file** (user = left,
+    assistant = right), time-aligned by wall-clock byte offset so the assistant sits at its
+    real position instead of stacked at 0. Mirrors the Node `voice-recorder` conversation track.
+  - `user.wav` / `assistant.wav` — the per-speaker stems.
+  - `manifest.json` — durations / byte lengths / truncation flags.
+  Wired optionally in the DO (only when the bucket is bound). `GET /recordings?sessionId=`
   lists a session's objects. Cloudflare's `withVoice` persists transcripts to SQLite but not
   raw audio, so this is additive.
 
