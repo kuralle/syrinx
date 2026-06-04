@@ -24,8 +24,22 @@ import {
   type SessionStore,
 } from "./session-store.js";
 
+/**
+ * Sink for per-conversation audio recording. The edge taps inbound caller audio
+ * and outbound TTS audio and hands raw PCM16 frames to this sink; the concrete
+ * implementation (e.g. an R2-backed recorder in the Workers host) decides where
+ * and how to persist. Kept runtime-agnostic here — no storage types leak into
+ * the transport layer.
+ */
+export interface EdgeRecorder {
+  onUserAudio(contextId: string, audio: Uint8Array, sampleRateHz: number): void;
+  onAssistantAudio(contextId: string, audio: Uint8Array, sampleRateHz: number): void;
+  finalize(meta: { sessionId: string; closedAtMs: number }): void | Promise<void>;
+}
+
 export interface VoiceEdgeWebSocketOptions {
   readonly createSession: (request: Request) => VoiceAgentSession | Promise<VoiceAgentSession>;
+  readonly recorder?: EdgeRecorder;
   readonly sessionId?: (request: Request) => string;
   readonly contextId?: () => string;
   readonly inputSampleRateHz?: number;
@@ -34,6 +48,20 @@ export interface VoiceEdgeWebSocketOptions {
   readonly maxSessionDurationMs?: number;
   readonly maxInboundMessageBytes?: number;
   readonly resumeWindowMs?: number;
+  /**
+   * Heartbeat cadence. While a connection is open the edge re-arms a scheduler
+   * task at this interval; on the Workers DO scheduler that alarm keeps the
+   * Durable Object from being evicted mid-call (the equivalent of Cloudflare
+   * agents' `keepAlive()` lease), and it is where idle/stale connections are
+   * detected. 0 disables the heartbeat.
+   */
+  readonly keepAliveIntervalMs?: number;
+  /**
+   * Close a connection that has sent no message within this window. Catches
+   * half-open clients (network dropped with no close frame) that the standard
+   * WebSocket cannot detect via a ping frame. 0 disables idle close.
+   */
+  readonly idleTimeoutMs?: number;
   readonly sessionStore: SessionStore;
   readonly scheduler?: Scheduler;
 }
@@ -58,6 +86,9 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_SESSION_DURATION_MS = 30 * 60_000;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
+const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 15_000;
+const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
+const KEEP_ALIVE_KEY = "voice.edge.keep_alive";
 
 export function createVoiceEdgeWebSocketResponse(
   request: Request,
@@ -91,6 +122,8 @@ export async function runVoiceEdgeWebSocketConnection(
   const maxSessionDurationMs = nonNegativeInteger(options.maxSessionDurationMs) ?? DEFAULT_MAX_SESSION_DURATION_MS;
   const maxInboundMessageBytes = positiveInteger(options.maxInboundMessageBytes) ?? DEFAULT_MAX_INBOUND_MESSAGE_BYTES;
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
+  const keepAliveIntervalMs = nonNegativeInteger(options.keepAliveIntervalMs) ?? DEFAULT_KEEP_ALIVE_INTERVAL_MS;
+  const idleTimeoutMs = nonNegativeInteger(options.idleTimeoutMs) ?? DEFAULT_IDLE_TIMEOUT_MS;
   const state: EdgeConnectionState = {
     managed: null,
     initialContextId: contextIdFn(),
@@ -101,6 +134,7 @@ export async function runVoiceEdgeWebSocketConnection(
   let ready = false;
   let closed = false;
   let maxSessionTimedOut = false;
+  let lastClientMessageMs = Date.now();
   let session: VoiceAgentSession | null = null;
 
   const sendError = (message: string): void => {
@@ -130,6 +164,7 @@ export async function runVoiceEdgeWebSocketConnection(
 
   socket.onMessage((data, isBinary) => {
     try {
+      lastClientMessageMs = Date.now();
       const byteLength = socketDataByteLength(data);
       if (byteLength > maxInboundMessageBytes) {
         sendError(`Websocket message exceeds maxInboundMessageBytes (${String(maxInboundMessageBytes)})`);
@@ -158,6 +193,11 @@ export async function runVoiceEdgeWebSocketConnection(
     if (state.managed) {
       state.managed.connectionCount = Math.max(0, state.managed.connectionCount - 1);
       void options.sessionStore.release(state.managed.id, maxSessionTimedOut ? 0 : resumeWindowMs);
+    }
+    if (options.recorder) {
+      void Promise.resolve(
+        options.recorder.finalize({ sessionId: state.managed?.id ?? "unknown", closedAtMs: Date.now() }),
+      ).catch(() => undefined);
     }
   });
 
@@ -196,7 +236,16 @@ export async function runVoiceEdgeWebSocketConnection(
       await options.sessionStore.release(leased.managed.id, 0);
       return;
     }
-    wireEdgeSessionEvents(session, socket, disposers, outputSampleRateHz);
+    wireEdgeSessionEvents(session, socket, disposers, outputSampleRateHz, options.recorder);
+    if (options.recorder) {
+      const recorder = options.recorder;
+      disposers.push(
+        session.bus.on("user.audio_received", (pkt) => {
+          const audio = pkt as UserAudioReceivedPacket;
+          recorder.onUserAudio(audio.contextId, audio.audio, inputSampleRateHz);
+        }),
+      );
+    }
     if (maxSessionDurationMs > 0) {
       scheduler.schedule("voice.edge.max_session_duration", maxSessionDurationMs, () => {
         maxSessionTimedOut = true;
@@ -209,6 +258,27 @@ export async function runVoiceEdgeWebSocketConnection(
         socket.dispose();
       });
       disposers.push(() => scheduler.cancel("voice.edge.max_session_duration"));
+    }
+    if (keepAliveIntervalMs > 0) {
+      const heartbeat = (): void => {
+        if (closed) return;
+        if (idleTimeoutMs > 0 && Date.now() - lastClientMessageMs > idleTimeoutMs) {
+          sendJson(socket, {
+            type: "error",
+            component: "transport",
+            category: "idle_timeout",
+            message: `Websocket idle for more than idleTimeoutMs (${String(idleTimeoutMs)})`,
+          });
+          socket.dispose();
+          return;
+        }
+        // Re-arm: on the Workers DO scheduler this keeps the alarm (and thus the
+        // Durable Object) alive while the client is active; on Node it is a plain
+        // interval. Cancelled on close so an idle DO can be evicted.
+        scheduler.schedule(KEEP_ALIVE_KEY, keepAliveIntervalMs, heartbeat);
+      };
+      scheduler.schedule(KEEP_ALIVE_KEY, keepAliveIntervalMs, heartbeat);
+      disposers.push(() => scheduler.cancel(KEEP_ALIVE_KEY));
     }
     sendJson(socket, {
       type: "ready",
@@ -248,6 +318,7 @@ function wireEdgeSessionEvents(
   socket: ManagedSocket,
   disposers: Array<() => void>,
   outputSampleRateHz: number,
+  recorder?: EdgeRecorder,
 ): void {
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
@@ -273,6 +344,8 @@ function wireEdgeSessionEvents(
   disposers.push(
     session.bus.on("tts.audio", (pkt) => {
       const audio = pkt as TextToSpeechAudioPacket;
+      const ttsSampleRate = requireTtsAudioSampleRate(audio.sampleRateHz) ?? outputSampleRateHz;
+      recorder?.onAssistantAudio(audio.contextId, audio.audio, ttsSampleRate);
       sendJson(socket, {
         type: "tts_chunk",
         turnId: audio.contextId,

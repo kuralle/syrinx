@@ -12,6 +12,12 @@
       }
     ]
   },
+  "r2_buckets": [
+    {
+      "binding": "RECORDINGS",
+      "bucket_name": "syrinx-voice-recordings"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

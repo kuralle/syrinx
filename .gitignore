@@ -21,3 +21,6 @@ knowledge-research/_sources/blogs/img/
 
 # edge-bundle verification artifact
 .edge-build/
+
+# wrangler local state
+.wrangler/
