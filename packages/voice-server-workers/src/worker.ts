@@ -8,9 +8,12 @@ import type { WorkersInboundSocketController } from "@asyncdot/voice-ws/workers"
 import { DurableObjectAlarmScheduler } from "./alarm-scheduler.js";
 import { DurableObjectSessionStore } from "./durable-session-store.js";
 import { createLiveVoiceAgentSession, type LiveSessionEnv } from "./live-session.js";
+import { R2EdgeRecorder } from "./r2-recorder.js";
 
 export interface Env extends LiveSessionEnv {
   VOICE_CONVERSATIONS: DurableObjectNamespace;
+  /** Optional: when bound, full call audio is recorded to this bucket. */
+  RECORDINGS?: R2Bucket;
 }
 
 const INPUT_SAMPLE_RATE_HZ = 16000;
@@ -20,12 +23,21 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname === "/recordings") return await listRecordings(url, env);
     if (url.pathname !== "/ws") return new Response("not found", { status: 404 });
     const sessionId = url.searchParams.get("sessionId") ?? crypto.randomUUID();
     const id = env.VOICE_CONVERSATIONS.idFromName(sessionId);
     return await env.VOICE_CONVERSATIONS.get(id).fetch(request);
   },
 };
+
+/** List recorded objects for a session: GET /recordings?sessionId=<id>. */
+async function listRecordings(url: URL, env: Env): Promise<Response> {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!env.RECORDINGS || !sessionId) return new Response("not found", { status: 404 });
+  const listed = await env.RECORDINGS.list({ prefix: `recordings/${sessionId}/` });
+  return Response.json(listed.objects.map((o) => ({ key: o.key, size: o.size })));
+}
 
 export class VoiceConversation {
   private readonly scheduler: DurableObjectAlarmScheduler;
@@ -44,15 +56,20 @@ export class VoiceConversation {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
+    const sessionId = new URL(request.url).searchParams.get("sessionId") ?? crypto.randomUUID();
+    const recorder = this.env.RECORDINGS
+      ? new R2EdgeRecorder({ bucket: this.env.RECORDINGS, sessionId, startedAtMs: Date.now() })
+      : undefined;
     const upgrade = createVoiceEdgeWebSocketUpgrade(request, {
       sessionStore: this.store,
       scheduler: this.scheduler,
+      recorder,
       createSession: () =>
         createLiveVoiceAgentSession(this.env, {
           inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
           outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
         }),
-      sessionId: (req) => new URL(req.url).searchParams.get("sessionId") ?? crypto.randomUUID(),
+      sessionId: () => sessionId,
       inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
       outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
       resumeWindowMs: 15_000,
