@@ -9,12 +9,16 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:live": "SYRINX_LIVE_WORKER_TEST=1 vitest run",
     "verify:edge-bundle": "../../scripts/verify-edge-bundle.sh",
     "wrangler:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@asyncdot/voice": "workspace:*",
+    "@asyncdot/voice-bridge-aisdk": "workspace:*",
     "@asyncdot/voice-server-websocket": "workspace:*",
+    "@asyncdot/voice-stt-deepgram": "workspace:*",
+    "@asyncdot/voice-tts-cartesia": "workspace:*",
     "@asyncdot/voice-ws": "workspace:*"
   },
   "devDependencies": {

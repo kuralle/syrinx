@@ -45,11 +45,20 @@ type WebSocketPairConstructor = new () => WebSocketPairValue;
 export async function createWorkersSocket(url: string, headers: Record<string, string>): Promise<ManagedSocket> {
   const doFetch = (globalThis as { fetch?: WorkersFetch }).fetch;
   if (!doFetch) throw new Error("fetch is not available in this runtime");
-  const resp = await doFetch(url, { headers: { ...headers, Upgrade: "websocket" } });
+  // workerd's fetch() only accepts http(s) schemes; the upgrade is requested on
+  // the http(s) URL with `Upgrade: websocket`, not on a ws(s):// URL.
+  const resp = await doFetch(toHttpUrl(url), { headers: { ...headers, Upgrade: "websocket" } });
   const ws = resp.webSocket;
   if (!ws) throw new Error(`WebSocket upgrade failed (status ${String(resp.status ?? "unknown")})`);
   ws.accept();
   return wrapWebSocket(ws);
+}
+
+/** Normalize a ws(s):// provider URL to the http(s):// scheme workerd's fetch requires. */
+function toHttpUrl(url: string): string {
+  if (url.startsWith("wss://")) return `https://${url.slice("wss://".length)}`;
+  if (url.startsWith("ws://")) return `http://${url.slice("ws://".length)}`;
+  return url;
 }
 
 export function createWorkersInboundSocket(ctx?: WorkersDurableObjectWebSocketContext): WorkersInboundSocket {

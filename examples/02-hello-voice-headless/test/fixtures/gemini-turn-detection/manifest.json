@@ -1,0 +1,52 @@
+{
+  "generatedAt": "2026-06-04T19:49:18.766Z",
+  "provider": "gemini-tts",
+  "model": "gemini-2.5-flash-preview-tts",
+  "voiceName": "Kore",
+  "sampleRateHz": 24000,
+  "purpose": "turn-detection-latency",
+  "fixtures": [
+    {
+      "id": "01-library-hours",
+      "text": "What time does the library close today?",
+      "path": "test/fixtures/gemini-turn-detection/01-library-hours.wav",
+      "durationMs": 2291,
+      "bytes": 110010
+    },
+    {
+      "id": "02-reset-password",
+      "text": "Can you help me reset my student portal password?",
+      "path": "test/fixtures/gemini-turn-detection/02-reset-password.wav",
+      "durationMs": 3171,
+      "bytes": 152250
+    },
+    {
+      "id": "03-order-status",
+      "text": "I'd like to check the status of my transcript request.",
+      "path": "test/fixtures/gemini-turn-detection/03-order-status.wav",
+      "durationMs": 3211,
+      "bytes": 154170
+    },
+    {
+      "id": "04-transfer-billing",
+      "text": "Please transfer me to the billing office.",
+      "path": "test/fixtures/gemini-turn-detection/04-transfer-billing.wav",
+      "durationMs": 2411,
+      "bytes": 115770
+    },
+    {
+      "id": "05-confirm-yes",
+      "text": "Yes, that's correct.",
+      "path": "test/fixtures/gemini-turn-detection/05-confirm-yes.wav",
+      "durationMs": 1771,
+      "bytes": 85050
+    },
+    {
+      "id": "06-thanks-goodbye",
+      "text": "Thanks, that's all I needed.",
+      "path": "test/fixtures/gemini-turn-detection/06-thanks-goodbye.wav",
+      "durationMs": 1811,
+      "bytes": 86970
+    }
+  ]
+}
