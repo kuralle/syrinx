@@ -141,6 +141,9 @@ export { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, VOICE_PROVIDER_OUTAG
 // Provider fallback/degradation
 export { ProviderFallback, type FallbackProvider, type ProviderFallbackOptions } from "./provider-fallback.js";
 
+// Runtime scheduler seam
+export { TimerScheduler, type Scheduler, type ScheduledCallback } from "./scheduler.js";
+
 // Idle timeout
 export { IdleTimeoutManager, type IdleTimeoutConfig, DEFAULT_IDLE_TIMEOUT_CONFIG } from "./idle-timeout.js";
 

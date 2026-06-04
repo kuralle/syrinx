@@ -72,7 +72,7 @@ describe("createTelnyxMediaStreamServer", () => {
         payload: Buffer.from(ulaw).toString("base64"),
       },
     }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => received.length === 1);
 
     const decoded = decodeMuLawToPcm16(ulaw);
     const expected = pcm16SamplesToBytes(resamplePcm16(decoded, 8000, 16000));
@@ -127,7 +127,7 @@ describe("createTelnyxMediaStreamServer", () => {
       stream_id: "telnyx-stream",
       media: { chunk: "5", timestamp: "100", payload },
     }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => received.length === 3);
 
     expect(received).toHaveLength(3);
     expect(metrics).toContainEqual(expect.objectContaining({
@@ -177,7 +177,7 @@ describe("createTelnyxMediaStreamServer", () => {
       stream_id: "telnyx-stream",
       media: { chunk: "2", timestamp: "20", payload: Buffer.from(chunk2).toString("base64") },
     }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => received.length === 3);
 
     expect(received).toHaveLength(3);
     expect(Buffer.from(received[0]!.audio)).toEqual(Buffer.from(pcm16SamplesToBytes(new Int16Array([1, 2, 3, 4]))));
@@ -228,11 +228,11 @@ describe("createTelnyxMediaStreamServer", () => {
       stream_id: "telnyx-stream",
       media: { chunk: "3", timestamp: "40", payload: Buffer.from(chunk3).toString("base64") },
     }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForCondition(() => received.length === 1);
     expect(received).toHaveLength(1);
 
     client.close();
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await waitForCondition(() => received.length === 2 && closeCalls > 0);
 
     expect(closeCalls).toBeGreaterThan(0);
     expect(received).toHaveLength(2);

@@ -34,7 +34,6 @@ import {
   requireStringConfig,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
-import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const SPEAK = (text: string): string => JSON.stringify({ type: "Speak", text });
 const FLUSH_MSG = JSON.stringify({ type: "Flush" });
@@ -45,7 +44,7 @@ const KEEP_ALIVE_INTERVAL_MS = 10_000;
 export class DeepgramTTSPlugin implements VoicePlugin {
   // socketFactory is injectable so the same plugin runs on Node (default) or
   // Cloudflare Workers (pass createWorkersSocket).
-  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+  constructor(private readonly socketFactory?: SocketFactory) {}
 
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
@@ -94,7 +93,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       },
       headers: { Authorization: `Token ${this.apiKey}` },
       retry: this.retryConfig,
-      socketFactory: this.socketFactory,
+      socketFactory: this.socketFactory ?? await defaultSocketFactory(),
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 32,
       onReplay: (event, count) => {
         this.emitMetric(this.currentContextId, `tts.deepgram.reconnect_replay_${event}`, String(count));
@@ -324,6 +323,11 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       timestampMs: Date.now(),
     } satisfies TextToSpeechEndPacket);
   }
+}
+
+async function defaultSocketFactory(): Promise<SocketFactory> {
+  const mod = await import("@asyncdot/voice-ws/node");
+  return mod.createNodeWsSocket;
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

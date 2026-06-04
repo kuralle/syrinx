@@ -18,7 +18,7 @@
 // quick-failure detection / disconnecting guard. Backoff reuses our equal-jitter
 // waitForRetryDelay.
 
-import { type RetryConfig, waitForRetryDelay } from "@asyncdot/voice";
+import { TimerScheduler, type RetryConfig, type Scheduler, waitForRetryDelay } from "@asyncdot/voice";
 
 /** A WebSocket text or binary frame, normalized across runtimes. */
 export type SocketData = string | Uint8Array;
@@ -67,6 +67,7 @@ export interface WebSocketConnectionOptions {
   /** Consecutive quick failures before giving up (backoff can't fix an instantly-closing socket). */
   readonly maxQuickFailures?: number;
   readonly connectTimeoutMs?: number;
+  readonly scheduler?: Scheduler;
   readonly onMessage: (data: SocketData, isBinary: boolean) => void;
   /** Called once when a live connection drops unexpectedly, with the close cause — for
    * failing in-flight work and dropping stale provider state before reconnecting. */
@@ -94,6 +95,7 @@ const DEFAULT_MIN_STABLE_MS = 5000;
 const DEFAULT_MAX_QUICK_FAILURES = 3;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const VERIFY_TIMEOUT_MS = 2000;
+let connectionSequence = 0;
 
 export class WebSocketConnection {
   private socket: ManagedSocket | null = null;
@@ -103,12 +105,18 @@ export class WebSocketConnection {
   private connResolver: (() => void) | null = null;
   private connRejecter: ((err: Error) => void) | null = null;
   private abortOpen: (() => void) | null = null;
-  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly scheduler: Scheduler;
+  private readonly keepAliveKey: string;
+  private keepAliveScheduled = false;
   private lastConnectAtMs = 0;
   private quickFailures = 0;
   private pendingReplay: SocketData[] = [];
 
-  constructor(private readonly opts: WebSocketConnectionOptions) {}
+  constructor(private readonly opts: WebSocketConnectionOptions) {
+    this.scheduler = opts.scheduler ?? new TimerScheduler();
+    connectionSequence += 1;
+    this.keepAliveKey = `voice-ws.keepalive:${String(connectionSequence)}`;
+  }
 
   private get replayBufferSize(): number {
     return Math.max(0, Math.floor(this.opts.replayBufferSize ?? 0));
@@ -351,7 +359,8 @@ export class WebSocketConnection {
     this.stopKeepAlive();
     const intervalMs = this.opts.keepAliveIntervalMs ?? 0;
     if (intervalMs <= 0) return;
-    this.keepAliveTimer = setInterval(() => {
+    const tick = (): void => {
+      this.keepAliveScheduled = false;
       const socket = this.socket;
       if (this.closed || !socket || !socket.isOpen) return;
       if (this.opts.keepAliveMessage) {
@@ -359,13 +368,19 @@ export class WebSocketConnection {
       } else {
         socket.keepAlivePing();
       }
-    }, intervalMs);
+      if (!this.closed && socket.isOpen) {
+        this.keepAliveScheduled = true;
+        this.scheduler.schedule(this.keepAliveKey, intervalMs, tick);
+      }
+    };
+    this.keepAliveScheduled = true;
+    this.scheduler.schedule(this.keepAliveKey, intervalMs, tick);
   }
 
   private stopKeepAlive(): void {
-    if (!this.keepAliveTimer) return;
-    clearInterval(this.keepAliveTimer);
-    this.keepAliveTimer = null;
+    if (!this.keepAliveScheduled) return;
+    this.scheduler.cancel(this.keepAliveKey);
+    this.keepAliveScheduled = false;
   }
 
   private get minStableMs(): number {

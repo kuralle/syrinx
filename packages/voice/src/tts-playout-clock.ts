@@ -10,17 +10,21 @@
 // Pure state + timers — no bus, no other session coupling. The orchestrator owns
 // wiring; this owns the playout bookkeeping.
 
+import { TimerScheduler, type Scheduler } from "./scheduler.js";
+
 export class TtsPlayoutClock {
   private readonly active = new Set<string>();
   // Wall-clock estimate of when each context's audio finishes playing out.
   private readonly playoutEndMs = new Map<string, number>();
-  private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly releaseTimers = new Set<string>();
   // Contexts for which the output transport has reported real playout progress.
   // When present, the transport's `complete` signal is authoritative and the
   // sample-duration estimate defers to it (it is only a fallback for transports
   // without a paced-playout layer, e.g. headless).
   private readonly realPlayoutContexts = new Set<string>();
   private readonly playedOutMsByContext = new Map<string, number>();
+
+  constructor(private readonly scheduler: Scheduler = new TimerScheduler()) {}
 
   /**
    * A TTS audio chunk arrived: mark the context active and advance its playout
@@ -47,18 +51,16 @@ export class TtsPlayoutClock {
       return;
     }
     this.cancelRelease(contextId);
-    this.releaseTimers.set(
-      contextId,
-      setTimeout(() => {
-        this.releaseTimers.delete(contextId);
-        // If a paced transport is reporting real playout for this context, it
-        // owns the release via noteProgress({complete}) — the estimate must not
-        // pre-empt it (real playout can run past the audio length under
-        // send-buffer backpressure). Session close() is the backstop.
-        if (this.realPlayoutContexts.has(contextId)) return;
-        this.release(contextId);
-      }, remainingMs),
-    );
+    this.releaseTimers.add(contextId);
+    this.scheduler.schedule(releaseKey(contextId), remainingMs, () => {
+      this.releaseTimers.delete(contextId);
+      // If a paced transport is reporting real playout for this context, it
+      // owns the release via noteProgress({complete}) — the estimate must not
+      // pre-empt it (real playout can run past the audio length under
+      // send-buffer backpressure). Session close() is the backstop.
+      if (this.realPlayoutContexts.has(contextId)) return;
+      this.release(contextId);
+    });
   }
 
   /**
@@ -95,7 +97,7 @@ export class TtsPlayoutClock {
   }
 
   clear(): void {
-    for (const contextId of [...this.releaseTimers.keys()]) this.cancelRelease(contextId);
+    for (const contextId of [...this.releaseTimers]) this.cancelRelease(contextId);
     this.active.clear();
     this.playoutEndMs.clear();
     this.realPlayoutContexts.clear();
@@ -103,10 +105,12 @@ export class TtsPlayoutClock {
   }
 
   private cancelRelease(contextId: string): void {
-    const timer = this.releaseTimers.get(contextId);
-    if (timer) {
-      clearTimeout(timer);
-      this.releaseTimers.delete(contextId);
-    }
+    if (!this.releaseTimers.has(contextId)) return;
+    this.scheduler.cancel(releaseKey(contextId));
+    this.releaseTimers.delete(contextId);
   }
+}
+
+function releaseKey(contextId: string): string {
+  return `voice.tts_playout.release:${contextId}`;
 }

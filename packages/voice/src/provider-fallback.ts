@@ -2,6 +2,7 @@
 
 import { Route, type PipelineBus } from "./pipeline-bus.js";
 import * as make from "./packet-factories.js";
+import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
 export interface FallbackProvider<TReq, TResp> {
   readonly id: string;
@@ -14,16 +15,20 @@ export interface ProviderFallbackOptions {
   readonly contextId: string;
   readonly attemptTimeoutMs: number;
   readonly recoveryProbeIntervalMs: number;
+  readonly scheduler?: Scheduler;
 }
 
 export class ProviderFallback<TReq, TResp> {
   private readonly unavailable = new Set<string>();
-  private readonly recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly recoveryTimers = new Set<string>();
+  private readonly scheduler: Scheduler;
 
   constructor(
     private readonly providers: readonly FallbackProvider<TReq, TResp>[],
     private readonly opts: ProviderFallbackOptions,
-  ) {}
+  ) {
+    this.scheduler = opts.scheduler ?? new TimerScheduler();
+  }
 
   async send(req: TReq): Promise<TResp> {
     let lastError: unknown = null;
@@ -40,7 +45,7 @@ export class ProviderFallback<TReq, TResp> {
   }
 
   close(): void {
-    for (const timer of this.recoveryTimers.values()) clearTimeout(timer);
+    for (const providerId of this.recoveryTimers) this.scheduler.cancel(recoveryKey(providerId));
     this.recoveryTimers.clear();
     this.unavailable.clear();
   }
@@ -66,9 +71,11 @@ export class ProviderFallback<TReq, TResp> {
       } catch {
         // Probe failure keeps the provider unavailable and schedules the next probe.
       }
-      this.recoveryTimers.set(provider.id, setTimeout(() => void runProbe(), this.opts.recoveryProbeIntervalMs));
+      this.recoveryTimers.add(provider.id);
+      this.scheduler.schedule(recoveryKey(provider.id), this.opts.recoveryProbeIntervalMs, () => void runProbe());
     };
-    this.recoveryTimers.set(provider.id, setTimeout(() => void runProbe(), this.opts.recoveryProbeIntervalMs));
+    this.recoveryTimers.add(provider.id);
+    this.scheduler.schedule(recoveryKey(provider.id), this.opts.recoveryProbeIntervalMs, () => void runProbe());
   }
 
   private metric(name: string, value: string): void {
@@ -76,3 +83,6 @@ export class ProviderFallback<TReq, TResp> {
   }
 }
 
+function recoveryKey(providerId: string): string {
+  return `voice.provider_fallback.recovery:${providerId}`;
+}
