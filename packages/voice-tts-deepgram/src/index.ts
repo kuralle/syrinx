@@ -62,6 +62,10 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private carry: Uint8Array = EMPTY;
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
+  // True between sending a Clear and receiving the Cleared ack: audio in that
+  // window is the interrupted turn's trailing PCM and must be dropped, never
+  // attributed to the next turn (Deepgram acks Cleared before the next turn's audio).
+  private clearedPending = false;
   private finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposers: Array<() => void> = [];
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 24000, channels: 1 };
@@ -154,6 +158,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.finishTimers.clear();
     this.currentContextId = "";
     this.carry = EMPTY;
+    this.clearedPending = false;
     await this.conn?.close();
     this.conn = null;
     this.bus = null;
@@ -168,8 +173,9 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.carry = EMPTY;
     if (contextIds.length === 0) return;
     // Clear stops Deepgram from streaming the rest of the interrupted turn while
-    // keeping the socket open for the next turn.
-    await this.trySend(CLEAR_MSG, contextIds[contextIds.length - 1] ?? "");
+    // keeping the socket open for the next turn. Arm clearedPending only if the
+    // Clear actually went out, so a failed send cannot wedge the audio path.
+    this.clearedPending = await this.trySend(CLEAR_MSG, contextIds[contextIds.length - 1] ?? "");
   }
 
   /** Send a frame, ensuring the socket is ready; emit a typed error if it cannot be sent. */
@@ -212,6 +218,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       }
       case "Cleared":
         this.carry = EMPTY;
+        this.clearedPending = false;
         return;
       case "Warning":
         return;
@@ -226,7 +233,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
 
   private handleAudio(frame: Uint8Array): void {
     const contextId = this.currentContextId;
-    if (!contextId || this.cancelledContexts.has(contextId)) return;
+    if (!contextId || this.clearedPending || this.cancelledContexts.has(contextId)) return;
     if (frame.byteLength === 0) return;
 
     const buf = this.carry.byteLength === 0 ? frame : concatBytes(this.carry, frame);
@@ -282,6 +289,10 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     for (const contextId of contextIds) this.clearFinishTimeout(contextId);
     this.currentContextId = "";
     this.carry = EMPTY;
+    // A dropped socket voids any in-flight Clear/Cleared handshake: the server
+    // resets on reconnect and will never ack the old Clear, so disarm here or
+    // the next turn's audio would be dropped forever.
+    this.clearedPending = false;
     for (const contextId of contextIds) this.emitError(contextId, err);
   }
 

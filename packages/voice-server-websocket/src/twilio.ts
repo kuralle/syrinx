@@ -337,6 +337,16 @@ export async function createTwilioMediaStreamServer(
       }
       if (event === "dtmf") {
         if (state.stopped) return;
+        if (!state.started || !state.contextId) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: "",
+            timestampMs: Date.now(),
+            name: "twilio.dtmf.before_start",
+            value: message.dtmf?.digit ?? "",
+          });
+          return;
+        }
         const rawDigit = message.dtmf?.digit ?? "";
         const digit = parseDtmfDigit(rawDigit);
         if (!digit) {

@@ -584,6 +584,11 @@ describe("createVoiceWebSocketServer", () => {
       audio: new Uint8Array([8, 9, 10, 11]),
       sampleRateHz: 16000,
     });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+    });
 
     expect(textPackets).toEqual([
       expect.objectContaining({
@@ -1819,8 +1824,13 @@ describe("createVoiceWebSocketServer", () => {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
-      audio: new Uint8Array([1, 2, 3, 4]),
+      audio: pcm16SamplesToBytes(new Int16Array(640)),
       sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-tts",
+      timestampMs: Date.now(),
     });
 
     await expect(closed).resolves.toEqual({

@@ -23,6 +23,14 @@ describe("browser opus codec", () => {
     expect(codec.decodeOpusFrame(wire).length).toBeGreaterThan(0);
   });
 
+  it("does not zero-pad partial PCM until explicitly requested", () => {
+    const codec = createBrowserOpusCodec(48000);
+    const quarter = new Int16Array(Math.round((48000 * BROWSER_OPUS_FRAME_DURATION_MS) / 4000));
+    expect(codec.encodePcm16Frame(quarter, false)).toEqual([]);
+    expect(codec.encodePcm16Frame(quarter, false)).toEqual([]);
+    expect(codec.encodePcm16Frame(new Int16Array(0), true).length).toBeGreaterThan(0);
+  });
+
   it("accumulates partial PCM before emitting a complete opus frame", () => {
     const codec = createBrowserOpusCodec(48000);
     const half = new Int16Array(Math.round((48000 * BROWSER_OPUS_FRAME_DURATION_MS) / 2000));

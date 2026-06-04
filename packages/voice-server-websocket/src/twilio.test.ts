@@ -1105,6 +1105,40 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
+  it("drops Twilio DTMF before start with a metric and no dtmf.received packet", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: unknown[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = registerServer(await createTwilioMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(twilioUrl(address.port));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      streamSid: "MZ-test-stream",
+      dtmf: { digit: "5" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(dtmfReceived).toEqual([]);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      name: "twilio.dtmf.before_start",
+      value: "5",
+    }));
+
+    client.close();
+    await server.close();
+  });
+
   it("test:dtmf_typed_per_carrier emits dtmf.received for Twilio DTMF", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const dtmfReceived: Array<{ kind: string; digit: string; provider: string; rawDigit: string; contextId: string }> = [];

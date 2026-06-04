@@ -30,6 +30,7 @@ import type {
   InterruptionSource,
   InterruptTtsPacket,
   InterruptLlmPacket,
+  InterruptSttPacket,
   InjectMessagePacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
@@ -172,6 +173,10 @@ export function interruptTts(contextId: string, timestampMs: number): InterruptT
 
 export function interruptLlm(contextId: string, timestampMs: number): InterruptLlmPacket {
   return { kind: "interrupt.llm", contextId, timestampMs };
+}
+
+export function interruptStt(contextId: string, timestampMs: number): InterruptSttPacket {
+  return { kind: "interrupt.stt", contextId, timestampMs };
 }
 
 export function ttsError(

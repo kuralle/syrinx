@@ -357,6 +357,16 @@ export async function createTelnyxMediaStreamServer(
       }
       if (event === "dtmf") {
         if (state.stopped) return;
+        if (!state.started || !state.contextId) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: "",
+            timestampMs: Date.now(),
+            name: "telnyx.dtmf.before_start",
+            value: message.dtmf?.digit ?? "",
+          });
+          return;
+        }
         const rawDigit = message.dtmf?.digit ?? "";
         const digit = parseDtmfDigit(rawDigit);
         if (!digit) {
@@ -529,11 +539,18 @@ function rememberTelnyxMediaChunk(
   inputSampleRateHz: number,
   maxInboundReorderFrames: number,
 ): void {
-  if (frame.chunk < state.nextInboundMediaChunk) {
-    throw new Error(`Telnyx media.chunk is stale or duplicated: expected at least ${String(state.nextInboundMediaChunk)}, received ${String(frame.chunk)}`);
-  }
-  if (state.inboundMediaReorderBuffer.has(frame.chunk)) {
-    throw new Error(`Telnyx media.chunk is stale or duplicated: expected at least ${String(state.nextInboundMediaChunk)}, received ${String(frame.chunk)}`);
+  if (frame.chunk < state.nextInboundMediaChunk || state.inboundMediaReorderBuffer.has(frame.chunk)) {
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: state.contextId,
+      timestampMs: Date.now(),
+      name: "telnyx.media_chunk_duplicate",
+      value: JSON.stringify({
+        expected: state.nextInboundMediaChunk,
+        received: frame.chunk,
+      }),
+    });
+    return;
   }
   state.inboundMediaReorderBuffer.set(frame.chunk, frame);
   flushTelnyxMediaReorderBuffer(session, state, inputSampleRateHz, maxInboundReorderFrames, false);
