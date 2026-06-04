@@ -7,11 +7,14 @@ import {
 import type { WorkersInboundSocketController } from "@asyncdot/voice-ws/workers";
 import { DurableObjectAlarmScheduler } from "./alarm-scheduler.js";
 import { DurableObjectSessionStore } from "./durable-session-store.js";
-import { StubVoiceAgentSession } from "./stub-session.js";
+import { createLiveVoiceAgentSession, type LiveSessionEnv } from "./live-session.js";
 
-export interface Env {
+export interface Env extends LiveSessionEnv {
   VOICE_CONVERSATIONS: DurableObjectNamespace;
 }
+
+const INPUT_SAMPLE_RATE_HZ = 16000;
+const OUTPUT_SAMPLE_RATE_HZ = 16000;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -31,7 +34,7 @@ export class VoiceConversation {
 
   constructor(
     private readonly ctx: DurableObjectState,
-    _env: Env,
+    private readonly env: Env,
   ) {
     this.scheduler = new DurableObjectAlarmScheduler(ctx.storage);
     this.store = new DurableObjectSessionStore(ctx.storage, this.scheduler);
@@ -44,10 +47,14 @@ export class VoiceConversation {
     const upgrade = createVoiceEdgeWebSocketUpgrade(request, {
       sessionStore: this.store,
       scheduler: this.scheduler,
-      createSession: () => new StubVoiceAgentSession().asVoiceAgentSession(),
+      createSession: () =>
+        createLiveVoiceAgentSession(this.env, {
+          inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+          outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
+        }),
       sessionId: (req) => new URL(req.url).searchParams.get("sessionId") ?? crypto.randomUUID(),
-      inputSampleRateHz: 16000,
-      outputSampleRateHz: 16000,
+      inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+      outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
       resumeWindowMs: 15_000,
     }, {
       acceptWebSocket: (socket) => this.ctx.acceptWebSocket(socket as WebSocket),

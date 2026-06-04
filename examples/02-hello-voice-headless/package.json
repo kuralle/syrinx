@@ -9,6 +9,7 @@
     "build": "tsc --noEmit -p tsconfig.json && mkdir -p dist && touch dist/.buildstamp",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "fixtures:gemini-university": "tsx scripts/generate-gemini-university-fixtures.ts",
+    "fixtures:gemini-turn-detection": "tsx scripts/generate-gemini-turn-detection-fixtures.ts",
     "lint": "eslint src test scripts --ext .ts",
     "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
     "review:telephony": "tsx scripts/serve-telephony-review.ts",

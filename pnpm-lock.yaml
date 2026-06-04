@@ -204,9 +204,18 @@ importers:
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice
+      '@asyncdot/voice-bridge-aisdk':
+        specifier: workspace:*
+        version: link:../voice-bridge-aisdk
       '@asyncdot/voice-server-websocket':
         specifier: workspace:*
         version: link:../voice-server-websocket
+      '@asyncdot/voice-stt-deepgram':
+        specifier: workspace:*
+        version: link:../voice-stt-deepgram
+      '@asyncdot/voice-tts-cartesia':
+        specifier: workspace:*
+        version: link:../voice-tts-cartesia
       '@asyncdot/voice-ws':
         specifier: workspace:*
         version: link:../voice-ws

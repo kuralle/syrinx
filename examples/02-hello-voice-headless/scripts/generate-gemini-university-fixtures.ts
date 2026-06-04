@@ -258,7 +258,7 @@ export function readPcm16Wav(path: string): PcmWav {
   return { samples, sampleRate: fmt.sampleRate };
 }
 
-async function synthesizeFixture(text: string, apiKey: string): Promise<{ toBuffer(): Uint8Array }> {
+export async function synthesizeFixture(text: string, apiKey: string): Promise<{ toBuffer(): Uint8Array }> {
   const bus = new PipelineBusImpl();
   const tts = new GeminiTTSPlugin();
   const chunks: Uint8Array[] = [];
@@ -336,11 +336,11 @@ function mergeBytes(chunks: readonly Uint8Array[]): Uint8Array {
   return merged;
 }
 
-function geminiTtsModel(): string {
+export function geminiTtsModel(): string {
   return process.env["SYRINX_GEMINI_TTS_MODEL"]?.trim() || "gemini-2.5-flash-preview-tts";
 }
 
-function geminiTtsVoiceName(): string {
+export function geminiTtsVoiceName(): string {
   return process.env["SYRINX_GEMINI_TTS_VOICE"]?.trim() || "Kore";
 }
 

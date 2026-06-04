@@ -118,7 +118,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           sample_rate: this.sampleRate,
         },
         language: this.language,
-        context_id: contextId || globalThis.crypto.randomUUID(),
+        context_id: contextId || crypto.randomUUID(),
         continue: true,
         add_timestamps: true,
       }),
