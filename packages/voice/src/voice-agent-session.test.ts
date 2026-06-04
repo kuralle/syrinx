@@ -2208,6 +2208,80 @@ describe("VoiceAgentSession", () => {
       await closeSession(session);
     });
 
+    it("re-arms per-turn guard state across a barge-in on a stable contextId (no stale interrupt-drop; emits interrupt.stt)", async () => {
+      const session = new VoiceAgentSession({
+        plugins: {},
+        endpointingOwner: "provider_stt",
+        minInterruptionMs: 0,
+      });
+      const ignoredAfterInterrupt: string[] = [];
+      const sttInterrupts: string[] = [];
+
+      await session.start();
+      session.bus.on("metric.conversation", (pkt) => {
+        const m = pkt as { name?: string };
+        if (m.name === "llm.delta_ignored_after_interrupt") ignoredAfterInterrupt.push(m.name);
+      });
+      session.bus.on("interrupt.stt", (pkt) => {
+        sttInterrupts.push((pkt as { contextId: string }).contextId);
+      });
+
+      // Turn 1 on a stable (telephony-style) contextId, then a barge-in during its response.
+      session.bus.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: "call-stable",
+        timestampMs: 1000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket);
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: "call-stable",
+        timestampMs: 1100,
+        text: "first turn",
+        transcripts: [],
+      } satisfies EndOfSpeechPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Critical, {
+        kind: "interrupt.detected",
+        contextId: "call-stable",
+        timestampMs: 1200,
+        source: "vad",
+      } satisfies InterruptionDetectedPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // interrupt.stt is now emitted on barge-in so provider STT resets transcript state.
+      expect(sttInterrupts).toContain("call-stable");
+
+      // Turn 2 reuses the SAME contextId. Before the fix, the stale interrupted-generation
+      // flag from turn 1 dropped turn 2's llm.delta as "llm.delta_ignored_after_interrupt".
+      session.bus.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: "call-stable",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket);
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: "call-stable",
+        timestampMs: 2100,
+        text: "second turn",
+        transcripts: [],
+      } satisfies EndOfSpeechPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Main, {
+        kind: "llm.delta",
+        contextId: "call-stable",
+        timestampMs: 2200,
+        text: "second turn reply",
+      } satisfies LlmDeltaPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Turn 2's response is NOT suppressed by turn 1's barge-in.
+      expect(ignoredAfterInterrupt).toEqual([]);
+
+      await closeSession(session);
+    });
+
     it("initializes only the provider finalizer when provider_stt owns endpointing", async () => {
       const provider = new EndpointingPlugin({
         owner: "provider_stt",

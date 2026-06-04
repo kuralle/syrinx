@@ -191,6 +191,7 @@ export async function createSmartPbxMediaStreamServer(
               }));
           },
           onInterrupt: (contextId) => {
+            state.opusEncodeRemainder = new Int16Array(0);
             session.bus.push(Route.Background, {
               kind: "metric.conversation",
               contextId,
@@ -290,6 +291,16 @@ export async function createSmartPbxMediaStreamServer(
       }
       if (message.event === "dtmf") {
         if (state.stopped) return;
+        if (!state.started || !state.contextId) {
+          session.bus.push(Route.Background, {
+            kind: "metric.conversation",
+            contextId: "",
+            timestampMs: Date.now(),
+            name: "smartpbx.dtmf.before_start",
+            value: message.dtmf?.digit ?? message.digit ?? "",
+          });
+          return;
+        }
         const rawDigit = message.dtmf?.digit ?? message.digit ?? "";
         const digit = parseDtmfDigit(rawDigit);
         if (!digit) {

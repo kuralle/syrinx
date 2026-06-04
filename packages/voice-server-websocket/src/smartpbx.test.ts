@@ -304,6 +304,11 @@ describe("createSmartPbxMediaStreamServer", () => {
       audio: pcm16SamplesToBytes(new Int16Array(320)),
       sampleRateHz: 16000,
     });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "smartpbx-call-test",
+      timestampMs: Date.now(),
+    });
     const media = await outbound;
     const opus = Buffer.from(media.media.payload, "base64");
     const decoded = pcm16BytesToSamples(new OpusDecoder({ channels: 1, sample_rate: 48000 }).decode(opus));
@@ -789,6 +794,39 @@ describe("createSmartPbxMediaStreamServer", () => {
       name: "smartpbx.send_buffer_playout_cleared_ms",
       value: "20",
     }));
+    await server.close();
+  });
+
+  it("drops SmartPBX DTMF before start with a metric and no dtmf.received packet", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const dtmfReceived: unknown[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = registerServer(await createSmartPbxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSmartPbxSocket(smartPbxUrl(address.port));
+    client.send(JSON.stringify({
+      event: "dtmf",
+      dtmf: { digit: "5" },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(dtmfReceived).toEqual([]);
+    expect(metrics).toContainEqual(expect.objectContaining({
+      name: "smartpbx.dtmf.before_start",
+      value: "5",
+    }));
+
+    client.close();
     await server.close();
   });
 

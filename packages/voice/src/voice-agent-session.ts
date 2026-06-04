@@ -680,6 +680,16 @@ export class VoiceAgentSession {
     }
     this.lastFinalizedContextId = pkt.contextId;
 
+    // Re-arm per-turn guard state for the next turn. Transports with a stable
+    // per-call contextId (telephony callSid) reuse one id across turns, so these
+    // Sets must be cleared at the turn boundary or turn 2+ inherits stale flags:
+    // - firstTtsAudioFired: else vaqi.latency_ms is never emitted again
+    // - interruptedGenerationContextIds: else turn N+1's LLM/TTS packets are dropped after a prior barge-in
+    // - fallbackInjectedContexts: else only one error fallback can ever be spoken per call
+    this.firstTtsAudioFired.delete(pkt.contextId);
+    this.interruptedGenerationContextIds.delete(pkt.contextId);
+    this.fallbackInjectedContexts.delete(pkt.contextId);
+
     this.currentTurnId = pkt.contextId;
     this.idleTimeout.setContextId(pkt.contextId);
 
@@ -955,6 +965,10 @@ export class VoiceAgentSession {
     // Interrupt TTS, then LLM
     this.bus.push(Route.Critical, make.interruptTts(pkt.contextId, pkt.timestampMs));
     this.bus.push(Route.Critical, make.interruptLlm(pkt.contextId, pkt.timestampMs));
+    // Reset STT transcript state too, so a barge-in cannot leak stale finalized
+    // segments into the next turn when a client reuses the same contextId
+    // (the provider STT plugins listen for interrupt.stt; previously unfired).
+    this.bus.push(Route.Critical, make.interruptStt(pkt.contextId, pkt.timestampMs));
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {

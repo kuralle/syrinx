@@ -196,6 +196,55 @@ describe("DeepgramTTSPlugin", () => {
     await started;
   });
 
+  it("drops the interrupted turn's trailing PCM instead of misattributing it to the next turn", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    let socketRef: WebSocket | null = null;
+    const endpointUrl = await createLocalServer((socket) => {
+      socketRef = socket;
+      socket.on("message", (data) => {
+        received.push(JSON.parse(data.toString()) as Record<string, unknown>);
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const audio: TextToSpeechAudioPacket[] = [];
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+
+    await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
+
+    // Turn 1 speaks, user barges in -> Clear is sent and clearedPending arms.
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-1", timestampMs: Date.now(), text: "First turn." });
+    await waitForCondition(() => received.some((m) => m["type"] === "Speak"));
+    bus.push(Route.Critical, { kind: "interrupt.tts", contextId: "turn-1", timestampMs: Date.now() });
+    await waitForCondition(() => received.some((m) => m["type"] === "Clear"));
+
+    // Turn 2 starts before Deepgram acks the Clear: currentContextId is now turn-2.
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-2", timestampMs: Date.now(), text: "Second turn." });
+    await waitForCondition(() => received.filter((m) => m["type"] === "Speak").length >= 2);
+
+    // Trailing PCM from the interrupted turn arrives before "Cleared" — must be
+    // dropped, never attributed to turn-2.
+    socketRef!.send(Buffer.from([9, 9]), { binary: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Deepgram acks the Clear; turn-2's real audio follows and must be emitted.
+    socketRef!.send(JSON.stringify({ type: "Cleared" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    socketRef!.send(Buffer.from([2, 2]), { binary: true });
+    await waitForCondition(() => audio.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(audio).toEqual([
+      expect.objectContaining({ contextId: "turn-2", audio: new Uint8Array([2, 2]) }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits a typed TTS error when Deepgram returns an Error frame", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {

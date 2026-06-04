@@ -296,7 +296,8 @@ describe("TurnArbiter", () => {
     });
 
     ttsPlayout.noteAudio("assistant-turn", 100, 1000);
-    arbiter.noteInterimEvidence("uh huh");
+    // Realistic ordering: VAD detects onset first, then STT emits the interim for
+    // this same utterance, then sustained activity drives the commit decision.
     arbiter.onSpeechStarted(
       {
         kind: "vad.speech_started",
@@ -306,6 +307,7 @@ describe("TurnArbiter", () => {
       } satisfies VadSpeechStartedPacket,
       "assistant-turn",
     );
+    arbiter.noteInterimEvidence("uh huh");
     arbiter.onSpeechActivity({
       kind: "vad.speech_activity",
       contextId: "user",
@@ -319,7 +321,7 @@ describe("TurnArbiter", () => {
     expect(metrics).not.toContain("interrupt.committed_after_ms");
   });
 
-  it("suppresses low-confidence speech evidence with a distinct metric", async () => {
+  it("discards stale interim evidence from before the barge-in window (no false suppression)", async () => {
     const { bus, ttsPlayout, arbiter } = await createArbiter(280);
     const metrics = metricNames(bus);
     const interrupts: InterruptionDetectedPacket[] = [];
@@ -327,8 +329,11 @@ describe("TurnArbiter", () => {
       interrupts.push(pkt as InterruptionDetectedPacket);
     });
 
+    // A backchannel interim lands while no barge-in is pending (e.g. STT emits it
+    // during a lull). It must NOT survive into the next, real barge-in's decision.
+    arbiter.noteInterimEvidence("uh huh");
+
     ttsPlayout.noteAudio("assistant-turn", 100, 1000);
-    arbiter.noteInterimEvidence("I need help", 0.21);
     arbiter.onSpeechStarted(
       {
         kind: "vad.speech_started",
@@ -338,6 +343,42 @@ describe("TurnArbiter", () => {
       } satisfies VadSpeechStartedPacket,
       "assistant-turn",
     );
+    // Sustained barge-in with no fresh interim for this turn: the stale "uh huh"
+    // from before the window must have been cleared, so this commits.
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+
+    expect(interrupts).toHaveLength(1);
+    expect(metrics).toContain("interrupt.committed_after_ms");
+    expect(metrics).not.toContain("interrupt.suppressed_backchannel");
+  });
+
+  it("suppresses low-confidence speech evidence with a distinct metric", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    // Realistic ordering: onset first, then the low-confidence interim for this
+    // utterance, then sustained activity reaching the commit decision.
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.noteInterimEvidence("I need help", 0.21);
     arbiter.onSpeechActivity({
       kind: "vad.speech_activity",
       contextId: "user",

@@ -170,6 +170,11 @@ export class TurnArbiter {
     awaitingAudio: boolean,
   ): void {
     this.deps.primarySpeakerGate.beginBargeInWindow();
+    // Reset interim evidence so a stale low-confidence/backchannel interim from a
+    // previous turn cannot suppress this new turn's barge-in. The current turn's
+    // own interims (noteInterimEvidence) repopulate it before tryCommit reads it.
+    this.latestInterimText = "";
+    this.latestInterimConfidence = null;
     this.turnInterruption = {
       kind: "pending",
       userContextId: pkt.contextId,

@@ -524,8 +524,7 @@ function wireBrowserSessionEvents(
           if (outputSampleRateHz !== opusCodec.sampleRateHz) {
             samples = resamplePcm16Streaming(streamingResamplers, samples, outputSampleRateHz, opusCodec.sampleRateHz);
           }
-          const flush = offset + frameBytesCount >= resampled.byteLength;
-          for (const opus of opusCodec.encodePcm16Frame(samples, flush)) {
+          for (const opus of opusCodec.encodePcm16Frame(samples, false)) {
             pushWireFrame(opus, "opus", BROWSER_OPUS_FRAME_DURATION_MS);
           }
         }
@@ -541,11 +540,45 @@ function wireBrowserSessionEvents(
 
     onInterrupt: (contextId) => {
       ttsSequences.delete(contextId);
+      opusCodec?.reset();
       sendJson(socket, { type: "audio_clear", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
       sendJson(socket, { type: "agent_interrupted", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
     },
 
     onDrain: (contextId, playout, progress) => {
+      if (binaryAudioEnvelope && opusCodec && getBrowserOpusDownlink()) {
+        const pendingFrames = opusCodec.encodePcm16Frame(new Int16Array(0), true).map((opus) => ({
+          contextId,
+          send: () => {
+            if (socket.readyState !== WebSocket.OPEN) return false;
+            const sequence = (ttsSequences.get(contextId) ?? 0) + 1;
+            ttsSequences.set(contextId, sequence);
+            const jsonSuccess = sendJsonWithResult(socket, {
+              type: "tts_chunk",
+              turnId: contextId,
+              sequence,
+              sampleRateHz: outputSampleRateHz,
+              encoding: "opus",
+              channels: 1,
+              byteLength: opus.byteLength,
+              durationMs: BROWSER_OPUS_FRAME_DURATION_MS,
+            }, maxBufferedAmountBytes);
+            if (!jsonSuccess) return false;
+            const binaryData = Buffer.from(encodeSyrinxAudioEnvelope({
+              type: "audio",
+              contextId,
+              sequence,
+              sampleRateHz: outputSampleRateHz,
+              encoding: "opus",
+              channels: 1,
+              byteLength: opus.byteLength,
+              durationMs: BROWSER_OPUS_FRAME_DURATION_MS,
+            }, opus));
+            return sendSocketDataWithResult(socket, binaryData, maxBufferedAmountBytes);
+          },
+        }));
+        playout.enqueue(pendingFrames);
+      }
       playout.enqueueControl(() => {
         ttsSequences.delete(contextId);
         progress.complete(contextId);
@@ -565,6 +598,7 @@ function wireBrowserSessionEvents(
 
     onClear: () => {
       ttsSequences.clear();
+      opusCodec?.reset();
     },
   };
 
