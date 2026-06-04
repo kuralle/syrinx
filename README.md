@@ -12,6 +12,23 @@ transport edge and hands the agent runtime a clean stream of mono PCM16 audio.
   sequence and sample-rate locks, reconnect within a retention window).
 - Telephony adapters: SIP, Twilio, LiveKit.
 - A provider-testing suite for realtime audio backends.
+- Runs on Node **and** Cloudflare Workers — one hibernatable Durable Object per
+  conversation (`WebSocketPair` inbound, timers→DO alarms, SQLite session store,
+  optional R2 call recording). See `docs/serverless-edge-port-implementation-notes.md`.
+
+## Edge deployment (Cloudflare Workers)
+
+The `@asyncdot/voice-server-workers` package runs the full engine — live Deepgram
+STT + OpenAI + Cartesia TTS — inside a Durable Object.
+
+```
+pnpm --filter @asyncdot/voice-server-workers exec wrangler deploy
+# set DEEPGRAM_API_KEY / OPENAI_API_KEY / CARTESIA_API_KEY via `wrangler secret put`
+```
+
+Endpoints: `wss://<worker>/ws?sessionId=<id>` (voice), `GET /health`,
+`GET /recordings?sessionId=<id>` (lists R2 recordings). Bind an R2 bucket as
+`RECORDINGS` to capture `user.wav` + `assistant.wav` + `manifest.json` per call.
 
 ## Configuration
 
