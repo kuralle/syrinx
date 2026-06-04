@@ -65,6 +65,12 @@ export interface Reasoner {
    * Drive one reasoning turn. The returned async-iterable IS the response.
    * Cancellation (barge-in) is via `turn.signal` (abort) — the adapter forwards
    * it into the backend stream and into tool execution.
+   *
+   * LATENCY INVARIANT (non-negotiable, see §7a): the adapter MUST yield every
+   * part the instant the backend produces it — NO buffering, NO awaiting the
+   * stream to completion, NO batching. The first `text-delta` must reach the
+   * caller as soon as the backend's first token lands. The seam adds at most one
+   * microtask + a synchronous object remap per part; it must add no I/O hop.
    */
   stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart>;
 }
@@ -190,6 +196,25 @@ Four interfaces were designed in parallel:
 
 ---
 
+## 7a. Latency (hard requirement — the seam must add ~0)
+
+Latency is the engine's top product constraint. Industry budgets for natural conversation:
+
+| Source | Voice-to-voice budget | LLM time-to-first-token | TTS time-to-first-byte |
+|---|---|---|---|
+| Daily — *Voice AI & Voice Agents primer* | ~**800 ms** total (STT 300 / **LLM-TTFT 350** / TTS-TTFB 120 / net 10); "good conversational" ~500 ms | ~350 ms | ~120 ms |
+| Modal — *One-second voice-to-voice* | ~**1000 ms** (good ≤1000, bad ≥2000) | ~500 ms | ~200 ms |
+
+The bridge sits on the **LLM-TTFT** stage and sets the streaming cadence into TTS — the single most latency-sensitive seam in the pipeline. The `Reasoner` abstraction therefore must be a **transparent passthrough**, not a stage that adds time.
+
+**Why the overhead is negligible (by construction):**
+- The adapter is `for await (part of backend) yield map(part)` — it forwards each part immediately. Cost added per part = **one microtask hop** (async-generator yield) **+ a synchronous object remap** (`TextStreamPart`/Mastra chunk → `ReasoningPart`). That is microseconds against a ~350 ms LLM-TTFT — i.e. < 0.01% of the stage, well inside measurement noise.
+- **No buffering, no completion-await, no batching, no extra network hop.** The first `text-delta` propagates the instant the backend emits its first token, so TTFT and first-sentence-to-TTS are unchanged.
+- **Mastra's callback stream** (`processDataStream({onChunk})`) is bridged to an async-iterable via a zero-delay queue — each `onChunk` enqueues and resolves the pending pull immediately; it must never accumulate.
+- Sentence aggregation (`llm.delta` → `tts.text`) is **unchanged** and still lives in the session orchestrator, so TTS-TTFB is unaffected.
+
+**Measurable acceptance (not asserted — instrumented).** The repo already records per-stage P50/P95/P99 for STT-final / **LLM-TTFT** / TTS-TTFB / playout-start (`docs/latency-budget.md`, the observability stage percentiles). Step-1 acceptance requires **LLM-TTFT P50 and P95 unchanged within noise** (target: ≤ a few ms delta) versus the pre-refactor baseline, measured by the existing instrumentation on the deployed worker. Any regression beyond noise is a step-1 blocker — the refactor is rejected, not merged. The same check gates step 2 (Mastra adapter) and step 3 (the suspend path must not add latency to *non-suspending* turns).
+
 ## 8. Tiny-commits refactor plan
 
 Each row is one atomic, independently-reviewable commit. Acceptance = the listed proof commands pass and the named invariant holds. No commit changes user-visible behavior until step 3.
@@ -200,9 +225,9 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 |---|---|---|
 | 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/voice/src/reasoner.ts`, exported from `voice/src/index.ts`. No consumers yet. | `pnpm --filter @asyncdot/voice typecheck`; new types compile, nothing references them. |
 | 1.2 | `refactor(bridge): add fromAiSdkAgent + fromStreamText adapters → Reasoner` — map `TextStreamPart`→`ReasoningPart` (§4.3). Adapter unit tests. | `pnpm --filter @asyncdot/voice-bridge-aisdk test` (new adapter tests green); mapping table covered incl. dropped part types. |
-| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 5-case `ReasoningPart` switch. Keep history, spoken-prefix barge-in, retry, supersede **identical**. The constructor still accepts the AI SDK config (wraps via `fromStreamText`). | **The 9 existing `index.test.ts` tests pass UNCHANGED.** `pnpm --filter @asyncdot/voice-bridge-aisdk test`. |
+| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 5-case `ReasoningPart` switch. Keep history, spoken-prefix barge-in, retry, supersede **identical**. **No buffering** — yield each part immediately (§7a). The constructor still accepts the AI SDK config (wraps via `fromStreamText`). | **The 9 existing `index.test.ts` tests pass UNCHANGED.** `pnpm --filter @asyncdot/voice-bridge-aisdk test`. **LLM-TTFT P50/P95 unchanged within noise** vs baseline (§7a). |
 | 1.4 | `refactor(bridge): accept a Reasoner or raw ToolLoopAgent; rename to ReasoningBridge` — constructor union `Reasoner \| AiSdkAgentLike \| StreamTextConfig`; auto-wrap by the `fullStream` discriminator. Keep `AISDKBridgePlugin` as a thin deprecated alias **only if** any caller needs it (prefer none — zero-debt). | `pnpm -r typecheck`; update the worker `live-session.ts` + examples to the new constructor; `pnpm -r test`. |
-| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + curl one turn on the deployed worker. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test`; deployed `/ws` turn transcribes + returns TTS. |
+| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + curl one turn on the deployed worker; **record LLM-TTFT** and compare to the pre-refactor baseline. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test`; deployed `/ws` turn transcribes + returns TTS; **LLM-TTFT within noise of baseline** (§7a). |
 
 ### Step 2 — `fromMastraAgent`
 
