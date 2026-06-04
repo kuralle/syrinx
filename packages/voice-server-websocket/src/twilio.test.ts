@@ -616,6 +616,7 @@ describe("createTwilioMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();
@@ -684,6 +685,7 @@ describe("createTwilioMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();
@@ -802,6 +804,7 @@ describe("createTwilioMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();
@@ -949,10 +952,11 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
-  it("closes when queued outbound audio exceeds the configured playout bound", async () => {
+  it("clears queued outbound audio without closing when playout exceeds the configured bound", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const metrics: ConversationMetricPacket[] = [];
     const recording: RecordAssistantAudioPacket[] = [];
+    let closed = false;
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
@@ -969,11 +973,11 @@ describe("createTwilioMediaStreamServer", () => {
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected TCP address");
     const client = await openSocket(twilioUrl(address.port));
+    client.once("close", () => {
+      closed = true;
+    });
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      client.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
-    });
 
     session.bus.push(Route.Main, {
       kind: "tts.audio",
@@ -991,15 +995,16 @@ describe("createTwilioMediaStreamServer", () => {
       sampleRateHz: 16000,
     });
 
-    await expect(closed).resolves.toEqual({
-      code: 1013,
-      reason: "outbound audio queue exceeded",
-    });
+    await waitForCondition(() =>
+      metrics.some((metric) => metric.name === "twilio.overflow_playout_cleared_ms"),
+    );
+    expect(closed).toBe(false);
     expect(metrics).toContainEqual(expect.objectContaining({
       name: "twilio.overflow_playout_cleared_ms",
       value: "60",
     }));
     expect(recording).toContainEqual(expect.objectContaining({ truncate: true }));
+    client.close();
     await server.close();
   });
 

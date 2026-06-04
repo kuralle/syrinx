@@ -59,7 +59,6 @@ export function wireTelephonyOutboundPipeline(args: {
     (discardedMs) => {
       callbacks.onStop("overflow");
       recordDiscardedPlayout(discardedMs, "overflow");
-      closeWebSocketWithFallback(socket, 1013, "outbound audio queue exceeded");
     },
     (discardedMs) => {
       callbacks.onStop("send_buffer");

@@ -1,0 +1,72 @@
+{
+  "area": "Observability + latency metrics (turn-metrics.ts, observability-observer.ts, observability.ts, latency-filler.ts)",
+  "files_reviewed": 8,
+  "how_it_works": "Two parallel metric paths exist. (1) Engine-native: ObservabilityObserver (packages/voice/src/observability-observer.ts) subscribes to bus events and at each turn boundary records monotonicNowMs() (observability.ts:6-8, performance.timeOrigin+performance.now()) into boundaryTimes keyed by speechId; on agent_started_speaking it emits the v2v_ms histogram as now - times.user_stopped_speaking (observability-observer.ts:135-139), plus thinking_ms and agent_speech_ms, tagged with provider/model/region/cancelled. Dims come from stageDims merged from STT/TTS packet provider fields (mergeStageDims:171-180), falling back to session dims which default to the literal string \"unknown\" (voice-agent-session.ts:310-312). (2) Browser path: TurnMetricsTracker (voice-server-websocket/src/turn-metrics.ts) tracks wall-clock packet timestampMs per contextId, builds an eou budget (hangover+stt-final+endpoint), and on tts.playout_progress.complete emits a per-turn JSON message then deletes the turn entry (turn-metrics.ts:169-181). Percentiles (P50/P95/P99) are computed only in an examples script (run-websocket-university-interactive.ts:628-694), not in the engine. The observer's user_stopped_speaking is the monotonic clock reading at vad.speech_ended arrival, never corrected by vad.stop_hangover_ms (which only TurnMetricsTracker consumes, turn-metrics.ts:137-144).",
+  "findings": [
+    {
+      "title": "Canonical engine v2v_ms is NOT hangover-corrected, violating the canonical definition",
+      "file_line": "packages/voice/src/observability-observer.ts:87-89,135-139",
+      "severity": "high",
+      "dimension": "correctness",
+      "evidence": "onVadSpeechEnded records the boundary at clock-now: `this.emitBoundary(this.speechId(pkt.contextId), \"user_stopped_speaking\");` and emitBoundary stamps `const now = monotonicNowMs(); ... times[boundary] = now;`. v2v is then `const delta = now - stopped;` where stopped===times.user_stopped_speaking. The vad.stop_hangover_ms metric is never consumed by this observer (grep shows it is only read in turn-metrics.ts:137-144).",
+      "recommendation": "Anchor user_stopped_speaking to raw VAD silence by subtracting the reported vad.stop_hangover_ms (subscribe to metric.conversation name===\"vad.stop_hangover_ms\" as TurnMetricsTracker already does, or carry the hangover on the vad.speech_ended packet) before computing v2v_ms. Today the engine's headline metric over-reports v2v by the hangover window.",
+      "checklist_ref": "PRODUCTION-CHECKLIST.md:347-349 (v2v=AgentStartedSpeaking-UserStoppedSpeaking; anchor UserStoppedSpeaking to raw VAD silence minus hangover); VE-05-bridge.md:48"
+    },
+    {
+      "title": "Cancelled turns are tagged but NOT excluded from the v2v percentile distribution",
+      "file_line": "examples/02-hello-voice-headless/scripts/run-websocket-university-interactive.ts:692-694; packages/voice/src/observability-observer.ts:135-139",
+      "severity": "high",
+      "dimension": "correctness",
+      "evidence": "positiveVoiceToVoiceMs filters only on positivity: `return turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);` with no cancelled/interrupted check. On the engine side, v2v_ms is emitted at agent_started_speaking even when the same speechId is later interrupted, and the histogram series carries cancelled as a tag (observability-observer.ts:126-139) rather than being withheld; nothing downstream filters it out.",
+      "recommendation": "Exclude cancelled/interrupted turns from v2v/STT/LLM/TTS percentile pools (filter on the cancelled tag in the script, and/or do not feed cancelled attempts into the latency histograms in the engine). The checklist explicitly requires cancelled attempts excluded from latency distributions.",
+      "checklist_ref": "PRODUCTION-CHECKLIST.md:259,277 (cancelled TTS metrics excluded from latency distributions; exclude cancelled attempts)"
+    },
+    {
+      "title": "ObservabilityObserver per-speechId maps grow unbounded for the session lifetime (no per-turn eviction)",
+      "file_line": "packages/voice/src/observability-observer.ts:34-36,71-77,117-123",
+      "severity": "medium",
+      "dimension": "reliability",
+      "evidence": "boundaryTimes, stageDims, agentStartedEmitted are populated once per turn (`this.boundaryTimes.set(speechId, times)`, `this.agentStartedEmitted.add(id)`, `this.stageDims.set(...)`) and are cleared ONLY in dispose(): `this.boundaryTimes.clear(); this.stageDims.clear(); this.agentStartedEmitted.clear();`. There is no agent_audio_done / interruption handler that deletes the entry for a completed speechId. Contrast TurnMetricsTracker which deletes on completion (turn-metrics.ts:176) and on interrupt (turn-metrics.ts:180).",
+      "recommendation": "Evict the speechId from all three collections when the turn terminates (agent_audio_done and interruption are natural terminal boundaries), mirroring TurnMetricsTracker. A multi-hour call accumulates one BoundaryTimes object + StageDims + Set entry per turn that is never freed until session close.",
+      "checklist_ref": "VE-07-bridge.md:11 (canonical observability backbone — must not leak per-turn state); §6/§8 reliability"
+    },
+    {
+      "title": "Default provider/model/region dims ship as the literal string \"unknown\" when observability config is absent",
+      "file_line": "packages/voice/src/voice-agent-session.ts:308-313; packages/voice/src/observability-observer.ts:182-189",
+      "severity": "medium",
+      "dimension": "checklist-violation",
+      "evidence": "Session construction: `provider: obs?.provider ?? \"unknown\", model: obs?.model ?? \"unknown\", region: obs?.region ?? \"unknown\"`. dimsFor falls back to these session dims when no stage dim was merged: `provider: stage.provider ?? this.deps.dims.provider`. If STT/TTS packets omit provider info (mergeStageDims only runs when pkt.provider is present, observability-observer.ts:92-93,99), every histogram/boundary is tagged provider=model=region=\"unknown\".",
+      "recommendation": "Require real dims from session config (fail-fast or warn loudly when missing) and ensure provider adapters always populate the provider field on stt.result/tts.audio packets so the merged stage dims are real. The domain grounding explicitly calls out that dims must be real, not \"unknown\".",
+      "checklist_ref": "VE-05-bridge.md:7,29; VE-07-bridge.md:53 (histograms tagged by provider/model/region — real values)"
+    },
+    {
+      "title": "v2v_ms tag dimensions are snapshotted at agent_started_speaking, before a later interrupt updates cancelled",
+      "file_line": "packages/voice/src/observability-observer.ts:97-103,125-139,182-189",
+      "severity": "medium",
+      "dimension": "correctness",
+      "evidence": "onTtsAudio emits agent_started_speaking immediately on the first audio chunk and computes/observes v2v_ms there with `cancelled: dims.cancelled ? \"true\":\"false\"`. dimsFor reads stageDims.cancelled at that instant. An interrupt.detected that arrives microseconds later (after the first TTS byte but during playout) sets stageDims.cancelled=true (lines 109-113) but the v2v_ms histogram was already recorded with cancelled:\"false\".",
+      "recommendation": "This compounds finding #2: because v2v is recorded at first-audio and interruptions typically land during playout, the cancelled tag on v2v_ms under-counts true barge-ins. Defer v2v recording to a terminal boundary, or re-emit/correct the cancelled classification at agent_audio_done vs interruption.",
+      "checklist_ref": "PRODUCTION-CHECKLIST.md:259,277 (cancelled excluded); VE-05-bridge.md:43 (mark attempts cancelled on interrupt.*)"
+    },
+    {
+      "title": "Empty contextId collapses all turns onto one speechId via getContextId() fallback",
+      "file_line": "packages/voice/src/observability-observer.ts:79-81,84-89",
+      "severity": "low",
+      "dimension": "correctness",
+      "evidence": "`private speechId(contextId: string): string { return contextId || this.deps.getContextId(); }`. If a packet arrives with contextId==='' AND getContextId() also returns '' (the unit test wires `getContextId: () => \"\"`, and voice-agent-session returns currentTurnId which can be empty between turns), every such boundary maps to speechId '' and shares one boundaryTimes bucket, cross-contaminating v2v across turns.",
+      "recommendation": "Treat an empty resolved speechId as a hard skip (do not record histograms/boundaries for a turn with no id) rather than bucketing everything under ''. Low severity because in production contextId is normally populated, but the fallback is silently lossy.",
+      "checklist_ref": "PRODUCTION-CHECKLIST.md:343 (canonical turn-boundary event stream with session ids)"
+    },
+    {
+      "title": "ObservabilityObserver has no test covering cancelled v2v exclusion or hangover correction",
+      "file_line": "packages/voice/src/observability-observer.test.ts:144-167",
+      "severity": "low",
+      "dimension": "test-quality",
+      "evidence": "The interruption test only asserts the boundary is tagged cancelled:true and that any histograms already tagged cancelled:\"true\" match shape: `const withCancelled = exporter.histograms.filter((h) => h.tags.cancelled === \"true\");`. It never asserts that v2v_ms for an interrupted turn is excluded, nor that v2v is hangover-corrected. The full-turn test asserts v2v exists and >=0 but with no hangover input, so the missing correction is invisible.",
+      "recommendation": "Add a test: feed vad.speech_ended + vad.stop_hangover_ms then assert v2v_ms == (agentStart - vadEnd - hangover). Add a test that an interrupt before agent_audio_done yields no v2v_ms (or a cancelled-tagged one that the percentile pool drops). These would have caught findings #1 and #2.",
+      "checklist_ref": "PRODUCTION-CHECKLIST.md:365 (assert P95/P99 distributions and failure recovery, not mean latency alone)"
+    }
+  ],
+  "verdict": "CONCERNS",
+  "summary": "The turn-boundary backbone is well built: monotonic clock via performance.timeOrigin+performance.now() (observability.ts:6-8) is correct and immune to wall-clock jumps; the typed obs.turn_boundary stream, agent_started_speaking-once guard (observer:100-101), and reconstructTurnTimeline with clamped non-negative deltas (observability.ts:36) are solid. TurnMetricsTracker is clean: it deletes turn state on completion and interrupt (turn-metrics.ts:176,180), guards deltas with positiveDelta (no negatives), and correctly drops partial state on interrupt without emitting (verified by test:297-326). latency-filler's prefix-strip logic is carefully tested for word-boundary false positives. The real gaps are metric-correctness against the canonical definition: (1) the engine v2v_ms is never hangover-corrected so it over-reports the headline latency by the VAD hangover window; (2) cancelled/interrupted turns are tagged but not excluded from the v2v percentile distribution (the percentile script filters only on positivity); (3) the observer's boundaryTimes/stageDims/agentStartedEmitted maps have no per-turn eviction and grow for the whole session; (4) provider/model/region default to the literal \"unknown\". Findings #1 and #2 are the load-bearing ones — they make the canonical v2v number both biased high and contaminated by barge-ins, which is exactly what the checklist's P95/P99 SLO posture cannot tolerate."
+}

@@ -62,6 +62,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private carry: Uint8Array = EMPTY;
   private activeContexts = new Set<string>();
   private cancelledContexts = new Set<string>();
+  private finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposers: Array<() => void> = [];
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 24000, channels: 1 };
 
@@ -72,6 +73,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
     this.sampleRate = readPositiveInteger(config["sample_rate"], this.sampleRate);
     this.retryConfig = readProviderRetryConfig(config);
+    const finishTimeoutMs = readNonNegativeInteger(config["finish_timeout_ms"], 2000);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
@@ -89,6 +91,10 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       headers: { Authorization: `Token ${this.apiKey}` },
       retry: this.retryConfig,
       socketFactory: this.socketFactory,
+      replayBufferSize: (config["replay_buffer_size"] as number) ?? 32,
+      onReplay: (event, count) => {
+        this.emitMetric(this.currentContextId, `tts.deepgram.reconnect_replay_${event}`, String(count));
+      },
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       onMessage: (data, isBinary) => this.handleProviderMessage(data, isBinary),
       onConnectionLost: (err) => this.failActiveContexts(err),
@@ -103,6 +109,9 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       }),
       bus.on("tts.done", async (pkt: unknown) => {
         const donePkt = pkt as { contextId: string };
+        if (finishTimeoutMs > 0 && this.activeContexts.has(donePkt.contextId)) {
+          this.scheduleFinishTimeout(donePkt.contextId, finishTimeoutMs);
+        }
         await this.finishContext(donePkt.contextId);
       }),
       bus.on("interrupt.tts", () => {
@@ -141,6 +150,8 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
+    for (const timer of this.finishTimers.values()) clearTimeout(timer);
+    this.finishTimers.clear();
     this.currentContextId = "";
     this.carry = EMPTY;
     await this.conn?.close();
@@ -152,6 +163,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     const contextIds = [...this.activeContexts];
     for (const contextId of contextIds) this.cancelledContexts.add(contextId);
     this.activeContexts.clear();
+    for (const contextId of contextIds) this.clearFinishTimeout(contextId);
     this.currentContextId = "";
     this.carry = EMPTY;
     if (contextIds.length === 0) return;
@@ -192,6 +204,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
         this.carry = EMPTY;
         if (contextId && this.activeContexts.has(contextId)) {
           this.activeContexts.delete(contextId);
+          this.clearFinishTimeout(contextId);
           this.emitEnd(contextId);
         }
         this.currentContextId = "";
@@ -232,6 +245,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
         timestampMs: Date.now(),
         audio,
         sampleRateHz: this.sampleRate,
+        provider: { name: "deepgram", model: this.model, region: "global", cancelled: false },
       };
       this.bus?.push(Route.Main, packet);
     }
@@ -252,12 +266,44 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.bus?.push(Route.Critical, packet);
   }
 
+  private emitMetric(contextId: string, name: string, value: string): void {
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name,
+      value,
+    });
+  }
+
   private failActiveContexts(err: Error): void {
     const contextIds = [...this.activeContexts];
     this.activeContexts.clear();
+    for (const contextId of contextIds) this.clearFinishTimeout(contextId);
     this.currentContextId = "";
     this.carry = EMPTY;
     for (const contextId of contextIds) this.emitError(contextId, err);
+  }
+
+  private scheduleFinishTimeout(contextId: string, timeoutMs: number): void {
+    this.clearFinishTimeout(contextId);
+    const timer = setTimeout(() => {
+      this.finishTimers.delete(contextId);
+      if (!this.activeContexts.has(contextId)) return;
+      this.emitMetric(contextId, "tts.deepgram.finish_timeout", String(timeoutMs));
+      this.activeContexts.delete(contextId);
+      if (this.currentContextId === contextId) this.currentContextId = "";
+      this.carry = EMPTY;
+      this.emitEnd(contextId);
+    }, timeoutMs);
+    this.finishTimers.set(contextId, timer);
+  }
+
+  private clearFinishTimeout(contextId: string): void {
+    const timer = this.finishTimers.get(contextId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.finishTimers.delete(contextId);
   }
 
   private emitEnd(contextId: string): void {
@@ -289,4 +335,10 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+function readNonNegativeInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const integer = Math.floor(value);
+  return integer >= 0 ? integer : fallback;
 }

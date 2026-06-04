@@ -1837,6 +1837,7 @@ describe("createVoiceWebSocketServer", () => {
       port: 0,
       maxBufferedAmountBytes: 4096,
       outboundFrameDurationMs: 300,
+      maxQueuedOutputAudioMs: 1000,
       browserOpusDownlink: false,
       createSession: () => session,
       contextId: () => "turn-test",

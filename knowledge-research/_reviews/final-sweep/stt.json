@@ -1,0 +1,72 @@
+{
+  "area": "STT ingestion (voice-stt-deepgram, voice-stt-google)",
+  "files_reviewed": 4,
+  "how_it_works": "Deepgram (packages/voice-stt-deepgram/src/index.ts) opens one session-long managed WebSocket (WebSocketConnection, replayBufferSize 64, KeepAlive every 3s, provider config carried in the URL query so it is re-injected on reconnect) and streams stt.audio bytes immediately via sendAudio (index.ts:270). handleProviderMessage (index.ts:188) parses provider frames, applies a confidence gate when confidenceThreshold>0 (index.ts:222), emits stt.interim for non-final and, for is_final, appends segments and pushes stt.result, releasing eos.turn_complete on speech_final or a requested Finalize (index.ts:236-263). forceFinalize -> requestProviderFinalize (index.ts:285-311) sends {type:Finalize} and arms a providerFinalizeTimeoutMs timer; on timeout it either drops the turn (strict) or, with finalize_timeout_fallback, promotes buffered text (index.ts:313-347); two consecutive timeouts reset the socket. onConnectionLost discards unconfirmed per-context state (index.ts:622-646). Pending-Finalize correlation across turn.change is handled via pendingProviderFinalizeContextIds (index.ts:465-469). Google (packages/voice-stt-google/src/index.ts) opens a raw ws to Speech-to-Text v2 streamingRecognize, sends a streamingConfig once on open (sendConfig, index.ts:206), and on each is_final pushes stt.result AND eos.turn_complete unconditionally (index.ts:245-260); reconnect (index.ts:292) just closes and reconnects with no replay buffer and re-sends config on open.",
+  "findings": [
+    {
+      "title": "Google STT ignores configured sample rate — audioFormat and provider config are hardcoded to 16000 Hz",
+      "file_line": "packages/voice-stt-google/src/index.ts:70,213",
+      "severity": "critical",
+      "dimension": "correctness",
+      "evidence": "private readonly audioFormat: AudioFormat = { encoding: \"pcm_s16le\", sampleRateHz: 16000, channels: 1 }; and in sendConfig: explicitDecodingConfig: { encoding: \"LINEAR16\", sampleRateHertz: 16000, audioChannelCount: 1 }. initialize() reads language, model, endpoint_url, retry config but never reads config[\"sample_rate\"]. The GCPConfig.sampleRateHertz field exists but is unused.",
+      "recommendation": "Read sample_rate from config (as Deepgram does at index.ts:99), store it on a mutable sampleRateHz, use it in both the audioFormat and in explicitDecodingConfig.sampleRateHertz so the declared provider rate matches the bytes actually sent. Otherwise any transport delivering 8k (telephony µ-law decoded) or 24/48k audio is misdecoded by Google as 16k, producing garbled or empty transcripts.",
+      "checklist_ref": "§2 line 119 (resample ingress audio to the STT provider's declared rate); VE-01.2 (declared format equals sent bytes)"
+    },
+    {
+      "title": "Google STT has no low-confidence gate — every final mutates state and completes the turn regardless of confidence",
+      "file_line": "packages/voice-stt-google/src/index.ts:243-260",
+      "severity": "high",
+      "dimension": "checklist-violation",
+      "evidence": "const confidence = alt.confidence ?? 0; ... if (result.isFinal === true) { this.bus?.push(Route.Main, { kind: \"stt.result\", ... confidence ... }); this.bus?.push(Route.Main, { kind: \"eos.turn_complete\", ... }); }. enableWordConfidence:true is set in sendConfig (index.ts:220) but the value is never compared against any threshold. There is no confidence_threshold config read at all. Deepgram by contrast gates at index.ts:222-234.",
+      "recommendation": "Mirror Deepgram: read confidence_threshold, and when confidence < threshold emit a stt_low_confidence telemetry metric and skip pushing stt.result/eos.turn_complete so a misheard utterance cannot interrupt speech or mutate agent state. Domain grounding explicitly flags this gap (\"Google STT has no confidence gate — verify impact\").",
+      "checklist_ref": "§2 line 103-115 (filter low-confidence STT before it can mutate state or interrupt speech)"
+    },
+    {
+      "title": "Neither STT plugin provides keyterm/keyword boosting",
+      "file_line": "packages/voice-stt-deepgram/src/index.ts:118-133; packages/voice-stt-google/src/index.ts:206-229",
+      "severity": "high",
+      "dimension": "checklist-violation",
+      "evidence": "grep for keyterm|keyword across both src trees returns zero matches. Deepgram builds its URLSearchParams (index.ts:120-130) with encoding/sample_rate/interim_results/endpointing/smart_format/model/language/channels/no_delay but no keyterm= or keywords=. Google sendConfig (index.ts:207-227) sets languageCodes/model/features but no speechAdaptation/phraseSets.",
+      "recommendation": "Add a keyterms config that maps to Deepgram's Nova-3 keyterm= query param (and keywords= for Nova-2 fallback) and to Google v2 adaptation phraseSets, validated by a param-name test. Domain names/products/account ids dominate real WER far more than benchmark accuracy.",
+      "checklist_ref": "§2 line 123-125 (model-specific keyword/keyterm boosting; e.g. Nova-2 Keywords vs Nova-3 Keyterm)"
+    },
+    {
+      "title": "Google STT loses the in-flight audio frame on reconnect — no replay buffer",
+      "file_line": "packages/voice-stt-google/src/index.ts:100-114,292-307",
+      "severity": "high",
+      "dimension": "reliability",
+      "evidence": "sendAudio does ws.send(audio) directly with no buffering; reconnect() does this.webSocket?.close(); await this.connectWithRetry(); with no pendingReplay equivalent. The Deepgram path uses WebSocketConnection with replayBufferSize:64 and onReplay metrics (deepgram index.ts:137-140); Google uses a raw ws with nothing comparable. A socket error mid-utterance drops the frame that failed to send and every frame that arrives during the reconnect window.",
+      "recommendation": "Buffer un-acked frames during reconnect and replay them in order after the new socket sends its config (the same VE-06.2 contract the shared WebSocketConnection already implements). Simplest fix: migrate Google to the shared WebSocketConnection like Deepgram so replay+keepalive+backoff are reused rather than re-implemented partially.",
+      "checklist_ref": "§2 line 313 (re-inject provider config and replay the failed in-flight frame after reconnect)"
+    },
+    {
+      "title": "Google STT sendAudio throws into the async bus handler instead of emitting stt.error",
+      "file_line": "packages/voice-stt-google/src/index.ts:108-113",
+      "severity": "high",
+      "dimension": "reliability",
+      "evidence": "const ws = this.webSocket; if (!ws || ws.readyState !== ws.OPEN) { throw new Error(\"Google STT WebSocket is not open\"); }. The caller is bus.on(\"stt.audio\", async (pkt) => { ...; await this.sendAudio(audioPkt.audio); }) (index.ts:89-93) with no try/catch, so this rejection is unhandled. Deepgram's sendAudio wraps the send in try/catch and calls this.emitError(...) returning false (deepgram index.ts:272-281).",
+      "recommendation": "Wrap sendAudio's not-open / send path in try/catch and route failures through emitError (matching Deepgram), so a transient closed socket surfaces a recoverable stt.error instead of an unhandled promise rejection that can crash or silently drop the audio handler.",
+      "checklist_ref": "§2 line 16 (reliability: quick-failure detection, graceful degradation); VE-01/STT error surfacing"
+    },
+    {
+      "title": "Google STT never subscribes to stt.finalize or interrupt.stt",
+      "file_line": "packages/voice-stt-google/src/index.ts:88-97",
+      "severity": "medium",
+      "dimension": "integration",
+      "evidence": "Only two subscriptions exist: bus.on(\"stt.audio\", ...) and bus.on(\"turn.change\", ...). There is no bus.on(\"stt.finalize\", ...) (Deepgram wires it at index.ts:181) and no bus.on(\"interrupt.stt\", ...) (Deepgram at index.ts:177). Google relies entirely on the provider deciding isFinal; when the turn owner (Pipecat/Smart-Turn) requests an explicit finalize or a barge-in interrupt fires, Google does nothing.",
+      "recommendation": "If Google is a supported degraded provider, subscribe to interrupt.stt to reset any in-flight transcript state on barge-in. Provider-owned finalize for Google v2 is limited, so at minimum document that stt.finalize is a no-op for Google and that turn boundaries are provider-owned; otherwise turn timing diverges from the Deepgram path.",
+      "checklist_ref": "§2 line 153 (single turn-boundary owner; avoid double/premature finalization across providers)"
+    },
+    {
+      "title": "Deepgram audio-byte accounting can attribute bytes to the wrong context under concurrent turn change",
+      "file_line": "packages/voice-stt-deepgram/src/index.ts:155-167,270-282",
+      "severity": "low",
+      "dimension": "correctness",
+      "evidence": "In the stt.audio handler currentContextId is set from the packet, then `const sent = await this.sendAudio(audioPkt.audio, this.currentContextId); if (sent) this.recordAudioSent(this.currentContextId, ...)`. sendAudio awaits conn.ensureReady(); a turn.change or a later stt.audio packet can mutate this.currentContextId during that await, so recordAudioSent reads the (possibly changed) field rather than a captured value. Only affects the audioStats byte/duration metric, not transcript correctness.",
+      "recommendation": "Capture const ctxId = audioPkt.contextId ?? this.currentContextId once at the top of the handler and pass that same ctxId to both sendAudio and recordAudioSent, instead of re-reading this.currentContextId after the await.",
+      "checklist_ref": "§2 provider-boundary metrics (audio byte/duration accounting); concurrency under turn change"
+    }
+  ],
+  "verdict": "CONCERNS",
+  "summary": "Deepgram STT is genuinely solid and the most carefully built plugin in this domain: session-long managed socket with replay+KeepAlive, a confidence gate, a disciplined Finalize-confirmation state machine with timeout/fallback/reconnect-threshold logic, pending-Finalize correlation across turn.change, and reconnect state discard — all backed by an unusually thorough test suite (14 tests covering finalize timeout, consecutive-timeout reset, counter-clear-on-reconnect, stale-state discard, malformed JSON, provider error frames, odd-length PCM). The concerns are concentrated in Google STT, which reads as a thinner second-class path: it hardcodes 16000 Hz and silently ignores any configured sample_rate (critical — misdecodes non-16k transport audio), has no low-confidence gate so every final unconditionally completes the turn, has no replay buffer so in-flight audio is lost on reconnect, throws raw into the async bus handler instead of emitting stt.error, and never subscribes to stt.finalize/interrupt.stt. Both providers also lack the required keyterm/keyword boosting (checklist §2 line 123). The strongest single fix would be to migrate Google onto the shared WebSocketConnection (as Deepgram uses) to inherit replay/keepalive/backoff, then add the sample-rate, confidence-gate, and keyterm gaps."
+}

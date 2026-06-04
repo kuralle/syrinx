@@ -37,6 +37,15 @@ function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return;
+    await waitMs(10);
+  }
+  throw new Error("Timed out waiting for browser pacing condition");
+}
+
 async function readJsonMatching(socket: WebSocket, predicate: (m: unknown) => boolean): Promise<unknown> {
   return new Promise((resolve) => {
     const onMessage = (data: WebSocket.RawData, isBinary: boolean) => {
@@ -343,5 +352,95 @@ describe("WT-03 Browser outbound pacing", () => {
       expect(firstChunk.durationMs).toBeGreaterThanOrEqual(35);
       expect(firstChunk.durationMs).toBeLessThanOrEqual(45);
     }
+  });
+
+  it("uses the interactive 200ms playout bound by default", async () => {
+    const httpServer = createServer();
+    activeHttpServers.push(httpServer);
+
+    let session: VoiceAgentSession | null = null;
+    const metrics: Array<{ name: string; value: string }> = [];
+    const server = await createVoiceWebSocketServer({
+      server: httpServer,
+      port: 0,
+      createSession: () => {
+        session = new VoiceAgentSession({ plugins: {} });
+        return session;
+      },
+    });
+    activeServers.push(server);
+
+    const port = (server.address() as any).port;
+    const socket = await openBrowserSocketReady(browserUrl(port));
+    let closed = false;
+    socket.once("close", () => {
+      closed = true;
+    });
+    session!.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string; value: string };
+      metrics.push(metric);
+    });
+
+    session!.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "default-bound-turn",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(16000)),
+      sampleRateHz: 16000,
+    });
+
+    await waitForCondition(() =>
+      metrics.some((metric) => metric.name === "browser.overflow_playout_stopped"),
+    );
+    expect(metrics).toContainEqual(expect.objectContaining({
+      name: "browser.overflow_playout_stopped",
+      value: "1",
+    }));
+    expect(closed).toBe(false);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    socket.close();
+  });
+
+  it("allows long playout queues only through an explicit override", async () => {
+    const httpServer = createServer();
+    activeHttpServers.push(httpServer);
+
+    let session: VoiceAgentSession | null = null;
+    const server = await createVoiceWebSocketServer({
+      server: httpServer,
+      port: 0,
+      createSession: () => {
+        session = new VoiceAgentSession({ plugins: {} });
+        return session;
+      },
+      maxQueuedOutputAudioMs: 1000,
+    });
+    activeServers.push(server);
+
+    const port = (server.address() as any).port;
+    const socket = await openBrowserSocketReady(browserUrl(port));
+    let closed = false;
+    socket.once("close", () => {
+      closed = true;
+    });
+
+    const ttsChunksPromise = collectMessagesMatching(
+      socket,
+      (m: any) => m.type === "tts_chunk",
+      150,
+    );
+    session!.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "explicit-long-queue-turn",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(6400)),
+      sampleRateHz: 16000,
+    });
+
+    const chunks = await ttsChunksPromise;
+    socket.close();
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(closed).toBe(false);
   });
 });

@@ -29,13 +29,23 @@ export const VOICE_PROVIDER_RETRY_CONFIG: RetryConfig = {
   maxDelayMs: 10_000,
 };
 
+export const VOICE_PROVIDER_OUTAGE_RETRY_CONFIG: RetryConfig = {
+  maxAttempts: 4,
+  baseDelayMs: 4_000,
+  maxDelayMs: 10_000,
+};
+
 export function readRetryConfig(config: Record<string, unknown>): RetryConfig {
   return readRetryConfigWithDefaults(config, DEFAULT_RETRY_CONFIG);
 }
 
 /** Read retry config for a voice-provider WebSocket; defaults to the patient-backoff profile. */
 export function readProviderRetryConfig(config: Record<string, unknown>): RetryConfig {
-  return readRetryConfigWithDefaults(config, VOICE_PROVIDER_RETRY_CONFIG);
+  const profile = typeof config["retry_profile"] === "string" ? config["retry_profile"] : "";
+  return readRetryConfigWithDefaults(
+    config,
+    profile === "provider_outage" ? VOICE_PROVIDER_OUTAGE_RETRY_CONFIG : VOICE_PROVIDER_RETRY_CONFIG,
+  );
 }
 
 function readRetryConfigWithDefaults(config: Record<string, unknown>, defaults: RetryConfig): RetryConfig {

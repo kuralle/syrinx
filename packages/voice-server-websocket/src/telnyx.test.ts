@@ -647,6 +647,7 @@ describe("createTelnyxMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();
@@ -715,6 +716,7 @@ describe("createTelnyxMediaStreamServer", () => {
       port: 0,
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
+      maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     }));
     const address = server.address();

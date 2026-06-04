@@ -86,6 +86,7 @@ export interface TurnResult {
   readonly agentOutWavPath: string;
   readonly inputWavPath: string;
   readonly eventsJsonlPath: string;
+  readonly eventsJsonPath: string;
   readonly transcriptJsonPath: string;
   readonly metricsJsonPath: string;
   readonly metrics: PerTurnMetrics;
@@ -416,14 +417,32 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
   const inputWavPath = join(sessionDir, "audio-in.wav");
   const agentOutWavPath = join(sessionDir, "audio-out.wav");
   const eventsJsonlPath = join(sessionDir, "events.jsonl");
+  const eventsJsonPath = join(sessionDir, "events.json");
   const transcriptJsonPath = join(sessionDir, "transcript.json");
   const metricsJsonPath = join(sessionDir, "metrics.json");
+  const events = eventLines
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const qualityGate = {
+    passed: finalTranscript.trim().length > 0 && agentReply.trim().length > 0 && outputChunks.length > 0,
+    failures: [
+      ...(finalTranscript.trim().length === 0 ? ["missing final transcript"] : []),
+      ...(agentReply.trim().length === 0 ? ["missing agent reply"] : []),
+      ...(outputChunks.length === 0 ? ["missing TTS audio"] : []),
+    ],
+  };
 
   await writePcm16Wav(inputWavPath, inputChunks, 16000);
   await writePcm16Wav(agentOutWavPath, outputChunks, 16000);
   await writeFile(eventsJsonlPath, eventLines.join(""), "utf8");
-  await writeFile(transcriptJsonPath, `${JSON.stringify({ finalTranscript, agentReply, metrics }, null, 2)}\n`, "utf8");
-  await writeFile(metricsJsonPath, `${JSON.stringify(metrics, null, 2)}\n`, "utf8");
+  await writeFile(eventsJsonPath, `${JSON.stringify({ events, qualityGate }, null, 2)}\n`, "utf8");
+  await writeFile(
+    transcriptJsonPath,
+    `${JSON.stringify({ finalTranscript, agentReply, turnCount: 1, metrics, qualityGate }, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(metricsJsonPath, `${JSON.stringify({ ...metrics, turnCount: 1, qualityGate }, null, 2)}\n`, "utf8");
 
   await session.close();
 
@@ -434,6 +453,7 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
     agentOutWavPath,
     inputWavPath,
     eventsJsonlPath,
+    eventsJsonPath,
     transcriptJsonPath,
     metricsJsonPath,
     metrics,

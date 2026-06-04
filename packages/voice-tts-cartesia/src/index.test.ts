@@ -249,6 +249,56 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
+  it("emits tts.end when Cartesia streams audio but never acknowledges flush", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.transcript !== "Hello there.") return;
+        socket.send(JSON.stringify({
+          type: "chunk",
+          context_id: msg.context_id,
+          data: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString("base64"),
+          done: false,
+          status_code: 206,
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      finish_timeout_ms: 20,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-timeout-end",
+      timestampMs: Date.now(),
+      text: "Hello there.",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-timeout-end",
+      timestampMs: Date.now(),
+      text: "Hello there.",
+    });
+    await waitForCondition(() => ends.length >= 1);
+
+    expect(ends).toEqual([expect.objectContaining({ contextId: "turn-timeout-end" })]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits a typed TTS error and closes the context when Cartesia returns an error frame", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {
@@ -706,39 +756,27 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
-  it("emits tts.word_timestamps with cumulative offsets when provider returns word_timestamps", async () => {
-    const audioChunk1 = new Uint8Array(3200); // 3200 bytes = 100ms at 16kHz PCM16
-    const audioChunk2 = new Uint8Array(1600); // 1600 bytes = 50ms at 16kHz PCM16
+  it("emits tts.word_timestamps from Cartesia's real top-level parallel-array timestamp frame", async () => {
+    const audioChunk = new Uint8Array(3200);
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data) => {
         const msg = JSON.parse(data.toString());
         if (msg.transcript === "Hello world.") {
-          // First chunk: word "Hello" at 0–0.4s, "world." at 0.5–0.9s
           socket.send(JSON.stringify({
             type: "chunk",
             context_id: msg.context_id,
-            data: Buffer.from(audioChunk1).toString("base64"),
-            word_timestamps: {
-              words: [
-                { word: "Hello", start: 0.0, end: 0.4 },
-                { word: "world.", start: 0.5, end: 0.9 },
-              ],
-            },
+            data: Buffer.from(audioChunk).toString("base64"),
             done: false,
             status_code: 206,
           }));
-          // Second chunk: word "Goodbye." at 0.0–0.4s relative (= 150ms offset from context start)
           socket.send(JSON.stringify({
-            type: "chunk",
+            type: "timestamps",
             context_id: msg.context_id,
-            data: Buffer.from(audioChunk2).toString("base64"),
             word_timestamps: {
-              words: [
-                { word: "Goodbye.", start: 0.0, end: 0.4 },
-              ],
+              words: ["Hello", "world."],
+              start: [0.0, 0.5],
+              end: [0.4, 0.9],
             },
-            done: false,
-            status_code: 206,
           }));
         }
         if (msg.continue === false) {
@@ -764,16 +802,11 @@ describe("CartesiaTTSPlugin", () => {
     });
     bus.push(Route.Main, { kind: "tts.text", contextId: "turn-ts", timestampMs: Date.now(), text: "Hello world." });
     bus.push(Route.Main, { kind: "tts.done", contextId: "turn-ts", timestampMs: Date.now(), text: "Hello world." });
-    await waitForCondition(() => wordTsPackets.length >= 2);
+    await waitForCondition(() => wordTsPackets.length >= 1);
 
-    // Chunk 1: timestamps start at 0 (no prior offset).
     expect(wordTsPackets[0]!.words).toEqual([
       { word: "Hello",  startMs: 0,   endMs: 400 },
       { word: "world.", startMs: 500, endMs: 900 },
-    ]);
-    // Chunk 2: timestamps offset by chunk1 audio duration (3200 bytes / 2 / 16000 * 1000 = 100ms).
-    expect(wordTsPackets[1]!.words).toEqual([
-      { word: "Goodbye.", startMs: 100, endMs: 500 },
     ]);
 
     await plugin.close();
@@ -848,167 +881,4 @@ describe("CartesiaTTSPlugin", () => {
     await started;
   });
 
-  it("clears cumulative audio offset state when Cartesia returns an error frame", async () => {
-    let sendCount = 0;
-    const endpointUrl = await createLocalServer((socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(data.toString());
-        sendCount += 1;
-        if (sendCount === 1) {
-          socket.send(JSON.stringify({
-            type: "chunk",
-            context_id: msg.context_id,
-            data: Buffer.from(new Uint8Array(3200)).toString("base64"),
-            word_timestamps: {
-              words: [{ word: "Hi", start: 0.0, end: 0.1 }],
-            },
-            done: false,
-            status_code: 206,
-          }));
-          socket.send(JSON.stringify({
-            type: "error",
-            done: true,
-            title: "Provider failed",
-            status_code: 500,
-            context_id: msg.context_id,
-          }));
-          return;
-        }
-        socket.send(JSON.stringify({
-          type: "chunk",
-          context_id: msg.context_id,
-          data: Buffer.from(new Uint8Array(1600)).toString("base64"),
-          word_timestamps: {
-            words: [{ word: "Again", start: 0.0, end: 0.1 }],
-          },
-          done: false,
-          status_code: 206,
-        }));
-        if (msg.continue === false) {
-          socket.send(JSON.stringify({
-            type: "done",
-            context_id: msg.context_id,
-            done: true,
-            status_code: 200,
-          }));
-        }
-      });
-    });
-    const bus = new PipelineBusImpl();
-    const started = startBus(bus);
-    const plugin = new CartesiaTTSPlugin();
-    const wordTsPackets: TextToSpeechWordTimestampsPacket[] = [];
-    bus.on("tts.word_timestamps", (pkt) => {
-      wordTsPackets.push(pkt as TextToSpeechWordTimestampsPacket);
-    });
-
-    await plugin.initialize(bus, {
-      api_key: "test-cartesia-key",
-      endpoint_url: endpointUrl,
-      voice_id: "voice-test",
-      model_id: "sonic-test",
-      sample_rate: 16000,
-    });
-    bus.push(Route.Main, {
-      kind: "tts.text",
-      contextId: "turn-offset-reset",
-      timestampMs: Date.now(),
-      text: "first try",
-    });
-    await waitForCondition(() => wordTsPackets.length >= 1);
-    bus.push(Route.Main, {
-      kind: "tts.text",
-      contextId: "turn-offset-reset",
-      timestampMs: Date.now(),
-      text: "second try",
-    });
-    bus.push(Route.Main, {
-      kind: "tts.done",
-      contextId: "turn-offset-reset",
-      timestampMs: Date.now(),
-    });
-    await waitForCondition(() => wordTsPackets.length >= 2);
-
-    expect(wordTsPackets[0]!.words[0]?.startMs).toBe(0);
-    expect(wordTsPackets[1]!.words[0]?.startMs).toBe(0);
-
-    await plugin.close();
-    bus.stop();
-    await started;
-  });
-
-  it("derives word-timestamp offsets from cumulative sample count without per-chunk rounding drift", async () => {
-    const chunkBytes = 334;
-    const chunkCount = 120;
-    const endpointUrl = await createLocalServer((socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(data.toString());
-        if (msg.transcript === "Long turn.") {
-          for (let i = 0; i < chunkCount; i += 1) {
-            socket.send(JSON.stringify({
-              type: "chunk",
-              context_id: msg.context_id,
-              data: Buffer.from(new Uint8Array(chunkBytes)).toString("base64"),
-              word_timestamps: i === chunkCount - 1
-                ? { words: [{ word: "end", start: 0.0, end: 0.01 }] }
-                : undefined,
-              done: false,
-              status_code: 206,
-            }));
-          }
-        }
-        if (msg.continue === false) {
-          socket.send(JSON.stringify({
-            type: "done",
-            context_id: msg.context_id,
-            done: true,
-            status_code: 200,
-          }));
-        }
-      });
-    });
-    const bus = new PipelineBusImpl();
-    const started = startBus(bus);
-    const plugin = new CartesiaTTSPlugin();
-    const wordTsPackets: TextToSpeechWordTimestampsPacket[] = [];
-    bus.on("tts.word_timestamps", (pkt) => {
-      wordTsPackets.push(pkt as TextToSpeechWordTimestampsPacket);
-    });
-
-    await plugin.initialize(bus, {
-      api_key: "test-cartesia-key",
-      endpoint_url: endpointUrl,
-      voice_id: "voice-test",
-      model_id: "sonic-test",
-      sample_rate: 16000,
-    });
-    bus.push(Route.Main, {
-      kind: "tts.text",
-      contextId: "turn-drift",
-      timestampMs: Date.now(),
-      text: "Long turn.",
-    });
-    bus.push(Route.Main, {
-      kind: "tts.done",
-      contextId: "turn-drift",
-      timestampMs: Date.now(),
-    });
-    await waitForCondition(() => wordTsPackets.length >= 1);
-
-    const totalSamples = (chunkBytes / 2) * chunkCount;
-    const expectedOffsetMs = Math.floor((totalSamples * 1000) / 16000) - Math.floor((chunkBytes / 2 * 1000) / 16000);
-    const roundedOffsetMs = (() => {
-      let offsetMs = 0;
-      for (let i = 0; i < chunkCount - 1; i += 1) {
-        offsetMs += Math.round(((chunkBytes / 2) / 16000) * 1000);
-      }
-      return offsetMs;
-    })();
-    expect(expectedOffsetMs).not.toBe(roundedOffsetMs);
-    expect(wordTsPackets.at(-1)!.words[0]?.startMs).toBe(expectedOffsetMs);
-
-    await plugin.close();
-    bus.stop();
-    await started;
-  });
 });

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
+import { createVoiceWebSocketServer, installGracefulShutdown } from "@asyncdot/voice-server-websocket";
 import type { VoiceAgentSession } from "@asyncdot/voice";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
@@ -138,16 +138,7 @@ async function main(): Promise<void> {
   console.log(`WebSocket endpoint: ws://${host}:${String(address.port)}/ws`);
   console.log(`TTS provider: ${ttsProvider}; input PCM: ${String(INPUT_SAMPLE_RATE)} Hz mono s16le`);
 
-  const close = async (): Promise<void> => {
-    await voiceServer.close({ graceful: true, drainDeadlineMs: 10_000 });
-    process.exit(0);
-  };
-  process.once("SIGINT", () => {
-    void close();
-  });
-  process.once("SIGTERM", () => {
-    void close();
-  });
+  installGracefulShutdown(voiceServer, { drainDeadlineMs: 10_000, onClosed: () => process.exit(0) });
 }
 
 function inferTtsProvider(): UniversitySupportTtsProvider {

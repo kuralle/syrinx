@@ -123,13 +123,23 @@ export { PipelineBusImpl, Route, type PipelineBus, type PipelineBusConfig, type 
 export { runInitChain, runFinalizeChain, type InitStep, InitializationError } from "./init-chain.js";
 
 // Plugin contract
-export { type VoicePlugin, type PluginConfig, requireStringConfig, optionalStringConfig } from "./plugin-contract.js";
+export {
+  type VoicePlugin,
+  type PluginConfig,
+  type EndpointingOwner,
+  type EndpointingCapability,
+  requireStringConfig,
+  optionalStringConfig,
+} from "./plugin-contract.js";
 
 // Error handler
 export { categorizeSttError, categorizeTtsError, categorizeLlmError, isRecoverable, isFatalError } from "./error-handler.js";
 
 // Retry helpers
-export { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, readRetryConfig, readProviderRetryConfig, retryDelayMs, waitForRetryDelay, type RetryConfig } from "./retry.js";
+export { DEFAULT_RETRY_CONFIG, VOICE_PROVIDER_RETRY_CONFIG, VOICE_PROVIDER_OUTAGE_RETRY_CONFIG, readRetryConfig, readProviderRetryConfig, retryDelayMs, waitForRetryDelay, type RetryConfig } from "./retry.js";
+
+// Provider fallback/degradation
+export { ProviderFallback, type FallbackProvider, type ProviderFallbackOptions } from "./provider-fallback.js";
 
 // Idle timeout
 export { IdleTimeoutManager, type IdleTimeoutConfig, DEFAULT_IDLE_TIMEOUT_CONFIG } from "./idle-timeout.js";

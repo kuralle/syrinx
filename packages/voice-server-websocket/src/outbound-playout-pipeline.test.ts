@@ -61,6 +61,13 @@ function wireTestPipeline(socket: WebSocket): {
   return { session, handle, disposers };
 }
 
+function makeFrames(count: number): Array<{ contextId: string; send: () => boolean }> {
+  return Array.from({ length: count }, () => ({
+    contextId: "turn-drain",
+    send: () => true,
+  }));
+}
+
 describe("wireTelephonyOutboundPipeline.interrupt.tts", () => {
   it("clears playout and emits interrupt_onset_to_media_silent_ms", async () => {
     const socket = createMockSocket();
@@ -89,6 +96,76 @@ describe("wireTelephonyOutboundPipeline.interrupt.tts", () => {
     expect(Number(mediaSilentMetrics[0]!.value)).toBeGreaterThanOrEqual(0);
 
     for (const dispose of disposers) dispose();
+  });
+});
+
+describe("wireTelephonyOutboundPipeline overflow", () => {
+  it("clears queued playout once at the 200ms cap without closing the socket", async () => {
+    const socket = createMockSocket();
+    const session = new VoiceAgentSession({ plugins: {} });
+    await session.start();
+    const disposers: Array<() => void> = [];
+    const stops: string[] = [];
+    const discardedMetrics: Array<{ name: string; value: string }> = [];
+    let encodeCall = 0;
+
+    wireTelephonyOutboundPipeline({
+      session,
+      socket,
+      disposers,
+      outboundFrameDurationMs: 20,
+      maxQueuedOutputAudioMs: 200,
+      callbacks: {
+        carrierLabel: "test",
+        getContextId: () => "turn-drain",
+        isActive: () => true,
+        encodeFrames: () => {
+          encodeCall += 1;
+          return makeFrames(encodeCall === 1 ? 10 : 2);
+        },
+        onInterrupt: () => undefined,
+        onDrain: () => undefined,
+        onStop: (reason) => {
+          stops.push(reason);
+        },
+      },
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as unknown as { name: string; value: string };
+      if (metric.name === "test.overflow_playout_cleared_ms") {
+        discardedMetrics.push(metric);
+      }
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-drain",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 8000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-drain",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([5, 6, 7, 8]),
+      sampleRateHz: 8000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(stops).toEqual(["overflow"]);
+    expect(discardedMetrics).toEqual([
+      expect.objectContaining({
+        name: "test.overflow_playout_cleared_ms",
+        value: expect.stringMatching(/^\d+$/),
+      }),
+    ]);
+    expect(Number(discardedMetrics[0]!.value)).toBeGreaterThan(0);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+
+    for (const dispose of disposers) dispose();
+    await session.close();
   });
 });
 

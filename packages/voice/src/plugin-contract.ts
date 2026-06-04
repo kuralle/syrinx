@@ -15,7 +15,16 @@ import type { PipelineBus } from "./pipeline-bus.js";
 // Contract
 // =============================================================================
 
+export type EndpointingOwner = "provider_stt" | "smart_turn";
+
+export interface EndpointingCapability {
+  readonly owner: EndpointingOwner;
+  readonly disableConfig?: PluginConfig;
+}
+
 export interface VoicePlugin {
+  readonly endpointingCapability?: EndpointingCapability;
+
   /**
    * Initialize the plugin. Called during the init chain.
    * Connect to provider, start streams, register bus handlers if needed.

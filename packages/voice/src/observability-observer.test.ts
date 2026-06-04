@@ -188,4 +188,58 @@ describe("ObservabilityObserver", () => {
       expect(started).toHaveLength(1);
     });
   });
+
+  it("uses provider/model/region dimensions from STT and TTS packets when present", async () => {
+    await withObserver(async ({ bus, exporter, boundaries }) => {
+      bus.push(Route.Main, {
+        kind: "vad.speech_ended",
+        contextId: SPEECH_ID,
+        timestampMs: 1100,
+      } satisfies VadSpeechEndedPacket);
+      bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: SPEECH_ID,
+        timestampMs: 1200,
+        text: "hello",
+        transcripts: [
+          {
+            kind: "stt.result",
+            contextId: SPEECH_ID,
+            timestampMs: 1190,
+            text: "hello",
+            confidence: 0.9,
+            provider: { name: "deepgram", model: "nova-3", region: "global" },
+          },
+        ],
+      } satisfies EndOfSpeechPacket);
+      bus.push(Route.Main, {
+        kind: "tts.audio",
+        contextId: SPEECH_ID,
+        timestampMs: 1300,
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+        provider: { name: "cartesia", model: "sonic-3", region: "global", cancelled: false },
+      } satisfies TextToSpeechAudioPacket);
+      await drainBus();
+
+      const started = boundaries.find((b) => b.boundary === "agent_started_speaking");
+      expect(started).toMatchObject({
+        provider: "cartesia",
+        model: "sonic-3",
+        region: "global",
+      });
+      const thinking = boundaries.find((b) => b.boundary === "agent_thinking");
+      expect(thinking).toMatchObject({
+        provider: "deepgram",
+        model: "nova-3",
+        region: "global",
+      });
+      expect(exporter.histograms.find((h) => h.name === "v2v_ms")?.tags).toMatchObject({
+        provider: "cartesia",
+        model: "sonic-3",
+        region: "global",
+        speechId: SPEECH_ID,
+      });
+    });
+  });
 });

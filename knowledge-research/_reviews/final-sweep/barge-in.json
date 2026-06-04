@@ -1,0 +1,54 @@
+{
+  "area": "Barge-in / Interruption (VE-03, Checklist §4)",
+  "files_reviewed": 7,
+  "how_it_works": "During assistant playout, VAD speech-start is gated by latestActiveTtsContextId() (voice-agent-session.ts:636) and handed to TurnArbiter.onSpeechStarted (turn-arbiter.ts:81). Default minInterruptionMs=280 transitions to a 'pending' state; tryCommit (turn-arbiter.ts:193) fires on sustained VAD via onSpeechActivity/onSpeechEnded, applying primary-speaker (PrimarySpeakerGate), low-confidence (<0.5) and backchannel suppressors before emitting interrupt.detected on Route.Critical. handleInterruptDetected (voice-agent-session.ts:919) then, on the Critical lane that drains before Main (pipeline-bus.ts:276), marks the context generation-interrupted, truncates assistant recording, and pushes interrupt.tts THEN interrupt.llm. The WS/telephony outbound pipeline's interrupt.tts handler (outbound-playout-pipeline.ts:83) discards playout progress, calls PacedPlayoutQueue.clearInterruptible() (paced-playout.ts:82), and emits interrupt_onset_to_media_silent_ms. The AI SDK bridge's interrupt.llm handler (index.ts:135) aborts the AbortController and rewrites the interrupted turn's history to the spoken prefix via word timestamps + playout position, falling back to text-sent-to-TTS (index.ts:315). Browser routes through the same PacedPlayoutQueue + PlayoutProgressEmitter, so it gets tts.playout_progress like telephony.",
+  "findings": [
+    {
+      "title": "Interruption confidence/backchannel gate reads session-wide STT evidence that can be stale from the PREVIOUS user turn",
+      "file_line": "packages/voice/src/turn-arbiter.ts:71-78, 205-212",
+      "severity": "medium",
+      "dimension": "correctness",
+      "evidence": "latestInterimText/latestInterimConfidence are single session-wide fields set by noteInterimEvidence(text, confidence) with no contextId scoping. They are cleared only on commit/suppress/clear() — clear() is called only on session close (voice-agent-session.ts:384), never at a turn boundary. stt.interim carries NO confidence (voice-stt-deepgram/src/index.ts:418), only stt.result does. So if a barge-in's tryCommit fires on the 280ms VAD gate BEFORE any fresh interim of the barge-in speech arrives, the gate reads `this.latestInterimConfidence` left over from the PRIOR completed user turn's stt.result: `if (this.latestInterimConfidence !== null && this.latestInterimConfidence < 0.5) { this.suppress(pending, \"interrupt.suppressed_low_confidence\", ...) }`. A prior turn with confidence<0.5 then falsely suppresses the new barge-in as low-confidence.",
+      "recommendation": "Scope interim evidence to the interrupting userContextId (pass contextId into noteInterimEvidence and ignore evidence whose contextId != pending.userContextId), and reset latestInterimText/Confidence in transitionToPending so a fresh barge-in window starts with no carried-over evidence.",
+      "checklist_ref": "§4 'Gate interruption by duration, confidence, and backchannel classification' (PRODUCTION-CHECKLIST.md:212); VE-03.2"
+    },
+    {
+      "title": "Spoken-prefix playout position is up to 200ms stale at barge-in (final progress suppressed by discard), under-truncating history on browser AND telephony",
+      "file_line": "packages/voice-server-websocket/src/playout-progress.ts:39-57; packages/voice-bridge-aisdk/src/index.ts:315-323",
+      "severity": "medium",
+      "dimension": "correctness",
+      "evidence": "PlayoutProgressEmitter only emits tts.playout_progress when `total - lastEmitted >= PROGRESS_THROTTLE_MS` (200ms) (playout-progress.ts:41). On interrupt the outbound handler calls `playoutProgress.discard(interrupt.contextId)` (outbound-playout-pipeline.ts:86) which deletes state and emits NOTHING (discard() has no emit, playout-progress.ts:53-57) — the authoritative `complete` progress is never sent for an interrupted turn. The bridge's computeSpokenPrefix then filters `words.filter((w) => w.endMs <= playedOutMs)` against a playedOutMs that lags real playout by up to the 200ms throttle. Words actually heard in the last <=200ms window are dropped from the recorded spoken prefix.",
+      "recommendation": "On interrupt, emit one final non-throttled progress (current playedOutMs) before/at discard so the bridge sees the exact position the audio reached, then discard. The error currently biases safe (history claims LESS was heard), so this is precision, not a talk-over bug — but it weakens the VE-03.4 'exact word-boundary' acceptance claim.",
+      "checklist_ref": "§4 'Record assistant history as the spoken prefix' (PRODUCTION-CHECKLIST.md:216); VE-03.4"
+    },
+    {
+      "title": "Selective playout clear (uninterruptible control frames) is dormant — no producer ever marks a frame uninterruptible, so clearInterruptible() == clear() in production",
+      "file_line": "packages/voice-server-websocket/src/paced-playout.ts:54-62, 82-102; outbound-playout-pipeline.ts:87",
+      "severity": "low",
+      "dimension": "checklist-violation",
+      "evidence": "enqueueControl supports `{ uninterruptible: true }` (paced-playout.ts:54) and clearInterruptible() retains frames with `interruptible === false` (paced-playout.ts:86), and interrupt.tts calls clearInterruptible() (outbound-playout-pipeline.ts:87). But a grep of all non-test src shows enqueueControl is invoked only without opts (drainAndClose at outbound-playout-pipeline.ts:161) — no call site passes uninterruptible:true. As the code comment admits (paced-playout.ts:80) 'With nothing marked uninterruptible this is equivalent to clear().' The capability + unit test (paced-playout.test.ts:194) exist but are unexercised end-to-end.",
+      "recommendation": "Either wire a real uninterruptible control frame (e.g. a carrier clear/playback-reset confirmation that must survive interrupt) to satisfy VE-03.3's 'preserve required control frames', or downgrade the acceptance claim to 'queue primitive supports it; no required control frames exist yet'. As-is, the §4 selective-flush invariant is structurally supported but not actually demonstrated in a live path.",
+      "checklist_ref": "§4 'Flush only interruptible audio/text frames and preserve required control frames' (PRODUCTION-CHECKLIST.md:208); VE-03.3"
+    },
+    {
+      "title": "interruptedGenerationContextIds / interruptedContextIds tombstone sets grow monotonically for the session lifetime",
+      "file_line": "packages/voice/src/voice-agent-session.ts:210,920; packages/voice-server-websocket/src/outbound-playout-pipeline.ts:79,85",
+      "severity": "low",
+      "dimension": "reliability",
+      "evidence": "Both sets are add-only: `this.interruptedGenerationContextIds.add(pkt.contextId)` (voice-agent-session.ts:920) and `interruptedContextIds.add(interrupt.contextId)` (outbound-playout-pipeline.ts:85). Neither is ever deleted per-context; the session set is cleared only in closeOnce (voice-agent-session.ts:389) and the pipeline set never (closure-scoped, GC'd at disposer teardown). Each barge-in uses a fresh contextId, so a long-lived call with many interruptions accumulates one permanent string entry per interrupted turn. These serve as intentional 'always drop late audio for this turn' tombstones, so eager deletion is unsafe, but the growth is unbounded within a session.",
+      "recommendation": "Bound retention (e.g. keep only the last N interrupted contextIds, or evict once the context's playout clock has been released and no further tts.audio can arrive). Per-session impact is small but the pattern is monotonic and would matter on multi-hour open-mic sessions.",
+      "checklist_ref": "§4 logic+media cancel state hygiene (PRODUCTION-CHECKLIST.md:192); general reliability (unbounded growth)"
+    },
+    {
+      "title": "commitClientInterrupt unconditionally wipes a pending VAD interruption for a different context",
+      "file_line": "packages/voice/src/turn-arbiter.ts:145-153",
+      "severity": "low",
+      "dimension": "correctness",
+      "evidence": "commitClientInterrupt sets `this.turnInterruption = { kind: \"idle\" }` (turn-arbiter.ts:147) before checking nothing about an in-flight pending VAD barge-in. If a VAD barge-in for context A is mid-gate (pending) and a client interrupt for context B arrives, A's pending state is silently discarded; A's barge-in would then never commit (its onSpeechActivity/onSpeechEnded find no pending via pendingFor()).",
+      "recommendation": "Guard the idle reset to only clear pending state matching interruptedContextId, or only when no VAD pending exists for a different context. Low severity (client + VAD barge-in racing on distinct contexts is rare), but it's a silent dropped-interrupt.",
+      "checklist_ref": "§4 high-priority lane / single interruption event (PRODUCTION-CHECKLIST.md:188)"
+    }
+  ],
+  "verdict": "CONCERNS",
+  "summary": "The barge-in path is structurally solid and matches VE-03 intent. SOLID: the Critical lane genuinely drains before Main (pipeline-bus.ts:276); the interrupt sequence is correctly ordered (truncate -> interrupt.tts -> interrupt.llm, voice-agent-session.ts:948-952); media-silent and onset-to-logic-cancel latency probes are emitted; the duration/primary-speaker/confidence/backchannel suppressors all fire with distinct metrics; spoken-prefix history rewrite uses the word-timestamp+playout ladder and errs conservative (never claims more was heard than played); and the browser path genuinely shares the PacedPlayoutQueue + PlayoutProgressEmitter so it is NOT telephony-only (contradicting any worry that browser lacks a playout clock). No critical talk-over or data-loss bug was found. The CONCERNS are precision/hygiene: (1) the confidence/backchannel gate reads session-wide STT evidence that can be stale from the prior turn and falsely suppress a barge-in (medium); (2) spoken-prefix playout position is up to 200ms stale because the final progress is suppressed by discard() on interrupt, slightly under-truncating history (medium); (3) the selective-clear uninterruptible-frame capability is built+unit-tested but no producer uses it, so VE-03.3's 'preserve required control frames' is unexercised in any live path (low); (4) two interrupted-context tombstone sets grow monotonically per session (low); (5) a client interrupt can silently wipe a pending VAD interruption for another context (low). False-interruption pause/resume (R-11/VE-03.5) is correctly DEFERRED, not a finding."
+}

@@ -90,6 +90,19 @@ class FailingInitPlugin implements VoicePlugin {
   }
 }
 
+class EndpointingPlugin extends CapturingPlugin {
+  initializeCount = 0;
+
+  constructor(readonly endpointingCapability: NonNullable<VoicePlugin["endpointingCapability"]>) {
+    super();
+  }
+
+  override async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
+    this.initializeCount += 1;
+    await super.initialize(bus, config);
+  }
+}
+
 class InterruptAwareStreamingTtsPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -263,7 +276,7 @@ describe("VoiceAgentSession", () => {
   });
 
   it("fans user audio out to recorder, VAD, STT, and EOS routes", async () => {
-    const session = new VoiceAgentSession({ plugins: {} });
+    const session = new VoiceAgentSession({ plugins: {}, endpointingOwner: "smart_turn" });
     await session.start();
 
     const recordPackets: RecordUserAudioPacket[] = [];
@@ -2072,24 +2085,29 @@ describe("VoiceAgentSession", () => {
       ).toThrow("Unsupported endpointingOwner: bogus");
     });
 
-    it("with owner unset still fans user audio to eos.audio (back-compat)", async () => {
+    it("with owner unset defaults to provider STT and does not fan user audio to eos.audio", async () => {
       const session = new VoiceAgentSession({ plugins: {} });
       await session.start();
 
       const eosPackets: EndOfSpeechAudioPacket[] = [];
+      const sttPackets: SpeechToTextAudioPacket[] = [];
       session.bus.on("eos.audio", (pkt) => {
         eosPackets.push(pkt as EndOfSpeechAudioPacket);
+      });
+      session.bus.on("stt.audio", (pkt) => {
+        sttPackets.push(pkt as SpeechToTextAudioPacket);
       });
 
       session.bus.push(Route.Main, {
         kind: "user.audio_received",
-        contextId: "turn-bc",
+        contextId: "turn-default-owner",
         timestampMs: Date.now(),
         audio: new Uint8Array([1, 2, 3]),
       } satisfies UserAudioReceivedPacket);
 
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(eosPackets).toHaveLength(1);
+      expect(sttPackets).toHaveLength(1);
+      expect(eosPackets).toHaveLength(0);
 
       await closeSession(session);
     });
@@ -2132,6 +2150,131 @@ describe("VoiceAgentSession", () => {
       expect(userInputs).toHaveLength(1);
       expect(userInputs[0]!.text).toBe("from provider");
 
+      await closeSession(session);
+    });
+
+    it("allows multiple user turns with the same stable transport contextId", async () => {
+      const session = new VoiceAgentSession({
+        plugins: {},
+        endpointingOwner: "provider_stt",
+      });
+      const userInputs: UserInputPacket[] = [];
+      const finals: Array<{ turnId: string; text: string }> = [];
+
+      await session.start();
+      session.bus.on("user.input", (pkt) => {
+        userInputs.push(pkt as UserInputPacket);
+      });
+      session.on("user_input_final", (event) => {
+        finals.push({ turnId: event.turnId, text: event.text });
+      });
+
+      session.bus.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: "call-stable",
+        timestampMs: 1000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket);
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: "call-stable",
+        timestampMs: 1100,
+        text: "first turn",
+        transcripts: [],
+      } satisfies EndOfSpeechPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      session.bus.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: "call-stable",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket);
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: "call-stable",
+        timestampMs: 2100,
+        text: "second turn",
+        transcripts: [],
+      } satisfies EndOfSpeechPacket);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(userInputs.map((pkt) => pkt.text)).toEqual(["first turn", "second turn"]);
+      expect(finals).toEqual([
+        { turnId: "call-stable", text: "first turn" },
+        { turnId: "call-stable", text: "second turn" },
+      ]);
+
+      await closeSession(session);
+    });
+
+    it("initializes only the provider finalizer when provider_stt owns endpointing", async () => {
+      const provider = new EndpointingPlugin({
+        owner: "provider_stt",
+        disableConfig: { emit_eos_on_final: false },
+      });
+      const smartTurn = new EndpointingPlugin({ owner: "smart_turn" });
+      const session = new VoiceAgentSession({
+        plugins: {
+          stt: { emit_eos_on_final: true },
+          eos: {},
+        },
+        endpointingOwner: "provider_stt",
+      });
+      session.registerPlugin("stt", provider);
+      session.registerPlugin("eos", smartTurn);
+
+      await session.start();
+
+      expect(provider.initializeCount).toBe(1);
+      expect(provider.config).toEqual({ emit_eos_on_final: true });
+      expect(smartTurn.initializeCount).toBe(0);
+
+      await closeSession(session);
+    });
+
+    it("forces provider EOS off while keeping STT initialized when smart_turn owns endpointing", async () => {
+      const provider = new EndpointingPlugin({
+        owner: "provider_stt",
+        disableConfig: {
+          emit_eos_on_final: false,
+          finalize_on_speech_final: false,
+        },
+      });
+      const smartTurn = new EndpointingPlugin({ owner: "smart_turn" });
+      const session = new VoiceAgentSession({
+        plugins: {
+          stt: { emit_eos_on_final: true, finalize_on_speech_final: true },
+          eos: {},
+        },
+        endpointingOwner: "smart_turn",
+      });
+      session.registerPlugin("stt", provider);
+      session.registerPlugin("eos", smartTurn);
+
+      await session.start();
+
+      expect(provider.initializeCount).toBe(1);
+      expect(provider.config).toEqual({
+        emit_eos_on_final: false,
+        finalize_on_speech_final: false,
+      });
+      expect(smartTurn.initializeCount).toBe(1);
+
+      await closeSession(session);
+    });
+
+    it("throws at startup when the selected endpointing owner has multiple finalizers", async () => {
+      const session = new VoiceAgentSession({
+        plugins: { sttA: {}, sttB: {} },
+        endpointingOwner: "provider_stt",
+      });
+      session.registerPlugin("sttA", new EndpointingPlugin({ owner: "provider_stt" }));
+      session.registerPlugin("sttB", new EndpointingPlugin({ owner: "provider_stt" }));
+
+      await expect(session.start()).rejects.toThrow(
+        "endpointingOwner=provider_stt requires exactly one registered provider_stt EOS finalizer; found 2",
+      );
       await closeSession(session);
     });
 

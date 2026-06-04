@@ -101,6 +101,7 @@ export function createUniversitySupportSession(options: UniversitySupportSession
       disconnectAfterMax: false,
     },
     sttForceFinalizeTimeoutMs: options.profile === "longform" ? 15_000 : 4_500,
+    endpointingOwner: "smart_turn",
     latencyFillerEnabled: options.latencyFillerEnabled === true,
   });
 

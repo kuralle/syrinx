@@ -43,6 +43,14 @@ interface ProviderTranscriptState {
 }
 
 export class DeepgramSTTPlugin implements VoicePlugin {
+  readonly endpointingCapability = {
+    owner: "provider_stt" as const,
+    disableConfig: {
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+    },
+  };
+
   private bus: PipelineBus | null = null;
   private apiKey: string = "";
   private sampleRate: number = 16000;
@@ -134,6 +142,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       headers: { Authorization: `Token ${this.apiKey}` },
       socketFactory: this.socketFactory,
       retry: readProviderRetryConfig(config),
+      replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
+      onReplay: (event, count) => {
+        this.pushMetric(this.currentContextId, `stt.deepgram.reconnect_replay_${event}`, String(count));
+      },
       keepAliveIntervalMs: this.keepAliveIntervalMs,
       keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
       onMessage: (data) => {
@@ -245,6 +257,8 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       });
       this.pushResult(transcript, confidence, providerContextId, {
         name: "deepgram",
+        model: this.model,
+        region: "global",
         speechFinal,
         fromFinalize,
         finalizeRequested,
@@ -393,7 +407,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     transcript: string,
     confidence: number,
     contextId = this.currentContextId,
-    provider?: Record<string, unknown>,
+    provider: Record<string, unknown> = { name: "deepgram", model: this.model, region: "global" },
   ): void {
     this.bus?.push(Route.Main, {
       kind: "stt.result",

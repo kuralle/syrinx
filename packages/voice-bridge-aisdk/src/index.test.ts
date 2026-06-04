@@ -121,6 +121,37 @@ describe("AISDKBridgePlugin", () => {
     });
   });
 
+  it("clears per-turn state when a generation errors before commit", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new AISDKBridgePlugin(async function* () {
+      throw new Error("provider failed");
+    });
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-error-cleanup", "Hi"));
+
+    await waitFor(() => hasPacket(packets, "llm.error", "turn-error-cleanup"));
+
+    const internals = plugin as unknown as {
+      spokenByContext: Map<string, unknown>;
+      turnUserText: Map<string, unknown>;
+      assistantMsgByContext: Map<string, unknown>;
+      wordTimestampsByContext: Map<string, unknown>;
+      playedOutMsByContext: Map<string, unknown>;
+    };
+    expect(internals.spokenByContext.has("turn-error-cleanup")).toBe(false);
+    expect(internals.turnUserText.has("turn-error-cleanup")).toBe(false);
+    expect(internals.assistantMsgByContext.has("turn-error-cleanup")).toBe(false);
+    expect(internals.wordTimestampsByContext.has("turn-error-cleanup")).toBe(false);
+    expect(internals.playedOutMsByContext.has("turn-error-cleanup")).toBe(false);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
   it("rewrites an interrupted turn's history to the spoken prefix on barge-in during playback", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];

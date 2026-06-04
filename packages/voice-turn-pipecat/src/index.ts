@@ -52,6 +52,7 @@ interface TurnState {
   boundaryAnalyzed: boolean;
   smartTurnComplete: boolean;
   semanticComplete: boolean;
+  speechActive: boolean;
   finalized: boolean;
   analysisSequence: number;
   finalizeTimer: ReturnType<typeof setTimeout> | null;
@@ -112,6 +113,8 @@ export class LocalSmartTurnV3Predictor implements SmartTurnPredictor {
 }
 
 export class PipecatEOSPlugin implements VoicePlugin {
+  readonly endpointingCapability = { owner: "smart_turn" as const };
+
   private bus: PipelineBus | null = null;
   private disposers: Array<() => void> = [];
   private turns = new Map<string, TurnState>();
@@ -239,6 +242,9 @@ export class PipecatEOSPlugin implements VoicePlugin {
       this.scheduleIncompleteFallback(state);
       return;
     }
+    if (state.speechActive) {
+      return;
+    }
     this.scheduleMaxFinalize(state);
   }
 
@@ -248,6 +254,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     state.boundaryAnalyzed = false;
     state.smartTurnComplete = false;
     state.semanticComplete = false;
+    state.speechActive = true;
     state.latestInterim = "";
     state.analysisSequence += 1;
     clearTurnTimers(state);
@@ -256,6 +263,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private async handleSpeechEnded(pkt: VadSpeechEndedPacket): Promise<void> {
     if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
+    state.speechActive = false;
     const sequence = ++state.analysisSequence;
     const probability = await this.predictor.predict(Float32Array.from(state.audio));
     if (state.finalized || state.analysisSequence !== sequence) return;
@@ -313,6 +321,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
       boundaryAnalyzed: false,
       smartTurnComplete: false,
       semanticComplete: false,
+      speechActive: false,
       finalized: false,
       analysisSequence: 0,
       finalizeTimer: null,
@@ -360,7 +369,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     if (state.finalized || state.deferTimer) return;
     state.deferTimer = setTimeout(() => {
       state.deferTimer = null;
-      if (state.finalized) return;
+      if (state.finalized || state.speechActive) return;
       const transcript = latestTranscript(state.finalSegments, state.latestInterim);
       const semantic = scoreSemanticCompleteness(transcript);
       state.smartTurnComplete = true;
