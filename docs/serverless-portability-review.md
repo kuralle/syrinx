@@ -1,5 +1,16 @@
 # Serverless / Edge Portability Review — Voice-Engine 36h Sweep
 
+> **⚠️ RESOLVED (2026-06-05) — this is the original diagnosis, kept as the record.**
+> The Cloudflare Workers verdict below (§1: "NO — cannot run today") has since been
+> closed. The engine now runs on Cloudflare Workers: one hibernatable Durable Object
+> per conversation (`@asyncdot/voice-server-workers`), inbound `WebSocketPair` seam,
+> timers→DO alarms via a `Scheduler`, `DurableObjectSessionStore`, lazy provider
+> sockets, and `onnxruntime-web` for VAD. It is **deployed and live-tested** end-to-end
+> with real Deepgram + OpenAI + Cartesia, plus R2 call recording and DO keep-alive.
+> See `serverless-edge-port-implementation-notes.md` for the resolution. The blocker
+> matrix and per-target checklists below remain accurate as the *map of what was fixed*
+> (Cloudflare items closed; Vercel/Lambda not pursued).
+
 **Scope:** `git diff 2b5e33f..HEAD` (29 changed source files under `packages/*/src/*.ts`). **Targets, in priority order:** Cloudflare Workers (the intended deployment), Vercel (Edge / Node serverless / Sandbox), AWS Lambda. **Reference architecture:** Cloudflare agents `withVoice` Durable-Object-per-conversation (see `knowledge-research/notes/ARCH-09-rapida-cloudflare-runtimes.md`).
 
 > Produced by a multi-agent review workflow (5 runtime dimensions → adversarial per-finding verification → synthesis). 33 findings, 30 upheld, 3 rejected.
