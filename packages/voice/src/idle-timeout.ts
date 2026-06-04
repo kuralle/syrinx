@@ -17,6 +17,7 @@ import type {
   InjectMessagePacket,
   DisconnectRequestedPacket,
 } from "./packets.js";
+import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
 // =============================================================================
 // Configuration
@@ -59,19 +60,22 @@ export const DEFAULT_IDLE_TIMEOUT_CONFIG: IdleTimeoutConfig = {
 // =============================================================================
 
 export class IdleTimeoutManager {
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timerScheduled = false;
   private count = 0;
   private readonly config: IdleTimeoutConfig;
   private readonly bus: PipelineBus;
   private currentContextId: string;
+  private readonly scheduler: Scheduler;
 
   constructor(
     bus: PipelineBus,
     config?: Partial<IdleTimeoutConfig>,
+    scheduler?: Scheduler,
   ) {
     this.bus = bus;
     this.config = { ...DEFAULT_IDLE_TIMEOUT_CONFIG, ...config };
     this.currentContextId = "";
+    this.scheduler = scheduler ?? new TimerScheduler();
   }
 
   // -------------------------------------------------------------------------
@@ -88,9 +92,11 @@ export class IdleTimeoutManager {
     this.clearTimer();
     if (this.config.durationMs <= 0) return;
 
-    this.timer = setTimeout(() => {
+    this.timerScheduled = true;
+    this.scheduler.schedule("voice.idle_timeout", this.config.durationMs, () => {
+      this.timerScheduled = false;
       this.onTimeout();
-    }, this.config.durationMs);
+    });
   }
 
   /**
@@ -112,9 +118,11 @@ export class IdleTimeoutManager {
    */
   extend(ms: number): void {
     this.clearTimer();
-    this.timer = setTimeout(() => {
+    this.timerScheduled = true;
+    this.scheduler.schedule("voice.idle_timeout", this.config.durationMs + ms, () => {
+      this.timerScheduled = false;
       this.onTimeout();
-    }, this.config.durationMs + ms);
+    });
   }
 
   /** Clean up — stop timer without side effects. */
@@ -127,10 +135,9 @@ export class IdleTimeoutManager {
   // -------------------------------------------------------------------------
 
   private clearTimer(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    if (!this.timerScheduled) return;
+    this.scheduler.cancel("voice.idle_timeout");
+    this.timerScheduled = false;
   }
 
   private onTimeout(): void {

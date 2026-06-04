@@ -33,7 +33,6 @@ import {
   isRecoverable,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
-import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 interface ProviderTranscriptState {
   lastInterimTranscript: string;
@@ -83,7 +82,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private streamStartTime = 0;
   private disposers: Array<() => void> = [];
 
-  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+  constructor(private readonly socketFactory?: SocketFactory) {}
 
   private transcriptStateByContextId = new Map<string, ProviderTranscriptState>();
   private finalizeRequestedContextIds = new Set<string>();
@@ -140,7 +139,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
       headers: { Authorization: `Token ${this.apiKey}` },
-      socketFactory: this.socketFactory,
+      socketFactory: this.socketFactory ?? await defaultSocketFactory(),
       retry: readProviderRetryConfig(config),
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
       onReplay: (event, count) => {
@@ -653,6 +652,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
   }
 
+}
+
+async function defaultSocketFactory(): Promise<SocketFactory> {
+  const mod = await import("@asyncdot/voice-ws/node");
+  return mod.createNodeWsSocket;
 }
 
 function providerAlternative(msg: Record<string, unknown>): Record<string, unknown> | null {

@@ -2,8 +2,6 @@
 //
 // Syrinx Kernel v2 — Cartesia TTS Plugin
 
-import { randomUUID } from "node:crypto";
-
 import type { PipelineBus } from "@asyncdot/voice";
 import {
   Route,
@@ -25,14 +23,13 @@ import {
   requireStringConfig,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
-import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 
 export class CartesiaTTSPlugin implements VoicePlugin {
   // socketFactory is injectable so the same plugin runs on Node (default) or
   // Cloudflare Workers (pass createWorkersSocket).
-  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+  constructor(private readonly socketFactory?: SocketFactory) {}
 
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
@@ -71,7 +68,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
       headers: { "X-API-Key": this.apiKey },
-      socketFactory: this.socketFactory,
+      socketFactory: this.socketFactory ?? await defaultSocketFactory(),
       retry: this.retryConfig,
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 32,
       onReplay: (event, count) => {
@@ -121,7 +118,7 @@ export class CartesiaTTSPlugin implements VoicePlugin {
           sample_rate: this.sampleRate,
         },
         language: this.language,
-        context_id: contextId || randomUUID(),
+        context_id: contextId || globalThis.crypto.randomUUID(),
         continue: true,
         add_timestamps: true,
       }),
@@ -358,6 +355,11 @@ export class CartesiaTTSPlugin implements VoicePlugin {
       words,
     });
   }
+}
+
+async function defaultSocketFactory(): Promise<SocketFactory> {
+  const mod = await import("@asyncdot/voice-ws/node");
+  return mod.createNodeWsSocket;
 }
 
 function isErrorStatusCode(value: unknown): boolean {

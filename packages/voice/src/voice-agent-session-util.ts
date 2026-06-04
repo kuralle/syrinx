@@ -4,6 +4,7 @@ import { Route, type PipelineBus } from "./pipeline-bus.js";
 import type { SttResultPacket } from "./packets.js";
 import { ErrorCategory, SessionState } from "./packets.js";
 import type { VoicePlugin } from "./plugin-contract.js";
+import { TimerScheduler, type Scheduler } from "./scheduler.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import * as make from "./packet-factories.js";
 
@@ -73,20 +74,24 @@ export interface VoiceSessionWatchdogsDeps {
   readonly getSessionState: () => SessionState;
   readonly isGenerationInterrupted: (contextId: string) => boolean;
   readonly onVaqiMissedResponseFired: (contextId: string) => void;
+  readonly scheduler?: Scheduler;
 }
 
 export class VoiceSessionWatchdogs {
-  private sttForceFinalizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly scheduler: Scheduler;
+  private sttForceFinalizeScheduled = false;
   private pendingSttContextId = "";
-  private vaqiMissedResponseTimer: ReturnType<typeof setTimeout> | null = null;
+  private vaqiMissedResponseScheduled = false;
   private vaqiMissedResponseContextId = "";
   private vaqiMissedResponseStartMs = 0;
-  private ttsStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private ttsStallScheduled = false;
   private ttsStallContextId = "";
-  private inputCadenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private inputCadenceScheduled = false;
   private inputCadenceContextId = "";
 
-  constructor(private readonly deps: VoiceSessionWatchdogsDeps) {}
+  constructor(private readonly deps: VoiceSessionWatchdogsDeps) {
+    this.scheduler = deps.scheduler ?? new TimerScheduler();
+  }
 
   dispose(): void {
     this.clearSttForceFinalizeTimer();
@@ -101,11 +106,12 @@ export class VoiceSessionWatchdogs {
 
     this.pendingSttContextId = contextId;
     this.clearSttForceFinalizeTimer(false);
-    this.sttForceFinalizeTimer = setTimeout(() => {
-      this.sttForceFinalizeTimer = null;
+    this.sttForceFinalizeScheduled = true;
+    this.scheduler.schedule("voice.watchdog.stt_force_finalize", this.deps.sttForceFinalizeTimeoutMs, () => {
+      this.sttForceFinalizeScheduled = false;
       const plugin = findForceFinalizableSttPlugin(this.deps.plugins);
       plugin?.forceFinalize(contextId);
-    }, this.deps.sttForceFinalizeTimeoutMs);
+    });
   }
 
   clearSttForceFinalizeIfContext(contextId: string): void {
@@ -119,15 +125,16 @@ export class VoiceSessionWatchdogs {
     this.clearVaqiMissedResponseTimer();
     this.vaqiMissedResponseContextId = contextId;
     this.vaqiMissedResponseStartMs = startMs;
-    this.vaqiMissedResponseTimer = setTimeout(() => {
-      this.vaqiMissedResponseTimer = null;
+    this.vaqiMissedResponseScheduled = true;
+    this.scheduler.schedule("voice.watchdog.vaqi_missed_response", this.deps.vaqiMissedResponseMs, () => {
+      this.vaqiMissedResponseScheduled = false;
       const cid = this.vaqiMissedResponseContextId;
       const elapsedMs = Date.now() - this.vaqiMissedResponseStartMs;
       this.vaqiMissedResponseContextId = "";
       this.vaqiMissedResponseStartMs = 0;
       this.deps.onVaqiMissedResponseFired(cid);
       this.deps.bus.push(Route.Background, make.metric(cid, "vaqi.missed_response", String(elapsedMs)));
-    }, this.deps.vaqiMissedResponseMs);
+    });
   }
 
   clearVaqiIfContext(contextId: string): void {
@@ -140,8 +147,9 @@ export class VoiceSessionWatchdogs {
     if (this.deps.ttsStallMs <= 0) return;
     this.clearTtsStallTimer();
     this.ttsStallContextId = contextId;
-    this.ttsStallTimer = setTimeout(() => {
-      this.ttsStallTimer = null;
+    this.ttsStallScheduled = true;
+    this.scheduler.schedule("voice.watchdog.tts_stall", this.deps.ttsStallMs, () => {
+      this.ttsStallScheduled = false;
       const cid = this.ttsStallContextId;
       this.ttsStallContextId = "";
       if (this.deps.isGenerationInterrupted(cid)) return;
@@ -158,7 +166,7 @@ export class VoiceSessionWatchdogs {
           true,
         ),
       );
-    }, this.deps.ttsStallMs);
+    });
   }
 
   clearTtsStallTimerFor(contextId: string): void {
@@ -171,8 +179,9 @@ export class VoiceSessionWatchdogs {
 
     this.clearInputCadenceWatchdog();
     this.inputCadenceContextId = contextId;
-    this.inputCadenceTimer = setTimeout(() => {
-      this.inputCadenceTimer = null;
+    this.inputCadenceScheduled = true;
+    this.scheduler.schedule("voice.watchdog.input_cadence", this.deps.inputCadenceTimeoutMs, () => {
+      this.inputCadenceScheduled = false;
       const cid = this.inputCadenceContextId;
       if (this.deps.getSessionState() !== SessionState.Ready) return;
 
@@ -191,21 +200,21 @@ export class VoiceSessionWatchdogs {
       });
 
       this.scheduleInputCadenceWatchdog(cid);
-    }, this.deps.inputCadenceTimeoutMs);
+    });
   }
 
   clearInputCadenceWatchdog(): void {
-    if (this.inputCadenceTimer) {
-      clearTimeout(this.inputCadenceTimer);
-      this.inputCadenceTimer = null;
+    if (this.inputCadenceScheduled) {
+      this.scheduler.cancel("voice.watchdog.input_cadence");
+      this.inputCadenceScheduled = false;
     }
     this.inputCadenceContextId = "";
   }
 
   private clearSttForceFinalizeTimer(clearContext = true): void {
-    if (this.sttForceFinalizeTimer) {
-      clearTimeout(this.sttForceFinalizeTimer);
-      this.sttForceFinalizeTimer = null;
+    if (this.sttForceFinalizeScheduled) {
+      this.scheduler.cancel("voice.watchdog.stt_force_finalize");
+      this.sttForceFinalizeScheduled = false;
     }
     if (clearContext) {
       this.pendingSttContextId = "";
@@ -213,18 +222,18 @@ export class VoiceSessionWatchdogs {
   }
 
   private clearVaqiMissedResponseTimer(): void {
-    if (this.vaqiMissedResponseTimer) {
-      clearTimeout(this.vaqiMissedResponseTimer);
-      this.vaqiMissedResponseTimer = null;
+    if (this.vaqiMissedResponseScheduled) {
+      this.scheduler.cancel("voice.watchdog.vaqi_missed_response");
+      this.vaqiMissedResponseScheduled = false;
     }
     this.vaqiMissedResponseContextId = "";
     this.vaqiMissedResponseStartMs = 0;
   }
 
   private clearTtsStallTimer(): void {
-    if (this.ttsStallTimer) {
-      clearTimeout(this.ttsStallTimer);
-      this.ttsStallTimer = null;
+    if (this.ttsStallScheduled) {
+      this.scheduler.cancel("voice.watchdog.tts_stall");
+      this.ttsStallScheduled = false;
     }
     this.ttsStallContextId = "";
   }

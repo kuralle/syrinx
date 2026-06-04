@@ -72,6 +72,7 @@ import {
 } from "./voice-agent-session-util.js";
 import { noopMetricsExporter, type MetricsExporter } from "./observability.js";
 import { ObservabilityObserver } from "./observability-observer.js";
+import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
 // =============================================================================
 // Types
@@ -152,6 +153,7 @@ export interface VoiceAgentSessionConfig {
    */
   endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
   readonly metricsExporter?: MetricsExporter;
+  readonly scheduler?: Scheduler;
   readonly observability?: {
     readonly sessionId?: string;
     readonly provider?: string;
@@ -206,7 +208,8 @@ export class VoiceAgentSession {
   private closePromise: Promise<void> | null = null;
   // Tracks which contexts are still playing out their TTS audio; turn-taking and
   // the stall watchdog key on this. Pure state — see TtsPlayoutClock.
-  private readonly ttsPlayout = new TtsPlayoutClock();
+  private readonly scheduler: Scheduler;
+  private readonly ttsPlayout: TtsPlayoutClock;
   private interruptedGenerationContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
@@ -234,6 +237,8 @@ export class VoiceAgentSession {
     }
     this.endpointingOwner = owner ?? "provider_stt";
     this.config = config;
+    this.scheduler = config.scheduler ?? new TimerScheduler();
+    this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
     this.primarySpeakerGate = new PrimarySpeakerGate({
@@ -299,6 +304,7 @@ export class VoiceAgentSession {
       onVaqiMissedResponseFired: (contextId) => {
         this.turnUserStoppedAtMs.delete(contextId);
       },
+      scheduler: this.scheduler,
     });
 
     const obs = config.observability;
@@ -315,7 +321,7 @@ export class VoiceAgentSession {
     });
 
     // Idle timeout — starts after bus handlers are wired
-    this.idleTimeout = new IdleTimeoutManager(this.bus, config.idleTimeout);
+    this.idleTimeout = new IdleTimeoutManager(this.bus, config.idleTimeout, this.scheduler);
 
     // Mode switcher
     this.modeSwitcher = new ModeSwitcher(this.bus);

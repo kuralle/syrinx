@@ -30,7 +30,6 @@ import {
   readProviderRetryConfig,
 } from "@asyncdot/voice";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@asyncdot/voice-ws";
-import { createNodeWsSocket } from "@asyncdot/voice-ws/node";
 
 // =============================================================================
 // Types
@@ -58,7 +57,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
     },
   };
 
-  constructor(private readonly socketFactory: SocketFactory = createNodeWsSocket) {}
+  constructor(private readonly socketFactory?: SocketFactory) {}
 
   private bus: PipelineBus | null = null;
   private conn: WebSocketConnection | null = null;
@@ -94,7 +93,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
         return this.endpointUrl ??
           `wss://speech.googleapis.com/v2/${this.recognizerPath}:streamingRecognize?key=${this.apiKey}`;
       },
-      socketFactory: this.socketFactory,
+      socketFactory: this.socketFactory ?? await defaultSocketFactory(),
       retry: readProviderRetryConfig(config),
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
       onReplay: (event, count) => {
@@ -242,4 +241,9 @@ export class GoogleSTTPlugin implements VoicePlugin {
       value,
     });
   }
+}
+
+async function defaultSocketFactory(): Promise<SocketFactory> {
+  const mod = await import("@asyncdot/voice-ws/node");
+  return mod.createNodeWsSocket;
 }

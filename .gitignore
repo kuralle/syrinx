@@ -18,3 +18,6 @@ research-notes/
 knowledge-research/_clones/
 knowledge-research/_sources/pdf/*.pdf
 knowledge-research/_sources/blogs/img/
+
+# edge-bundle verification artifact
+.edge-build/

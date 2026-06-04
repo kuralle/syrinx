@@ -1,0 +1,28 @@
+{
+  "name": "@asyncdot/voice-server-workers",
+  "version": "2.0.0",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "main": "./src/worker.ts",
+  "types": "./src/worker.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:edge-bundle": "../../scripts/verify-edge-bundle.sh",
+    "wrangler:dry-run": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@asyncdot/voice": "workspace:*",
+    "@asyncdot/voice-server-websocket": "workspace:*",
+    "@asyncdot/voice-ws": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260601.0",
+    "esbuild": "^0.25.0",
+    "miniflare": "^4.20260601.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^4.19.0"
+  }
+}
