@@ -28,7 +28,9 @@ pnpm --filter @asyncdot/voice-server-workers exec wrangler deploy
 
 Endpoints: `wss://<worker>/ws?sessionId=<id>` (voice), `GET /health`,
 `GET /recordings?sessionId=<id>` (lists R2 recordings). Bind an R2 bucket as
-`RECORDINGS` to capture `user.wav` + `assistant.wav` + `manifest.json` per call.
+`RECORDINGS` to capture, per call, a stereo `conversation.wav` (user left /
+assistant right, time-aligned) plus `user.wav` / `assistant.wav` stems and a
+`manifest.json`.
 
 ## Configuration
 

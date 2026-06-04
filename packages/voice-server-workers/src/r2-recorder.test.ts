@@ -23,12 +23,16 @@ function asString(body: Uint8Array | string): string {
   return typeof body === "string" ? body : new TextDecoder().decode(body);
 }
 
-describe("R2EdgeRecorder", () => {
-  it("writes user/assistant WAV + manifest to R2 on finalize", async () => {
-    const { bucket, puts } = fakeBucket();
-    const rec = new R2EdgeRecorder({ bucket, sessionId: "s1", startedAtMs: 1000 });
+function wavChannels(body: Uint8Array | string): number {
+  const wav = body as Uint8Array;
+  return new DataView(wav.buffer, wav.byteOffset, wav.byteLength).getUint16(22, true);
+}
 
-    // 320 samples (640 bytes) of user audio @16k, 160 samples (320 bytes) tts @24k.
+describe("R2EdgeRecorder", () => {
+  it("writes a stereo conversation.wav plus user/assistant stems and manifest", async () => {
+    const { bucket, puts } = fakeBucket();
+    const rec = new R2EdgeRecorder({ bucket, sessionId: "s1", startedAtMs: 1000, now: () => 1000 });
+
     rec.onUserAudio("c1", new Uint8Array(640), 16000);
     rec.onAssistantAudio("c1", new Uint8Array(320), 24000);
     await rec.finalize({ sessionId: "s1", closedAtMs: 2000 });
@@ -36,23 +40,41 @@ describe("R2EdgeRecorder", () => {
     const keys = puts.map((p) => p.key).sort();
     expect(keys).toEqual([
       "recordings/s1/1000/assistant.wav",
+      "recordings/s1/1000/conversation.wav",
       "recordings/s1/1000/manifest.json",
       "recordings/s1/1000/user.wav",
     ]);
 
-    const userWav = puts.find((p) => p.key.endsWith("user.wav"))!.body as Uint8Array;
-    expect(asString(userWav.subarray(0, 4))).toBe("RIFF");
-    expect(asString(userWav.subarray(8, 12))).toBe("WAVE");
-    expect(userWav.byteLength).toBe(44 + 640); // header + pcm
+    const conversation = puts.find((p) => p.key.endsWith("conversation.wav"))!.body;
+    expect(asString((conversation as Uint8Array).subarray(0, 4))).toBe("RIFF");
+    expect(wavChannels(conversation)).toBe(2); // stereo: user L / assistant R
+    expect(wavChannels(puts.find((p) => p.key.endsWith("user.wav"))!.body)).toBe(1);
 
     const manifest = JSON.parse(asString(puts.find((p) => p.key.endsWith("manifest.json"))!.body)) as {
-      user: { sampleRateHz: number; byteLength: number; durationMs: number };
-      assistant: { sampleRateHz: number; byteLength: number };
+      conversation: { channels: number };
     };
-    expect(manifest.user.sampleRateHz).toBe(16000);
-    expect(manifest.user.byteLength).toBe(640);
-    expect(manifest.user.durationMs).toBe(20); // 320 samples @16k = 20ms
-    expect(manifest.assistant.sampleRateHz).toBe(24000);
+    expect(manifest.conversation.channels).toBe(2);
+  });
+
+  it("time-aligns the assistant after the user instead of stacking at 0", async () => {
+    const { bucket, puts } = fakeBucket();
+    let now = 0;
+    const rec = new R2EdgeRecorder({ bucket, sessionId: "t", startedAtMs: 0, now: () => now });
+
+    now = 0;
+    rec.onUserAudio("c", new Uint8Array(640), 16000); // 20ms of user at t=0
+    now = 1000;
+    rec.onAssistantAudio("c", new Uint8Array(320), 16000); // assistant starts at t=1000ms
+    await rec.finalize({ sessionId: "t", closedAtMs: 1100 });
+
+    const manifest = JSON.parse(asString(puts.find((p) => p.key.endsWith("manifest.json"))!.body)) as {
+      conversation: { durationMs: number };
+      assistant: { durationMs: number };
+    };
+    // Assistant anchored at ~1000ms, so both the assistant stem and the merged
+    // conversation run ~1010ms — not the ~20ms they'd be if stacked at offset 0.
+    expect(manifest.assistant.durationMs).toBe(1010);
+    expect(manifest.conversation.durationMs).toBe(1010);
   });
 
   it("does not write anything when no audio was captured", async () => {
@@ -64,7 +86,7 @@ describe("R2EdgeRecorder", () => {
 
   it("flags truncation past the per-stream cap instead of buffering unbounded", async () => {
     const { bucket, puts } = fakeBucket();
-    const rec = new R2EdgeRecorder({ bucket, sessionId: "big", startedAtMs: 1, maxBytesPerStream: 1000 });
+    const rec = new R2EdgeRecorder({ bucket, sessionId: "big", startedAtMs: 1, maxBytesPerStream: 1000, now: () => 1 });
     rec.onUserAudio("c", new Uint8Array(800), 16000);
     rec.onUserAudio("c", new Uint8Array(800), 16000); // would exceed 1000 -> dropped
     await rec.finalize({ sessionId: "big", closedAtMs: 2 });
