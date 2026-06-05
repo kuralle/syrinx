@@ -14,12 +14,14 @@
     "wrangler:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.67",
     "@asyncdot/voice": "workspace:*",
     "@asyncdot/voice-bridge-aisdk": "workspace:*",
     "@asyncdot/voice-server-websocket": "workspace:*",
     "@asyncdot/voice-stt-deepgram": "workspace:*",
     "@asyncdot/voice-tts-cartesia": "workspace:*",
-    "@asyncdot/voice-ws": "workspace:*"
+    "@asyncdot/voice-ws": "workspace:*",
+    "ai": "^6.0.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",

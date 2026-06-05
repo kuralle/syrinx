@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-import { tool } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
 import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@asyncdot/voice";
-import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
+import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { PipecatEOSPlugin } from "@asyncdot/voice-turn-pipecat";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
@@ -92,6 +93,7 @@ export interface UniversitySupportSessionOptions {
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
   const ttsProvider = options.ttsProvider ?? inferTtsProvider();
+  const interactive = options.profile === "interactive";
   const pluginConfig = createUniversitySupportPluginConfig({ ...options, ttsProvider });
   const session = new VoiceAgentSession({
     plugins: pluginConfig,
@@ -109,7 +111,15 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     stt: new DeepgramSTTPlugin(),
     vad: new SileroVADPlugin(),
     eos: new PipecatEOSPlugin(),
-    bridge: new AISDKBridgePlugin(),
+    bridge: new ReasoningBridge(fromStreamText({
+      model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
+      system: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
+      temperature: 0.2,
+      maxOutputTokens: interactive ? 1024 : 1400,
+      maxRetries: 0,
+      timeout: 30_000,
+      stopWhen: stepCountIs(3),
+    })),
     tts: createTtsPlugin(ttsProvider),
   };
   for (const [name, plugin] of Object.entries(plugins)) {
@@ -151,17 +161,7 @@ export function createUniversitySupportPluginConfig(
       semantic_shortcut_delay_ms: interactive ? 0 : 50,
       semantic_defer_fallback_ms: interactive ? 4500 : 4000,
     },
-    bridge: {
-      api_key: requireEnv("OPENAI_API_KEY"),
-      model: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
-      system_prompt: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
-      tools: studentRelationsTools,
-      temperature: 0.2,
-      max_output_tokens: interactive ? 1024 : 1400,
-      max_steps: 3,
-      max_history_turns: 20,
-      timeout_ms: interactive ? 30_000 : 60_000,
-    },
+    bridge: {},
     tts:
       ttsProvider === "cartesia"
         ? cartesiaTtsConfig()
