@@ -14,6 +14,7 @@ import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
 import { GEMINI_UNIVERSITY_FIXTURES, PKG_ROOT } from "./generate-gemini-university-fixtures.js";
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
 import { createUniversitySupportSession } from "../src/university-support-agent.js";
+import { createUniversitySupportMastraSession } from "../src/university-support-mastra.js";
 import { pcm16DurationMs, writeSmokeArtifactManifest, type SmokeArtifactManifest } from "./smoke-artifact-manifest.js";
 import type { UniversitySupportTtsProvider } from "../src/university-support-agent.js";
 
@@ -97,11 +98,17 @@ async function main(): Promise<void> {
   const server = await createVoiceWebSocketServer({
     port: 0,
     maxQueuedOutputAudioMs: 30_000,
-    createSession: () => createUniversitySupportSession({
-      inputSampleRate: INPUT_SAMPLE_RATE,
-      profile: "interactive",
-      ttsProvider,
-    }),
+    createSession: () => (process.env["SYRINX_BRIDGE"] === "mastra"
+      ? createUniversitySupportMastraSession({
+          inputSampleRate: INPUT_SAMPLE_RATE,
+          profile: "interactive",
+          ttsProvider,
+        })
+      : createUniversitySupportSession({
+          inputSampleRate: INPUT_SAMPLE_RATE,
+          profile: "interactive",
+          ttsProvider,
+        })),
     contextId: () => "interactive-bootstrap",
   });
 
