@@ -6,11 +6,10 @@
 
 ## Active sprint
 
-**Sprint number:** `4`
-**Sprint name:** Polish + 1.0
-**Status:** `not-started`
-**Goal:** The bridge generalization is released: a latency report across both backends within budget, docs current, every RFC risk resolved or backlogged, and a final live demo through AI SDK + Mastra plus suspend/resume.
-**WBS section:** [`sprints/WBS.md` § Sprint 4](./WBS.md)
+**PROGRAM COMPLETE** — all 5 sprints (0–4) done; the WBS is complete. The Reasoner-bridge generalization is **released on `v2`** (not merged to trunk — kept on `v2` per user direction, see backlog B-07).
+
+**Last sprint:** `4 — Polish + 1.0` (done).
+**Resume point if reopened:** backlog B-07 (trunk PR) / B-05 (Mastra bundle diet) — see `sprints/WBS.md` §4 + `sprints/sprint-4/WARMDOWN.md`.
 
 ## Build branch
 
@@ -48,7 +47,7 @@ The session running sprint 4 must read these in this order before any story:
 | 1 | done | 2026-06-05 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
 | 2 | done | 2026-06-05 | [sprint-2/WARMDOWN.md](./sprint-2/WARMDOWN.md) |
 | 3 | done | 2026-06-05 | [sprint-3/WARMDOWN.md](./sprint-3/WARMDOWN.md) |
-| 4 | not-started | — | — |
+| 4 | done | 2026-06-05 | [sprint-4/WARMDOWN.md](./sprint-4/WARMDOWN.md) |
 
 When a sprint completes, append a row here from `WARMDOWN.md`.
 
