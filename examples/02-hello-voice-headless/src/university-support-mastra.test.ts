@@ -31,6 +31,12 @@ function scriptedAgent(chunks: MastraChunk[]): MastraAgentLike {
         fullStream: chunksToStream(chunks),
       };
     },
+    async resumeStream() {
+      return {
+        runId: "r1",
+        fullStream: chunksToStream(chunks),
+      };
+    },
   };
 }
 
