@@ -9,9 +9,7 @@
 import type { PipelineBus } from "@asyncdot/voice";
 import { createOpenAI } from "@ai-sdk/openai";
 import {
-  streamText,
   stepCountIs,
-  type FinishReason,
   type ModelMessage,
   type TextStreamPart,
   type ToolChoice,
@@ -21,6 +19,8 @@ import {
   Route,
   type VoicePlugin,
   type PluginConfig,
+  type Reasoner,
+  type ReasonerTurn,
   type TtsWordTimestamp,
   requireStringConfig,
   categorizeLlmError,
@@ -37,6 +37,8 @@ export {
   type AiSdkAgentLike,
   type StreamTextConfig,
 } from "./from-ai-sdk.js";
+
+import { fromStreamFactory, fromStreamText } from "./from-ai-sdk.js";
 
 export type AISDKBridgeTools = ToolSet;
 export type AISDKStreamFactory = (request: {
@@ -57,7 +59,7 @@ export class AISDKBridgePlugin implements VoicePlugin {
   private maxSteps: number = 3;
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
-  private history: ModelMessage[] = [];
+  private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
   private activeGeneration: { contextId: string; controller: AbortController } | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
@@ -170,55 +172,56 @@ export class AISDKBridgePlugin implements VoicePlugin {
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         try {
-          let finishReason: FinishReason | null = null;
-          let rawFinishReason: string | undefined;
-          for await (const part of withStreamIdleTimeout(this.streamResponse(userText, signal), this.timeoutMs, signal)) {
-            if (signal.aborted) return;
-            if (part.type === "text-delta") {
-              reply += part.text;
-              emittedDelta = true;
+          const reasoner = this.buildReasoner();
+          const turn: ReasonerTurn = { userText, messages: this.history, signal };
 
-              this.bus.push(Route.Main, {
-                kind: "llm.delta",
-                contextId,
-                timestampMs: Date.now(),
-                text: part.text,
-              });
-            } else if (part.type === "tool-call") {
-              this.bus.push(Route.Main, {
-                kind: "llm.tool_call",
-                contextId,
-                timestampMs: Date.now(),
-                toolId: part.toolCallId,
-                toolName: part.toolName,
-                toolArgs: toRecord(part.input),
-              });
-            } else if (part.type === "tool-result") {
-              this.bus.push(Route.Main, {
-                kind: "llm.tool_result",
-                contextId,
-                timestampMs: Date.now(),
-                toolId: part.toolCallId,
-                toolName: part.toolName,
-                result: stringifyToolOutput(part.output),
-              });
-            } else if (part.type === "tool-error") {
-              throw part.error instanceof Error ? part.error : new Error(`Tool ${part.toolName} failed`);
-            } else if (part.type === "error") {
-              throw part.error instanceof Error ? part.error : new Error(String(part.error));
-            } else if (part.type === "finish-step") {
-              this.recordFinishReason(contextId, "llm.finish_step_reason", part.finishReason, part.rawFinishReason);
-              if (part.finishReason === "error" || part.finishReason === "content-filter") {
-                throw new Error(`AI SDK provider step failed: ${formatFinishReason(part.finishReason, part.rawFinishReason)}`);
-              }
-            } else if (part.type === "finish") {
-              finishReason = part.finishReason;
-              rawFinishReason = part.rawFinishReason;
-              this.recordFinishReason(contextId, "llm.finish_reason", part.finishReason, part.rawFinishReason);
+          let finishReason: "stop" | "tool" | "length" | null = null;
+
+          for await (const part of withStreamIdleTimeout(reasoner.stream(turn), this.timeoutMs, signal)) {
+            if (signal.aborted) return;
+            switch (part.type) {
+              case "text-delta":
+                reply += part.text;
+                emittedDelta = true;
+                this.bus.push(Route.Main, {
+                  kind: "llm.delta",
+                  contextId,
+                  timestampMs: Date.now(),
+                  text: part.text,
+                });
+                break;
+              case "tool-call":
+                this.bus.push(Route.Main, {
+                  kind: "llm.tool_call",
+                  contextId,
+                  timestampMs: Date.now(),
+                  toolId: part.toolId,
+                  toolName: part.toolName,
+                  toolArgs: part.args,
+                });
+                break;
+              case "tool-result":
+                this.bus.push(Route.Main, {
+                  kind: "llm.tool_result",
+                  contextId,
+                  timestampMs: Date.now(),
+                  toolId: part.toolId,
+                  toolName: part.toolName,
+                  result: part.result,
+                });
+                break;
+              case "error":
+                throw part.cause;
+              case "finish":
+                this.recordFinishReason(contextId, "llm.finish_reason", part.reason);
+                finishReason = part.reason;
+                break;
+              case "suspended":
+                break;
             }
           }
 
-          validateFinalFinishReason(finishReason, rawFinishReason);
+          validateFinalFinishReason(finishReason);
 
           // Interrupted as generation finished — the interrupt handler owns the history
           // for this turn (spoken prefix); don't commit the full reply or emit llm.done.
@@ -268,45 +271,33 @@ export class AISDKBridgePlugin implements VoicePlugin {
     }
   }
 
-  private async *streamResponse(userText: string, signal: AbortSignal): AsyncGenerator<TextStreamPart<ToolSet>> {
-    const messages: ModelMessage[] = [...this.history, { role: "user", content: userText }];
-    if (this.streamFactory) {
-      yield* this.streamFactory({ userText, signal, messages });
-      return;
-    }
-
+  private buildReasoner(): Reasoner {
+    if (this.streamFactory) return fromStreamFactory(this.streamFactory);
     const openai = createOpenAI({ apiKey: this.apiKey });
-    const result = streamText({
+    return fromStreamText({
       model: openai(this.model),
       system: this.systemPrompt,
-      messages,
       tools: this.tools,
       toolChoice: this.toolChoice,
       temperature: this.temperature,
       maxOutputTokens: this.maxOutputTokens,
       maxRetries: 0,
-      abortSignal: signal,
       timeout: this.timeoutMs,
       stopWhen: stepCountIs(this.maxSteps),
     });
-
-    for await (const part of result.fullStream) {
-      yield part;
-    }
   }
 
   private recordFinishReason(
     contextId: string,
     name: string,
-    finishReason: FinishReason,
-    rawFinishReason: string | undefined,
+    finishReason: "stop" | "tool" | "length",
   ): void {
     this.bus?.push(Route.Background, {
       kind: "metric.conversation",
       contextId,
       timestampMs: Date.now(),
       name,
-      value: rawFinishReason ? `${finishReason}:${rawFinishReason}` : finishReason,
+      value: finishReason,
     });
   }
 
@@ -402,20 +393,16 @@ export class AISDKBridgePlugin implements VoicePlugin {
   }
 }
 
-function validateFinalFinishReason(finishReason: FinishReason | null, rawFinishReason: string | undefined): void {
+function validateFinalFinishReason(finishReason: "stop" | "tool" | "length" | null): void {
   if (finishReason === null) {
     throw new Error("AI SDK stream ended without a provider finish reason");
   }
   if (finishReason === "length") {
-    throw new Error(`AI SDK provider reached token limit before completing: ${formatFinishReason(finishReason, rawFinishReason)}`);
+    throw new Error("AI SDK provider reached token limit before completing");
   }
   if (finishReason !== "stop") {
-    throw new Error(`AI SDK provider did not complete normally: ${formatFinishReason(finishReason, rawFinishReason)}`);
+    throw new Error("AI SDK provider did not complete normally");
   }
-}
-
-function formatFinishReason(finishReason: FinishReason, rawFinishReason: string | undefined): string {
-  return rawFinishReason ? `${finishReason} (${rawFinishReason})` : finishReason;
 }
 
 function readToolsConfig(value: unknown): AISDKBridgeTools | undefined {
@@ -441,29 +428,21 @@ function readPositiveIntegerConfig(value: unknown, fallback: number): number {
   return integer > 0 ? integer : fallback;
 }
 
-function toRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
-}
-
-function stringifyToolOutput(output: unknown): string {
-  return typeof output === "string" ? output : JSON.stringify(output);
-}
-
 async function* withStreamIdleTimeout<T>(
-  stream: AsyncGenerator<T>,
+  source: AsyncIterable<T>,
   timeoutMs: number,
   signal: AbortSignal,
 ): AsyncGenerator<T> {
+  const iterator = source[Symbol.asyncIterator]();
   for (;;) {
-    const next = await nextWithTimeout(stream, timeoutMs, signal);
+    const next = await nextWithTimeout(iterator, timeoutMs, signal);
     if (next.done === true) return;
     yield next.value;
   }
 }
 
 async function nextWithTimeout<T>(
-  stream: AsyncGenerator<T>,
+  iterator: AsyncIterator<T>,
   timeoutMs: number,
   signal: AbortSignal,
 ): Promise<IteratorResult<T>> {
@@ -473,16 +452,16 @@ async function nextWithTimeout<T>(
       return;
     }
     const timeout = setTimeout(() => {
-      void stream.return(undefined);
+      void iterator.return?.(undefined);
       reject(new Error(`AI SDK stream idle timeout after ${String(timeoutMs)}ms`));
     }, timeoutMs);
     const onAbort = (): void => {
       clearTimeout(timeout);
-      void stream.return(undefined);
+      void iterator.return?.(undefined);
       reject(new Error("AI SDK stream aborted"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    stream.next().then(
+    iterator.next().then(
       (next) => {
         clearTimeout(timeout);
         signal.removeEventListener("abort", onAbort);
