@@ -204,7 +204,11 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 | B-01 | Realtime / speech-to-speech `RealtimeBridge` — a sibling `VoicePlugin` (consumes `user.audio_received`, emits `tts.audio`); a `Reasoner` plugs in as a delegate tool. | v2 | §3 (non-goals), §9 |
 | B-02 | First-class multi-agent / agent-network handling (currently flattens into one `agent.stream()`; only the responding agent's text is spoken). | v1.x | §9 |
 | B-03 | Alternative Mastra adapter via `@mastra/ai-sdk` `toAISdkStream()` (reuse the AI SDK mapping path instead of `processDataStream`). | v1.x | §4.3 |
-| B-04 | `AISDKBridgePlugin` deprecated-alias removal (if a compat alias was kept in S1-02). | v1.x | §8 (1.4) |
+| B-04 | ~~`AISDKBridgePlugin` deprecated-alias removal~~ — **N/A**: `AISDKBridgePlugin` was fully removed in S1-02 (no alias kept). | — | §8 (1.4) |
+| B-05 | Mastra-edge worker bundle diet — narrow `@mastra/core` entry (exclude workspace/deployment/harness tooling) to drop the ~8 MB worker under the 3 MiB Workers Free limit. | v1.x | §9 (v2.3) |
+| B-06 | `onResumeConflict: "replay"` — replay the bridge's corrected `messages` into the resumed Mastra run (currently throws "not yet supported"; needs verified Mastra injected-history-on-resume). | v1.x | §4.6 (B4) |
+| KI-flaky | Test-infra: `pnpm -r test` flakes under concurrency (`voice-server-websocket` smartpbx/send_after_close, `voice-stt-google` Smart-Turn-EOS — 5 s-timeout tests, pass in isolation; pre-existing, not Reasoner-bridge). Raise timeouts / fake timers / serialize. | v1.x | — |
+| B-07 | `voice-server-workers-mastra` deploy → trunk (`v2`→`main`) merge — deferred (kept on `v2` per user direction, 2026-06-05). | when chosen | §8 |
 
 ---
 

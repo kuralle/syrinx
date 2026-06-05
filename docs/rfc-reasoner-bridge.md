@@ -302,3 +302,24 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 - **Who converts "next user turn" → `resume.data`?** The orchestrator (turn-routing owner), not the adapter — keeps the bridge a pure function of the turn. Confirm the mapping policy (raw text vs structured) per workflow at step 3.3.
 - **Multi-agent / workflows / sub-agents** need no special handling: they flatten into one `agent.stream().fullStream`; nested agents/workflows surface as ordinary `tool-call`/`tool-result` parts, only the responding agent's `text-delta` is spoken. The sole composite-specific primitive is `suspended` (step 3).
 - **Realtime / S2S** is out of scope; when added it is a sibling `VoicePlugin`, and a `Reasoner` plugs into it as a delegate tool — no change to this seam.
+
+---
+
+## 9.1 Risk closeout + 1.0 status (S4-03, 2026-06-05)
+
+Final status of every §9 risk after Sprints 0–3 (all on `v2`):
+
+| Risk | Status | Evidence |
+|---|---|---|
+| Latency regression from the seam | **RESOLVED** | No-buffering unit test (S0-02) + cross-backend report (`docs/latency-budget.md` S4-01): AI-SDK P50 mean 2705 ms (faster than the 3290 baseline), Mastra 2967/884, all within the S1-00 band. |
+| Mastra wire shapes unverified | **RESOLVED (v2.2)** | Verified against installed `@mastra/core@1.41.0`; `processDataStream`→`fullStream` correction. |
+| Edge-bundle weight (Mastra) | **RESOLVED (v2.3)** | Quantified 8 MB; Mastra quarantined to the dedicated `voice-server-workers-mastra` worker (`nodejs_compat`, Paid tier); product worker stays Mastra-free + `verify-edge-bundle.sh`-clean. Bundle diet → **backlog B-05**. |
+| Spoken-prefix vs Mastra resume (B4) | **RESOLVED** | `onResumeConflict` default `restart` (barge-in discards the pending pointer); `suspend→barge-in→resume→restart` test (S3-03). `replay` → **backlog B-06** (needs unverified Mastra injected-history-on-resume). |
+| "next user turn" → `resume.data` mapping | **RESOLVED (Sprint 3)** | Bridge maps raw `userText` → `resume.data`; richer/structured mapping is the orchestrator's, per-workflow → noted. |
+| Behavior drift in the step-1 refactor | **RESOLVED** | The 9 `index.test.ts` assertions byte-for-byte unchanged across S1–S3; live deployed turn (Version `cc9236aa`). |
+| Multi-agent / sub-agents | **No special handling needed** | Flatten into one `fullStream`; first-class handling → **backlog B-02**. |
+| Realtime / S2S | **Out of scope** | Sibling `VoicePlugin` → **backlog B-01**. |
+
+**Public surface:** `Reasoner` / `ReasonerTurn` / `ReasonerMessage` / `ReasoningPart` / `ReasoningBridge` / `fromAiSdkAgent` / `fromStreamText` / `fromStreamFactory` / `fromMastraAgent` match RFC §4 as shipped — **unchanged** across v2.0→v2.3 (the amendments corrected the Mastra *mechanism* + suspend/resume *architecture*, never the seam types). No further amendment.
+
+**1.0 status (on `v2`):** the bridge generalization is **released on the `v2` branch** — one `ReasoningBridge` drives AI SDK (`ToolLoopAgent`/`streamText`), Mastra `Agent`, and a suspend/resume DO path, all live-proven (AI-SDK deployed `cc9236aa`; Mastra-edge deployed `40a15353`). **Not merged to trunk this cycle (user-directed — kept as `v2`).** Backlog: B-01 (Realtime), B-02 (multi-agent), B-03 (`@mastra/ai-sdk` path), B-04 (alias removal — n/a, `AISDKBridgePlugin` was fully removed in S1-02), B-05 (Mastra bundle diet → Free tier), B-06 (`onResumeConflict: replay`), plus the test-infra flakiness KI-3-01.
