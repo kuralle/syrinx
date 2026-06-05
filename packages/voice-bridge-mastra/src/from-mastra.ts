@@ -2,11 +2,17 @@
 import type { Reasoner, ReasonerTurn, ReasonerMessage, ReasoningPart } from "@asyncdot/voice";
 import { categorizeLlmError, isRecoverable } from "@asyncdot/voice";
 
+type MastraStreamOutput = { readonly runId: string; readonly fullStream: ReadableStream<MastraChunk> };
+
 export interface MastraAgentLike {
   stream(
     messages: MastraMessage[],
     options?: { abortSignal?: AbortSignal },
-  ): Promise<{ readonly runId: string; readonly fullStream: ReadableStream<MastraChunk> }>;
+  ): Promise<MastraStreamOutput>;
+  resumeStream(
+    resumeData: unknown,
+    options: { runId: string; toolCallId?: string; abortSignal?: AbortSignal },
+  ): Promise<MastraStreamOutput>;
 }
 
 export interface MastraChunk {
@@ -20,15 +26,23 @@ export function fromMastraAgent(agent: MastraAgentLike): Reasoner {
   return { stream: (turn) => streamFromMastra(agent, turn) };
 }
 
+function buildMessages(turn: ReasonerTurn): MastraMessage[] {
+  return [
+    ...turn.messages.map((m: ReasonerMessage) => ({ role: m.role, content: m.content })),
+    { role: "user", content: turn.userText },
+  ];
+}
+
 async function* streamFromMastra(
   agent: MastraAgentLike,
   turn: ReasonerTurn,
 ): AsyncGenerator<ReasoningPart> {
-  const messages: MastraMessage[] = [
-    ...turn.messages.map((m: ReasonerMessage) => ({ role: m.role, content: m.content })),
-    { role: "user", content: turn.userText },
-  ];
-  const out = await agent.stream(messages, { abortSignal: turn.signal });
+  const out = turn.resume
+    ? await agent.resumeStream(turn.resume.data, {
+        runId: turn.resume.runId,
+        abortSignal: turn.signal,
+      })
+    : await agent.stream(buildMessages(turn), { abortSignal: turn.signal });
   let acc = "";
   for await (const chunk of out.fullStream) {
     if (turn.signal.aborted) return;
@@ -74,7 +88,22 @@ async function* streamFromMastra(
         );
         return;
       }
-      // case "tool-call-suspended": Sprint 3 (S3-02)
+      case "tool-call-suspended": {
+        const sp = chunk.payload.suspendPayload as Record<string, unknown> | undefined;
+        const prompt =
+          typeof sp?.["message"] === "string"
+            ? (sp["message"] as string)
+            : typeof sp?.["prompt"] === "string"
+              ? (sp["prompt"] as string)
+              : undefined;
+        yield {
+          type: "suspended",
+          runId: out.runId,
+          prompt,
+          payload: chunk.payload.suspendPayload,
+        };
+        return;
+      }
       default:
         break;
     }

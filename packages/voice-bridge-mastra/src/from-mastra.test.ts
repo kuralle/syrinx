@@ -56,12 +56,42 @@ function delayedStream(first: MastraChunk): { stream: ReadableStream<MastraChunk
   return { stream, release };
 }
 
-function fakeAgent(chunks: MastraChunk[] | ReadableStream<MastraChunk>): MastraAgentLike {
+function fakeAgent(
+  chunks: MastraChunk[] | ReadableStream<MastraChunk>,
+  opts?: {
+    runId?: string;
+    resume?: {
+      chunks: MastraChunk[] | ReadableStream<MastraChunk>;
+      runId?: string;
+    };
+    spy?: {
+      streamCalled?: boolean;
+      resumeCalled?: boolean;
+      resumeData?: unknown;
+      resumeOptions?: { runId: string; toolCallId?: string; abortSignal?: AbortSignal };
+    };
+  },
+): MastraAgentLike {
+  const spy = opts?.spy;
   return {
     async stream() {
+      if (spy) spy.streamCalled = true;
       return {
-        runId: "r1",
+        runId: opts?.runId ?? "r1",
         fullStream: chunks instanceof ReadableStream ? chunks : chunksToStream(chunks),
+      };
+    },
+    async resumeStream(resumeData, options) {
+      if (spy) {
+        spy.resumeCalled = true;
+        spy.resumeData = resumeData;
+        spy.resumeOptions = options;
+      }
+      const resumeChunks = opts?.resume?.chunks ?? [];
+      return {
+        runId: opts?.resume?.runId ?? opts?.runId ?? "r1",
+        fullStream:
+          resumeChunks instanceof ReadableStream ? resumeChunks : chunksToStream(resumeChunks),
       };
     },
   };
@@ -192,5 +222,62 @@ describe("fromMastraAgent", () => {
     const parts = await collectParts(reasoner, turn);
 
     expect(parts).toEqual([]);
+  });
+
+  it("maps tool-call-suspended to terminal suspended part", async () => {
+    const reasoner = fromMastraAgent(
+      fakeAgent(
+        [
+          {
+            type: "tool-call-suspended",
+            payload: { suspendPayload: { message: "Approve the refund?" } },
+          },
+        ],
+        { runId: "run-1" },
+      ),
+    );
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      {
+        type: "suspended",
+        runId: "run-1",
+        prompt: "Approve the refund?",
+        payload: { message: "Approve the refund?" },
+      },
+    ]);
+  });
+
+  it("resume turn calls resumeStream instead of stream", async () => {
+    const spy = {
+      streamCalled: false,
+      resumeCalled: false,
+      resumeData: undefined as unknown,
+      resumeOptions: undefined as
+        | { runId: string; toolCallId?: string; abortSignal?: AbortSignal }
+        | undefined,
+    };
+    const reasoner = fromMastraAgent(
+      fakeAgent([], {
+        resume: { chunks: [textDelta("Done."), finish("stop")], runId: "run-1" },
+        spy,
+      }),
+    );
+
+    const turn: ReasonerTurn = {
+      ...baseTurn(),
+      resume: { runId: "run-1", data: { approved: true } },
+    };
+    const parts = await collectParts(reasoner, turn);
+
+    expect(spy.streamCalled).toBe(false);
+    expect(spy.resumeCalled).toBe(true);
+    expect(spy.resumeData).toEqual({ approved: true });
+    expect(spy.resumeOptions).toEqual({ runId: "run-1", abortSignal: turn.signal });
+    expect(parts).toEqual([
+      { type: "text-delta", text: "Done." },
+      { type: "finish", reason: "stop", text: "Done." },
+    ]);
   });
 });
