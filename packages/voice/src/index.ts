@@ -199,3 +199,11 @@ export {
   LATENCY_FILLER_FIXTURES,
   type LatencyFillerFixture,
 } from "./latency-filler-fixtures.js";
+
+// Reasoner seam (RFC §4.2)
+export {
+  type Reasoner,
+  type ReasonerTurn,
+  type ReasonerMessage,
+  type ReasoningPart,
+} from "./reasoner.js";
