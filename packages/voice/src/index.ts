@@ -57,6 +57,12 @@ export {
   type LlmToolResultPacket,
 } from "./packets.js";
 
+// Pipeline packets — reasoning (suspend/resume)
+export {
+  type ReasoningSuspendedPacket,
+  type ReasoningResumePacket,
+} from "./packets.js";
+
 // Pipeline packets — TTS
 export {
   type TextToSpeechTextPacket,

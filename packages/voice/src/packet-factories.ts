@@ -34,6 +34,8 @@ import type {
   InjectMessagePacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
+  ReasoningSuspendedPacket,
+  ReasoningResumePacket,
   StartIdleTimeoutPacket,
   StopIdleTimeoutPacket,
   ModeSwitchRequestedPacket,
@@ -199,6 +201,25 @@ export function llmDelta(contextId: string, timestampMs: number, text: string): 
 
 export function llmDone(contextId: string, timestampMs: number, text: string): LlmResponseDonePacket {
   return { kind: "llm.done", contextId, timestampMs, text };
+}
+
+export function reasoningSuspended(
+  contextId: string,
+  timestampMs: number,
+  runId: string,
+  payload: unknown,
+  prompt?: string,
+): ReasoningSuspendedPacket {
+  return { kind: "reasoning.suspended", contextId, timestampMs, runId, prompt, payload };
+}
+
+export function reasoningResume(
+  contextId: string,
+  timestampMs: number,
+  runId: string,
+  data: unknown,
+): ReasoningResumePacket {
+  return { kind: "reasoning.resume", contextId, timestampMs, runId, data };
 }
 
 export function startIdleTimeout(contextId: string, timestampMs: number): StartIdleTimeoutPacket {

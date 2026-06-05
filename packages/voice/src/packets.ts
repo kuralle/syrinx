@@ -288,6 +288,19 @@ export interface LlmToolResultPacket extends VoicePacket {
   readonly result: string;
 }
 
+export interface ReasoningSuspendedPacket extends VoicePacket {
+  readonly kind: "reasoning.suspended";
+  readonly runId: string;
+  readonly prompt?: string;
+  readonly payload: unknown;
+}
+
+export interface ReasoningResumePacket extends VoicePacket {
+  readonly kind: "reasoning.resume";
+  readonly runId: string;
+  readonly data: unknown;
+}
+
 // =============================================================================
 // Output Pipeline Packets (LLM text → TTS audio)
 // =============================================================================
@@ -508,7 +521,9 @@ export type LlmPacket =
   | LlmResponseDonePacket
   | LlmErrorPacket
   | LlmToolCallPacket
-  | LlmToolResultPacket;
+  | LlmToolResultPacket
+  | ReasoningSuspendedPacket
+  | ReasoningResumePacket;
 
 /** All TTS output packets. */
 export type TtsPacket =
