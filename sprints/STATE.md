@@ -6,11 +6,11 @@
 
 ## Active sprint
 
-**Sprint number:** `3`
-**Sprint name:** Suspend / resume DO path
+**Sprint number:** `4`
+**Sprint name:** Polish + 1.0
 **Status:** `not-started`
-**Goal:** A Mastra workflow `suspend()` parks a run that is persisted by `runId` in the Durable Object, asked of the user, and resumed on a later voice turn — surviving DO hibernation between turns (proven in workerd).
-**WBS section:** [`sprints/WBS.md` § Sprint 3](./WBS.md)
+**Goal:** The bridge generalization is released: a latency report across both backends within budget, docs current, every RFC risk resolved or backlogged, and a final live demo through AI SDK + Mastra plus suspend/resume.
+**WBS section:** [`sprints/WBS.md` § Sprint 4](./WBS.md)
 
 ## Build branch
 
@@ -20,23 +20,21 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout v2` (or `git fetch && git checkout v2` if missing locally).
 
-## Load-bearing reading for sprint 3
+## Load-bearing reading for sprint 4
 
-The session running sprint 3 must read these in this order before delegating any story:
+The session running sprint 4 must read these in this order before any story:
 
-1. `sprints/sprint-2/HANDOFF.md` — read-me-first: state of the world + suspend/resume traps + verified Mastra API.
-2. `sprints/WBS.md` § Sprint 3 — stories S3-01 … S3-04.
-3. `docs/rfc-reasoner-bridge.md` — §4.6 (suspend/resume across turns + DO `runId` + **(B4)** `onResumeConflict: "restart" | "replay"`), §9, §8 commits 3.1–3.5.
-4. `packages/voice/src/reasoner.ts` — `ReasoningPart.suspended` + `ReasonerTurn.resume` (exist from S0-01); S3-01 adds `reasoning.suspended`/`reasoning.resume` packets.
-5. `packages/voice-bridge-mastra/src/from-mastra.ts` — the `// Sprint 3 (S3-02)` marker (`tool-call-suspended` → terminal `suspended`; `turn.resume` → `agent.resumeStream(data,{runId})`).
-6. `packages/voice-server-workers/src/*` — the DO + `DurableObjectSessionStore` (mirror for `DurableObjectRunStore` on `ctx.storage.sql`). **Run `/code-understand` on the DO + suspend path before S3-03/S3-04.**
-7. `packages/voice-bridge-aisdk/src/index.ts` — `ReasoningBridge` (add `suspended` handling + `onResumeConflict` + injected `RunStore`).
+1. `sprints/sprint-3/HANDOFF.md` — read-me-first: state of the world (all 3 backends working/deployed) + traps.
+2. `sprints/WBS.md` § Sprint 4 — stories S4-01 … S4-03.
+3. `docs/latency-budget.md` — the S1-00 baseline/band (the denominator) + where the cross-backend report (S4-01) appends.
+4. `docs/rfc-reasoner-bridge.md` §7 (validation) + §9 (risk closeout, S4-03).
+5. The shipped APIs to document (S4-02): `packages/voice/src/reasoner.ts`, `voice-bridge-aisdk` (`ReasoningBridge`/`from-ai-sdk`/`RunStore`), `voice-bridge-mastra` (`from-mastra`), `voice-server-workers-mastra`.
 
-**Carry-forward traps (from Sprint 2):** **(B4)** spoken-prefix reconciliation on resume — `onResumeConflict` default `restart` (discard + re-ask if a barge-in landed since suspend; never `resumeStream` a stale checkpoint); the DO `{runId,contextId,payload}` row must survive **hibernation** (workerd test); the `DurableObjectRunStore` is **edge code** (SQL, Mastra-free) — the Mastra `resumeStream` runs on the Node path; suspend must add **no** latency to non-suspending turns (§7a, `SYRINX_WS_MAX_TURNS=1` vs the S1-00 band). Verified on `@mastra/core@1.41.0`: `resumeStream(resumeData,{runId,toolCallId?})` + `tool-call-suspended` (`payload.suspendPayload`) + `runId` exist. **KI-2-01:** `voice-server-websocket` smartpbx heartbeat test is timing-flaky under load — re-run in isolation.
+**Carry-forward traps (from Sprint 3):** **KI-3-01** — `pnpm -r test` flakes under concurrency (`voice-server-websocket`, `voice-stt-google` 5 s-timeout tests, pass in isolation, NOT Reasoner-bridge regressions) — judge green per-package. Latency report uses the **short fixture** (`SYRINX_WS_MAX_TURNS=1`) vs the S1-00 band. Mastra-edge worker is **Paid tier** (8 MB); bundle diet is backlog (KI-3-02). **No new deps** in Sprint 4 — it's report + docs + risk closeout + the trunk PR. **Capstone = `v2`→trunk PR — confirm with the user before opening/merging.** All three demos already proven: AI-SDK deployed (`cc9236aa`), Mastra Node (S2) + edge deployed (`40a15353`), suspend/resume deployed.
 
 ## Last completed sprint
 
-`2 — Mastra adapter`
+`3 — Suspend / resume DO path`
 
 ## Last completed at
 
@@ -49,7 +47,8 @@ The session running sprint 3 must read these in this order before delegating any
 | 0 | done | 2026-06-05 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
 | 1 | done | 2026-06-05 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
 | 2 | done | 2026-06-05 | [sprint-2/WARMDOWN.md](./sprint-2/WARMDOWN.md) |
-| 3 | not-started | — | — |
+| 3 | done | 2026-06-05 | [sprint-3/WARMDOWN.md](./sprint-3/WARMDOWN.md) |
+| 4 | not-started | — | — |
 
 When a sprint completes, append a row here from `WARMDOWN.md`.
 
