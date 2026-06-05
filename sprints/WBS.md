@@ -19,7 +19,7 @@ A sprint's stories are collectively Done when **all** of the following hold:
 2. Unit tests written for every new exported function / class. **Coverage is not the metric**; *behavioral coverage* is — every public surface tested with at least one happy-path and one failure-path test.
 3. **Passes sprint-level manager review (Phase B — after every story has proceed evidence):** manager sandwich review on full diff + briefs + proceed artifacts; blockers/majors resolved in fix pass. Optional `/delegate-review` when adversarial second opinion is explicitly needed.
 4. **Public surfaces match the source RFC.** Diffs to the RFC require an explicit RFC amendment in the same sprint (the `Reasoner` / `ReasoningPart` / `ReasoningBridge` / adapter signatures are RFC §4).
-5. **Latency gate (non-negotiable, RFC §7a):** the seam adds no measurable latency — **LLM-TTFT P50/P95 unchanged within noise** vs the pre-refactor baseline, measured by the existing per-stage percentile instrumentation (`docs/latency-budget.md`). A regression beyond noise is a blocker, not a follow-up.
+5. **Latency gate (non-negotiable, RFC §7a + M3):** the seam adds no measurable latency — **LLM-TTFT P50/P95 within the captured baseline variance band**, measured on the stable local harness `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive` (NOT the noisy deployed worker, and NOT a literature budget). The baseline + band are captured once on `v2` HEAD before Sprint 1 (S1-00) and recorded in `docs/latency-budget.md`. A regression beyond the band is a blocker, not a follow-up.
 6. Docs updated: at minimum the package's README; at most an RFC delta.
 7. Manual demo artifact captured per story or per sprint (transcript / test log / deployed-worker turn).
 8. **No `--no-verify`, no type-suppression, no silent-catch shortcuts.** If you can't meet a check, change the design, not the gate.
@@ -60,7 +60,7 @@ The next session reads HANDOFF first, WARMDOWN if it needs depth.
 | Sprint | Phase | Goal (one sentence) |
 |--------|-------|---------------------|
 | 0 | Seam foundation | The `Reasoner` seam + `ReasoningPart` union exist in core and the AI SDK adapter maps `TextStreamPart` → `ReasoningPart` with no buffering, unit-tested. |
-| 1 | Re-home the bridge | The production bridge drives a `Reasoner` internally with **zero behavior change** (the 9 existing bridge tests pass unchanged) and accepts a `ToolLoopAgent`; a live turn runs on the deployed worker with LLM-TTFT unchanged. |
+| 1 | Re-home the bridge | The production bridge drives a `Reasoner` internally with **zero behavior change** (the 9 existing bridge tests' assertions unchanged; construction line adapts via `fromStreamFactory`) and is constructed with an explicit `fromAiSdkAgent(...)`; a live turn runs on the deployed worker with LLM-TTFT within the captured baseline band. |
 | 2 | Mastra adapter | A Mastra `Agent` drives the same bridge via `fromMastraAgent`; a live worker turn runs through a Mastra backend, edge bundle stays clean, LLM-TTFT within budget. |
 | 3 | Suspend / resume | A Mastra workflow `suspend()` → DO-persisted `runId` → resume across two voice turns survives Durable-Object hibernation (workerd test). |
 | 4 | Polish + 1.0 | Latency report across both backends, docs, success-metric gate, backlog/risk closeout — the bridge generalization is released. |
@@ -85,8 +85,8 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S0-01 | Add the `Reasoner` seam + `ReasoningPart` union (types only) in `packages/voice/src/reasoner.ts`, exported from `voice/src/index.ts`. Include the `suspended` variant now (designed once, wired in Sprint 3). No runtime consumers yet. | `pnpm --filter @asyncdot/voice typecheck` green; the union matches RFC §4.2 exactly; the `LATENCY INVARIANT` doc-comment is on `Reasoner.stream`. |
-| S0-02 | `fromAiSdkAgent` + `fromStreamText` adapters → `Reasoner` in `packages/voice-bridge-aisdk/src/from-ai-sdk.ts`; map `TextStreamPart` → `ReasoningPart` per RFC §4.3 (drop `tool-input-*`/`reasoning`/`source`); yield each part immediately (no buffering). | `pnpm --filter @asyncdot/voice-bridge-aisdk test` green incl. new adapter tests covering the full mapping table + a dropped-part-type case + a failure (`tool-error`/`error`) case. |
+| S0-01 | Add the `Reasoner` seam + `ReasoningPart` union (types only) in `packages/voice/src/reasoner.ts`, exported from `voice/src/index.ts`. Include the `suspended` **and `error`** variants now (B1 — designed once; `error` wired in Sprint 1, `suspended` in Sprint 3). No runtime consumers yet. | `pnpm --filter @asyncdot/voice typecheck` green; the union matches RFC §4.2 (incl. `error`); the `LATENCY INVARIANT` doc-comment is on `Reasoner.stream`. |
+| S0-02 | `fromAiSdkAgent` + `fromStreamText` **+ `fromStreamFactory`** adapters → `Reasoner` in `packages/voice-bridge-aisdk/src/from-ai-sdk.ts`; map the **full** `TextStreamPart` union → `ReasoningPart` per RFC §4.3 — **`error`/`tool-error`/`finish-step` → `error` (B1, not dropped)**; `await` `agent.stream()` (returns a `Promise`, B3); yield each part immediately (no buffering). `fromStreamFactory` preserves the existing test seam (B2). | `pnpm --filter @asyncdot/voice-bridge-aisdk test` green; new adapter tests cover the full table incl. the **error→`error`** paths + a dropped-part case. |
 
 **Demo:** a unit test that feeds a scripted `fullStream` of `TextStreamPart`s through `fromAiSdkAgent` and asserts the exact normalized `ReasoningPart` sequence (incl. `finish`), runnable and green.
 
@@ -103,13 +103,14 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 ### Sprint 1 — Re-home the bridge (zero behavior change + live)
 
-**Goal:** The production bridge drives a `Reasoner` internally with zero behavior change (the 9 existing `index.test.ts` tests pass unchanged), accepts a `Reasoner` or a raw `ToolLoopAgent`, and runs a live turn on the deployed worker with LLM-TTFT unchanged.
+**Goal:** The production bridge drives a `Reasoner` internally with zero behavior change (the 9 `index.test.ts` tests' assertions unchanged; construction adapts via `fromStreamFactory` — B2), is constructed with an explicit `fromAiSdkAgent(...)` (no auto-wrap — B3), and runs a live turn on the deployed worker with LLM-TTFT within the S1-00 baseline band (M3).
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S1-01 | Drive `AISDKBridgePlugin` from a `Reasoner` internally: replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 5-case `ReasoningPart` switch. Keep history, spoken-prefix barge-in, retry, supersede **identical**. No buffering. Constructor still accepts AI SDK config (wraps via `fromStreamText`). | **The 9 existing `index.test.ts` tests pass UNCHANGED** (rename imports only). `pnpm --filter @asyncdot/voice-bridge-aisdk test`. LLM-TTFT P50/P95 unchanged within noise (RFC §7a). |
-| S1-02 | Generalize the constructor and rename to `ReasoningBridge`: accept `Reasoner \| AiSdkAgentLike \| StreamTextConfig`; auto-wrap a raw `ToolLoopAgent` via the `"fullStream" in result` discriminator. Update `voice-server-workers/live-session.ts` + examples. Zero-debt: no compat alias unless a caller needs it. | `pnpm -r typecheck && pnpm -r test` green; worker + examples updated; no behavior change. |
-| S1-03 | Live worker proof: confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + drive one turn on the deployed worker; record LLM-TTFT vs the pre-refactor baseline. | `bash scripts/verify-edge-bundle.sh` clean; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test` passes; deployed `/ws` turn transcribes + returns TTS; LLM-TTFT within noise of baseline. |
+| S1-00 | **(M3)** Capture the latency baseline on `v2` HEAD **before any refactor**: run `smoke:websocket-interactive` ×3, record LLM-TTFT P50/P95 + the variance band in `docs/latency-budget.md`. This is the denominator every later latency gate uses. | baseline + band committed to `docs/latency-budget.md`; 3 runs captured. |
+| S1-01 | Drive `AISDKBridgePlugin` from a `Reasoner` internally: replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a **6-case** `ReasoningPart` switch (incl. `error` → the existing retry/`llm.error` path, B1). Keep history, spoken-prefix barge-in, retry, supersede **identical**. No buffering. | **(B2)** The 9 `index.test.ts` tests: **assertions/behavior unchanged**; each construction line adapts `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))`. `pnpm --filter @asyncdot/voice-bridge-aisdk test`. **LLM-TTFT P50/P95 within the S1-00 baseline band** (RFC §7a/M3). |
+| S1-02 | **(B3)** Rename to `ReasoningBridge`; constructor accepts a **`Reasoner` only** — callers wrap explicitly via `fromAiSdkAgent`/`fromStreamText`/`fromStreamFactory`. **No `.stream()`-probe auto-wrap.** Update `voice-server-workers/live-session.ts` + examples to the explicit wrap. Zero-debt: remove `AISDKBridgePlugin` (or thin alias only if a caller needs it). | `pnpm -r typecheck && pnpm -r test` green; no call site uses auto-wrap; no behavior change. |
+| S1-03 | Live worker proof (functional): `verify-edge-bundle.sh` clean; opt-in live worker turn; deploy + drive one turn on the deployed worker. Latency gate is the **local harness**, not the deployed turn. | `bash scripts/verify-edge-bundle.sh` clean; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test` passes; deployed `/ws` turn transcribes + returns TTS; **`smoke:websocket-interactive` LLM-TTFT within the S1-00 band** (deployed turn is functional proof only). |
 
 **Demo:** a deployed-worker live turn (transcript + TTS bytes) plus an LLM-TTFT before/after comparison showing no regression.
 
@@ -132,13 +133,13 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 |-------|-------------|------|
 | S2-01 | New `@asyncdot/voice-bridge-mastra` package: `fromMastraAgent(agent) → Reasoner`; map `processDataStream` payload-wrapped chunks → `ReasoningPart` per RFC §4.3. Bridge Mastra's callback stream to an async-iterable via a **zero-delay queue** (no accumulation — RFC §7a). | `pnpm --filter @asyncdot/voice-bridge-mastra typecheck` green; deps limited to `@mastra/core` (+ `@mastra/ai-sdk` only if needed). |
 | S2-02 | Mastra adapter unit tests: chunk→part mapping + barge-in parity, driven by a scripted Mastra-shaped stream (no network). | `pnpm --filter @asyncdot/voice-bridge-mastra test` green incl. happy + failure + abort cases. |
-| S2-03 | Auto-wrap Mastra agents in `ReasoningBridge` (no `fullStream` ⇒ Mastra) + live worker turn through a Mastra backend. | `pnpm -r typecheck && pnpm -r test`; `verify-edge-bundle.sh` clean (gate Mastra to the Node build via a runtime-split export if it pulls Node-only deps); deployed live turn with a Mastra agent; LLM-TTFT within budget. |
+| S2-03 | Drive `ReasoningBridge` with a Mastra agent via explicit `fromMastraAgent(agent)` (no auto-wrap — B3) + live worker turn through a Mastra backend. | `pnpm -r typecheck && pnpm -r test`; `verify-edge-bundle.sh` clean (gate Mastra to the Node build via a runtime-split export if it pulls Node-only deps); deployed live turn with a Mastra agent; **`smoke:websocket-interactive` LLM-TTFT within the S1-00 baseline band** (M3). |
 
 **Demo:** a deployed live turn driven through a Mastra-backed `ReasoningBridge`, transcript + TTS.
 
 **Dependencies:** Sprint 1.
 
-**Source RFC §:** §4.3 (Mastra mapping), §4.4 (auto-wrap), §9 (edge-bundle weight). Commits 2.1–2.4.
+**Source RFC §:** §4.3 (Mastra mapping), §4.4 (explicit adapter), §9 (edge-bundle weight). Commits 2.1–2.4.
 
 **Sprint-specific risks:**
 - Mastra wire shapes (`processDataStream` chunk fields) unverified vs a running build → detection: typecheck against pinned `@mastra/core` + the scripted unit test → mitigation: confirm the chunk shape at S2-01 before finalizing the mapping.
@@ -156,7 +157,7 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 |-------|-------------|------|
 | S3-01 | Add `reasoning.suspended` + `reasoning.resume` packets + factories to `@asyncdot/voice` (`ReasonerTurn.resume` already exists from S0-01). | `pnpm --filter @asyncdot/voice typecheck` green; packet-factory tests. |
 | S3-02 | Mastra adapter emits the terminal `suspended` part (map `tool-call-suspended` → `{type:"suspended", runId, …}`) and routes a resume turn to `agent.resumeStream(data, {runId})`. | `pnpm --filter @asyncdot/voice-bridge-mastra test` with a scripted suspend → resume sequence. |
-| S3-03 | Bridge handles the `suspended` part: speak `prompt`, emit `reasoning.suspended`, persist `{runId, contextId, payload}` via an injected `RunStore`; on a turn with a pending run, build a `resume` turn; barge-in on a suspended run discards it. | bridge unit tests with a fake `RunStore` covering suspend → resume and barge-in-discards. |
+| S3-03 | Bridge handles the `suspended` part: speak `prompt`, emit `reasoning.suspended`, persist `{runId, contextId, payload}` via an injected `RunStore`; on a turn with a pending run, build a `resume` turn. **(B4)** Implement `onResumeConflict: "restart" \| "replay"` (default `restart`) — if a spoken-prefix correction landed since suspend, discard + re-ask rather than `resumeStream` (the suspended checkpoint holds the uncorrected turn). Barge-in on a suspended run discards it. | bridge unit tests with a fake `RunStore`: clean suspend→resume, **suspend→barge-in→resume → `restart`**, barge-in-discards. |
 | S3-04 | `DurableObjectRunStore` on `ctx.storage.sql` (one `reasoning_runs` table, mirrors `DurableObjectSessionStore`); wire into the DO; alarm-GC stale rows (TTL). Workerd test: suspend → DO hibernates → resume across two turns. | `pnpm --filter @asyncdot/voice-server-workers test` incl. the new suspend→hibernate→resume-across-two-turns workerd/Miniflare test. |
 
 **Demo:** a Miniflare two-turn run — suspend on turn 1, DO evicted, resume on turn 2 by `runId`, asserted end-to-end.
@@ -166,7 +167,7 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 **Source RFC §:** §4.6 (suspend/resume + DO `runId`), §9. Commits 3.1–3.5.
 
 **Sprint-specific risks:**
-- History is dual-sourced on a Mastra resume run (bridge `messages` advisory; the suspended run holds its own state under `runId`) → detection: the two-turn workerd test → mitigation: `runId` carries the only non-reconstructible continuity; history advisory per RFC §9.
+- **(B4)** Spoken-prefix correction vs Mastra's resumed checkpoint: a barge-in between suspend and resume leaves the run's checkpoint uncorrected, diverging from the bridge's history → detection: the `suspend→barge-in→resume` unit test (S3-03) + the two-turn workerd test → mitigation: `onResumeConflict` defaults to `restart` (discard + re-ask); `replay` is opt-in per backend.
 - "next user turn" → `resume.data` mapping policy → detection: review at S3-03 → mitigation: the orchestrator (turn-routing owner) maps it, keeping the bridge a pure function of the turn.
 
 **Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
@@ -214,7 +215,8 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 | Latency regression from the seam (extra hop / buffering) | 0–3 | manager | LLM-TTFT P50/P95 gate every sprint (RFC §7a); no-buffering invariant on `Reasoner.stream`; revert any commit that regresses. |
 | Mastra wire shapes (`tool-call-suspended`, `resumeStream`, `processDataStream`) unverified vs a running build | 2–3 | IC + manager | Confirm against pinned `@mastra/core` at S2-01 before finalizing mappings. |
 | Edge-bundle weight from `@mastra/core` | 2 | manager | `verify-edge-bundle.sh` gate; runtime-split Mastra to the Node build if it pulls Node-only deps. |
-| History dual-sourcing on Mastra resume runs | 3 | manager | `runId` carries continuity; history advisory (RFC §9); two-turn workerd test asserts correctness. |
+| Spoken-prefix correction lost on Mastra resume (B4) | 3 | manager | `onResumeConflict` default `restart` (discard + re-ask) so a corrected turn is never overwritten by a stale checkpoint; `replay` opt-in; `suspend→barge-in→resume` test. |
+| Latency gate measured against the wrong denominator (M3) | 0–3 | manager | Gate on `smoke:websocket-interactive` vs the S1-00 captured baseline band — never the literature budget or the noisy deployed worker. |
 | Behavior drift hiding in the step-1 refactor | 1 | manager | The 9 unchanged bridge tests + LLM-TTFT measurement; behavior-preserving, revertible commits. |
 | Scope creep into Realtime/S2S | 4 | manager | Out of scope (RFC §3); backlog B-01 only. |
 
