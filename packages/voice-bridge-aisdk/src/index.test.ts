@@ -7,6 +7,10 @@ import type {
   InterruptLlmPacket,
   LlmErrorPacket,
   LlmResponseDonePacket,
+  ReasoningSuspendedPacket,
+  Reasoner,
+  ReasonerTurn,
+  ReasoningPart,
   TextToSpeechPlayoutProgressPacket,
   TextToSpeechTextPacket,
   TextToSpeechWordTimestampsPacket,
@@ -14,7 +18,7 @@ import type {
 } from "@asyncdot/voice";
 import type { FinishReason, ModelMessage, TextStreamPart, ToolSet } from "ai";
 import { fromStreamFactory } from "./from-ai-sdk.js";
-import { ReasoningBridge } from "./index.js";
+import { ReasoningBridge, type RunPointer, type RunStore } from "./index.js";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -389,6 +393,177 @@ describe("ReasoningBridge", () => {
     ]);
   });
 });
+
+describe("ReasoningBridge suspend/resume", () => {
+  it("clean suspend → resume: saves pointer, resumes with userText, discards on finish", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const runStore = new FakeRunStore();
+    const { reasoner, capturedTurns } = createSuspendResumeReasoner();
+    const plugin = new ReasoningBridge(reasoner, { runStore });
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, turnComplete("ctx", "first question"));
+    await waitFor(() => hasPacket(packets, "llm.done", "ctx"));
+
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({
+        kind: "llm.done",
+        contextId: "ctx",
+        text: "Approve?",
+      } satisfies Partial<LlmResponseDonePacket>),
+    });
+    expect(packets).toContainEqual({
+      route: Route.Background,
+      packet: expect.objectContaining({
+        kind: "reasoning.suspended",
+        contextId: "ctx",
+        runId: "r1",
+        prompt: "Approve?",
+        payload: { step: 1 },
+      } satisfies Partial<ReasoningSuspendedPacket>),
+    });
+    expect(runStore.saveCalls).toEqual([["ctx", "r1"]]);
+
+    bus.push(Route.Main, turnComplete("ctx", "yes"));
+    await waitFor(() => packets.filter(({ packet }) => (packet as { kind?: string }).kind === "llm.done").length >= 2);
+
+    expect(capturedTurns[1]?.resume).toEqual({ runId: "r1", data: "yes" });
+    expect(runStore.discardCalls).toEqual(["ctx"]);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("suspend → barge-in → next turn restarts without resume", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const runStore = new FakeRunStore();
+    const { reasoner, capturedTurns } = createSuspendResumeReasoner();
+    const plugin = new ReasoningBridge(reasoner, { runStore });
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, turnComplete("ctx", "first question"));
+    await waitFor(() => hasPacket(packets, "reasoning.suspended", "ctx"));
+    expect(runStore.saveCalls).toEqual([["ctx", "r1"]]);
+
+    bus.push(Route.Critical, interruptLlm("ctx"));
+    await waitFor(() => runStore.discardCalls.includes("ctx"));
+
+    bus.push(Route.Main, turnComplete("ctx", "corrected answer"));
+    await waitFor(() => capturedTurns.length >= 2);
+
+    expect(capturedTurns[1]?.resume).toBeUndefined();
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("barge-in discards a pending run pointer", async () => {
+    const runStore = new FakeRunStore();
+    runStore.save("ctx", "r1");
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield textDelta("ok.");
+      yield finish("stop");
+    }), { runStore });
+    const bus = new PipelineBusImpl({ onPacket: () => undefined });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Critical, interruptLlm("ctx"));
+    await waitFor(() => runStore.discardCalls.includes("ctx"));
+    expect(runStore.takePending("ctx")).toBeNull();
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("without runStore, suspended still emits reasoning.suspended without persistence", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const { reasoner } = createSuspendResumeReasoner();
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, turnComplete("ctx", "question"));
+    await waitFor(() => hasPacket(packets, "reasoning.suspended", "ctx"));
+
+    expect(packets).toContainEqual({
+      route: Route.Background,
+      packet: expect.objectContaining({
+        kind: "reasoning.suspended",
+        contextId: "ctx",
+        runId: "r1",
+      } satisfies Partial<ReasoningSuspendedPacket>),
+    });
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("throws when onResumeConflict is replay", () => {
+    expect(
+      () => new ReasoningBridge(fromStreamFactory(async function* () {}), { onResumeConflict: "replay" }),
+    ).toThrow("onResumeConflict 'replay' not yet supported — use 'restart'");
+  });
+});
+
+class FakeRunStore implements RunStore {
+  private pointers = new Map<string, string>();
+  saveCalls: Array<[string, string]> = [];
+  discardCalls: string[] = [];
+  takePendingCalls: string[] = [];
+
+  save(contextId: string, runId: string): void {
+    this.saveCalls.push([contextId, runId]);
+    this.pointers.set(contextId, runId);
+  }
+
+  takePending(contextId: string): RunPointer | null {
+    this.takePendingCalls.push(contextId);
+    const runId = this.pointers.get(contextId);
+    return runId ? { runId } : null;
+  }
+
+  discard(contextId: string): void {
+    this.discardCalls.push(contextId);
+    this.pointers.delete(contextId);
+  }
+}
+
+function createSuspendResumeReasoner(): {
+  reasoner: Reasoner;
+  capturedTurns: ReasonerTurn[];
+} {
+  const capturedTurns: ReasonerTurn[] = [];
+  const reasoner: Reasoner = {
+    stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
+      capturedTurns.push(turn);
+      return (async function* () {
+        if (turn.resume) {
+          yield { type: "text-delta", text: "Resumed." };
+          yield { type: "finish", reason: "stop", text: "Resumed." };
+          return;
+        }
+        yield {
+          type: "suspended",
+          runId: "r1",
+          prompt: "Approve?",
+          payload: { step: 1 },
+        };
+      })();
+    },
+  };
+  return { reasoner, capturedTurns };
+}
 
 function hasPacket(packets: Array<{ packet: unknown }>, kind: string, contextId: string): boolean {
   return packets.some(

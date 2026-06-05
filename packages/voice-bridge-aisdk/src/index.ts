@@ -41,6 +41,16 @@ export type AISDKStreamFactory = (request: {
   messages: ModelMessage[];
 }) => AsyncGenerator<TextStreamPart<ToolSet>>;
 
+export interface RunPointer {
+  readonly runId: string;
+}
+
+export interface RunStore {
+  save(contextId: string, runId: string): void | Promise<void>;
+  takePending(contextId: string): RunPointer | null | Promise<RunPointer | null>;
+  discard(contextId: string): void | Promise<void>;
+}
+
 export class ReasoningBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private timeoutMs: number = 30_000;
@@ -70,7 +80,14 @@ export class ReasoningBridge implements VoicePlugin {
   // back to spokenByContext.
   private playedOutMsByContext = new Map<string, number>();
 
-  constructor(private readonly reasoner: Reasoner) {}
+  constructor(
+    private readonly reasoner: Reasoner,
+    private readonly opts: { runStore?: RunStore; onResumeConflict?: "restart" | "replay" } = {},
+  ) {
+    if (this.opts.onResumeConflict === "replay") {
+      throw new Error("onResumeConflict 'replay' not yet supported — use 'restart'");
+    }
+  }
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -127,6 +144,9 @@ export class ReasoningBridge implements VoicePlugin {
           this.activeGeneration = null;
         }
         this.commitInterruptedHistory(contextId);
+        if (this.opts.runStore && this.opts.onResumeConflict !== "replay") {
+          void Promise.resolve(this.opts.runStore.discard(contextId)).catch(() => undefined);
+        }
       }),
     );
   }
@@ -150,7 +170,13 @@ export class ReasoningBridge implements VoicePlugin {
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         try {
-          const turn: ReasonerTurn = { userText, messages: this.history, signal };
+          const pending = this.opts.runStore
+            ? await Promise.resolve(this.opts.runStore.takePending(contextId))
+            : null;
+          const resuming = pending !== null;
+          const turn: ReasonerTurn = pending
+            ? { userText, messages: this.history, signal, resume: { runId: pending.runId, data: userText } }
+            : { userText, messages: this.history, signal };
 
           let finishReason: "stop" | "tool" | "length" | null = null;
 
@@ -193,8 +219,38 @@ export class ReasoningBridge implements VoicePlugin {
                 this.recordFinishReason(contextId, "llm.finish_reason", part.reason);
                 finishReason = part.reason;
                 break;
-              case "suspended":
-                break;
+              case "suspended": {
+                if (part.prompt && !emittedDelta) {
+                  this.bus.push(Route.Main, {
+                    kind: "llm.delta",
+                    contextId,
+                    timestampMs: Date.now(),
+                    text: part.prompt,
+                  });
+                  reply += part.prompt;
+                }
+                if (signal.aborted) return;
+                this.bus.push(Route.Main, {
+                  kind: "llm.done",
+                  contextId,
+                  timestampMs: Date.now(),
+                  text: reply,
+                });
+                this.rememberTurn(userText, reply, contextId);
+                this.bus.push(Route.Background, {
+                  kind: "reasoning.suspended",
+                  contextId,
+                  timestampMs: Date.now(),
+                  runId: part.runId,
+                  prompt: part.prompt,
+                  payload: part.payload,
+                });
+                if (this.opts.runStore) {
+                  await Promise.resolve(this.opts.runStore.save(contextId, part.runId));
+                }
+                committed = true;
+                return;
+              }
             }
           }
 
@@ -211,6 +267,9 @@ export class ReasoningBridge implements VoicePlugin {
             text: reply,
           });
           this.rememberTurn(userText, reply, contextId);
+          if (this.opts.runStore && resuming) {
+            await Promise.resolve(this.opts.runStore.discard(contextId));
+          }
           committed = true;
           return;
         } catch (err) {
