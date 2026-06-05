@@ -1,7 +1,9 @@
 # RFC: `Reasoner` — a framework-agnostic reasoning seam for the cascading bridge
 
-**Status:** Draft · **Author:** Syrinx · **Date:** 2026-06-05 · **Branch target:** `v2`
+**Status:** Draft v2.1 (revised after a cross-family review — pi-glm / GLM 5.1) · **Author:** Syrinx · **Date:** 2026-06-05 · **Branch target:** `v2`
 **Scope:** cascading (text) bridge only. **Non-goal:** the speech-to-speech / OpenAI Realtime path (deferred — see §9).
+
+> **v2.1 changelog (review fixes):** B1 — `ReasoningPart` gains an `error` variant; the AI SDK `error`/`tool-error`/`finish-step` parts now map to it instead of being dropped (they drive retry). B2 — added `fromStreamFactory`; the "9 tests unchanged" claim is corrected (assertions unchanged, the construction line adapts). B3 — **auto-wrap dropped**; callers wrap explicitly with `fromAiSdkAgent` / `fromMastraAgent` (the `"fullStream" in agent.stream()` discriminator was broken — `stream()` returns a `Promise` — and it contradicted §6). B4 — explicit spoken-prefix reconciliation policy on Mastra resume. M3 — latency gate now measures *no regression vs our own baseline on a stable local harness* (`smoke:websocket-interactive`), not a delta against a literature budget or the noisy deployed worker.
 
 ---
 
@@ -99,33 +101,43 @@ export type ReasoningPart =
   | { readonly type: "tool-result"; readonly toolId: string; readonly toolName: string; readonly result: string }
   // Human-in-the-loop pause (step 3). ALWAYS the terminal part for the turn.
   | { readonly type: "suspended"; readonly runId: string; readonly toolId?: string; readonly prompt?: string; readonly payload: unknown }
+  // (B1) Error/abort the backend surfaced. The bridge treats `error` like today's
+  // thrown TextStreamPart `error`/`tool-error`/`finish-step(error)`: it drives the
+  // retry/`llm.error` path. `recoverable` mirrors `categorizeLlmError`. ALWAYS terminal.
+  | { readonly type: "error"; readonly cause: Error; readonly recoverable: boolean }
   | { readonly type: "finish"; readonly reason: "stop" | "tool" | "length"; readonly text: string };
 ```
 
-The `suspended` variant is designed in **now** (zero-tech-debt — we don't want to churn the union later) even though it is only *wired* in step 3.
+The `suspended` and `error` variants are designed in **now** (zero-tech-debt — we don't want to churn the union later); `suspended` is only *wired* in step 3, `error` is wired in step 1 (it carries the retry-triggering throws today's bridge depends on — see B1, §4.3).
 
 ### 4.3 Adapters (where the per-framework glue lives)
 
 ```ts
 // packages/voice-bridge-aisdk/src/from-ai-sdk.ts
-export function fromAiSdkAgent(agent: AiSdkAgentLike, opts?): Reasoner;   // wraps .stream().fullStream
-export function fromStreamText(config: StreamTextConfig): Reasoner;       // today's default path, as an adapter
+export function fromAiSdkAgent(agent: AiSdkAgentLike, opts?): Reasoner;       // wraps (await agent.stream()).fullStream
+export function fromStreamText(config: StreamTextConfig): Reasoner;           // raw streamText, as an adapter
+// (B2) Preserves today's test seam: the current bridge is constructed with an
+// `AISDKStreamFactory` (an `async function*`). All 9 existing tests use it, so the
+// seam must survive as a Reasoner adapter — otherwise "behavior unchanged" is a lie.
+export function fromStreamFactory(factory: AISDKStreamFactory): Reasoner;     // async-generator of TextStreamPart → Reasoner
 
 // packages/voice-bridge-mastra/src/from-mastra.ts   (new package, step 2)
-export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner; // wraps .stream().processDataStream + resumeStream
+export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner;     // wraps .stream().processDataStream + resumeStream
 ```
 
-**AI SDK → `ReasoningPart` mapping** (`TextStreamPart` is already what today's bridge consumes — near 1:1):
+**AI SDK → `ReasoningPart` mapping.** `agent.stream()` returns a `Promise<StreamTextResult>` (B3 — the adapter `await`s it, then iterates `.fullStream`). The full `ai@6` `TextStreamPart` union is mapped — **the error/abort parts are NOT dropped**, because today's bridge throws on them to trigger retry:
 
 | `TextStreamPart.type` | `ReasoningPart` |
 |---|---|
 | `text-delta` | `{ type:"text-delta", text }` |
 | `tool-call` | `{ type:"tool-call", toolId, toolName, args }` |
 | `tool-result` | `{ type:"tool-result", toolId, toolName, result }` |
+| `error`, `tool-error`, `abort` | `{ type:"error", cause, recoverable }` (terminal — drives retry/`llm.error`) **(B1)** |
+| `finish-step` (with `finishReason: error`/`content-filter`) | `{ type:"error", … }` **(B1)** — matches the current `processTurn` step-validation throw |
 | `finish` | `{ type:"finish", reason, text }` |
-| `tool-input-start/delta/end`, `reasoning`, `source` | dropped (no voice use) |
+| `tool-input-start/delta/end`, `reasoning`, `source`, raw | dropped (no voice use) |
 
-(`ToolLoopAgent` has no suspend → `suspended` never emitted. Resume turn throws `not supported`.)
+(`ToolLoopAgent` has no suspend → `suspended` never emitted. A `resume` turn throws `not supported`.)
 
 **Mastra → `ReasoningPart` mapping** (payload-wrapped; `resume` re-enters via `resumeStream`):
 
@@ -139,15 +151,18 @@ export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner; // wra
 
 ### 4.4 The bridge, generalized
 
-`AISDKBridgePlugin` → `ReasoningBridge` (a `VoicePlugin`). Its constructor accepts a `Reasoner`, **or** a raw agent it auto-wraps by the stable discriminator (`"fullStream" in agent.stream(...)` ⇒ AI SDK; else Mastra):
+`AISDKBridgePlugin` → `ReasoningBridge` (a `VoicePlugin`). Its constructor accepts a **`Reasoner` only** — callers wrap their backend explicitly with the matching adapter:
 
 ```ts
-new ReasoningBridge(reasoner)        // explicit, typed
-new ReasoningBridge(toolLoopAgent)   // auto-wrapped via fromAiSdkAgent
-new ReasoningBridge(mastraAgent)     // auto-wrapped via fromMastraAgent  (after step 2)
+new ReasoningBridge(fromAiSdkAgent(toolLoopAgent))   // AI SDK
+new ReasoningBridge(fromMastraAgent(mastraAgent))    // Mastra (after step 2)
+new ReasoningBridge(fromStreamText(config))          // raw streamText
+new ReasoningBridge(fromStreamFactory(asyncGenFn))   // the existing test seam (B2)
 ```
 
-Everything else in `processTurn` is unchanged except the inner loop now switches on `ReasoningPart` (5 cases) instead of `TextStreamPart` (10+ cases) — strictly simpler.
+**(B3) No auto-wrap / duck-typing.** An earlier draft accepted a raw agent and detected the backend with `"fullStream" in agent.stream(...)`. That is broken — `agent.stream()` returns a `Promise` (so `"fullStream" in` it is always false), and using a *side-effecting network call* as a type probe is wrong regardless. It also contradicted §6 ("explicit adapters, not duck-type magic"). The explicit-adapter call site costs one wrapper and removes the failure mode entirely. (If a one-liner is later wanted, it is a pure-shape factory like `reasoningBridge(agent, { kind: "ai-sdk" })`, never a probe that calls `.stream()`.)
+
+Everything else in `processTurn` is unchanged except the inner loop now switches on `ReasoningPart` (6 cases incl. `error`) instead of `TextStreamPart` (10+ cases) — still simpler, and the `error` case routes to the exact retry/`llm.error` path the current code takes on a thrown part (§4.5, B1).
 
 ### 4.5 What stays (verbatim — this is the safety property of step 1)
 
@@ -158,6 +173,12 @@ Everything else in `processTurn` is unchanged except the inner loop now switches
 ### 4.6 Suspend/resume across turns (step 3)
 
 A `suspended` part is terminal: the bridge speaks `prompt` (if any), persists `{runId, contextId, payload}` in the DO (`ctx.storage.sql`, alongside `DurableObjectSessionStore`), ends the turn, and emits a `reasoning.suspended` packet. On the next user turn the orchestrator (which owns turn-routing) recognizes a pending run for the conversation and feeds a `ReasonerTurn` with `resume: { runId, data: mappedUserAnswer }`; the Mastra adapter calls `agent.resumeStream(data, {runId})`. The DO survives hibernation between turns, so the run resumes after eviction. A barged-in suspended run is discarded (drop the row). This reuses the existing turn loop + DO; the only new state is one SQL row keyed by `runId`.
+
+**(B4) Spoken-prefix reconciliation on resume — the one genuinely subtle correctness issue.** The barge-in correction (`commitInterruptedHistory`) rewrites the *bridge's* `messages` to the spoken prefix — what the user actually heard. But a Mastra agent that suspended holds its **own** checkpoint, and `resumeStream(data, {runId})` restores *that* uncorrected state. So if, between a suspend and its resume, an *earlier* assistant turn was barged-in, the agent's internal memory still believes it said the full reply — diverging from the bridge's corrected history and silently defeating the project's signature feature. §9's old "dual-sourced, acceptable" framing was wrong. Policy:
+- **Default — `restart`:** if any spoken-prefix correction landed on a turn within the suspended run's context since it suspended, **discard the suspended run** (drop the row, no `resumeStream`) and re-issue the question as a fresh turn carrying the corrected `messages`. Correct by construction; costs one extra model turn in the rare suspend-then-barge-in overlap.
+- **Opt-in — `replay`:** for backends that accept it, replay the bridge's corrected `messages` into the resumed run (Mastra: pass corrected history alongside `resumeData`) so the checkpoint is reconciled in place. Cheaper, but depends on the backend honoring an injected history on resume — verify per backend before enabling.
+
+This only bites when **barge-in and suspend/resume coincide in the same conversation** (an edge case), but it is a real divergence, not a wash. The reconciliation mode is a `ReasoningBridge` option (`onResumeConflict: "restart" | "replay"`, default `restart`).
 
 ---
 
@@ -179,7 +200,7 @@ Rejected:
 Four interfaces were designed in parallel:
 1. **Minimal pull-stream** (LiveKit `LLM.chat()→LLMStream`). → Adopted as the **seam shape** (`Reasoner.stream`), but it is consumed *inside* the bridge, not exposed as the primitive.
 2. **Bus-native frame processor** (Pipecat / our current model). → Adopted as the **primitive** (the bridge stays a `VoicePlugin`). Rejecting it would mean a second lifecycle competing with the bus.
-3. **Optimize-for-common-case** (auto-everything, duck-typed history/runStore). → Kept the *ergonomic* ("pass your agent" via auto-wrap) but **dropped the magic**: history/run persistence stay explicit, not hidden hooks.
+3. **Optimize-for-common-case** (auto-everything, duck-typed history/runStore). → **Dropped entirely** (B3). An interim draft kept a single ergonomic — auto-wrapping a raw agent — but that required a `.stream()`-probe discriminator which is both broken (returns a `Promise`) and side-effecting. Callers wrap explicitly with `fromAiSdkAgent`/`fromMastraAgent`. One extra wrapper; zero magic; no probe.
 4. **Stateful resumable run object** (LangGraph-style checkpoints). → Right *insight* (suspend/resume must checkpoint to the DO and survive hibernation), wrong *size*: expressed as a `suspended` part + a `runId` row, not a six-method run object.
 
 **Why not "just duck-type any `.stream`":** the args, return shape, and resume entry differ between backends, so glue is unavoidable; named adapters make that glue typed, testable, and the home for suspend/resume — versus scattering `if ("fullStream" in out)` branches through the bridge.
@@ -188,8 +209,8 @@ Four interfaces were designed in parallel:
 
 ## 7. Validation & testing
 
-- **Step 1 is a refactor, not a feature:** the 9 existing tests in `packages/voice-bridge-aisdk/src/index.test.ts` must pass **unchanged** (rename imports only). That is the zero-behavior-change proof.
-- New per-adapter unit tests: `TextStreamPart`/Mastra chunk → `ReasoningPart` mapping; barge-in spoken-prefix preserved; finish-reason validation; retry.
+- **Step 1 is a refactor, not a feature. (B2)** The 9 existing tests in `packages/voice-bridge-aisdk/src/index.test.ts` each construct `new AISDKBridgePlugin(async function*(){…})` — an `AISDKStreamFactory`. Their **assertions and behavior stay byte-for-byte identical**; the *only* change is the construction line `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (a mechanical, one-line-per-test edit that preserves the exact streamed sequence). "Pass unchanged" was imprecise — the *test logic* is unchanged, the *constructor call* adapts. That is still the zero-behavior-change proof: same inputs, same asserted outputs.
+- New per-adapter unit tests: `TextStreamPart`/Mastra chunk → `ReasoningPart` mapping (**including the `error`/`tool-error`/`finish-step` → `error` paths — B1**); barge-in spoken-prefix preserved; finish-reason validation; retry triggered by an `error` part.
 - **Edge stays clean:** `scripts/verify-edge-bundle.sh` continues to pass (no Node-only deps pulled by the new files).
 - **Live proof on the deployed worker** (`https://syrinx-voice-server-workers.mithushancj.workers.dev`): the opt-in worker turn (`pnpm --filter @asyncdot/voice-server-workers test:live`, `SYRINX_LIVE_WORKER_TEST=1`) drives a real turn through the generalized bridge with an AI SDK backend (step 1) and a Mastra backend (step 2). Step 3 adds a Miniflare/workerd test that drives a **suspend → [hibernate] → resume across two turns** asserting the `runId` row survives.
 - Baseline: `pnpm -r typecheck && pnpm -r test` green throughout.
@@ -213,7 +234,13 @@ The bridge sits on the **LLM-TTFT** stage and sets the streaming cadence into TT
 - **Mastra's callback stream** (`processDataStream({onChunk})`) is bridged to an async-iterable via a zero-delay queue — each `onChunk` enqueues and resolves the pending pull immediately; it must never accumulate.
 - Sentence aggregation (`llm.delta` → `tts.text`) is **unchanged** and still lives in the session orchestrator, so TTS-TTFB is unaffected.
 
-**Measurable acceptance (not asserted — instrumented).** The repo already records per-stage P50/P95/P99 for STT-final / **LLM-TTFT** / TTS-TTFB / playout-start (`docs/latency-budget.md`, the observability stage percentiles). Step-1 acceptance requires **LLM-TTFT P50 and P95 unchanged within noise** (target: ≤ a few ms delta) versus the pre-refactor baseline, measured by the existing instrumentation on the deployed worker. Any regression beyond noise is a step-1 blocker — the refactor is rejected, not merged. The same check gates step 2 (Mastra adapter) and step 3 (the suspend path must not add latency to *non-suspending* turns).
+**Measurable acceptance (not asserted — instrumented). (M3)** The numbers above (~350 ms LLM-TTFT, etc.) are *literature budgets*, not our baseline — and the deployed worker's LLM-TTFT is far higher and network-noisy (real provider RTT, observed on the order of ~1.3 s), so "within a few ms of 350 ms" is meaningless against that floor. The gate is therefore framed as **no regression vs *our own* captured baseline on a stable, repeatable local harness** — not the literature budget, and not the noisy deployed worker:
+
+1. **Capture the baseline before step 1** on the pre-refactor `main`/`v2` HEAD using `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive`, which already reports per-stage **LLM-TTFT P50/P95** over a fixed scripted run. Record the numbers (commit them under `docs/latency-budget.md`).
+2. **After each step**, re-run the *same* harness on the *same* fixture and assert **LLM-TTFT P50 and P95 are within the run-to-run variance band of that baseline** (establish the band from 3 baseline runs; typical target ≤ ~5 % or a few ms, whichever is larger). A regression beyond the band is a blocker — the refactor is rejected, not merged.
+3. The deployed-worker turn (step 1.5) is a *functional* live proof (transcribes + returns TTS), **not** the latency gate — its variance is too high to gate on.
+
+This gates step 1, step 2 (Mastra adapter), and step 3 (the suspend path must not add latency to *non-suspending* turns).
 
 ## 8. Tiny-commits refactor plan
 
@@ -224,10 +251,12 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 | # | Commit | Acceptance / proof |
 |---|---|---|
 | 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/voice/src/reasoner.ts`, exported from `voice/src/index.ts`. No consumers yet. | `pnpm --filter @asyncdot/voice typecheck`; new types compile, nothing references them. |
-| 1.2 | `refactor(bridge): add fromAiSdkAgent + fromStreamText adapters → Reasoner` — map `TextStreamPart`→`ReasoningPart` (§4.3). Adapter unit tests. | `pnpm --filter @asyncdot/voice-bridge-aisdk test` (new adapter tests green); mapping table covered incl. dropped part types. |
-| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 5-case `ReasoningPart` switch. Keep history, spoken-prefix barge-in, retry, supersede **identical**. **No buffering** — yield each part immediately (§7a). The constructor still accepts the AI SDK config (wraps via `fromStreamText`). | **The 9 existing `index.test.ts` tests pass UNCHANGED.** `pnpm --filter @asyncdot/voice-bridge-aisdk test`. **LLM-TTFT P50/P95 unchanged within noise** vs baseline (§7a). |
-| 1.4 | `refactor(bridge): accept a Reasoner or raw ToolLoopAgent; rename to ReasoningBridge` — constructor union `Reasoner \| AiSdkAgentLike \| StreamTextConfig`; auto-wrap by the `fullStream` discriminator. Keep `AISDKBridgePlugin` as a thin deprecated alias **only if** any caller needs it (prefer none — zero-debt). | `pnpm -r typecheck`; update the worker `live-session.ts` + examples to the new constructor; `pnpm -r test`. |
-| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + curl one turn on the deployed worker; **record LLM-TTFT** and compare to the pre-refactor baseline. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test`; deployed `/ws` turn transcribes + returns TTS; **LLM-TTFT within noise of baseline** (§7a). |
+| 1.0 | `chore(latency): capture pre-refactor LLM-TTFT baseline` **(M3)** — run `smoke:websocket-interactive` ×3 on `v2` HEAD; record LLM-TTFT P50/P95 + the variance band in `docs/latency-budget.md`. | baseline committed; band documented. This is the denominator every later latency gate compares against. |
+| 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/voice/src/reasoner.ts` incl. the `error` and `suspended` variants (B1); exported from `voice/src/index.ts`. No consumers yet. | `pnpm --filter @asyncdot/voice typecheck`; the union matches RFC §4.2 (incl. `error`). |
+| 1.2 | `refactor(bridge): add fromAiSdkAgent + fromStreamText + fromStreamFactory adapters → Reasoner` — map the full `TextStreamPart` union → `ReasoningPart` (§4.3), **including `error`/`tool-error`/`finish-step` → `error` (B1)** and `fromStreamFactory` for the existing test seam (B2). Adapter unit tests. | `pnpm --filter @asyncdot/voice-bridge-aisdk test` (new adapter tests green); mapping table covered incl. the **error paths** and dropped part types. |
+| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 6-case `ReasoningPart` switch (incl. `error` → the existing retry/`llm.error` path, B1). Keep history, spoken-prefix barge-in, retry, supersede **identical**. **No buffering** — yield each part immediately (§7a). | **The 9 `index.test.ts` tests: assertions unchanged; each construction line adapts `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (B2).** `pnpm --filter @asyncdot/voice-bridge-aisdk test`. **LLM-TTFT P50/P95 within the baseline band** from 1.0 (§7a/M3). |
+| 1.4 | `refactor(bridge): rename to ReasoningBridge; accept a Reasoner only (no auto-wrap)` **(B3)** — constructor takes a `Reasoner`; callers wrap via `fromAiSdkAgent`/`fromStreamText`/`fromStreamFactory`. **No `.stream()`-probe discriminator.** Update `live-session.ts` + examples to the explicit wrap. Remove `AISDKBridgePlugin` (zero-debt) or keep a thin alias only if a caller needs it. | `pnpm -r typecheck && pnpm -r test`; no call site uses auto-wrap. |
+| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + drive one turn on the deployed worker (functional proof). Re-run `smoke:websocket-interactive` for the **latency gate** (M3) — the deployed turn is NOT the latency gate. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test`; deployed `/ws` turn transcribes + returns TTS; **`smoke:websocket-interactive` LLM-TTFT within the 1.0 baseline band**. |
 
 ### Step 2 — `fromMastraAgent`
 
@@ -235,7 +264,7 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 |---|---|---|
 | 2.1 | `feat(bridge-mastra): new @asyncdot/voice-bridge-mastra package` — `fromMastraAgent(agent) → Reasoner`; map `processDataStream` chunks → `ReasoningPart` (§4.3); deps `@mastra/core` (+ `@mastra/ai-sdk` only if needed). | `pnpm --filter @asyncdot/voice-bridge-mastra typecheck`. |
 | 2.2 | `test(bridge-mastra): chunk→part mapping + barge-in parity` — unit tests with a scripted Mastra-shaped stream (no network). | `pnpm --filter @asyncdot/voice-bridge-mastra test`. |
-| 2.3 | `feat(bridge): auto-wrap Mastra agents in ReasoningBridge` — extend the discriminator (no `fullStream` ⇒ Mastra). | `pnpm -r typecheck && pnpm -r test`; edge bundle still clean (Mastra adapter must not pull Node-only deps; gate if it does). |
+| 2.3 | `feat(examples): drive ReasoningBridge with a Mastra agent via fromMastraAgent` — wire a Mastra-backed `new ReasoningBridge(fromMastraAgent(agent))` into the worker/example (explicit adapter, no auto-wrap — B3). | `pnpm -r typecheck && pnpm -r test`; edge bundle still clean (Mastra adapter must not pull Node-only deps; gate if it does). |
 | 2.4 | `test(edge): live worker turn through a Mastra-backed bridge` (opt-in, deployed). | `SYRINX_LIVE_WORKER_TEST=1 ...`; deployed turn with a Mastra agent. |
 
 ### Step 3 — `suspended` / `runId` DO path
@@ -244,7 +273,7 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 |---|---|---|
 | 3.1 | `feat(voice): reasoning.suspended + reasoning.resume packets` — add to the packet union + factories; `ReasonerTurn.resume` already exists from 1.1. | `pnpm --filter @asyncdot/voice typecheck`; packet tests. |
 | 3.2 | `feat(bridge-mastra): emit suspended part + resume re-entry` — adapter maps `tool-call-suspended`→`suspended` (terminal) and routes `turn.resume` to `agent.resumeStream(data,{runId})`. | `pnpm --filter @asyncdot/voice-bridge-mastra test` (scripted suspend→resume). |
-| 3.3 | `feat(bridge): persist suspended runId, resume on next turn` — bridge handles the `suspended` part: speak `prompt`, emit `reasoning.suspended`, persist `{runId,contextId,payload}` via an injected `RunStore`; on a turn with a pending run, build `resume` turn. Barge-in on a suspended run discards it. | bridge unit tests with a fake `RunStore` (suspend→resume, barge-in-discards). |
+| 3.3 | `feat(bridge): persist suspended runId, resume on next turn + spoken-prefix reconciliation` — bridge handles the `suspended` part: speak `prompt`, emit `reasoning.suspended`, persist `{runId,contextId,payload}` via an injected `RunStore`; on a turn with a pending run, build a `resume` turn. **(B4)** Implement `onResumeConflict: "restart" \| "replay"` (default `restart`): if a spoken-prefix correction landed since suspend, discard + re-ask instead of `resumeStream`. Barge-in on a suspended run discards it. | bridge unit tests with a fake `RunStore`: suspend→resume (clean), **suspend→barge-in→resume → `restart` (no stale checkpoint)**, barge-in-discards. |
 | 3.4 | `feat(voice-server-workers): DurableObjectRunStore on ctx.storage.sql` — one `reasoning_runs` table, mirrors `DurableObjectSessionStore`; wire into the DO; alarm-GC stale rows (TTL). | `pnpm --filter @asyncdot/voice-server-workers test`. |
 | 3.5 | `test(edge): suspend → hibernate → resume across two voice turns (workerd)` — Miniflare test asserting the run resumes after the DO is evicted between turns. | `pnpm --filter @asyncdot/voice-server-workers test` (the new DO suspend/resume test). |
 
@@ -254,9 +283,9 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 
 ## 9. Risks & open questions
 
-- **Mastra wire shapes** (`tool-call-suspended` payload, `resumeStream` signature, `processDataStream` chunk fields) are taken from current docs, not a running build — confirm against the pinned `@mastra/core` version at step 2.1 before finalizing the mapping. (AI SDK v6 `ToolLoopAgent.stream().fullStream` is verified.)
+- **Mastra wire shapes** (`tool-call-suspended` payload, `resumeStream` signature, `processDataStream` chunk fields) are taken from current docs, not a running build — confirm against the pinned `@mastra/core` version at step 2.1 before finalizing the mapping. (AI SDK v6 `TextStreamPart` union is verified against `ai@6.0.191`, incl. the `error`/`tool-error`/`finish-step`/`abort` members B1 maps; `ToolLoopAgent.stream()` returns a `Promise<StreamTextResult>`, so adapters `await` it — B3.)
 - **Edge-bundle weight (Mastra):** `@mastra/core` may pull heavier deps; step 2.3 must keep `verify-edge-bundle.sh` green or gate Mastra to the Node build with a runtime-split export (mirror the `voice-ws` `./node` pattern).
-- **History on Mastra resume runs** is dual-sourced (bridge `messages` advisory; the suspended run holds its own state under `runId`). Documented on `ReasonerTurn`; acceptable because `runId` carries the only continuity that cannot be reconstructed.
+- **History on Mastra resume runs vs the spoken-prefix correction (B4):** the suspended run holds its own checkpoint, which `resumeStream` restores *uncorrected* — so a barge-in that landed between suspend and resume diverges from the bridge's corrected history. Resolved by the `onResumeConflict: "restart" | "replay"` policy in §4.6 (default `restart`), **not** by the earlier "dual-sourced, acceptable" hand-wave. Only materializes when barge-in and suspend/resume overlap.
 - **Who converts "next user turn" → `resume.data`?** The orchestrator (turn-routing owner), not the adapter — keeps the bridge a pure function of the turn. Confirm the mapping policy (raw text vs structured) per workflow at step 3.3.
 - **Multi-agent / workflows / sub-agents** need no special handling: they flatten into one `agent.stream().fullStream`; nested agents/workflows surface as ordinary `tool-call`/`tool-result` parts, only the responding agent's `text-delta` is spoken. The sole composite-specific primitive is `suspended` (step 3).
 - **Realtime / S2S** is out of scope; when added it is a sibling `VoicePlugin`, and a `Reasoner` plugs into it as a delegate tool — no change to this seam.
