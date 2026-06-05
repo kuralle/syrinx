@@ -6,11 +6,11 @@
 
 ## Active sprint
 
-**Sprint number:** `0`
-**Sprint name:** Seam foundation
+**Sprint number:** `1`
+**Sprint name:** Re-home the bridge (zero behavior change + live)
 **Status:** `not-started`
-**Goal:** The `Reasoner` seam + `ReasoningPart` union exist in `@asyncdot/voice`, and the AI SDK adapter maps `TextStreamPart` → `ReasoningPart` with no buffering, fully unit-tested.
-**WBS section:** [`sprints/WBS.md` § Sprint 0](./WBS.md)
+**Goal:** The production bridge drives a `Reasoner` internally with zero behavior change (the 9 `index.test.ts` tests' assertions unchanged; construction adapts via `fromStreamFactory` — B2), is constructed with an explicit `fromAiSdkAgent(...)` (no auto-wrap — B3), and runs a live turn on the deployed worker with LLM-TTFT within the S1-00 baseline band (M3).
+**WBS section:** [`sprints/WBS.md` § Sprint 1](./WBS.md)
 
 ## Build branch
 
@@ -20,29 +20,33 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout v2` (or `git fetch && git checkout v2` if missing locally).
 
-## Load-bearing reading for sprint 0
+## Load-bearing reading for sprint 1
 
-The session running sprint 0 must read these in this order before delegating any story:
+The session running sprint 1 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` — full read; this is the plan.
-2. `sprints/SESSION_KICKOFF_PROMPT.md` — the loop you are running.
-3. `docs/rfc-reasoner-bridge.md` — §4.2 (the `Reasoner` seam + `ReasoningPart` union), §4.3 (AI SDK → `ReasoningPart` mapping table), §7a (the no-buffering LATENCY INVARIANT), §8 commits 1.1–1.2.
-4. `packages/voice-bridge-aisdk/src/index.ts` — today's bridge being re-homed; note the `streamFactory` seam (`:77`) and the `processTurn` part-switch — the AI SDK adapter mirrors that mapping.
-5. `packages/voice/src/plugin-contract.ts` + `packages/voice/src/index.ts` — the `VoicePlugin` contract and the voice package's public exports (where `Reasoner`/`ReasoningPart` are exported from).
+1. `sprints/sprint-0/HANDOFF.md` — read-me-first: state of the world + traps carried forward.
+2. `sprints/WBS.md` § Sprint 1 — stories S1-00 … S1-03.
+3. `docs/rfc-reasoner-bridge.md` — §4.4 (the generalized bridge), §4.5 (what stays verbatim — history + spoken-prefix barge-in + retry), §7a + M3 (the latency gate + baseline harness), §8 commits 1.0 / 1.3–1.5.
+4. `packages/voice-bridge-aisdk/src/index.ts` — `AISDKBridgePlugin`, the bridge being re-homed; `processTurn` part-switch (`:167`) and `streamResponse` (`:263`). **Run `/code-understand` here before briefing S1-01.**
+5. `packages/voice-bridge-aisdk/src/from-ai-sdk.ts` — the Sprint-0 adapter the bridge will be driven by (esp. `fromStreamFactory`, the B2 seam for the 9-test re-home).
+6. `packages/voice/src/reasoner.ts` — the seam contract the bridge consumes.
+
+**Carry-forward traps (from Sprint 0):** signal-abort (silent `return`) vs `abort` stream-part (→ `error`); `fromStreamText` must pass `maxRetries:0` (KI-0-02); validate the abnormal-terminal-`finish` → `error` decision (sprint-0 PLAN §6) against the 9 tests; S1-00 (latency baseline) runs **first**.
 
 ## Last completed sprint
 
-`(none — project not started)`
+`0 — Seam foundation`
 
 ## Last completed at
 
-`(none)`
+`2026-06-05`
 
 ## Sprint history
 
 | Sprint | Status | Completed at | Warmdown |
 |--------|--------|--------------|----------|
-| 0 | not-started | — | — |
+| 0 | done | 2026-06-05 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
+| 1 | not-started | — | — |
 
 When a sprint completes, append a row here from `WARMDOWN.md`.
 
