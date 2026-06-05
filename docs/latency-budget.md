@@ -38,3 +38,27 @@ These are definitions + targets, not a deployed alerting stack — the export ba
 - Per-stage timings: `TurnMetricsTracker` (`packages/voice-server-websocket/src/turn-metrics.ts`) + the interactive smoke harness + the `obs.turn_boundary` histograms (VE-07.3).
 - EOU sub-budget (VAD stop hangover + STT-final delay + endpoint delay + sum): `eouBudgetMs` (VE-02.3).
 - Monotonic time source + `cancelled` flag: `observability.ts` `monotonicNowMs` + `ObservabilityObserver` (VE-07), so cancelled attempts never pollute the latency histograms and metrics are exporter-agnostic.
+
+---
+
+## Sprint-1 S1-00 baseline — Reasoner-bridge latency gate denominator (2026-06-05, gpt-4.1-mini)
+
+Captured on `v2` HEAD **before** the `Reasoner` re-home (commit `1db701f`), via `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive` ×3. This is the **denominator** every Reasoner-bridge latency gate (S1-01, S1-02, S1-03, and Sprints 2–3) compares against per RFC §7a / M3 — *no regression vs our own baseline*, **not** the literature budget and **not** the noisy deployed worker.
+
+**Provider:** OpenAI `gpt-4.1-mini` (bridge default since `35601f6`) / Deepgram `nova-3` / Cartesia `sonic-3`. The prior "Measured baseline (2026-06, gemini-3.1-flash-lite)" section above is **stale** for the LLM leg and is superseded by this for Reasoner-bridge gating.
+
+| Run | LLM-TTFT P50 (ms) | LLM-TTFT P95 (ms) | artifact |
+|---|---|---|---|
+| 1 | 3733 | 4313 | `test/performance/runs/websocket-university-interactive-2026-06-05T07-28-31-103Z/` |
+| 2 | 2773 | 3801 | `…2026-06-05T07-29-51-648Z/` |
+| 3 | 3365 | 4018 | `…2026-06-05T07-31-07-990Z/` |
+| **mean** | **3290** | **4044** | — |
+| min / max | 2773 / 3733 | 3801 / 4313 | — |
+
+**The variance is provider-driven, not harness-driven.** `smoke:websocket-interactive`'s LLM-TTFT stage is a **live OpenAI API call**, so its TTFT carries real provider/network RTT noise — P50 ranged 2773–3733 ms (~±15% around the mean) across three back-to-back runs. By contrast the speech stages were stable (STT-final P50 519–530 ms; TTS-TTFB P50 488–530 ms). The RFC M3 framing assumed this harness yields a *stable* LLM-TTFT; it is stable for the speech stages but **not** for the LLM stage. The gate therefore bands against observed run-to-run variance, not the RFC's aspirational "~5%".
+
+### The gate (assert in S1-01 / S1-02 / S1-03)
+
+> **PASS** iff the post-change `smoke:websocket-interactive` shows **LLM-TTFT P50 ≤ 3920 ms** and **P95 ≤ 4530 ms** (= worst baseline run + 5% headroom).
+
+Rationale: the `Reasoner` seam is a structural passthrough — Sprint 0 proved it adds at most one microtask + a synchronous object remap per part (~microseconds), i.e. < 0.001% of a ~3290 ms LLM-TTFT, invisible against ±1000 ms of live-API noise. The failure mode the gate actually protects against is **accidental buffering** (e.g. awaiting the stream to completion before emitting) — that would balloon LLM-TTFT to full-generation time (seconds), blowing past 3920/4530 ms unmistakably. The real fine-grained protection against behavior drift is the **9 unchanged `index.test.ts` assertions** + the no-buffering unit test, not the absolute millisecond delta. A post-change result *above* the gate that cannot be attributed to provider noise (re-run ×3 to confirm) is a **hard-flag regression** (RFC §7a) — reject the commit, do not merge.
