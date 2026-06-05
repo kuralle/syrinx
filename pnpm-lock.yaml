@@ -272,6 +272,9 @@ importers:
 
   packages/voice-server-workers-mastra:
     dependencies:
+      '@ai-sdk/openai':
+        specifier: ^3.0.67
+        version: 3.0.67(zod@4.4.3)
       '@asyncdot/voice':
         specifier: workspace:*
         version: link:../voice

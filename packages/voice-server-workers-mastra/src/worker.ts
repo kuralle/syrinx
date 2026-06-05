@@ -5,6 +5,7 @@ import { CloudflareDOStorage } from "@mastra/cloudflare/do";
 import { Agent } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core";
 import { createTool } from "@mastra/core/tools";
+import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { PipelineBusImpl, Route } from "@asyncdot/voice";
 import type { EndOfSpeechPacket } from "@asyncdot/voice";
@@ -16,6 +17,8 @@ import { createSpikeMockModel, resetMockModelCalls } from "./mock-model.js";
 
 export interface Env {
   MASTRA_AGENT: DurableObjectNamespace;
+  /** When set, the agent uses a real OpenAI model (gpt-4.1-mini); else a deterministic stub (tests). */
+  OPENAI_API_KEY?: string;
 }
 
 const DEFAULT_CONTEXT_ID = "mastra-session";
@@ -79,13 +82,19 @@ function toMastraAgentLike(agent: Agent): MastraAgentLike {
   };
 }
 
-function createMastra(sql: SqlStorage): { mastra: Mastra; agent: Agent } {
+function createMastra(sql: SqlStorage, apiKey?: string): { mastra: Mastra; agent: Agent } {
   const storage = new CloudflareDOStorage({ sql });
+  // Real OpenAI model when a key is provided (live deploy); deterministic stub otherwise (tests).
+  const model = apiKey
+    ? (createOpenAI({ apiKey })("gpt-4.1-mini") as never)
+    : (createSpikeMockModel(sql) as never);
   const agent = new Agent({
     id: "support",
     name: "Support Agent",
-    instructions: "You confirm actions before deploying.",
-    model: createSpikeMockModel(sql) as never,
+    instructions:
+      "You confirm potentially destructive actions with the user before doing them. " +
+      "When asked to deploy, call the confirmAction tool to get confirmation first.",
+    model,
     tools: { confirmAction: confirmTool },
   });
   const mastra = new Mastra({
@@ -125,6 +134,7 @@ async function driveTurn(
   storage: DurableObjectState["storage"],
   contextId: string,
   userText: string,
+  apiKey?: string,
 ): Promise<{
   packets: Array<{ route: Route; packet: Record<string, unknown> }>;
   pointer: { runId: string } | null;
@@ -132,7 +142,7 @@ async function driveTurn(
 }> {
   const scheduler = new DurableObjectAlarmScheduler(storage);
   const runStore = new DurableObjectRunStore(storage, scheduler);
-  const { agent } = createMastra(storage.sql);
+  const { agent } = createMastra(storage.sql, apiKey);
   const bridge = new ReasoningBridge(fromMastraAgent(toMastraAgentLike(agent)), {
     runStore,
     onResumeConflict: "restart",
@@ -178,8 +188,8 @@ export class MastraAgentDO extends DurableObject<Env> {
       }
 
       if (url.pathname === "/suspend") {
-        resetMockModelCalls(this.ctx.storage.sql, contextId);
-        const result = await driveTurn(this.ctx.storage, contextId, "Deploy to production");
+        if (!this.env.OPENAI_API_KEY) resetMockModelCalls(this.ctx.storage.sql, contextId);
+        const result = await driveTurn(this.ctx.storage, contextId, "Deploy to production", this.env.OPENAI_API_KEY);
         const suspended = result.packets.find(({ packet }) => packet["kind"] === "reasoning.suspended");
         const llmDone = result.packets.find(({ packet }) => packet["kind"] === "llm.done");
         return Response.json({
@@ -197,7 +207,7 @@ export class MastraAgentDO extends DurableObject<Env> {
       if (url.pathname === "/resume") {
         const body = await request.json() as { userText?: string };
         const userText = body.userText ?? "yes";
-        const result = await driveTurn(this.ctx.storage, contextId, userText);
+        const result = await driveTurn(this.ctx.storage, contextId, userText, this.env.OPENAI_API_KEY);
         const llmDone = result.packets.find(({ packet }) => packet["kind"] === "llm.done");
         const suspended = result.packets.find(({ packet }) => packet["kind"] === "reasoning.suspended");
         return Response.json({
