@@ -14,3 +14,6 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
+
+minimumReleaseAgeExclude:
+  - '@mastra/core@1.41.0'

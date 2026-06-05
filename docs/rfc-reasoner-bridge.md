@@ -4,6 +4,8 @@
 **Scope:** cascading (text) bridge only. **Non-goal:** the speech-to-speech / OpenAI Realtime path (deferred — see §9).
 
 > **v2.1 changelog (review fixes):** B1 — `ReasoningPart` gains an `error` variant; the AI SDK `error`/`tool-error`/`finish-step` parts now map to it instead of being dropped (they drive retry). B2 — added `fromStreamFactory`; the "9 tests unchanged" claim is corrected (assertions unchanged, the construction line adapts). B3 — **auto-wrap dropped**; callers wrap explicitly with `fromAiSdkAgent` / `fromMastraAgent` (the `"fullStream" in agent.stream()` discriminator was broken — `stream()` returns a `Promise` — and it contradicted §6). B4 — explicit spoken-prefix reconciliation policy on Mastra resume. M3 — latency gate now measures *no regression vs our own baseline on a stable local harness* (`smoke:websocket-interactive`), not a delta against a literature budget or the noisy deployed worker.
+>
+> **v2.2 changelog (Sprint 2 — Mastra wire shapes verified against installed `@mastra/core@1.41.0`):** the §4.3 Mastra mechanism is corrected from `processDataStream({onChunk})` (a `@mastra/client-js` callback API) to the **server-side core API**: `Agent.stream(messages)` → `Promise<MastraModelOutput>`; iterate **`output.fullStream`** — a `ReadableStream<ChunkType>` (async-iterable) of `{type, payload}` chunks. Consequence: the Mastra adapter is structurally identical to `fromAiSdkAgent` (`for await … yield map(chunk)`) and the §7a "callback stream → zero-delay queue" bridge is **unnecessary** (it was already pull-based). `runId` lives on the output; `resumeStream(resumeData,{runId,toolCallId?})` exists (Sprint 3). The `Reasoner`/`ReasoningPart`/`ReasoningBridge` public surfaces are unchanged. §9's Mastra wire-shape risk is **resolved**.
 
 ---
 
@@ -27,7 +29,7 @@ We want callers to bind their *own* agent framework to voice. The two concrete t
 | Backend | `.stream()` call | `.stream()` return |
 |---|---|---|
 | AI SDK v6 `ToolLoopAgent` | `.stream({ prompt \| messages, abortSignal })` | `StreamTextResult` → iterate `.fullStream` (`TextStreamPart`, flat) |
-| Mastra `Agent` | `.stream(prompt, options)` | `MastraModelOutput` → `.processDataStream({onChunk})` (payload-wrapped); suspend via `tool-call-suspended`; resume via `resumeStream(resumeData, {runId})` |
+| Mastra `Agent` | `.stream(messages, options)` | `Promise<MastraModelOutput>` → iterate `.fullStream` (`ReadableStream<ChunkType>`, async-iterable, payload-wrapped `{type,payload}`); `runId` on the output; suspend via `tool-call-suspended`; resume via `resumeStream(resumeData, {runId})`. *(v2.2: verified `@mastra/core@1.41.0`; `processDataStream` is the `@mastra/client-js` API, not core.)* |
 
 Both have `.stream()` — but agree on **nothing else** (args, return shape, resume entry differ). So a blind `backend.stream(x)` cannot span them; per-framework glue is unavoidable. The design question is only *where that glue lives*. This RFC puts it in **named adapters** behind **one normalized seam**, leaving the bus primitive untouched.
 
@@ -122,7 +124,7 @@ export function fromStreamText(config: StreamTextConfig): Reasoner;           //
 export function fromStreamFactory(factory: AISDKStreamFactory): Reasoner;     // async-generator of TextStreamPart → Reasoner
 
 // packages/voice-bridge-mastra/src/from-mastra.ts   (new package, step 2)
-export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner;     // wraps .stream().processDataStream + resumeStream
+export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner;     // wraps (await agent.stream(messages)).fullStream; resumeStream for step-3 resume
 ```
 
 **AI SDK → `ReasoningPart` mapping.** `agent.stream()` returns a `Promise<StreamTextResult>` (B3 — the adapter `await`s it, then iterates `.fullStream`). The full `ai@6` `TextStreamPart` union is mapped — **the error/abort parts are NOT dropped**, because today's bridge throws on them to trigger retry:
@@ -139,15 +141,18 @@ export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner;     //
 
 (`ToolLoopAgent` has no suspend → `suspended` never emitted. A `resume` turn throws `not supported`.)
 
-**Mastra → `ReasoningPart` mapping** (payload-wrapped; `resume` re-enters via `resumeStream`):
+**Mastra → `ReasoningPart` mapping** (v2.2: source is `(await agent.stream(messages)).fullStream`, a `ReadableStream<ChunkType>` of `{type, payload}` chunks — iterated with `for await`, NOT `processDataStream`; `resume` re-enters via `resumeStream`):
 
 | Mastra chunk | `ReasoningPart` |
 |---|---|
 | `text-delta` → `payload.text` | `{ type:"text-delta", text }` |
-| `tool-call` → `payload.{toolCallId,toolName,args}` | `{ type:"tool-call", ... }` |
-| `tool-result` → `payload.{...,result}` | `{ type:"tool-result", ... }` |
-| `tool-call-suspended` → `payload.suspendPayload`, `stream.runId` | `{ type:"suspended", runId, ... }` (terminal) |
-| stream end | `{ type:"finish", reason:"stop", text }` |
+| `tool-call` → `payload.{toolCallId,toolName,args}` | `{ type:"tool-call", toolId, toolName, args }` |
+| `tool-result` → `payload.{toolCallId,toolName,result}` | `{ type:"tool-result", toolId, toolName, result }` |
+| `error` → `payload.error` | `{ type:"error", cause, recoverable }` (terminal — drives retry) |
+| `finish` → `payload.stepResult.reason` (an AI SDK `LanguageModelV2FinishReason`) | `stop`→`{finish, reason:"stop"}`, `tool-calls`→`{finish, reason:"tool"}`, `length`→`{finish, reason:"length"}`; abnormal (`error`/`content-filter`/…)→`{ type:"error", … }` (same coercion as the AI SDK adapter) |
+| `tool-call-suspended` → `payload.suspendPayload`, `output.runId` | `{ type:"suspended", runId, ... }` (terminal — **Sprint 3**) |
+| stream ends with no `finish` | `{ type:"error", … }` (terminal — parity with the AI SDK path) |
+| everything else (reasoning/workflow/network/tool-input-streaming chunks) | dropped |
 
 ### 4.4 The bridge, generalized
 
@@ -231,7 +236,7 @@ The bridge sits on the **LLM-TTFT** stage and sets the streaming cadence into TT
 **Why the overhead is negligible (by construction):**
 - The adapter is `for await (part of backend) yield map(part)` — it forwards each part immediately. Cost added per part = **one microtask hop** (async-generator yield) **+ a synchronous object remap** (`TextStreamPart`/Mastra chunk → `ReasoningPart`). That is microseconds against a ~350 ms LLM-TTFT — i.e. < 0.01% of the stage, well inside measurement noise.
 - **No buffering, no completion-await, no batching, no extra network hop.** The first `text-delta` propagates the instant the backend emits its first token, so TTFT and first-sentence-to-TTS are unchanged.
-- **Mastra's callback stream** (`processDataStream({onChunk})`) is bridged to an async-iterable via a zero-delay queue — each `onChunk` enqueues and resolves the pending pull immediately; it must never accumulate.
+- **Mastra's `.fullStream`** is already a pull-based `ReadableStream<ChunkType>` (v2.2 — verified against `@mastra/core@1.41.0`), iterated with `for await` exactly like the AI SDK `fullStream`. **No callback→queue bridge is needed** (the earlier `processDataStream({onChunk})` framing was the client-js API); the adapter remaps each chunk and yields it immediately (one microtask + a synchronous object remap), and must never accumulate.
 - Sentence aggregation (`llm.delta` → `tts.text`) is **unchanged** and still lives in the session orchestrator, so TTS-TTFB is unaffected.
 
 **Measurable acceptance (not asserted — instrumented). (M3)** The numbers above (~350 ms LLM-TTFT, etc.) are *literature budgets*, not our baseline — and the deployed worker's LLM-TTFT is far higher and network-noisy (real provider RTT, observed on the order of ~1.3 s), so "within a few ms of 350 ms" is meaningless against that floor. The gate is therefore framed as **no regression vs *our own* captured baseline on a stable, repeatable local harness** — not the literature budget, and not the noisy deployed worker:
@@ -283,7 +288,7 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 
 ## 9. Risks & open questions
 
-- **Mastra wire shapes** (`tool-call-suspended` payload, `resumeStream` signature, `processDataStream` chunk fields) are taken from current docs, not a running build — confirm against the pinned `@mastra/core` version at step 2.1 before finalizing the mapping. (AI SDK v6 `TextStreamPart` union is verified against `ai@6.0.191`, incl. the `error`/`tool-error`/`finish-step`/`abort` members B1 maps; `ToolLoopAgent.stream()` returns a `Promise<StreamTextResult>`, so adapters `await` it — B3.)
+- **Mastra wire shapes** — **RESOLVED (v2.2, Sprint 2)** against installed `@mastra/core@1.41.0`: `Agent.stream(messages)` → `Promise<MastraModelOutput>`; iterate `output.fullStream` (`ReadableStream<ChunkType>`, async-iterable); chunks are `{type, payload}` — `text-delta.payload.text`, `tool-call.payload.{toolCallId,toolName,args}`, `tool-result.payload.{toolCallId,toolName,result}`, `finish.payload.stepResult.reason` (AI SDK `LanguageModelV2FinishReason`), `error.payload.error`; `runId` on the output; `resumeStream(resumeData,{runId,toolCallId?})` exists. `processDataStream` is the `@mastra/client-js` API, not core. (AI SDK v6 `TextStreamPart` union is verified against `ai@6.0.191`, incl. the `error`/`tool-error`/`finish-step`/`abort` members B1 maps; `ToolLoopAgent.stream()` returns a `Promise<StreamTextResult>`, so adapters `await` it — B3.)
 - **Edge-bundle weight (Mastra):** `@mastra/core` may pull heavier deps; step 2.3 must keep `verify-edge-bundle.sh` green or gate Mastra to the Node build with a runtime-split export (mirror the `voice-ws` `./node` pattern).
 - **History on Mastra resume runs vs the spoken-prefix correction (B4):** the suspended run holds its own checkpoint, which `resumeStream` restores *uncorrected* — so a barge-in that landed between suspend and resume diverges from the bridge's corrected history. Resolved by the `onResumeConflict: "restart" | "replay"` policy in §4.6 (default `restart`), **not** by the earlier "dual-sourced, acceptable" hand-wave. Only materializes when barge-in and suspend/resume overlap.
 - **Who converts "next user turn" → `resume.data`?** The orchestrator (turn-routing owner), not the adapter — keeps the bridge a pure function of the turn. Confirm the mapping policy (raw text vs structured) per workflow at step 3.3.
