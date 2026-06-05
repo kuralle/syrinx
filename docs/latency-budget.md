@@ -62,3 +62,20 @@ Captured on `v2` HEAD **before** the `Reasoner` re-home (commit `1db701f`), via 
 > **PASS** iff the post-change `smoke:websocket-interactive` shows **LLM-TTFT P50 ≤ 3920 ms** and **P95 ≤ 4530 ms** (= worst baseline run + 5% headroom).
 
 Rationale: the `Reasoner` seam is a structural passthrough — Sprint 0 proved it adds at most one microtask + a synchronous object remap per part (~microseconds), i.e. < 0.001% of a ~3290 ms LLM-TTFT, invisible against ±1000 ms of live-API noise. The failure mode the gate actually protects against is **accidental buffering** (e.g. awaiting the stream to completion before emitting) — that would balloon LLM-TTFT to full-generation time (seconds), blowing past 3920/4530 ms unmistakably. The real fine-grained protection against behavior drift is the **9 unchanged `index.test.ts` assertions** + the no-buffering unit test, not the absolute millisecond delta. A post-change result *above* the gate that cannot be attributed to provider noise (re-run ×3 to confirm) is a **hard-flag regression** (RFC §7a) — reject the commit, do not merge.
+
+---
+
+## Reasoner-bridge cross-backend latency report (S4-01, 2026-06-05)
+
+Consolidated from the program's per-sprint proceed evidence (this session) — the `Reasoner` seam is a transparent passthrough; **no seam-attributable LLM-TTFT regression on any backend**. Methodology: `smoke:websocket-interactive`, short fixture (`SYRINX_WS_MAX_TURNS=1`) per the credit directive; the LLM leg is a live OpenAI call (network-noisy — see the S1-00 section), so the gate bands against observed variance, not the literature ~350 ms stage budget.
+
+| Backend / stage | LLM-TTFT | vs S1-00 gate (P50 ≤ 3920 / P95 ≤ 4530) | Source |
+|---|---|---|---|
+| **S1-00 baseline** (pre-refactor, AI-SDK, gpt-4.1-mini) | P50 mean **3290** (3733/2773/3365), P95 mean **4044** (4313/3801/4018) | — (the denominator) | `sprints/sprint-1` |
+| **AI-SDK, post-re-home** (`ReasoningBridge` drives the `Reasoner`) | P50 mean **2705** (6 runs), P95 mean **3763** | ✅ within band — *faster* than baseline (a buffering regression would inflate P50) | `proceed-S1-01.md` |
+| **Mastra** (Node, gpt-4.1-mini via `fromMastraAgent`) | **2967** / **884** (2 short-fixture runs) | ✅ within band | `proceed-S2-02.md` |
+| **Suspend/resume path** (Mastra-on-edge DO) | non-suspending turns: `RunStore.takePending` = one local SQL `SELECT`, no hot-path I/O hop (RFC §7a) | ✅ no added latency on the common path | `proceed-S3-03/04.md` |
+
+**Verdict:** the generalization (AI SDK → Mastra → suspend/resume) is **latency-neutral**. The seam adds at most one microtask + a synchronous object remap per part (Sprint 0's no-buffering unit test + the structural proof); the dominant cost is the LLM provider's TTFT, which is identical across backends at the same model. The ~350 ms literature stage budget (Daily/Modal) is the provider's target, not the seam's — the seam's contribution is below measurement noise. Speech stages (STT-final ~520 ms, TTS-TTFB ~500 ms) are unchanged throughout (they don't route through the bridge).
+
+**Live demos proven (this program):** AI-SDK deployed (`syrinx-voice-server-workers`, Version `cc9236aa`); Mastra Node turn (S2-02) + Mastra-edge deployed (`voice-server-workers-mastra`, Version `40a15353`, Paid tier); suspend→resume by `runId` on the deployed Mastra worker. The Mastra-edge worker's ~249 ms cold-start is a deploy-runtime metric, separate from LLM-TTFT.
