@@ -7,10 +7,11 @@ import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { tool } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
+import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
@@ -224,7 +225,16 @@ async function main(): Promise<void> {
       plugins: {
         stt: new DeepgramSTTPlugin(),
         vad: new SileroVADPlugin(),
-        bridge: new AISDKBridgePlugin(),
+        bridge: new ReasoningBridge(fromStreamText({
+          model: createOpenAI({ apiKey: process.env["OPENAI_API_KEY"]! })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
+          system: UNIVERSITY_SUPPORT_PROMPT,
+          tools: supportTools,
+          temperature: 0.2,
+          maxOutputTokens: 180,
+          maxRetries: 0,
+          timeout: 45_000,
+          stopWhen: stepCountIs(4),
+        })),
         tts: new CartesiaTTSPlugin(),
       },
       pluginConfig: {
@@ -238,13 +248,6 @@ async function main(): Promise<void> {
         },
         vad: { threshold: 0.01 },
         bridge: {
-          api_key: process.env["OPENAI_API_KEY"],
-          model: process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
-          system_prompt: UNIVERSITY_SUPPORT_PROMPT,
-          tools: supportTools,
-          temperature: 0.2,
-          max_output_tokens: 180,
-          max_steps: 4,
           timeout_ms: 45_000,
         },
         tts: {

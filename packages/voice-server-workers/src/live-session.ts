@@ -8,7 +8,9 @@
 // needed on the hot path.
 
 import { VoiceAgentSession } from "@asyncdot/voice";
-import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
+import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
+import { createOpenAI } from "@ai-sdk/openai";
+import { stepCountIs } from "ai";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { createWorkersSocket } from "@asyncdot/voice-ws/workers";
@@ -59,11 +61,7 @@ export function createLiveVoiceAgentSession(
         language: "en-US",
         endpointing: 300,
       },
-      bridge: {
-        api_key: openaiKey,
-        model: env.OPENAI_MODEL ?? DEFAULT_MODEL,
-        system_prompt: env.SYRINX_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
-      },
+      bridge: {},
       tts: {
         api_key: cartesiaKey,
         voice_id: env.CARTESIA_VOICE_ID ?? DEFAULT_VOICE_ID,
@@ -77,7 +75,15 @@ export function createLiveVoiceAgentSession(
   });
 
   session.registerPlugin("stt", new DeepgramSTTPlugin(createWorkersSocket));
-  session.registerPlugin("bridge", new AISDKBridgePlugin());
+  session.registerPlugin("bridge", new ReasoningBridge(fromStreamText({
+    model: createOpenAI({ apiKey: openaiKey })(env.OPENAI_MODEL ?? DEFAULT_MODEL),
+    system: env.SYRINX_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
+    temperature: 0.4,
+    maxOutputTokens: 256,
+    maxRetries: 0,
+    timeout: 30_000,
+    stopWhen: stepCountIs(1),
+  })));
   session.registerPlugin("tts", new CartesiaTTSPlugin(createWorkersSocket));
   return session;
 }

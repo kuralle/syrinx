@@ -13,7 +13,8 @@ import type {
   TtsWordTimestamp,
 } from "@asyncdot/voice";
 import type { FinishReason, ModelMessage, TextStreamPart, ToolSet } from "ai";
-import { AISDKBridgePlugin } from "./index.js";
+import { fromStreamFactory } from "./from-ai-sdk.js";
+import { ReasoningBridge } from "./index.js";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -30,13 +31,13 @@ const ZERO_USAGE = {
   totalTokens: 0,
 };
 
-describe("AISDKBridgePlugin", () => {
+describe("ReasoningBridge", () => {
   it("emits llm.done only after a normal provider stop finish", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
-    const plugin = new AISDKBridgePlugin(async function* () {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
       yield textDelta("Hello.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
 
@@ -69,10 +70,10 @@ describe("AISDKBridgePlugin", () => {
 
   it("emits llm.error instead of llm.done when provider reaches token limit", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
-    const plugin = new AISDKBridgePlugin(async function* () {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
       yield textDelta("This answer is incomplete");
       yield finish("length", "MAX_TOKENS");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
 
@@ -97,9 +98,9 @@ describe("AISDKBridgePlugin", () => {
 
   it("emits llm.error when the stream ends without finish metadata", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
-    const plugin = new AISDKBridgePlugin(async function* () {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
       yield textDelta("Hello.");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
 
@@ -123,9 +124,9 @@ describe("AISDKBridgePlugin", () => {
 
   it("clears per-turn state when a generation errors before commit", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
-    const plugin = new AISDKBridgePlugin(async function* () {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
       throw new Error("provider failed");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
 
@@ -155,7 +156,7 @@ describe("AISDKBridgePlugin", () => {
   it("rewrites an interrupted turn's history to the spoken prefix on barge-in during playback", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];
-    const plugin = new AISDKBridgePlugin(async function* ({ messages }) {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* ({ messages }) {
       capturedMessages.push(messages);
       if (capturedMessages.length === 1) {
         yield textDelta("Sentence one. Sentence two.");
@@ -164,7 +165,7 @@ describe("AISDKBridgePlugin", () => {
       }
       yield textDelta("ok.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());
@@ -200,7 +201,7 @@ describe("AISDKBridgePlugin", () => {
     // exactly the words whose endMs falls before the playout cutoff.
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];
-    const plugin = new AISDKBridgePlugin(async function* ({ messages }) {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* ({ messages }) {
       capturedMessages.push(messages);
       if (capturedMessages.length === 1) {
         yield textDelta("Hello world foo bar.");
@@ -209,7 +210,7 @@ describe("AISDKBridgePlugin", () => {
       }
       yield textDelta("ok.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());
@@ -251,7 +252,7 @@ describe("AISDKBridgePlugin", () => {
   it("falls back to text-sent-to-TTS when no word timestamps are available", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];
-    const plugin = new AISDKBridgePlugin(async function* ({ messages }) {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* ({ messages }) {
       capturedMessages.push(messages);
       if (capturedMessages.length === 1) {
         yield textDelta("Sentence one. Sentence two.");
@@ -260,7 +261,7 @@ describe("AISDKBridgePlugin", () => {
       }
       yield textDelta("ok.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());
@@ -292,7 +293,7 @@ describe("AISDKBridgePlugin", () => {
   it("falls back to text-sent-to-TTS when playout position is unavailable (headless/browser path)", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];
-    const plugin = new AISDKBridgePlugin(async function* ({ messages }) {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* ({ messages }) {
       capturedMessages.push(messages);
       if (capturedMessages.length === 1) {
         yield textDelta("Hello world foo.");
@@ -301,7 +302,7 @@ describe("AISDKBridgePlugin", () => {
       }
       yield textDelta("ok.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());
@@ -338,7 +339,7 @@ describe("AISDKBridgePlugin", () => {
   it("records an interrupted mid-generation turn as the spoken prefix instead of dropping it", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const capturedMessages: ModelMessage[][] = [];
-    const plugin = new AISDKBridgePlugin(async function* ({ signal, messages }) {
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* ({ signal, messages }) {
       capturedMessages.push(messages);
       if (capturedMessages.length === 1) {
         yield textDelta("Hello");
@@ -353,7 +354,7 @@ describe("AISDKBridgePlugin", () => {
       }
       yield textDelta("ok.");
       yield finish("stop");
-    });
+    }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());

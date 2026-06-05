@@ -8,6 +8,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { config as loadDotenv } from "dotenv";
+import { createOpenAI } from "@ai-sdk/openai";
+import { stepCountIs } from "ai";
 import {
   Route,
   VoiceAgentSession,
@@ -18,7 +20,7 @@ import {
   type VoiceAgentSessionEvents,
   type VoicePlugin,
 } from "@asyncdot/voice";
-import { AISDKBridgePlugin } from "@asyncdot/voice-bridge-aisdk";
+import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
 import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
 import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
 import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
@@ -214,7 +216,15 @@ async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<Hea
     plugins: {
       stt: new DeepgramSTTPlugin(),
       vad: new SileroVADPlugin(),
-      bridge: new AISDKBridgePlugin(),
+      bridge: new ReasoningBridge(fromStreamText({
+        model: createOpenAI({ apiKey: process.env["OPENAI_API_KEY"]! })(ext.model ?? DEFAULT_MODEL),
+        system: ext.systemPrompt ?? DEFAULT_SYSTEM_LINES.join("\n"),
+        temperature: 0.4,
+        maxOutputTokens: 256,
+        maxRetries: 0,
+        timeout: 30_000,
+        stopWhen: stepCountIs(1),
+      })),
       tts: new CartesiaTTSPlugin(),
     },
     pluginConfig: {
@@ -226,11 +236,7 @@ async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<Hea
         language: "en-US",
       },
       vad: { threshold: 0.01 },
-      bridge: {
-        api_key: process.env["OPENAI_API_KEY"],
-        model: ext.model ?? DEFAULT_MODEL,
-        system_prompt: ext.systemPrompt ?? DEFAULT_SYSTEM_LINES.join("\n"),
-      },
+      bridge: {},
       tts: {
         api_key: process.env["CARTESIA_API_KEY"],
         voice_id: ext.voiceId ?? DEFAULT_VOICE_ID,

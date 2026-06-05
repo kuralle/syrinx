@@ -7,12 +7,9 @@
 // into the bus. Handles LLM interrupts via AbortController.
 
 import type { PipelineBus } from "@asyncdot/voice";
-import { createOpenAI } from "@ai-sdk/openai";
 import {
-  stepCountIs,
   type ModelMessage,
   type TextStreamPart,
-  type ToolChoice,
   type ToolSet,
 } from "ai";
 import {
@@ -22,7 +19,6 @@ import {
   type Reasoner,
   type ReasonerTurn,
   type TtsWordTimestamp,
-  requireStringConfig,
   categorizeLlmError,
   isRecoverable,
   readRetryConfig,
@@ -38,8 +34,6 @@ export {
   type StreamTextConfig,
 } from "./from-ai-sdk.js";
 
-import { fromStreamFactory, fromStreamText } from "./from-ai-sdk.js";
-
 export type AISDKBridgeTools = ToolSet;
 export type AISDKStreamFactory = (request: {
   userText: string;
@@ -47,16 +41,8 @@ export type AISDKStreamFactory = (request: {
   messages: ModelMessage[];
 }) => AsyncGenerator<TextStreamPart<ToolSet>>;
 
-export class AISDKBridgePlugin implements VoicePlugin {
+export class ReasoningBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
-  private apiKey: string = "";
-  private model: string = "gpt-4.1-mini";
-  private systemPrompt: string = "You are a helpful voice assistant.";
-  private tools: AISDKBridgeTools | undefined;
-  private toolChoice: ToolChoice<ToolSet> | undefined;
-  private temperature: number = 0.4;
-  private maxOutputTokens: number = 256;
-  private maxSteps: number = 3;
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
   private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
@@ -84,18 +70,10 @@ export class AISDKBridgePlugin implements VoicePlugin {
   // back to spokenByContext.
   private playedOutMsByContext = new Map<string, number>();
 
-  constructor(private readonly streamFactory?: AISDKStreamFactory) {}
+  constructor(private readonly reasoner: Reasoner) {}
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
-    this.apiKey = requireStringConfig(config, "api_key");
-    this.model = (config["model"] as string) ?? "gpt-4.1-mini";
-    this.systemPrompt = (config["system_prompt"] as string) ?? "You are a helpful voice assistant.";
-    this.tools = readToolsConfig(config["tools"]);
-    this.toolChoice = readToolChoiceConfig(config["tool_choice"]);
-    this.temperature = readNumberConfig(config["temperature"], 0.4);
-    this.maxOutputTokens = readPositiveIntegerConfig(config["max_output_tokens"], 256);
-    this.maxSteps = readPositiveIntegerConfig(config["max_steps"], this.tools === undefined ? 1 : 3);
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
     this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
@@ -172,12 +150,11 @@ export class AISDKBridgePlugin implements VoicePlugin {
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         try {
-          const reasoner = this.buildReasoner();
           const turn: ReasonerTurn = { userText, messages: this.history, signal };
 
           let finishReason: "stop" | "tool" | "length" | null = null;
 
-          for await (const part of withStreamIdleTimeout(reasoner.stream(turn), this.timeoutMs, signal)) {
+          for await (const part of withStreamIdleTimeout(this.reasoner.stream(turn), this.timeoutMs, signal)) {
             if (signal.aborted) return;
             switch (part.type) {
               case "text-delta":
@@ -269,22 +246,6 @@ export class AISDKBridgePlugin implements VoicePlugin {
       }
       if (!committed) this.clearTurnState(contextId);
     }
-  }
-
-  private buildReasoner(): Reasoner {
-    if (this.streamFactory) return fromStreamFactory(this.streamFactory);
-    const openai = createOpenAI({ apiKey: this.apiKey });
-    return fromStreamText({
-      model: openai(this.model),
-      system: this.systemPrompt,
-      tools: this.tools,
-      toolChoice: this.toolChoice,
-      temperature: this.temperature,
-      maxOutputTokens: this.maxOutputTokens,
-      maxRetries: 0,
-      timeout: this.timeoutMs,
-      stopWhen: stepCountIs(this.maxSteps),
-    });
   }
 
   private recordFinishReason(
@@ -403,23 +364,6 @@ function validateFinalFinishReason(finishReason: "stop" | "tool" | "length" | nu
   if (finishReason !== "stop") {
     throw new Error("AI SDK provider did not complete normally");
   }
-}
-
-function readToolsConfig(value: unknown): AISDKBridgeTools | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Plugin config key tools must be an AI SDK ToolSet object");
-  }
-  return value as AISDKBridgeTools;
-}
-
-function readToolChoiceConfig(value: unknown): ToolChoice<ToolSet> | undefined {
-  if (value === undefined) return undefined;
-  return value as ToolChoice<ToolSet>;
-}
-
-function readNumberConfig(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function readPositiveIntegerConfig(value: unknown, fallback: number): number {

@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.67",
     "@asyncdot/voice": "workspace:*",
     "@asyncdot/voice-client-browser": "workspace:*",
     "@asyncdot/voice-bridge-aisdk": "workspace:*",
