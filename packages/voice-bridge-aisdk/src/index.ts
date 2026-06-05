@@ -30,6 +30,14 @@ import {
   type RetryConfig,
 } from "@asyncdot/voice";
 
+export {
+  fromAiSdkAgent,
+  fromStreamText,
+  fromStreamFactory,
+  type AiSdkAgentLike,
+  type StreamTextConfig,
+} from "./from-ai-sdk.js";
+
 export type AISDKBridgeTools = ToolSet;
 export type AISDKStreamFactory = (request: {
   userText: string;
