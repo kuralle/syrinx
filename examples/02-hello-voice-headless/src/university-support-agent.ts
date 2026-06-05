@@ -114,10 +114,11 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     bridge: new ReasoningBridge(fromStreamText({
       model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
       system: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
+      tools: studentRelationsTools,
       temperature: 0.2,
       maxOutputTokens: interactive ? 1024 : 1400,
       maxRetries: 0,
-      timeout: 30_000,
+      timeout: interactive ? 30_000 : 60_000,
       stopWhen: stepCountIs(3),
     })),
     tts: createTtsPlugin(ttsProvider),
@@ -161,7 +162,10 @@ export function createUniversitySupportPluginConfig(
       semantic_shortcut_delay_ms: interactive ? 0 : 50,
       semantic_defer_fallback_ms: interactive ? 4500 : 4000,
     },
-    bridge: {},
+    bridge: {
+      max_history_turns: 20,
+      timeout_ms: interactive ? 30_000 : 60_000,
+    },
     tts:
       ttsProvider === "cartesia"
         ? cartesiaTtsConfig()
