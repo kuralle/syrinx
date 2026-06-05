@@ -6,11 +6,11 @@
 
 ## Active sprint
 
-**Sprint number:** `1`
-**Sprint name:** Re-home the bridge (zero behavior change + live)
+**Sprint number:** `2`
+**Sprint name:** Mastra adapter
 **Status:** `not-started`
-**Goal:** The production bridge drives a `Reasoner` internally with zero behavior change (the 9 `index.test.ts` tests' assertions unchanged; construction adapts via `fromStreamFactory` — B2), is constructed with an explicit `fromAiSdkAgent(...)` (no auto-wrap — B3), and runs a live turn on the deployed worker with LLM-TTFT within the S1-00 baseline band (M3).
-**WBS section:** [`sprints/WBS.md` § Sprint 1](./WBS.md)
+**Goal:** A Mastra `Agent` drives the same `ReasoningBridge` via `fromMastraAgent`, with a live worker turn through a Mastra backend, the edge bundle still clean, and LLM-TTFT within budget.
+**WBS section:** [`sprints/WBS.md` § Sprint 2](./WBS.md)
 
 ## Build branch
 
@@ -20,22 +20,22 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout v2` (or `git fetch && git checkout v2` if missing locally).
 
-## Load-bearing reading for sprint 1
+## Load-bearing reading for sprint 2
 
-The session running sprint 1 must read these in this order before delegating any story:
+The session running sprint 2 must read these in this order before delegating any story:
 
-1. `sprints/sprint-0/HANDOFF.md` — read-me-first: state of the world + traps carried forward.
-2. `sprints/WBS.md` § Sprint 1 — stories S1-00 … S1-03.
-3. `docs/rfc-reasoner-bridge.md` — §4.4 (the generalized bridge), §4.5 (what stays verbatim — history + spoken-prefix barge-in + retry), §7a + M3 (the latency gate + baseline harness), §8 commits 1.0 / 1.3–1.5.
-4. `packages/voice-bridge-aisdk/src/index.ts` — `AISDKBridgePlugin`, the bridge being re-homed; `processTurn` part-switch (`:167`) and `streamResponse` (`:263`). **Run `/code-understand` here before briefing S1-01.**
-5. `packages/voice-bridge-aisdk/src/from-ai-sdk.ts` — the Sprint-0 adapter the bridge will be driven by (esp. `fromStreamFactory`, the B2 seam for the 9-test re-home).
-6. `packages/voice/src/reasoner.ts` — the seam contract the bridge consumes.
+1. `sprints/sprint-1/HANDOFF.md` — read-me-first: state of the world + Mastra/edge traps carried forward.
+2. `sprints/WBS.md` § Sprint 2 — stories S2-01 … S2-03.
+3. `docs/rfc-reasoner-bridge.md` — §4.3 (Mastra chunk → `ReasoningPart` mapping table), §9 (edge-bundle weight + Mastra wire-shape risks), §7a (zero-delay queue, no accumulation), §8 commits 2.1–2.4.
+4. `packages/voice-bridge-aisdk/src/from-ai-sdk.ts` — the adapter shape `fromMastraAgent` mirrors (one shared no-buffering mapping generator → `ReasoningPart`).
+5. `packages/voice/src/reasoner.ts` — the seam contract.
+6. `.understanding/bridge-rehome.md` — how `ReasoningBridge` consumes the seam (the Mastra adapter targets the same `Reasoner`).
 
-**Carry-forward traps (from Sprint 0):** signal-abort (silent `return`) vs `abort` stream-part (→ `error`); `fromStreamText` must pass `maxRetries:0` (KI-0-02); validate the abnormal-terminal-`finish` → `error` decision (sprint-0 PLAN §6) against the 9 tests; S1-00 (latency baseline) runs **first**.
+**Carry-forward traps (from Sprint 1):** confirm `@mastra/core` wire shapes against the **pinned** version at S2-01 before finalizing the mapping (read the installed `.d.ts`); bridge the Mastra callback stream via a **zero-delay queue** (no accumulation, RFC §7a); `@mastra/core` may bloat the edge bundle — keep `verify-edge-bundle.sh` clean (runtime-split to the Node build if needed) **[hard flag]**; wire via `new ReasoningBridge(fromMastraAgent(agent))` (explicit, no auto-wrap). Gate latency with `SYRINX_WS_MAX_TURNS=1` vs the S1-00 band.
 
 ## Last completed sprint
 
-`0 — Seam foundation`
+`1 — Re-home the bridge (zero behavior change + live)`
 
 ## Last completed at
 
@@ -46,7 +46,8 @@ The session running sprint 1 must read these in this order before delegating any
 | Sprint | Status | Completed at | Warmdown |
 |--------|--------|--------------|----------|
 | 0 | done | 2026-06-05 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
-| 1 | not-started | — | — |
+| 1 | done | 2026-06-05 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
+| 2 | not-started | — | — |
 
 When a sprint completes, append a row here from `WARMDOWN.md`.
 
