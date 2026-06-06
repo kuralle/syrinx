@@ -60,6 +60,11 @@ export function createLiveVoiceAgentSession(
         model: "nova-3",
         language: "en-US",
         endpointing: 300,
+        // Workers→Deepgram round-trip is higher latency than a local server: give the Finalize
+        // confirmation more time (default 1200ms is too tight here), and fall back to the best
+        // transcript instead of erroring if it still times out (the transcript has already arrived).
+        provider_finalize_timeout_ms: 2500,
+        finalize_timeout_fallback: true,
       },
       bridge: {},
       tts: {
