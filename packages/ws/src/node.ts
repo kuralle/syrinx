@@ -25,6 +25,7 @@ export const createNodeWsSocket: SocketFactory = (url, headers): ManagedSocket =
   };
 
   return {
+    supportsFramePing: true,
     get isOpen(): boolean {
       return ws.readyState === ws.OPEN;
     },

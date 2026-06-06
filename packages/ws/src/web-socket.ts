@@ -46,7 +46,7 @@ export function wrapWebSocket(ws: WebSocketLike): ManagedSocket {
     keepAlivePing: () => {
       // The standard WebSocket has no ping frame — rely on keepAliveMessage.
     },
-    verify: async (): Promise<boolean> => ws.readyState === WEBSOCKET_OPEN,
+    verify: async (_timeoutMs: number): Promise<boolean> => ws.readyState === WEBSOCKET_OPEN,
     dispose: () => {
       try {
         ws.close();

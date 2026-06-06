@@ -77,6 +77,7 @@ class GrokRealtimeAdapter implements RealtimeAdapter {
   private openRejecter: ((err: Error) => void) | null = null;
   private assistantTranscript = "";
   private activeResponse = false;
+  private pendingResponseCreate = false;
 
   constructor(private readonly opts: GrokRealtimeOptions) {
     this.events = this.stream;
@@ -146,7 +147,6 @@ class GrokRealtimeAdapter implements RealtimeAdapter {
   cancelResponse(_audioEndMs: number): void {
     if (!this.activeResponse) return;
     this.requireSocket().send({ type: "response.cancel" });
-    this.activeResponse = false;
   }
 
   injectToolResult(toolId: string, text: string): void {
@@ -159,7 +159,24 @@ class GrokRealtimeAdapter implements RealtimeAdapter {
         output: text,
       },
     });
-    socket.send({ type: "response.create" });
+    this.requestResponseCreate();
+  }
+
+  private requestResponseCreate(): void {
+    if (this.activeResponse) {
+      this.pendingResponseCreate = true;
+      return;
+    }
+    this.requireSocket().send({ type: "response.create" });
+    this.pendingResponseCreate = false;
+  }
+
+  private completeResponse(): void {
+    this.activeResponse = false;
+    if (this.pendingResponseCreate) {
+      this.pendingResponseCreate = false;
+      this.requireSocket().send({ type: "response.create" });
+    }
   }
 
   private buildSessionUpdate(
@@ -289,7 +306,7 @@ class GrokRealtimeAdapter implements RealtimeAdapter {
         break;
       }
       case "response.done": {
-        this.activeResponse = false;
+        this.completeResponse();
         const toolCall = extractFunctionCall(msg["response"]);
         if (toolCall) this.stream.push(toolCall);
         this.stream.push({ type: "response_done" });

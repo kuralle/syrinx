@@ -88,6 +88,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
   private currentAssistantItemId: string | null = null;
   private assistantTranscript = "";
   private activeResponse = false;
+  private pendingResponseCreate = false;
 
   constructor(private readonly opts: OpenAIRealtimeOptions) {
     this.events = this.stream;
@@ -166,7 +167,6 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
         audio_end_ms: audioEndMs,
       });
     }
-    this.activeResponse = false;
     this.currentAssistantItemId = null;
   }
 
@@ -181,7 +181,25 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
       },
     });
     if (this.opts.requiresResponseCreateAfterToolOutput !== false) {
-      socket.send({ type: "response.create" });
+      this.requestResponseCreate();
+    }
+  }
+
+  private requestResponseCreate(): void {
+    if (this.activeResponse) {
+      this.pendingResponseCreate = true;
+      return;
+    }
+    this.requireSocket().send({ type: "response.create" });
+    this.pendingResponseCreate = false;
+  }
+
+  private completeResponse(): void {
+    this.activeResponse = false;
+    this.currentAssistantItemId = null;
+    if (this.pendingResponseCreate) {
+      this.pendingResponseCreate = false;
+      this.requireSocket().send({ type: "response.create" });
     }
   }
 
@@ -329,8 +347,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
         break;
       }
       case "response.done": {
-        this.activeResponse = false;
-        this.currentAssistantItemId = null;
+        this.completeResponse();
         const toolCall = extractFunctionCall(msg["response"]);
         if (toolCall) {
           this.stream.push(toolCall);
