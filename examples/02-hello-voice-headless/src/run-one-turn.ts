@@ -19,11 +19,11 @@ import {
   type TextToSpeechEndPacket,
   type VoiceAgentSessionEvents,
   type VoicePlugin,
-} from "@asyncdot/voice";
-import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
-import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
-import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
-import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
+} from "@kuralle-syrinx/core";
+import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
+import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
+import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
+import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 const require = createRequire(import.meta.url);
 const { WaveFile } = require("wavefile") as typeof import("wavefile");

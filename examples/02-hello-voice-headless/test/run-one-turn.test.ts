@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { FakeBridge, FakeSTT, FakeTTS, FakeVAD } from "@asyncdot/voice-test";
+import { FakeBridge, FakeSTT, FakeTTS, FakeVAD } from "@kuralle-syrinx/test";
 import { describe, expect, it } from "vitest";
 
 import {

@@ -25,5 +25,5 @@ For the current targets — good-network browsers and carrier-managed telephony 
 Move to WebRTC (and turn on Opus FEC there) only if a real deployment shows **measured packet loss / jitter that TCP retransmit + the 100 ms jitter buffer cannot absorb** — e.g. v2v tail (P99) regressions correlated with lossy mobile/last-mile networks. Until then, this is a deliberate, documented non-goal, not an oversight.
 
 ## Status of related VE-08.7 surface
-- Opus encoder: `packages/voice-server-websocket/src/browser-opus.ts` (`application: "voip"`, no FEC — intentional per above).
+- Opus encoder: `packages/server-websocket/src/browser-opus.ts` (`application: "voip"`, no FEC — intentional per above).
 - Media-mode statement: `docs/websocket-audio-protocol.md` → "Client Media Mode (current)".

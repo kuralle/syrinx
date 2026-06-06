@@ -7,8 +7,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 
-import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@asyncdot/voice";
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
+import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@kuralle-syrinx/core";
+import { createVoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,

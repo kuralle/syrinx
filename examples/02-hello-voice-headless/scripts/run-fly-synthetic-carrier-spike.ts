@@ -5,7 +5,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { validateVoiceSessionRecorderManifest, type VoiceSessionRecorderManifest } from "@asyncdot/voice-recorder";
+import { validateVoiceSessionRecorderManifest, type VoiceSessionRecorderManifest } from "@kuralle-syrinx/recorder";
 
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 

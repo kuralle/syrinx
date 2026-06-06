@@ -4,9 +4,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
-import { SyrinxBrowserClient, WebSocketClientTransport, type ClientTransport, type ClientTransportHandlers } from "@asyncdot/voice-client-browser";
+import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
+import { createVoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
+import { SyrinxBrowserClient, WebSocketClientTransport, type ClientTransport, type ClientTransportHandlers } from "@kuralle-syrinx/browser-client";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(SCRIPT_DIR, "..");

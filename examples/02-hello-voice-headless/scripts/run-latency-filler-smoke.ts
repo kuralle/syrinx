@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
+import { createVoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
 import { createUniversitySupportSession } from "../src/university-support-agent.js";

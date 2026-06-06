@@ -7,9 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import WebSocket, { type RawData } from "ws";
 import { Decoder as OpusDecoder } from "@evan/opus";
 
-import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@asyncdot/voice";
-import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@asyncdot/voice/audio";
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
+import { decodeSyrinxAudioEnvelope, hasSyrinxAudioEnvelope } from "@kuralle-syrinx/core";
+import { pcm16BytesToSamples, pcm16SamplesToBytes, resamplePcm16 } from "@kuralle-syrinx/core/audio";
+import { createVoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
 
 import { GEMINI_UNIVERSITY_FIXTURES, PKG_ROOT } from "./generate-gemini-university-fixtures.js";
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";

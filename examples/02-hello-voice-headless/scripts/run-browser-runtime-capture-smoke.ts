@@ -8,8 +8,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import WebSocket from "ws";
-import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import { createVoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
+import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
+import { createVoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
 
 const CHROME_PATHS = [
   process.env["CHROME_PATH"],
@@ -23,7 +23,7 @@ const TARGET_SAMPLE_RATE_HZ = 16000;
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = resolve(SCRIPT_DIR, "..");
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../..");
-const REVIEW_HTML = join(REPO_ROOT, "packages", "voice-client-browser", "index.html");
+const REVIEW_HTML = join(REPO_ROOT, "packages", "browser-client", "index.html");
 const RUNS_DIR = join(PKG_ROOT, "test", "performance", "runs");
 const DEFAULT_FAKE_MIC_WAV = join(PKG_ROOT, "test", "fixtures", "university-support-add-drop.wav");
 

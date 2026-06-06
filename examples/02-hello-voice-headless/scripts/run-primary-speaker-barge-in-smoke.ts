@@ -15,12 +15,12 @@ import {
   type VadAudioPacket,
   type VadSpeechActivityPacket,
   type VadSpeechStartedPacket,
-} from "@asyncdot/voice";
+} from "@kuralle-syrinx/core";
 import {
   BYSTANDER_SPEAKER_TONE_HZ,
   synthesizeTonePcm16,
-} from "@asyncdot/voice";
-import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
+} from "@kuralle-syrinx/core";
+import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(SCRIPT_DIR, "..");

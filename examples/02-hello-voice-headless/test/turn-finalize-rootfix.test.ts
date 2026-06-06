@@ -7,9 +7,9 @@ import {
   Route,
   type ConversationMetricPacket,
   type EndOfSpeechPacket,
-} from "@asyncdot/voice";
-import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
-import { PipecatEOSPlugin, type SmartTurnPredictor } from "@asyncdot/voice-turn-pipecat";
+} from "@kuralle-syrinx/core";
+import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
+import { PipecatEOSPlugin, type SmartTurnPredictor } from "@kuralle-syrinx/pipecat-smart-turn";
 
 class PredictableSmartTurn implements SmartTurnPredictor {
   constructor(private readonly predictions: number[]) {}

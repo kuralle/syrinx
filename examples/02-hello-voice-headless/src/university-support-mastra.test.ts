@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { PipelineBusImpl, Route } from "@asyncdot/voice";
-import type { EndOfSpeechPacket, LlmResponseDonePacket } from "@asyncdot/voice";
-import { ReasoningBridge } from "@asyncdot/voice-bridge-aisdk";
-import { fromMastraAgent, type MastraAgentLike, type MastraChunk } from "@asyncdot/voice-bridge-mastra";
+import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
+import type { EndOfSpeechPacket, LlmResponseDonePacket } from "@kuralle-syrinx/core";
+import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
+import { fromMastraAgent, type MastraAgentLike, type MastraChunk } from "@kuralle-syrinx/mastra";
 
 function textDelta(text: string): MastraChunk {
   return { type: "text-delta", payload: { text } };

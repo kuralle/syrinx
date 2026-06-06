@@ -61,13 +61,13 @@ are fatal. Stale transcript/finalize/audio-delivery state is discarded before an
 pnpm -r test
 
 # Live 3-turn interactive smoke (Deepgram nova-3, Gemini agent, Cartesia TTS)
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive
 
 # Live 24-turn longform smoke (Deepgram nova-3, Gemini agent, Gemini TTS)
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-university
 
 # Live 3-turn recorder coherence with Whisper audit
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:live-recorder-coherence
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:live-recorder-coherence
 ```
 
 **Artifact paths written:**
@@ -99,13 +99,13 @@ Confirm against the `@ai-sdk/google` package docs or https://ai-sdk.dev (not yet
 
 ```bash
 # Generates user-side WAV fixtures from Gemini TTS (also validates Gemini LLM access)
-pnpm --filter @asyncdot-example/02-hello-voice-headless fixtures:gemini-university
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless fixtures:gemini-university
 
 # Live 3-turn interactive smoke
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive
 
 # Live 24-turn longform
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-university
 ```
 
 **Artifact path:** `examples/02-hello-voice-headless/test/performance/runs/websocket-university-<ts>/manifest.json`
@@ -133,14 +133,14 @@ are suppressed.
 
 ```bash
 # Live 3-turn interactive (Cartesia is the interactive-review TTS path when CARTESIA_API_KEY is set)
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive
 
 # Live 3-turn recorder coherence with Whisper audit (Cartesia TTS)
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:live-recorder-coherence
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:live-recorder-coherence
 
 # Live telephony adapter smoke with Cartesia TTS (pick a provider)
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 **Artifact path:** `examples/02-hello-voice-headless/test/performance/runs/websocket-university-interactive-<ts>/manifest.json`
@@ -169,7 +169,7 @@ end mark stays pending until all prior playback marks are acknowledged.
 **Emulator smoke (no live provider, no credentials):**
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:twilio-emulator
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/twilio-emulator-<ts>/manifest.json`
@@ -181,7 +181,7 @@ paced PCMU frames, 2 marks (including terminal end mark after playback-mark ack)
 
 ```bash
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/telephony-university-live-twilio-<ts>/baseline.json`
@@ -195,7 +195,7 @@ TWILIO_AUTH_TOKEN=... \
 TWILIO_FROM_NUMBER=+15551234567 \
 TWILIO_TO_NUMBER=+15557654321 \
 SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-carrier-call
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:twilio-carrier-call
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/twilio-carrier-call-<ts>/baseline.json`
@@ -228,7 +228,7 @@ inbound `media.chunk` uses a 4-frame bounded reorder window. Outbound: paced `me
 **Emulator smoke:**
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telnyx-emulator
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/telnyx-emulator-<ts>/manifest.json`
@@ -240,7 +240,7 @@ frames, quality gate passed.
 
 ```bash
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/telephony-university-live-telnyx-<ts>/baseline.json`
@@ -253,7 +253,7 @@ TELNYX_CONNECTION_ID=... \
 TELNYX_FROM_NUMBER=+15551234567 \
 TELNYX_TO_NUMBER=+15557654321 \
 SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-carrier-call
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telnyx-carrier-call
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/telnyx-carrier-call-<ts>/baseline.json`
@@ -280,7 +280,7 @@ no public URL. **UNVERIFIED** for any public SmartPBX AI Provider documentation 
 **Emulator smoke:**
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:smartpbx-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:smartpbx-emulator
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/smartpbx-emulator-g711_ulaw-<ts>/manifest.json`
@@ -292,7 +292,7 @@ Latest result: `g711_ulaw`/8 kHz, 7 inbound frames / 1,120 PCMU wire bytes / 4,4
 
 ```bash
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 Artifact: `examples/02-hello-voice-headless/test/performance/runs/telephony-university-live-smartpbx-<ts>/baseline.json`
@@ -329,9 +329,9 @@ Telnyx reorder window, mark/clear semantics, and recorder truncation under block
 ### Rung 2 — Deterministic emulator smokes (no live providers, no credentials)
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-emulator
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-emulator
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:smartpbx-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:twilio-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telnyx-emulator
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:smartpbx-emulator
 ```
 
 Artifacts: `test/performance/runs/{twilio,telnyx,smartpbx}-emulator-<ts>/manifest.json`
@@ -349,7 +349,7 @@ and decoded-PCM-byte fields.
 ### Rung 3 — Browser runtime capture smoke (Chrome, no live STT/LLM/TTS)
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:browser-runtime
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:browser-runtime
 ```
 
 Artifact: `test/performance/runs/browser-runtime-<ts>/baseline.json`
@@ -368,10 +368,10 @@ audio frame from the server.
 
 ```bash
 # 3-turn interactive: Deepgram nova-3 / Gemini agent / Cartesia TTS
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive
 
 # 24-turn longform: Deepgram nova-3 / Gemini agent / Gemini TTS
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-university
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-university
 ```
 
 Artifacts:
@@ -394,7 +394,7 @@ recorder WAV export and Whisper coherence.
 ### Rung 5 — Live recorder coherence smoke (real providers + local Whisper audit)
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:live-recorder-coherence
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:live-recorder-coherence
 ```
 
 Artifacts:
@@ -418,13 +418,13 @@ provider STT text and spoken TTS text are preserved separately; zero truncations
 
 ```bash
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 Also supported: `SYRINX_TELEPHONY_NETWORK_PROFILE=bursty` for burst-packet simulation.
@@ -461,7 +461,7 @@ This is the accepted production-replication run when real carrier accounts are u
 
 ```bash
 SYRINX_TELEPHONY_NETWORK_PROFILE=jittery \
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:fly-synthetic-carrier
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:fly-synthetic-carrier
 ```
 
 Optional controls:
@@ -522,13 +522,13 @@ Start the bot server first:
 
 ```bash
 SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
-pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless review:telephony
 ```
 
 Run public routing preflight before wiring a carrier dashboard:
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
 **Twilio carrier call:**
@@ -539,7 +539,7 @@ TWILIO_AUTH_TOKEN=... \
 TWILIO_FROM_NUMBER=+15551234567 \
 TWILIO_TO_NUMBER=+15557654321 \
 SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:twilio-carrier-call
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:twilio-carrier-call
 ```
 
 Artifact: `test/performance/runs/twilio-carrier-call-<ts>/baseline.json`
@@ -552,7 +552,7 @@ TELNYX_CONNECTION_ID=... \
 TELNYX_FROM_NUMBER=+15551234567 \
 TELNYX_TO_NUMBER=+15557654321 \
 SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://your-public-tls-host.example \
-pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telnyx-carrier-call
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telnyx-carrier-call
 ```
 
 Artifact: `test/performance/runs/telnyx-carrier-call-<ts>/baseline.json`

@@ -7,12 +7,12 @@ import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { Route, type TextToSpeechAudioPacket, type TextToSpeechEndPacket } from "@asyncdot/voice";
+import { Route, type TextToSpeechAudioPacket, type TextToSpeechEndPacket } from "@kuralle-syrinx/core";
 import {
   assertVoiceSessionRecorderManifest,
   createVoiceSessionRecorder,
   type VoiceSessionRecorderManifest,
-} from "@asyncdot/voice-recorder";
+} from "@kuralle-syrinx/recorder";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,

@@ -6,15 +6,15 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createVoiceWebSocketServer, installGracefulShutdown } from "@asyncdot/voice-server-websocket";
-import type { VoiceAgentSession } from "@asyncdot/voice";
+import { createVoiceWebSocketServer, installGracefulShutdown } from "@kuralle-syrinx/server-websocket";
+import type { VoiceAgentSession } from "@kuralle-syrinx/core";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
 import { createUniversitySupportSession, type UniversitySupportTtsProvider } from "../src/university-support-agent.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../..");
-const STUDIO_HTML = join(REPO_ROOT, "packages", "voice-client-browser", "index.html");
+const STUDIO_HTML = join(REPO_ROOT, "packages", "browser-client", "index.html");
 const INPUT_SAMPLE_RATE = 16000;
 
 // Session-scoped turn-taking observability written to disk (one JSONL file per WS session) so a

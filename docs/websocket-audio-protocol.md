@@ -172,12 +172,12 @@ The smoke writer validates the manifest before writing: schema version, turn tot
 
 Default path: `/twilio`
 
-Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /twilio/twiml` with bidirectional `<Connect><Stream>` TwiML for this path. Set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...` so generated carrier URLs use `wss://`.
+Live review helper: `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless review:telephony` serves `GET /twilio/twiml` with bidirectional `<Connect><Stream>` TwiML for this path. Set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...` so generated carrier URLs use `wss://`.
 
 Public routing probe:
 
 ```bash
-pnpm --filter @asyncdot-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless probe:telephony-public https://your-public-tls-host.example
 ```
 
 The probe checks the HTTP setup endpoints, Twilio/Telnyx callback endpoints, and opens Twilio, Telnyx, and SmartPBX-shaped websocket sessions with one valid PCMU media frame. It asserts no websocket extension negotiation, so public deployments preserve the no-compression transport invariant.
@@ -211,7 +211,7 @@ The Twilio adapter buffers bounded early `start`/`media` messages that arrive be
 
 Default path: `/telnyx`
 
-Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with `stream_url`, `stream_track`, `stream_bidirectional_mode`, `stream_bidirectional_codec`, and `webhook_url` for this path. Set `SYRINX_TELNYX_BIDIRECTIONAL_CODEC` to match the Telnyx call stream codec.
+Live review helper: `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with `stream_url`, `stream_track`, `stream_bidirectional_mode`, `stream_bidirectional_codec`, and `webhook_url` for this path. Set `SYRINX_TELNYX_BIDIRECTIONAL_CODEC` to match the Telnyx call stream codec.
 
 Telnyx remains provider-specific at the adapter boundary:
 
@@ -244,14 +244,14 @@ The Telnyx adapter buffers bounded early `start`/`media` messages that arrive be
 The live-provider adapter smoke can exercise this Telnyx websocket shape with real Deepgram/Gemini/Cartesia before a carrier call:
 
 ```bash
-SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 ## SmartPBX AI Provider
 
 Default path: `/media-stream`
 
-Live review helper: `pnpm --filter @asyncdot-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with the SmartPBX websocket URL for this path. Set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...` so generated carrier URLs use `wss://`.
+Live review helper: `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless review:telephony` serves `GET /telephony/config.json` with the SmartPBX websocket URL for this path. Set `SYRINX_TELEPHONY_PUBLIC_BASE_URL=https://...` so generated carrier URLs use `wss://`.
 
 SmartPBX remains provider-specific at the adapter boundary:
 
@@ -281,9 +281,9 @@ The SmartPBX adapter buffers bounded early `start`/`media` messages that arrive 
 The same live-provider adapter smoke can be run for all telephony websocket shapes:
 
 ```bash
-SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
-SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
-SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=twilio pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=telnyx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
+SYRINX_TELEPHONY_PROVIDER=smartpbx pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:telephony-university-live
 ```
 
 This smoke uses live Deepgram, Gemini, Cartesia, and the recorder while emulating each provider websocket locally. It waits for paced carrier playout to drain before stop/hangup so recorder artifacts represent audio that reached the carrier boundary.

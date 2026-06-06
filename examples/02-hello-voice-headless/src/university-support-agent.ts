@@ -4,14 +4,14 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@asyncdot/voice";
-import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
-import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
-import { PipecatEOSPlugin } from "@asyncdot/voice-turn-pipecat";
-import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
-import { GeminiTTSPlugin } from "@asyncdot/voice-tts-gemini";
-import { DeepgramTTSPlugin } from "@asyncdot/voice-tts-deepgram";
-import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
+import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@kuralle-syrinx/core";
+import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
+import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
+import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn";
+import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
+import { GeminiTTSPlugin } from "@kuralle-syrinx/gemini";
+import { DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
+import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
 

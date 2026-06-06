@@ -12,8 +12,8 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TtsErrorPacket,
-} from "@asyncdot/voice";
-import { GeminiTTSPlugin } from "@asyncdot/voice-tts-gemini";
+} from "@kuralle-syrinx/core";
+import { GeminiTTSPlugin } from "@kuralle-syrinx/gemini";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
 

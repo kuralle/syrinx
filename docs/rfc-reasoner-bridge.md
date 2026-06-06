@@ -24,7 +24,7 @@ Delivered in three reviewable steps:
 
 ## 2. Motivation
 
-`AISDKBridgePlugin` (`packages/voice-bridge-aisdk/src/index.ts`) is the LLM stage of the cascade: it consumes `eos.turn_complete {text}` and emits `llm.delta` / `llm.tool_call` / `llm.tool_result` / `llm.done` packets. It is excellent — it owns history, retry, finish-reason validation, turn-superseding, and a genuinely sophisticated barge-in that rewrites history to the **spoken prefix** (what the user actually heard, via word-timestamps + playout position). But it is **welded to the AI SDK**: its only injection seam, `streamFactory`, returns `AsyncGenerator<TextStreamPart<ToolSet>>` — AI-SDK-typed.
+`AISDKBridgePlugin` (`packages/aisdk/src/index.ts`) is the LLM stage of the cascade: it consumes `eos.turn_complete {text}` and emits `llm.delta` / `llm.tool_call` / `llm.tool_result` / `llm.done` packets. It is excellent — it owns history, retry, finish-reason validation, turn-superseding, and a genuinely sophisticated barge-in that rewrites history to the **spoken prefix** (what the user actually heard, via word-timestamps + playout position). But it is **welded to the AI SDK**: its only injection seam, `streamFactory`, returns `AsyncGenerator<TextStreamPart<ToolSet>>` — AI-SDK-typed.
 
 We want callers to bind their *own* agent framework to voice. The two concrete targets:
 
@@ -63,7 +63,7 @@ Both have `.stream()` — but agree on **nothing else** (args, return shape, res
 ### 4.2 The `Reasoner` seam
 
 ```ts
-// packages/voice/src/reasoner.ts  (new — lives in core so adapters/bridge share it)
+// packages/core/src/reasoner.ts  (new — lives in core so adapters/bridge share it)
 
 /** A reasoning backend reduced to one normalized pull-stream per turn. */
 export interface Reasoner {
@@ -117,7 +117,7 @@ The `suspended` and `error` variants are designed in **now** (zero-tech-debt —
 ### 4.3 Adapters (where the per-framework glue lives)
 
 ```ts
-// packages/voice-bridge-aisdk/src/from-ai-sdk.ts
+// packages/aisdk/src/from-ai-sdk.ts
 export function fromAiSdkAgent(agent: AiSdkAgentLike, opts?): Reasoner;       // wraps (await agent.stream()).fullStream
 export function fromStreamText(config: StreamTextConfig): Reasoner;           // raw streamText, as an adapter
 // (B2) Preserves today's test seam: the current bridge is constructed with an
@@ -125,7 +125,7 @@ export function fromStreamText(config: StreamTextConfig): Reasoner;           //
 // seam must survive as a Reasoner adapter — otherwise "behavior unchanged" is a lie.
 export function fromStreamFactory(factory: AISDKStreamFactory): Reasoner;     // async-generator of TextStreamPart → Reasoner
 
-// packages/voice-bridge-mastra/src/from-mastra.ts   (new package, step 2)
+// packages/mastra/src/from-mastra.ts   (new package, step 2)
 export function fromMastraAgent(agent: MastraAgentLike, opts?): Reasoner;     // wraps (await agent.stream(messages)).fullStream; resumeStream for step-3 resume
 ```
 
@@ -222,10 +222,10 @@ Four interfaces were designed in parallel:
 
 ## 7. Validation & testing
 
-- **Step 1 is a refactor, not a feature. (B2)** The 9 existing tests in `packages/voice-bridge-aisdk/src/index.test.ts` each construct `new AISDKBridgePlugin(async function*(){…})` — an `AISDKStreamFactory`. Their **assertions and behavior stay byte-for-byte identical**; the *only* change is the construction line `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (a mechanical, one-line-per-test edit that preserves the exact streamed sequence). "Pass unchanged" was imprecise — the *test logic* is unchanged, the *constructor call* adapts. That is still the zero-behavior-change proof: same inputs, same asserted outputs.
+- **Step 1 is a refactor, not a feature. (B2)** The 9 existing tests in `packages/aisdk/src/index.test.ts` each construct `new AISDKBridgePlugin(async function*(){…})` — an `AISDKStreamFactory`. Their **assertions and behavior stay byte-for-byte identical**; the *only* change is the construction line `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (a mechanical, one-line-per-test edit that preserves the exact streamed sequence). "Pass unchanged" was imprecise — the *test logic* is unchanged, the *constructor call* adapts. That is still the zero-behavior-change proof: same inputs, same asserted outputs.
 - New per-adapter unit tests: `TextStreamPart`/Mastra chunk → `ReasoningPart` mapping (**including the `error`/`tool-error`/`finish-step` → `error` paths — B1**); barge-in spoken-prefix preserved; finish-reason validation; retry triggered by an `error` part.
 - **Edge stays clean:** `scripts/verify-edge-bundle.sh` continues to pass (no Node-only deps pulled by the new files).
-- **Live proof on the deployed worker** (`https://syrinx-voice-server-workers.mithushancj.workers.dev`): the opt-in worker turn (`pnpm --filter @asyncdot/voice-server-workers test:live`, `SYRINX_LIVE_WORKER_TEST=1`) drives a real turn through the generalized bridge with an AI SDK backend (step 1) and a Mastra backend (step 2). Step 3 adds a Miniflare/workerd test that drives a **suspend → [hibernate] → resume across two turns** asserting the `runId` row survives.
+- **Live proof on the deployed worker** (`https://syrinx-voice-server-workers.mithushancj.workers.dev`): the opt-in worker turn (`pnpm --filter @kuralle-syrinx/server-workers test:live`, `SYRINX_LIVE_WORKER_TEST=1`) drives a real turn through the generalized bridge with an AI SDK backend (step 1) and a Mastra backend (step 2). Step 3 adds a Miniflare/workerd test that drives a **suspend → [hibernate] → resume across two turns** asserting the `runId` row survives.
 - Baseline: `pnpm -r typecheck && pnpm -r test` green throughout.
 
 ---
@@ -249,7 +249,7 @@ The bridge sits on the **LLM-TTFT** stage and sets the streaming cadence into TT
 
 **Measurable acceptance (not asserted — instrumented). (M3)** The numbers above (~350 ms LLM-TTFT, etc.) are *literature budgets*, not our baseline — and the deployed worker's LLM-TTFT is far higher and network-noisy (real provider RTT, observed on the order of ~1.3 s), so "within a few ms of 350 ms" is meaningless against that floor. The gate is therefore framed as **no regression vs *our own* captured baseline on a stable, repeatable local harness** — not the literature budget, and not the noisy deployed worker:
 
-1. **Capture the baseline before step 1** on the pre-refactor `main`/`v2` HEAD using `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive`, which already reports per-stage **LLM-TTFT P50/P95** over a fixed scripted run. Record the numbers (commit them under `docs/latency-budget.md`).
+1. **Capture the baseline before step 1** on the pre-refactor `main`/`v2` HEAD using `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive`, which already reports per-stage **LLM-TTFT P50/P95** over a fixed scripted run. Record the numbers (commit them under `docs/latency-budget.md`).
 2. **After each step**, re-run the *same* harness on the *same* fixture and assert **LLM-TTFT P50 and P95 are within the run-to-run variance band of that baseline** (establish the band from 3 baseline runs; typical target ≤ ~5 % or a few ms, whichever is larger). A regression beyond the band is a blocker — the refactor is rejected, not merged.
 3. The deployed-worker turn (step 1.5) is a *functional* live proof (transcribes + returns TTS), **not** the latency gate — its variance is too high to gate on.
 
@@ -263,20 +263,20 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 
 | # | Commit | Acceptance / proof |
 |---|---|---|
-| 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/voice/src/reasoner.ts`, exported from `voice/src/index.ts`. No consumers yet. | `pnpm --filter @asyncdot/voice typecheck`; new types compile, nothing references them. |
+| 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/core/src/reasoner.ts`, exported from `core/src/index.ts`. No consumers yet. | `pnpm --filter @kuralle-syrinx/core typecheck`; new types compile, nothing references them. |
 | 1.0 | `chore(latency): capture pre-refactor LLM-TTFT baseline` **(M3)** — run `smoke:websocket-interactive` ×3 on `v2` HEAD; record LLM-TTFT P50/P95 + the variance band in `docs/latency-budget.md`. | baseline committed; band documented. This is the denominator every later latency gate compares against. |
-| 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/voice/src/reasoner.ts` incl. the `error` and `suspended` variants (B1); exported from `voice/src/index.ts`. No consumers yet. | `pnpm --filter @asyncdot/voice typecheck`; the union matches RFC §4.2 (incl. `error`). |
-| 1.2 | `refactor(bridge): add fromAiSdkAgent + fromStreamText + fromStreamFactory adapters → Reasoner` — map the full `TextStreamPart` union → `ReasoningPart` (§4.3), **including `error`/`tool-error`/`finish-step` → `error` (B1)** and `fromStreamFactory` for the existing test seam (B2). Adapter unit tests. | `pnpm --filter @asyncdot/voice-bridge-aisdk test` (new adapter tests green); mapping table covered incl. the **error paths** and dropped part types. |
-| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 6-case `ReasoningPart` switch (incl. `error` → the existing retry/`llm.error` path, B1). Keep history, spoken-prefix barge-in, retry, supersede **identical**. **No buffering** — yield each part immediately (§7a). | **The 9 `index.test.ts` tests: assertions unchanged; each construction line adapts `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (B2).** `pnpm --filter @asyncdot/voice-bridge-aisdk test`. **LLM-TTFT P50/P95 within the baseline band** from 1.0 (§7a/M3). |
+| 1.1 | `feat(voice): add Reasoner seam + ReasoningPart union (types only)` — `packages/core/src/reasoner.ts` incl. the `error` and `suspended` variants (B1); exported from `core/src/index.ts`. No consumers yet. | `pnpm --filter @kuralle-syrinx/core typecheck`; the union matches RFC §4.2 (incl. `error`). |
+| 1.2 | `refactor(bridge): add fromAiSdkAgent + fromStreamText + fromStreamFactory adapters → Reasoner` — map the full `TextStreamPart` union → `ReasoningPart` (§4.3), **including `error`/`tool-error`/`finish-step` → `error` (B1)** and `fromStreamFactory` for the existing test seam (B2). Adapter unit tests. | `pnpm --filter @kuralle-syrinx/aisdk test` (new adapter tests green); mapping table covered incl. the **error paths** and dropped part types. |
+| 1.3 | `refactor(bridge): drive AISDKBridgePlugin from a Reasoner internally` — replace the `streamResponse`/`fullStream` loop with `reasoner.stream(turn)` + a 6-case `ReasoningPart` switch (incl. `error` → the existing retry/`llm.error` path, B1). Keep history, spoken-prefix barge-in, retry, supersede **identical**. **No buffering** — yield each part immediately (§7a). | **The 9 `index.test.ts` tests: assertions unchanged; each construction line adapts `new AISDKBridgePlugin(fn)` → `new ReasoningBridge(fromStreamFactory(fn))` (B2).** `pnpm --filter @kuralle-syrinx/aisdk test`. **LLM-TTFT P50/P95 within the baseline band** from 1.0 (§7a/M3). |
 | 1.4 | `refactor(bridge): rename to ReasoningBridge; accept a Reasoner only (no auto-wrap)` **(B3)** — constructor takes a `Reasoner`; callers wrap via `fromAiSdkAgent`/`fromStreamText`/`fromStreamFactory`. **No `.stream()`-probe discriminator.** Update `live-session.ts` + examples to the explicit wrap. Remove `AISDKBridgePlugin` (zero-debt) or keep a thin alias only if a caller needs it. | `pnpm -r typecheck && pnpm -r test`; no call site uses auto-wrap. |
-| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + drive one turn on the deployed worker (functional proof). Re-run `smoke:websocket-interactive` for the **latency gate** (M3) — the deployed turn is NOT the latency gate. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @asyncdot/voice-server-workers test`; deployed `/ws` turn transcribes + returns TTS; **`smoke:websocket-interactive` LLM-TTFT within the 1.0 baseline band**. |
+| 1.5 | `test(edge): live worker turn through the generalized bridge (AI SDK)` — confirm `verify-edge-bundle.sh` clean; run the opt-in live worker turn; deploy + drive one turn on the deployed worker (functional proof). Re-run `smoke:websocket-interactive` for the **latency gate** (M3) — the deployed turn is NOT the latency gate. | `bash scripts/verify-edge-bundle.sh`; `SYRINX_LIVE_WORKER_TEST=1 pnpm --filter @kuralle-syrinx/server-workers test`; deployed `/ws` turn transcribes + returns TTS; **`smoke:websocket-interactive` LLM-TTFT within the 1.0 baseline band**. |
 
 ### Step 2 — `fromMastraAgent`
 
 | # | Commit | Acceptance / proof |
 |---|---|---|
-| 2.1 | `feat(bridge-mastra): new @asyncdot/voice-bridge-mastra package` — `fromMastraAgent(agent) → Reasoner`; map `processDataStream` chunks → `ReasoningPart` (§4.3); deps `@mastra/core` (+ `@mastra/ai-sdk` only if needed). | `pnpm --filter @asyncdot/voice-bridge-mastra typecheck`. |
-| 2.2 | `test(bridge-mastra): chunk→part mapping + barge-in parity` — unit tests with a scripted Mastra-shaped stream (no network). | `pnpm --filter @asyncdot/voice-bridge-mastra test`. |
+| 2.1 | `feat(bridge-mastra): new @kuralle-syrinx/mastra package` — `fromMastraAgent(agent) → Reasoner`; map `processDataStream` chunks → `ReasoningPart` (§4.3); deps `@mastra/core` (+ `@mastra/ai-sdk` only if needed). | `pnpm --filter @kuralle-syrinx/mastra typecheck`. |
+| 2.2 | `test(bridge-mastra): chunk→part mapping + barge-in parity` — unit tests with a scripted Mastra-shaped stream (no network). | `pnpm --filter @kuralle-syrinx/mastra test`. |
 | 2.3 | `feat(examples): drive ReasoningBridge with a Mastra agent via fromMastraAgent` — wire a Mastra-backed `new ReasoningBridge(fromMastraAgent(agent))` into the worker/example (explicit adapter, no auto-wrap — B3). | `pnpm -r typecheck && pnpm -r test`; edge bundle still clean (Mastra adapter must not pull Node-only deps; gate if it does). |
 | 2.4 | `test(edge): live worker turn through a Mastra-backed bridge` (opt-in, deployed). | `SYRINX_LIVE_WORKER_TEST=1 ...`; deployed turn with a Mastra agent. |
 
@@ -284,11 +284,11 @@ Each row is one atomic, independently-reviewable commit. Acceptance = the listed
 
 | # | Commit | Acceptance / proof |
 |---|---|---|
-| 3.1 | `feat(voice): reasoning.suspended + reasoning.resume packets` — add to the packet union + factories; `ReasonerTurn.resume` already exists from 1.1. | `pnpm --filter @asyncdot/voice typecheck`; packet tests. |
-| 3.2 | `feat(bridge-mastra): emit suspended part + resume re-entry` — adapter maps `tool-call-suspended`→`suspended` (terminal) and routes `turn.resume` to `agent.resumeStream(data,{runId})`. | `pnpm --filter @asyncdot/voice-bridge-mastra test` (scripted suspend→resume). |
+| 3.1 | `feat(voice): reasoning.suspended + reasoning.resume packets` — add to the packet union + factories; `ReasonerTurn.resume` already exists from 1.1. | `pnpm --filter @kuralle-syrinx/core typecheck`; packet tests. |
+| 3.2 | `feat(bridge-mastra): emit suspended part + resume re-entry` — adapter maps `tool-call-suspended`→`suspended` (terminal) and routes `turn.resume` to `agent.resumeStream(data,{runId})`. | `pnpm --filter @kuralle-syrinx/mastra test` (scripted suspend→resume). |
 | 3.3 | `feat(bridge): persist suspended runId, resume on next turn + spoken-prefix reconciliation` — bridge handles the `suspended` part: speak `prompt`, emit `reasoning.suspended`, persist `{runId,contextId,payload}` via an injected `RunStore`; on a turn with a pending run, build a `resume` turn. **(B4)** Implement `onResumeConflict: "restart" \| "replay"` (default `restart`): if a spoken-prefix correction landed since suspend, discard + re-ask instead of `resumeStream`. Barge-in on a suspended run discards it. | bridge unit tests with a fake `RunStore`: suspend→resume (clean), **suspend→barge-in→resume → `restart` (no stale checkpoint)**, barge-in-discards. |
-| 3.4 | `feat(voice-server-workers): DurableObjectRunStore on ctx.storage.sql` — one `reasoning_runs` table, mirrors `DurableObjectSessionStore`; wire into the DO; alarm-GC stale rows (TTL). | `pnpm --filter @asyncdot/voice-server-workers test`. |
-| 3.5 | `test(edge): suspend → hibernate → resume across two voice turns (workerd)` — Miniflare test asserting the run resumes after the DO is evicted between turns. | `pnpm --filter @asyncdot/voice-server-workers test` (the new DO suspend/resume test). |
+| 3.4 | `feat(voice-server-workers): DurableObjectRunStore on ctx.storage.sql` — one `reasoning_runs` table, mirrors `DurableObjectSessionStore`; wire into the DO; alarm-GC stale rows (TTL). | `pnpm --filter @kuralle-syrinx/server-workers test`. |
+| 3.5 | `test(edge): suspend → hibernate → resume across two voice turns (workerd)` — Miniflare test asserting the run resumes after the DO is evicted between turns. | `pnpm --filter @kuralle-syrinx/server-workers test` (the new DO suspend/resume test). |
 
 **Rollback:** every step-1 commit is behavior-preserving, so any can be reverted independently; steps 2–3 are additive (new package / opt-in path) and revert without touching the AI SDK path.
 
