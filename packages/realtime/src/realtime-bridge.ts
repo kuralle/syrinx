@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-import { randomUUID } from "node:crypto";
-
 import {
   Route,
   categorizeLlmError,
@@ -14,6 +12,7 @@ import {
   type PipelineBus,
   type PluginConfig,
   type Reasoner,
+  type ReasonerMessage,
   type UserAudioReceivedPacket,
   type SttResultPacket,
   type TextToSpeechAudioPacket,
@@ -27,6 +26,16 @@ import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
 
 const ENGINE_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES_20MS = 320;
+const FRAME_BYTES_20MS = FRAME_SAMPLES_20MS * 2;
+
+export interface RealtimeBridgeOptions {
+  readonly debug?: boolean;
+  /**
+   * Supplies prior conversation context for delegate Reasoner turns. When omitted the delegate is
+   * stateless — each tool call receives only the query extracted from the front-model tool args.
+   */
+  readonly contextProvider?: () => readonly ReasonerMessage[];
+}
 
 export class RealtimeBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -35,12 +44,14 @@ export class RealtimeBridge implements VoicePlugin {
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
   private playedMs = 0;
+  private audioRemainder: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private readonly disposers: Array<() => void> = [];
 
   constructor(
     private readonly adapter: RealtimeAdapter,
     private readonly reasoner?: Reasoner,
-    private readonly delegateToolName = "ask_university",
+    private readonly delegateToolName = "consult_knowledge",
+    private readonly opts: RealtimeBridgeOptions = {},
   ) {}
 
   async initialize(bus: PipelineBus, _cfg: PluginConfig): Promise<void> {
@@ -86,8 +97,13 @@ export class RealtimeBridge implements VoicePlugin {
         if (!this.bus) return;
         await this.handleEvent(bus, ev);
       }
-    } catch {
-      // Pump ends when adapter closes or the session aborts.
+    } catch (err) {
+      if (!this.bus || isAbortError(err)) return;
+      this.onError(
+        this.bus,
+        err instanceof Error ? err : new Error(String(err)),
+        false,
+      );
     }
   }
 
@@ -100,13 +116,18 @@ export class RealtimeBridge implements VoicePlugin {
         this.onAudio(bus, ev.pcm16, ev.sampleRateHz);
         break;
       case "transcript":
-        // Only the USER's final transcript is the turn's user text / stt.result.
-        // The adapter currently emits assistant transcripts (the model's own speech); those are
-        // not user input and must not be recorded as stt.result.
         if (ev.final && ev.role === "user") this.onFinalTranscript(bus, ev.text);
         break;
       case "tool_call":
-        if (ev.toolName === this.delegateToolName && this.reasoner) {
+        if (this.reasoner) {
+          if (ev.toolName !== this.delegateToolName) {
+            const cause = new Error(
+              `Unexpected tool call "${ev.toolName}" (expected "${this.delegateToolName}")`,
+            );
+            if (this.opts.debug) console.error("[realtime-bridge]", cause.message);
+            this.onError(bus, cause, true);
+            break;
+          }
           await this.runDelegate(bus, ev);
         }
         break;
@@ -144,9 +165,10 @@ export class RealtimeBridge implements VoicePlugin {
     let answer = "";
 
     try {
+      const messages = this.opts.contextProvider?.() ?? [];
       for await (const part of this.reasoner!.stream({
         userText: String(ev.args["query"] ?? ""),
-        messages: [],
+        messages,
         signal: this.inflight.signal,
       })) {
         switch (part.type) {
@@ -156,13 +178,20 @@ export class RealtimeBridge implements VoicePlugin {
           case "tool-result":
             break;
           case "finish":
-            answer = answer || part.text;
+            if (!answer && part.text) answer = part.text;
             break;
-          case "suspended":
-            throw new Error("delegate suspended — cannot voice inline");
+          case "suspended": {
+            const cause = new Error(
+              part.prompt ?? "delegate suspended — cannot voice inline without resume",
+            );
+            if (this.opts.debug) console.error("[realtime-bridge]", cause.message, part.payload);
+            this.onError(bus, cause, false);
+            return;
+          }
           case "error":
             if (!part.recoverable) throw part.cause;
-            break;
+            this.onError(bus, part.cause, true);
+            return;
         }
       }
     } catch (err) {
@@ -171,6 +200,11 @@ export class RealtimeBridge implements VoicePlugin {
       return;
     } finally {
       this.inflight = undefined;
+    }
+
+    if (answer.length === 0) {
+      this.onError(bus, new Error("delegate produced no output"), false);
+      return;
     }
 
     const toolResult: LlmToolResultPacket = {
@@ -198,9 +232,10 @@ export class RealtimeBridge implements VoicePlugin {
 
   private onResponseStarted(bus: PipelineBus): void {
     const previousContextId = this.contextId;
-    this.contextId = randomUUID();
+    this.contextId = globalThis.crypto.randomUUID();
     this.turnUserText = "";
     this.playedMs = 0;
+    this.audioRemainder = new Uint8Array(0);
     const packet: TurnChangePacket = {
       kind: "turn.change",
       contextId: this.contextId,
@@ -214,16 +249,8 @@ export class RealtimeBridge implements VoicePlugin {
   private onAudio(bus: PipelineBus, pcm16: Uint8Array, sampleRateHz: number): void {
     if (!this.contextId) return;
     const resampled = resamplePcm16Bytes(pcm16, sampleRateHz, ENGINE_SAMPLE_RATE_HZ);
-    for (const frame of chunkPcm16To20msFrames(resampled, ENGINE_SAMPLE_RATE_HZ)) {
-      const packet: TextToSpeechAudioPacket = {
-        kind: "tts.audio",
-        contextId: this.contextId,
-        timestampMs: Date.now(),
-        audio: frame,
-        sampleRateHz: ENGINE_SAMPLE_RATE_HZ,
-      };
-      bus.push(Route.Main, packet);
-    }
+    this.audioRemainder = concatBytes(this.audioRemainder, resampled);
+    this.emitCoalescedAudio(bus, false);
   }
 
   private onFinalTranscript(bus: PipelineBus, text: string): void {
@@ -241,6 +268,9 @@ export class RealtimeBridge implements VoicePlugin {
 
   private onResponseDone(bus: PipelineBus): void {
     if (!this.contextId) return;
+    this.emitCoalescedAudio(bus, true);
+    this.audioRemainder = new Uint8Array(0);
+
     const timestampMs = Date.now();
     const transcripts: SttResultPacket[] = this.turnUserText
       ? [{
@@ -266,6 +296,51 @@ export class RealtimeBridge implements VoicePlugin {
     bus.push(Route.Main, turnComplete, ttsEnd);
   }
 
+  private emitCoalescedAudio(bus: PipelineBus, flush: boolean): void {
+    if (!this.contextId) return;
+
+    let buf = this.audioRemainder;
+    if (buf.byteLength === 0) return;
+
+    let processLen = buf.byteLength;
+    if (processLen % 2 !== 0) {
+      processLen -= 1;
+    }
+    if (processLen < 2) return;
+
+    let offset = 0;
+    while (offset + FRAME_BYTES_20MS <= processLen) {
+      const frame = buf.subarray(offset, offset + FRAME_BYTES_20MS);
+      this.pushAudioFrame(bus, frame);
+      offset += FRAME_BYTES_20MS;
+    }
+
+    const trailingEven = processLen - offset;
+    if (flush && trailingEven >= 2) {
+      this.pushAudioFrame(bus, buf.subarray(offset, offset + trailingEven));
+      offset += trailingEven;
+    }
+
+    const leftoverStart = offset;
+    const leftoverEnd = buf.byteLength;
+    this.audioRemainder =
+      leftoverStart < leftoverEnd
+        ? new Uint8Array(buf.subarray(leftoverStart, leftoverEnd))
+        : new Uint8Array(0);
+  }
+
+  private pushAudioFrame(bus: PipelineBus, frame: Uint8Array): void {
+    if (frame.byteLength % 2 !== 0 || frame.byteLength === 0) return;
+    const packet: TextToSpeechAudioPacket = {
+      kind: "tts.audio",
+      contextId: this.contextId,
+      timestampMs: Date.now(),
+      audio: frame,
+      sampleRateHz: ENGINE_SAMPLE_RATE_HZ,
+    };
+    bus.push(Route.Main, packet);
+  }
+
   private onError(bus: PipelineBus, cause: Error, isRecoverable: boolean): void {
     const packet: LlmErrorPacket = {
       kind: "llm.error",
@@ -280,11 +355,20 @@ export class RealtimeBridge implements VoicePlugin {
   }
 }
 
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.byteLength + b.byteLength);
+  out.set(a, 0);
+  out.set(b, a.byteLength);
+  return out;
+}
+
 function resamplePcm16Bytes(pcm16: Uint8Array, fromHz: number, toHz: number): Uint8Array {
-  if (fromHz === toHz) return pcm16;
+  if (fromHz === toHz) return new Uint8Array(pcm16);
   const samples = new Int16Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength / 2);
   const out = resamplePcm16(samples, fromHz, toHz);
-  return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
+  const bytes = new Uint8Array(out.byteLength);
+  bytes.set(new Uint8Array(out.buffer, out.byteOffset, out.byteLength));
+  return bytes;
 }
 
 function resamplePcm16(samples: Int16Array, fromHz: number, toHz: number): Int16Array {
@@ -304,18 +388,4 @@ function resamplePcm16(samples: Int16Array, fromHz: number, toHz: number): Int16
 
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
-}
-
-function chunkPcm16To20msFrames(pcm16: Uint8Array, sampleRateHz: number): Uint8Array[] {
-  const samples = new Int16Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength / 2);
-  const frameSamples = sampleRateHz === ENGINE_SAMPLE_RATE_HZ
-    ? FRAME_SAMPLES_20MS
-    : Math.max(1, Math.round(sampleRateHz * 0.02));
-  const frames: Uint8Array[] = [];
-  for (let offset = 0; offset < samples.length; offset += frameSamples) {
-    const end = Math.min(offset + frameSamples, samples.length);
-    const slice = samples.subarray(offset, end);
-    frames.push(new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength));
-  }
-  return frames;
 }

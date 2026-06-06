@@ -19,25 +19,91 @@ turn-taking; the async back owns the facts. See `docs/rfc-realtime-bridge.md` an
   runs the delegate loop on the front model's `ask_university`-style tool call and feeds the answer back
   via `function_call_output` for the front model to voice.
 
-## Usage
+## Two modes (and how the back model plugs in)
+
+The `RealtimeBridge` runs in two modes; the back "meat" model plugs in via the **`Reasoner` seam** — the
+*same* framework adapters the cascade `ReasoningBridge` uses (`@kuralle-syrinx/aisdk`'s
+`fromStreamText`/`fromAiSdkAgent`/`fromStreamFactory`, `@kuralle-syrinx/mastra`'s `fromMastraAgent`). You
+pass the **`Reasoner`**, not the `ReasoningBridge` plugin (the bridge runs it as a delegate tool and feeds
+the result back for the front model to voice — using the `ReasoningBridge` plugin here would double-speak).
 
 ```ts
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
-import { fromStreamText } from "@kuralle-syrinx/aisdk"; // the back "meat" Reasoner
+import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 
 const adapter = fromOpenAIRealtime({
   apiKey: process.env.OPENAI_API_KEY!,
-  socketFactory: createNodeWsSocket,            // from @kuralle-syrinx/ws/node
-  // turnDetection defaults to semantic_vad; server_vad is more deterministic for tests/telephony:
-  // turnDetection: { type: "server_vad", silence_duration_ms: 500 },
+  socketFactory: createNodeWsSocket,
+  // turnDetection defaults to semantic_vad; server_vad is more deterministic for tests/telephony.
+  // tools: [...]  // domain tools the front model may call — supplied by YOU, never hardcoded here.
 });
 
-const reasoner = fromStreamText({ model, system: UNIVERSITY_SUPPORT_PROMPT, tools: { resolveLateAddRequest } });
+// (1) STANDALONE — pure s2s, the realtime model answers from its own knowledge:
+session.registerPlugin("realtime", new RealtimeBridge(adapter));
 
-session.registerPlugin("realtime", new RealtimeBridge(adapter, reasoner));
-// run the session with endpointingOwner:"timer" — the s2s model owns turn detection,
-// so NO STT/VAD/TTS plugins are registered on the live path.
+// (2) BI-MODEL with an AI SDK back (the "meat"):
+import { fromStreamText } from "@kuralle-syrinx/aisdk";
+const aiReasoner = fromStreamText({ model, system, tools: { resolveLateAddRequest } });
+const adapterA = fromOpenAIRealtime({ ...opts, tools: [{ name: "ask_kb", description: "...", parameters: {/*JSON Schema*/} }] });
+session.registerPlugin("realtime", new RealtimeBridge(adapterA, aiReasoner, "ask_kb"));
+
+// (3) BI-MODEL with a Mastra back — identical wiring, just a different Reasoner factory:
+import { fromMastraAgent } from "@kuralle-syrinx/mastra";
+const mastraReasoner = fromMastraAgent(myMastraAgent);
+session.registerPlugin("realtime", new RealtimeBridge(adapterA, mastraReasoner, "ask_kb"));
 ```
+
+Run the session with `endpointingOwner:"timer"` — the s2s model owns turn detection, so NO STT/VAD/TTS
+plugins are registered on the live path. The **delegate tool is caller-supplied**: pass the tool def to
+the adapter (`tools`) and its name as the bridge's 3rd arg (`delegateToolName`); the adapter is fully
+domain-neutral (it never hardcodes any tool). The same `Reasoner` backends also power the cascade
+`ReasoningBridge` — only the front (s2s vs STT→TTS) differs.
+
+## Deploy on Cloudflare Workers
+
+`@kuralle-syrinx/realtime` is **edge-clean**: no `Buffer`, `process`, or `node:crypto` in `src/`. The
+adapter is **provider-socket-agnostic** — inject whichever `@kuralle-syrinx/ws` factory your runtime needs.
+On Workers, outbound provider WebSockets that require auth headers use the fetch-upgrade path via
+`createWorkersSocket` (not the global `WebSocket` constructor, which cannot set headers).
+
+Wire secrets through the Worker **`env` binding** (Wrangler secrets / vars), not `process.env`. Pass
+`apiKey` and `debug` as constructor options:
+
+```ts
+import { VoiceAgentSession } from "@kuralle-syrinx/core";
+import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
+import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
+
+/** Bound in wrangler.jsonc / dashboard — e.g. OPENAI_API_KEY secret. */
+export interface Env {
+  readonly OPENAI_API_KEY: string;
+}
+
+export function createRealtimeVoiceSession(env: Env): VoiceAgentSession {
+  const adapter = fromOpenAIRealtime({
+    apiKey: env.OPENAI_API_KEY,
+    socketFactory: createWorkersSocket,
+    debug: false,
+    turnDetection: { type: "semantic_vad" },
+  });
+
+  const session = new VoiceAgentSession({
+    endpointingOwner: "timer",
+    plugins: { realtime: {} },
+  });
+  session.registerPlugin("realtime", new RealtimeBridge(adapter));
+  return session;
+}
+```
+
+**Durable Object session shape** (see `packages/server-workers`): the Worker `fetch` handler routes
+`/ws?sessionId=…` to a `VoiceConversation` Durable Object. The DO accepts the client upgrade via
+`WebSocketPair`, constructs the `VoiceAgentSession` (cascade or bi-model realtime — same env-injection
+pattern), and pumps audio over the accepted socket. Provider outbound legs (OpenAI Realtime, Deepgram,
+Cartesia, …) all dial through `createWorkersSocket` so auth headers ride on the fetch upgrade.
+
+Regression lock: `edge-safety.test.ts` runs the adapter + bridge with `Buffer` and `process` removed from
+`globalThis`.
 
 ## Capability model
 

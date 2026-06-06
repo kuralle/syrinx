@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { ManagedSocket, SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 
 import type { RealtimeEvent } from "./realtime-adapter.js";
-import { fromOpenAIRealtime } from "./from-openai-realtime.js";
+import { base64ToBytes, bytesToBase64, fromOpenAIRealtime } from "./from-openai-realtime.js";
 
 interface MockSocketHarness {
   readonly factory: SocketFactory;
@@ -72,6 +72,13 @@ describe("fromOpenAIRealtime", () => {
       apiKey: "test-key",
       socketFactory: mock.factory,
       url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      tools: [
+        {
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        },
+      ],
     });
 
     const openTask = adapter.open(new AbortController().signal);
@@ -99,8 +106,8 @@ describe("fromOpenAIRealtime", () => {
         tools: [
           {
             type: "function",
-            name: "ask_university",
-            description: "Answer university student-relations questions (enrollment, add/drop, advising).",
+            name: "consult_knowledge",
+            description: "Answer knowledge questions.",
             parameters: {
               type: "object",
               properties: { query: { type: "string" } },
@@ -116,7 +123,7 @@ describe("fromOpenAIRealtime", () => {
     adapter.sendAudio(pcm);
     expect(JSON.parse(mock.sent[1]!)).toEqual({
       type: "input_audio_buffer.append",
-      audio: Buffer.from(pcm).toString("base64"),
+      audio: bytesToBase64(pcm),
     });
 
     mock.inject({ type: "response.created" });
@@ -165,7 +172,7 @@ describe("fromOpenAIRealtime", () => {
     });
     mock.inject({
       type: "response.output_audio.delta",
-      delta: Buffer.from(audioBytes).toString("base64"),
+      delta: bytesToBase64(audioBytes),
     });
     mock.inject({ type: "input_audio_buffer.speech_started" });
     mock.inject({
@@ -183,7 +190,7 @@ describe("fromOpenAIRealtime", () => {
           {
             type: "function_call",
             call_id: "call_123",
-            name: "ask_university",
+            name: "consult_knowledge",
             arguments: JSON.stringify({ query: "late add biology" }),
           },
         ],
@@ -204,7 +211,7 @@ describe("fromOpenAIRealtime", () => {
       {
         type: "tool_call",
         toolId: "call_123",
-        toolName: "ask_university",
+        toolName: "consult_knowledge",
         args: { query: "late add biology" },
       },
       { type: "response_done" },
@@ -227,5 +234,139 @@ describe("fromOpenAIRealtime", () => {
       supportsConcurrentToolAudio: true,
       supportsTruncate: true,
     });
+  });
+
+  it("R-04: base64 encode/decode works without Buffer or process", async () => {
+    const savedBuffer = (globalThis as { Buffer?: unknown }).Buffer;
+    const savedProcess = (globalThis as { process?: unknown }).process;
+    delete (globalThis as { Buffer?: unknown }).Buffer;
+    delete (globalThis as { process?: unknown }).process;
+
+    try {
+      const pcm = new Uint8Array([0, 1, 2, 3, 255, 128]);
+      const encoded = bytesToBase64(pcm);
+      expect(base64ToBytes(encoded)).toEqual(pcm);
+
+      const mock = createMockSocketHarness();
+      const adapter = fromOpenAIRealtime({
+        apiKey: "test-key",
+        socketFactory: mock.factory,
+        url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      });
+
+      const openTask = adapter.open(new AbortController().signal);
+      await waitFor(() => mock.sent.length > 0);
+      mock.inject({ type: "session.updated" });
+      await openTask;
+
+      adapter.sendAudio(pcm);
+      const sent = JSON.parse(mock.sent[1]!) as { audio: string };
+      expect(sent.audio).toBe(encoded);
+    } finally {
+      if (savedBuffer !== undefined) (globalThis as { Buffer?: unknown }).Buffer = savedBuffer;
+      if (savedProcess !== undefined) (globalThis as { process?: unknown }).process = savedProcess;
+    }
+  });
+
+  it("R-06: forwards optional session config into session.update", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      instructions: "You are a helpful assistant.",
+      modalities: ["audio", "text"],
+      temperature: 0.7,
+      inputTranscription: { model: "whisper-1" },
+      toolChoice: "required",
+      inputRateHz: 16000,
+      outputRateHz: 16000,
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    expect(JSON.parse(mock.sent[0]!)).toEqual({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        model: "gpt-realtime-2",
+        output_modalities: ["audio", "text"],
+        instructions: "You are a helpful assistant.",
+        temperature: 0.7,
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 16000 },
+            turn_detection: { type: "semantic_vad" },
+            transcription: { model: "whisper-1" },
+          },
+          output: {
+            format: { type: "audio/pcm", rate: 16000 },
+            voice: "marin",
+          },
+        },
+        tools: [],
+        tool_choice: "required",
+      },
+    });
+    expect(adapter.caps.inputSampleRateHz).toBe(16000);
+    expect(adapter.caps.outputSampleRateHz).toBe(16000);
+  });
+
+  it("R-10: skips response.create when requiresResponseCreateAfterToolOutput is false", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      requiresResponseCreateAfterToolOutput: false,
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    adapter.injectToolResult("call_xyz", "done");
+    expect(mock.sent).toHaveLength(2);
+    expect(JSON.parse(mock.sent[1]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: "call_xyz",
+        output: "done",
+      },
+    });
+  });
+
+  it("R-11: does not truncate stale item when new response is canceled before output_item.added", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({ type: "response.created" });
+    mock.inject({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_old" },
+    });
+    mock.inject({ type: "response.done" });
+
+    mock.inject({ type: "response.created" });
+    adapter.cancelResponse(100);
+
+    const truncateMessages = mock.sent
+      .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+      .filter((msg) => msg["type"] === "conversation.item.truncate");
+    expect(truncateMessages).toHaveLength(0);
   });
 });

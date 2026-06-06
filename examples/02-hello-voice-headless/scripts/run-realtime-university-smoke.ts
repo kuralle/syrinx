@@ -23,7 +23,7 @@ import {
 } from "@kuralle-syrinx/core";
 import { fromStreamText } from "@kuralle-syrinx/aisdk";
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
-import type { RealtimeAdapter, RealtimeEvent } from "@kuralle-syrinx/realtime";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "@kuralle-syrinx/realtime";
 import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 
 import { DEFAULT_MODEL, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
@@ -37,6 +37,17 @@ const FIXTURE_PATH = join(PKG_ROOT, "test", "fixtures", "university-support-add-
 const OUTPUT_DIR = join(PKG_ROOT, "test", "performance", "runs", "realtime-university-smoke");
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES = 320;
+
+// The front-model delegate tool lives in the EXAMPLE (domain-specific), not the generic adapter.
+const ASK_UNIVERSITY_TOOL: RealtimeToolDef = {
+  name: "ask_university",
+  description: "Answer university student-relations questions (enrollment, add/drop, advising).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string" } },
+    required: ["query"],
+  },
+};
 
 const UNIVERSITY_SUPPORT_PROMPT = [
   "You are Syrinx University's Student Relations voice agent.",
@@ -177,6 +188,7 @@ async function main(): Promise<void> {
     apiKey,
     socketFactory: createNodeWsSocket,
     turnDetection: { type: "server_vad", silence_duration_ms: 500 },
+    tools: [ASK_UNIVERSITY_TOOL],
   });
   const adapter = teeRealtimeAdapter(baseAdapter, (ev) => {
     if (ev.type === "tool_call") {
@@ -201,7 +213,7 @@ async function main(): Promise<void> {
     stopWhen: stepCountIs(4),
   });
 
-  const bridge = new RealtimeBridge(adapter, universityReasoner);
+  const bridge = new RealtimeBridge(adapter, universityReasoner, ASK_UNIVERSITY_TOOL.name);
 
   const session = new VoiceAgentSession({
     plugins: { realtime: {} },
