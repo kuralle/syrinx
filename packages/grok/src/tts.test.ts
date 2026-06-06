@@ -9,7 +9,7 @@ import {
   type TextToSpeechEndPacket,
 } from "@kuralle-syrinx/core";
 
-import { bytesToBase64 } from "./base64.js";
+import { bytesToBase64 } from "@kuralle-syrinx/realtime";
 import { GrokTTSPlugin } from "./tts.js";
 
 let servers: WebSocketServer[] = [];
