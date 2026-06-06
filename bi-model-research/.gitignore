@@ -2,3 +2,5 @@
 moshi-rag/
 # Large source PDF — reproducible from arxiv; the parsed .txt is committed instead.
 *.pdf
+openai-agents-js/
+openai-agents-python/

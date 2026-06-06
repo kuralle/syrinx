@@ -36,6 +36,9 @@
     "smoke:realtime-oneturn": "tsx scripts/run-realtime-oneturn-smoke.ts",
     "smoke:realtime-bargein": "tsx scripts/run-realtime-bargein-smoke.ts",
     "smoke:realtime-university": "tsx scripts/run-realtime-university-smoke.ts",
+    "smoke:grok-stt": "tsx scripts/run-grok-stt-smoke.ts",
+    "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
+    "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
     "test": "vitest run"
   },
@@ -56,6 +59,7 @@
     "@kuralle-syrinx/cartesia": "workspace:*",
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/gemini": "workspace:*",
+    "@kuralle-syrinx/grok": "workspace:*",
     "@kuralle-syrinx/pipecat-smart-turn": "workspace:*",
     "@kuralle-syrinx/silero-vad": "workspace:*",
     "@evan/opus": "1.0.3",
