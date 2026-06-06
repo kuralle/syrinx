@@ -1,8 +1,0 @@
-{
-  "section": "## 4. Barge-In / Interruption",
-  "items_checked": 7,
-  "citations_checked": 18,
-  "aligned_count": 7,
-  "findings": [],
-  "summary": "All 7 checklist items in the Barge-In / Interruption section verified against ground-truth code, notes, and sources. Every code citation opens to the claimed mechanism within range: audio_recognition.py:152 (_audio_input_atask continuous input, backed by BARGE-01), frame_processor.py:119-154 (FrameProcessorQueue system-frame priority) and :996-1042 (system frames processed first), agent_activity.py:1249-1284 (cancel preemptive gen + interrupt current/queued speech), frame_processor.py:632-637 (InterruptionFrame -> _start_interruption), base_output.py:538-555 and tts_service.py:902-918 (selective reset keeping uninterruptible frames), turn.py:117-125 (_INTERRUPTION_DEFAULTS), stt_callback.go:60-78 (listen.threshold confidence gate), synchronizer.py:294-299 (synchronized_transcript = spoken prefix), agent_activity.py:2415-2448 (forwarded_text added to chat ctx with interrupted flag), base_output.py:379-380 (pts handle_timed_frame, backed by BARGE-08), agent_activity.py:3669 (_start_false_interruption_timer + _pause_enabled can_pause). Numbers confirmed: min_duration 0.5 s (turn.py:120), false_interruption_timeout 2.0 s (turn.py:123), backchannel_boundary (1.0,1.0) (turn.py:124). Source-only flags honest: Vapi <100ms interruption sequence confirmed source-only at vapi-pipeline-part-2.md:49 ('must complete in under 100ms'); no OSS clone measures it. All 9 BARGE note refs plus ARCH-03, LAT-10, TTS-11, TURN-11, STT-03, XPORT-10 exist and support their items. No misalignments or minor issues found."
-}

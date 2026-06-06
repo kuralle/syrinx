@@ -13,11 +13,9 @@ research-notes/
 .handoff/
 .antigravitycli/
 
-# Voice-engine knowledge-research: never commit the cloned upstream repos (306MB, own .git)
-# or the raw copyrighted source PDF (the parsed .md text is kept as provenance).
-knowledge-research/_clones/
-knowledge-research/_sources/pdf/*.pdf
-knowledge-research/_sources/blogs/img/
+# Research, notes & internal reviews live in the private repo octalpixel/kuralle-syrinx-research.
+# Keep this checkout free of them (ignored if cloned in here locally for reference).
+knowledge-research/
 
 # edge-bundle verification artifact
 .edge-build/

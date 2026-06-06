@@ -1,9 +1,0 @@
-{
-  "bridge": "VE-08 Bridge — Tier-1 Hardening",
-  "citations_checked": 6,
-  "absence_claims_checked": 8,
-  "aligned_count": 14,
-  "overall": "PASS",
-  "findings": [],
-  "summary": "All six state citations verified at or near the cited lines: semantic-completeness.ts:51 (BACKCHANNEL regex at 51-52), latency-filler.ts:41 (start() emits selectLatencyFillerConnective), voice-tts-cartesia/src/index.ts:243 (word-timestamp emission), packets.ts:201 (UserInputPacket.language at 204), packets.ts:120 (DenoiseAudioPacket reserved stage). packets.ts:162 cites the SttResultPacket interface header; its language? field is at 166 (same interface, acceptable precision). All eight absence claims survive adversarial grep: no preempt/speculative/eager-EOT symbol or EagerEotPacket anywhere; denoise.audio/denoise.result are only declared+re-exported in packets.ts and voice/src/index.ts with no plugin producing or consuming them; no pronunciation/phoneme/lexicon/dictionary code; no FEC/inband-fec code; scripts/run-kernel-benchmark.ts is an end-to-end STT/LLM/TTS cascade latency benchmark, not a VAD-vs-alternative benchmark, so 'VAD benchmarking MISSING' holds; the only 'resume' hits are session-connection resumption (session-store.ts resumed:boolean), not false-interruption playout resume; the only packets.ts language-switch hit is ModeSwitchRequestedPacket (text/voice mode), not language-triggered TTS voice switching. All implementation-approach file paths exist (turn-arbiter.ts, voice-agent-session.ts, voice-bridge-aisdk/src/index.ts, voice-vad-silero, packets.ts). No WRONG/MISCITED findings."
-}

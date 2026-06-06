@@ -1,9 +1,0 @@
-{
-  "bridge": "VE-07 — Observability & SLOs",
-  "citations_checked": 8,
-  "absence_claims_checked": 9,
-  "aligned_count": 17,
-  "overall": "PASS",
-  "findings": [],
-  "summary": "All 8 state citations in VE-07's 'Current state' section verify against the cited files at/near the claimed lines: pipeline-bus.ts:59 (allPackets ReadableStream), voice-agent-session.ts:224 (bus construction with onPacket hook at 225-227), voice-agent-session.ts:219 (createConversationEventStream debug stream at 220), turn-metrics.ts:23 (BrowserMetricsMessage), turn-arbiter.ts:178 (vaqi.interruption metric, exact), voice-agent-session.ts:797 (vaqi.latency_ms block, metric at 799), voice-agent-session-util.ts:125 (vaqi.missed_response, exact), and PROVIDER-TESTING.md:1 (title). All 'Missing' absence claims hold up under grep: no prometheus, otel/opentelemetry, histogram, startSpan/trace spans, SLO, turn_boundary/TurnBoundary, or MetricsExporter/observeHistogram anywhere in packages/ or scripts/. The files the Implementation approach proposes to touch (conversation-event.ts, packets.ts, packet-factories.ts) all exist; the proposed new observability.ts does not yet exist (correctly described as net-new). baseline-v2.json exists at repo root. No over-claims, no mis-described behavior."
-}

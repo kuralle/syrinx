@@ -1,8 +1,0 @@
-{
-  "section": "## 3. Turn-Taking & Endpointing",
-  "items_checked": 8,
-  "citations_checked": 16,
-  "aligned_count": 8,
-  "findings": [],
-  "summary": "All 8 items in the Turn-Taking & Endpointing section are aligned with ground truth. VAD state machine + defaults (confidence 0.7, start/stop 0.2s, min_volume 0.6) verified at vad_analyzer.py:24-27 and the QUIET->STARTING->SPEAKING->STOPPING transition table at 206-243. Endpointing budget citations (metrics/base.py EOUMetrics 94-105; speech_timeout strategy) confirmed. Semantic EOT strategy citations (user_turn_strategies.py 27-51, audio_recognition.py:1106) confirmed. Cartesia provider-owned turn protocol (turn.start/turn.end at stt.py 60-63) confirmed; deepgram source-only flag honest. Eager/preemptive EOT (agent_activity.py 1872-1919 schedule_speech=False, 2086-2111 validate-and-commit) matches the pseudocode. Backchannel numbers (turn.py 108-125: min_duration=0.5, false_interruption_timeout=2.0, backchannel_boundary=(1.0,1.0); defaults.ts 7-10: THRESHOLD=0.5, 2x25ms frames) all match. Multi-VAD benchmark (vad.go:27 silero/ten/firered + BENCHMARK_COMPARISON.md with Apple M1 Pro numbers) confirmed. All Evidence note IDs (TURN-01/03-12, OBS-05, LAT-09/10, BARGE-06) exist and support their items; numbers are internally consistent across checklist, code, and notes."
-}
