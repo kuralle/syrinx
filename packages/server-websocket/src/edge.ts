@@ -350,6 +350,9 @@ function wireEdgeSessionEvents(
   };
 
   onSession("user_input_final", (event) => {
+    // Skip empty transcripts — a trailing-silence turn (e.g. realtime VAD re-triggering on silence)
+    // produces an empty user input that would render as a blank transcript bubble.
+    if (!event.text.trim()) return;
     sendJson(socket, { type: "stt_output", turnId: event.turnId, transcript: event.text, confidence: event.confidence });
   });
   onSession("agent_text_delta", (event) => {
