@@ -83,6 +83,7 @@ export type SyrinxStudioMessage =
   | { readonly type: "agent_interrupted"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "audio_clear"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "tts_end"; readonly turnId?: string }
+  | { readonly type: "turn_complete"; readonly turnId?: string; readonly transcript: string }
   | {
       readonly type: "tts_chunk";
       readonly turnId?: string;
@@ -704,6 +705,13 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
       message: requiredString(value.message, "error.message"),
     };
   }
+  if (type === "turn_complete") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "turn_complete.turnId"),
+      transcript: typeof value.transcript === "string" ? value.transcript : "",
+    };
+  }
   throw new Error(`Unsupported Syrinx websocket message type: ${type}`);
 }
 
@@ -745,7 +753,9 @@ function requiredString(value: unknown, name: string): string {
 }
 
 function optionalString(value: unknown, name: string): string | undefined {
-  if (value === undefined) return undefined;
+  // An optional field that arrives empty/null carries no value — treat as absent rather than
+  // throwing. (Servers may emit e.g. `tts_end.turnId: ""` when a turn has no context id.)
+  if (value === undefined || value === null || value === "") return undefined;
   return requiredString(value, name);
 }
 

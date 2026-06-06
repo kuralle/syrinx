@@ -140,8 +140,22 @@ export class IdleTimeoutManager {
     this.timerScheduled = false;
   }
 
+  /**
+   * Resolve a non-empty context id for injected idle turns. If no turn context has been seen yet
+   * (e.g. the idle timer fired before the first user turn completed), synthesize a stable one —
+   * an empty contextId propagates downstream and is rejected by providers that validate it
+   * (e.g. Cartesia TTS: "context_id must be alphanumeric/_/-").
+   */
+  private ensureContextId(): string {
+    if (this.currentContextId === "") {
+      this.currentContextId = `idle-${String(Date.now())}`;
+    }
+    return this.currentContextId;
+  }
+
   private onTimeout(): void {
     this.count++;
+    const contextId = this.ensureContextId();
 
     // Check if we should disconnect
     if (
@@ -151,7 +165,7 @@ export class IdleTimeoutManager {
     ) {
       const disconnect: DisconnectRequestedPacket = {
         kind: "session.disconnect",
-        contextId: this.currentContextId,
+        contextId,
         timestampMs: Date.now(),
         reason: `idle_timeout: ${this.count} consecutive`,
       };
@@ -168,7 +182,7 @@ export class IdleTimeoutManager {
     if (message) {
       const inject: InjectMessagePacket = {
         kind: "inject.message",
-        contextId: this.currentContextId,
+        contextId,
         timestampMs: Date.now(),
         text: message,
       };
