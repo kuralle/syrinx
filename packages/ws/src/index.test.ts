@@ -206,4 +206,145 @@ describe("WebSocketConnection", () => {
 
     await conn.close();
   });
+
+  it("rejects openSocket when the socket factory never resolves", async () => {
+    const connectTimeoutMs = 50;
+    const hangingFactory: SocketFactory = () =>
+      new Promise<ManagedSocket>(() => {
+        /* never resolves */
+      });
+
+    const conn = new WebSocketConnection({
+      url: () => "ws://127.0.0.1:1/",
+      socketFactory: hangingFactory,
+      connectTimeoutMs,
+      retry: FAST_RETRY,
+      onMessage: () => undefined,
+    });
+
+    const startedAt = Date.now();
+    await expect(conn.connect()).rejects.toThrow(/connect timeout/i);
+    expect(Date.now() - startedAt).toBeLessThan(connectTimeoutMs + 100);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(connectTimeoutMs - 10);
+
+    await conn.close();
+  });
+
+  it("rejects openSocket when the socket fires no event after construction", async () => {
+    const connectTimeoutMs = 50;
+    const silentSocket: ManagedSocket = {
+      get isOpen() {
+        return false;
+      },
+      send: () => undefined,
+      keepAlivePing: () => undefined,
+      verify: async () => false,
+      dispose: () => undefined,
+      onOpen: () => undefined,
+      onMessage: () => undefined,
+      onClose: () => undefined,
+      onError: () => undefined,
+    };
+    const socketFactory: SocketFactory = () => silentSocket;
+
+    const conn = new WebSocketConnection({
+      url: () => "ws://127.0.0.1:1/",
+      socketFactory,
+      connectTimeoutMs,
+      retry: { maxAttempts: 2, baseDelayMs: 5, maxDelayMs: 10 },
+      maxReconnectAttempts: 1,
+      minStableMs: 0,
+      onMessage: () => undefined,
+    });
+
+    const startedAt = Date.now();
+    await expect(conn.connect()).rejects.toThrow(/connect timeout/i);
+    expect(Date.now() - startedAt).toBeLessThan(connectTimeoutMs + 100);
+
+    await conn.close();
+  });
+
+  it("reconnects after openSocket times out on a silent socket during tryReconnect", async () => {
+    const connectTimeoutMs = 40;
+    let factoryCalls = 0;
+    const { url, server } = await createServer((socket) => {
+      socket.on("message", () => undefined);
+    });
+
+    const silentSocket: ManagedSocket = {
+      get isOpen() {
+        return false;
+      },
+      send: () => undefined,
+      keepAlivePing: () => undefined,
+      verify: async () => false,
+      dispose: () => undefined,
+      onOpen: () => undefined,
+      onMessage: () => undefined,
+      onClose: () => undefined,
+      onError: () => undefined,
+    };
+
+    const socketFactory: SocketFactory = (targetUrl, headers) => {
+      factoryCalls += 1;
+      if (factoryCalls === 2) return silentSocket;
+      return createNodeWsSocket(targetUrl, headers);
+    };
+
+    let reconnected = 0;
+    const conn = new WebSocketConnection({
+      url: () => url,
+      socketFactory,
+      connectTimeoutMs,
+      retry: { maxAttempts: 3, baseDelayMs: 5, maxDelayMs: 10 },
+      minStableMs: 0,
+      onMessage: () => undefined,
+      onReconnected: () => {
+        reconnected += 1;
+      },
+    });
+
+    await conn.connect();
+    expect(factoryCalls).toBe(1);
+
+    for (const client of server.clients) client.terminate();
+    await waitFor(() => reconnected >= 1, 5000);
+    expect(factoryCalls).toBeGreaterThanOrEqual(3);
+
+    await conn.close();
+  });
+
+  it("gives up after maxReconnectDurationMs when the link keeps flapping", async () => {
+    const minStableMs = 30;
+    const maxReconnectDurationMs = 200;
+    const { url } = await createServer((socket) => {
+      setTimeout(() => socket.close(1011, "flap"), minStableMs + 1);
+    });
+
+    let unrecoverable: Error | null = null;
+    let reconnects = 0;
+    const conn = new WebSocketConnection({
+      url: () => url,
+      socketFactory: createNodeWsSocket,
+      retry: { maxAttempts: 50, baseDelayMs: 5, maxDelayMs: 10 },
+      minStableMs,
+      maxQuickFailures: 100,
+      maxReconnectDurationMs,
+      maxReconnectAttempts: 50,
+      onMessage: () => undefined,
+      onReconnected: () => {
+        reconnects += 1;
+      },
+      onUnrecoverable: (err) => {
+        unrecoverable = err;
+      },
+    });
+    await conn.connect();
+    await waitFor(() => unrecoverable !== null, 5000);
+
+    expect((unrecoverable! as Error).message).toContain(String(maxReconnectDurationMs));
+    expect(reconnects).toBeGreaterThanOrEqual(1);
+
+    await conn.close();
+  });
 });

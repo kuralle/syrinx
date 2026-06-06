@@ -34,6 +34,8 @@ export interface ManagedSocket {
   send(data: SocketData): void;
   /** Fire-and-forget liveness ping (Node WS ping frame). No-op where unsupported. */
   keepAlivePing(): void;
+  /** When true, verify() sends a WS ping frame and awaits a pong (Node/Bun only). */
+  readonly supportsFramePing?: boolean;
   /** Probe liveness: Node pings and awaits a pong; the built-in WebSocket just reports readyState. */
   verify(timeoutMs: number): Promise<boolean>;
   /** Remove listeners and close — used when replacing or tearing down. */
@@ -67,6 +69,10 @@ export interface WebSocketConnectionOptions {
   /** Consecutive quick failures before giving up (backoff can't fix an instantly-closing socket). */
   readonly maxQuickFailures?: number;
   readonly connectTimeoutMs?: number;
+  /** App-level round-trip liveness check used on runtimes without WS ping frames (web/workers). */
+  readonly livenessProbe?: (socket: ManagedSocket) => Promise<boolean>;
+  /** Max wall-clock time for a reconnect burst before giving up. */
+  readonly maxReconnectDurationMs?: number;
   readonly scheduler?: Scheduler;
   readonly onMessage: (data: SocketData, isBinary: boolean) => void;
   /** Called once when a live connection drops unexpectedly, with the close cause — for
@@ -110,12 +116,15 @@ export class WebSocketConnection {
   private keepAliveScheduled = false;
   private lastConnectAtMs = 0;
   private quickFailures = 0;
+  private reconnectBurstStartedAtMs: number | null = null;
+  private reconnectBurstResetKey: string;
   private pendingReplay: SocketData[] = [];
 
   constructor(private readonly opts: WebSocketConnectionOptions) {
     this.scheduler = opts.scheduler ?? new TimerScheduler();
     connectionSequence += 1;
     this.keepAliveKey = `voice-ws.keepalive:${String(connectionSequence)}`;
+    this.reconnectBurstResetKey = `voice-ws.burst-reset:${String(connectionSequence)}`;
   }
 
   private get replayBufferSize(): number {
@@ -192,6 +201,8 @@ export class WebSocketConnection {
   async close(): Promise<void> {
     this.closed = true;
     this.pendingReplay = [];
+    this.cancelReconnectBurstReset();
+    this.reconnectBurstStartedAtMs = null;
     this.stopKeepAlive();
     this.abortPendingOpen(new Error("WebSocket connection closed"));
     this.connResolver = null;
@@ -225,70 +236,128 @@ export class WebSocketConnection {
     this.socket?.dispose();
     this.ready = false;
 
-    const socket = await this.opts.socketFactory(this.opts.url(), this.opts.headers ?? {});
-    this.socket = socket;
+    let socket: ManagedSocket | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
 
-    return new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const settle = (fn: () => void) => {
-        if (!settled) {
+    const clearDeadline = (): void => {
+      if (deadlineTimer !== undefined) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+      }
+    };
+
+    const disposeAttempt = (): void => {
+      socket?.dispose();
+      if (socket === this.socket) this.socket = null;
+    };
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        deadlineTimer = setTimeout(() => {
+          if (settled) return;
           settled = true;
+          clearDeadline();
+          this.abortOpen = null;
+          disposeAttempt();
+          reject(new Error("WebSocket connect timeout"));
+        }, this.connectTimeoutMs);
+
+        const settle = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          clearDeadline();
           this.abortOpen = null;
           fn();
-        }
-      };
+        };
 
-      // settle() resolves THIS attempt's promise and is always safe to call (it
-      // is idempotent and owned by this socket). The shared connection state,
-      // however, must only be touched by the *current* socket: a socket replaced
-      // by a reconnect can emit a late close/message, and acting on it would
-      // clobber the healthy connection or trigger a spurious reconnect.
-      const isActive = (): boolean => socket === this.socket;
+        // settle() resolves THIS attempt's promise and is always safe to call (it
+        // is idempotent and owned by this socket). The shared connection state,
+        // however, must only be touched by the *current* socket: a socket replaced
+        // by a reconnect can emit a late close/message, and acting on it would
+        // clobber the healthy connection or trigger a spurious reconnect.
+        const bindSocket = (active: ManagedSocket): boolean => active === this.socket;
 
-      this.abortOpen = () => {
-        settle(() => reject(new Error("WebSocket connection disposed")));
-      };
+        this.abortOpen = () => {
+          settle(() => reject(new Error("WebSocket connection disposed")));
+        };
 
-      socket.onOpen(() => {
-        settle(resolve);
-        if (!isActive()) return;
-        this.ready = true;
-        this.lastConnectAtMs = Date.now();
-        this.startKeepAlive();
-        this.connResolver?.();
-        this.connResolver = null;
-        this.connRejecter = null;
+        void (async () => {
+          try {
+            const created = await this.opts.socketFactory(this.opts.url(), this.opts.headers ?? {});
+            if (settled) {
+              created.dispose();
+              return;
+            }
+            socket = created;
+            this.socket = created;
+
+            created.onOpen(() => {
+              settle(resolve);
+              if (!bindSocket(created)) return;
+              this.ready = true;
+              this.lastConnectAtMs = Date.now();
+              this.startKeepAlive();
+              this.connResolver?.();
+              this.connResolver = null;
+              this.connRejecter = null;
+            });
+
+            created.onMessage((data, isBinary) => {
+              if (!bindSocket(created)) return;
+              this.opts.onMessage(data, isBinary);
+            });
+
+            created.onError((err) => {
+              settle(() => reject(err));
+              if (!bindSocket(created)) return;
+              this.ready = false;
+              this.connRejecter?.(err);
+              this.connResolver = null;
+              this.connRejecter = null;
+            });
+
+            created.onClose((code, reason) => {
+              const closeErr = closeError(code, reason);
+              settle(() => reject(closeErr));
+              if (!bindSocket(created)) return;
+              this.ready = false;
+              this.stopKeepAlive();
+              this.connRejecter?.(closeErr);
+              this.connResolver = null;
+              this.connRejecter = null;
+              if (!this.closed && !this.reconnecting) {
+                this.opts.onConnectionLost?.(closeErr);
+                void this.tryReconnect();
+              }
+            });
+          } catch (err) {
+            settle(() => reject(err instanceof Error ? err : new Error(String(err))));
+          }
+        })();
       });
+    } catch (err) {
+      if (!settled) {
+        settled = true;
+        clearDeadline();
+        this.abortOpen = null;
+        disposeAttempt();
+      }
+      throw err;
+    }
+  }
 
-      socket.onMessage((data, isBinary) => {
-        if (!isActive()) return;
-        this.opts.onMessage(data, isBinary);
-      });
-
-      socket.onError((err) => {
-        settle(() => reject(err));
-        if (!isActive()) return;
-        this.ready = false;
-        this.connRejecter?.(err);
-        this.connResolver = null;
-        this.connRejecter = null;
-      });
-
-      socket.onClose((code, reason) => {
-        const closeErr = closeError(code, reason);
-        settle(() => reject(closeErr));
-        if (!isActive()) return;
-        this.ready = false;
-        this.stopKeepAlive();
-        this.connRejecter?.(closeErr);
-        this.connResolver = null;
-        this.connRejecter = null;
-        if (!this.closed && !this.reconnecting) {
-          this.opts.onConnectionLost?.(closeErr);
-          void this.tryReconnect();
-        }
-      });
-    });
+  private async verifyConnection(timeoutMs: number): Promise<boolean> {
+    const socket = this.socket;
+    if (!socket) return false;
+    if (socket.supportsFramePing) return socket.verify(timeoutMs);
+    if (this.opts.livenessProbe) {
+      return await Promise.race([
+        this.opts.livenessProbe(socket),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+      ]);
+    }
+    return socket.verify(timeoutMs);
   }
 
   private abortPendingOpen(err: Error): void {
@@ -305,6 +374,16 @@ export class WebSocketConnection {
     if (this.reconnecting || this.closed) return;
     this.reconnecting = true;
     try {
+      const maxDurationMs = this.opts.maxReconnectDurationMs;
+      if (maxDurationMs !== undefined) {
+        if (this.reconnectBurstStartedAtMs === null) {
+          this.reconnectBurstStartedAtMs = Date.now();
+        } else if (Date.now() - this.reconnectBurstStartedAtMs > maxDurationMs) {
+          this.giveUp(new Error(`WebSocket reconnect exceeded ${String(maxDurationMs)}ms`));
+          return;
+        }
+      }
+
       // Quick-failure guard: a socket that re-opens then dies within minStableMs,
       // repeatedly, will never be fixed by backoff (the handshake keeps
       // succeeding — usually a bad key or policy rejection). Stop and surface it.
@@ -326,10 +405,17 @@ export class WebSocketConnection {
       const maxAttempts = this.opts.maxReconnectAttempts ?? this.opts.retry.maxAttempts;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         if (this.closed) return;
+        if (maxDurationMs !== undefined && this.reconnectBurstStartedAtMs !== null) {
+          if (Date.now() - this.reconnectBurstStartedAtMs > maxDurationMs) {
+            this.giveUp(new Error(`WebSocket reconnect exceeded ${String(maxDurationMs)}ms`));
+            return;
+          }
+        }
         this.opts.onReconnecting?.();
         try {
           await this.openSocket();
-          if (this.socket && (await this.socket.verify(VERIFY_TIMEOUT_MS))) {
+          if (this.socket && (await this.verifyConnection(VERIFY_TIMEOUT_MS))) {
+            this.scheduleReconnectBurstReset();
             this.opts.onReadyBeforeReplay?.();
             this.flushReplay();
             this.opts.onReconnected?.();
@@ -349,6 +435,7 @@ export class WebSocketConnection {
 
   private giveUp(err: Error): void {
     this.closed = true;
+    this.cancelReconnectBurstReset();
     this.stopKeepAlive();
     this.socket?.dispose();
     this.socket = null;
@@ -389,6 +476,22 @@ export class WebSocketConnection {
 
   private get maxQuickFailures(): number {
     return this.opts.maxQuickFailures ?? DEFAULT_MAX_QUICK_FAILURES;
+  }
+
+  private cancelReconnectBurstReset(): void {
+    this.scheduler.cancel(this.reconnectBurstResetKey);
+  }
+
+  private scheduleReconnectBurstReset(): void {
+    if (this.reconnectBurstStartedAtMs === null) return;
+    const burstStarted = this.reconnectBurstStartedAtMs;
+    const stableMs = this.minStableMs * 2;
+    this.cancelReconnectBurstReset();
+    this.scheduler.schedule(this.reconnectBurstResetKey, stableMs, () => {
+      if (this.reconnectBurstStartedAtMs === burstStarted && this.ready && this.socket?.isOpen) {
+        this.reconnectBurstStartedAtMs = null;
+      }
+    });
   }
 }
 

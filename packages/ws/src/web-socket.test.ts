@@ -75,6 +75,44 @@ describe("WebSocketConnection over the standard WebSocket (Workers/browser)", ()
     await conn.close();
     expect(fake.readyState).toBe(3);
   });
+
+  it("verify fails when livenessProbe gets no reply and reconnect continues", async () => {
+    let activeFake: FakeWebSocket | null = null;
+    let probeCalls = 0;
+    let reconnecting = 0;
+
+    const conn = new WebSocketConnection({
+      url: () => "wss://example/v1",
+      socketFactory: () => {
+        activeFake = new FakeWebSocket();
+        queueMicrotask(() => activeFake!.fireOpen());
+        return wrapWebSocket(activeFake);
+      },
+      retry: FAST_RETRY,
+      minStableMs: 0,
+      connectTimeoutMs: 500,
+      livenessProbe: async () => {
+        probeCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return false;
+      },
+      onMessage: () => undefined,
+      onReconnecting: () => {
+        reconnecting += 1;
+      },
+    });
+
+    await conn.connect();
+    expect(conn.isReady).toBe(true);
+
+    activeFake!.close();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(probeCalls).toBeGreaterThanOrEqual(1);
+    expect(reconnecting).toBeGreaterThanOrEqual(1);
+
+    await conn.close();
+  });
 });
 
 describe("wrapWebSocket skip-open (workerd fetch-upgrade)", () => {

@@ -149,6 +149,9 @@ describe("fromOpenAIRealtime", () => {
         output: "Late Add Petition required.",
       },
     });
+    expect(mock.sent).toHaveLength(5);
+
+    mock.inject({ type: "response.done", response: {} });
     expect(JSON.parse(mock.sent[5]!)).toEqual({ type: "response.create" });
   });
 
@@ -339,6 +342,77 @@ describe("fromOpenAIRealtime", () => {
         output: "done",
       },
     });
+  });
+
+  it("B1: does not send response.create while response is active (cancel-in-flight interleaving)", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({ type: "response.created" });
+    mock.inject({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_assistant_1" },
+    });
+
+    adapter.cancelResponse(420);
+    expect(JSON.parse(mock.sent[1]!)).toEqual({ type: "response.cancel" });
+    expect(JSON.parse(mock.sent[2]!)).toEqual({
+      type: "conversation.item.truncate",
+      item_id: "item_assistant_1",
+      content_index: 0,
+      audio_end_ms: 420,
+    });
+
+    adapter.injectToolResult("call_abc", "Late Add Petition required.");
+    const typesAfterInject = mock.sent.map(
+      (raw) => (JSON.parse(raw) as Record<string, unknown>)["type"],
+    );
+    expect(typesAfterInject).toContain("conversation.item.create");
+    expect(typesAfterInject).not.toContain("response.create");
+
+    mock.inject({ type: "response.done", response: {} });
+    const typesAfterDone = mock.sent.map(
+      (raw) => (JSON.parse(raw) as Record<string, unknown>)["type"],
+    );
+    expect(typesAfterDone.filter((t) => t === "response.create")).toHaveLength(1);
+    expect(JSON.parse(mock.sent[mock.sent.length - 1]!)).toEqual({ type: "response.create" });
+  });
+
+  it("B1: does not send response.create while response is active (direct inject without cancel)", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({ type: "response.created" });
+
+    adapter.injectToolResult("call_xyz", "inline result");
+    const typesAfterInject = mock.sent.map(
+      (raw) => (JSON.parse(raw) as Record<string, unknown>)["type"],
+    );
+    expect(typesAfterInject).toContain("conversation.item.create");
+    expect(typesAfterInject).not.toContain("response.create");
+
+    mock.inject({ type: "response.done", response: {} });
+    expect(
+      mock.sent.map((raw) => (JSON.parse(raw) as Record<string, unknown>)["type"]),
+    ).toContain("response.create");
   });
 
   it("R-11: does not truncate stale item when new response is canceled before output_item.added", async () => {
