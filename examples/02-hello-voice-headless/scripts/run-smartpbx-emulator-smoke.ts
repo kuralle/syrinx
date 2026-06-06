@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
 import { Decoder as OpusDecoder, Encoder as OpusEncoder } from "@evan/opus";
-import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import { createSmartPbxMediaStreamServer } from "@asyncdot/voice-server-websocket";
-import { encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
+import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
+import { createSmartPbxMediaStreamServer } from "@kuralle-syrinx/server-websocket";
+import { encodePcm16ToMuLaw, pcm16BytesToSamples, pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 
 import {
   pcMuDurationMs,

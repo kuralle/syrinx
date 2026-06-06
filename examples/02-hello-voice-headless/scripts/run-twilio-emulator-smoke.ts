@@ -5,9 +5,9 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
-import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@asyncdot/voice";
-import { createTwilioMediaStreamServer } from "@asyncdot/voice-server-websocket";
-import { encodePcm16ToMuLaw, pcm16SamplesToBytes } from "@asyncdot/voice/audio";
+import { Route, VoiceAgentSession, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
+import { createTwilioMediaStreamServer } from "@kuralle-syrinx/server-websocket";
+import { encodePcm16ToMuLaw, pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 
 import {
   pcMuDurationMs,

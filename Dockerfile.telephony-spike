@@ -18,4 +18,4 @@ ENV SYRINX_SYNTHETIC_CARRIER_PORT=4180
 
 EXPOSE 4180
 
-CMD ["pnpm", "--filter", "@asyncdot-example/02-hello-voice-headless", "telephony:spike"]
+CMD ["pnpm", "--filter", "@kuralle-syrinx-example/02-hello-voice-headless", "telephony:spike"]

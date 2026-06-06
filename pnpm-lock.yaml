@@ -28,48 +28,45 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../../packages/voice
-      '@asyncdot/voice-bridge-aisdk':
-        specifier: workspace:*
-        version: link:../../packages/voice-bridge-aisdk
-      '@asyncdot/voice-bridge-mastra':
-        specifier: workspace:*
-        version: link:../../packages/voice-bridge-mastra
-      '@asyncdot/voice-client-browser':
-        specifier: workspace:*
-        version: link:../../packages/voice-client-browser
-      '@asyncdot/voice-recorder':
-        specifier: workspace:*
-        version: link:../../packages/voice-recorder
-      '@asyncdot/voice-server-websocket':
-        specifier: workspace:*
-        version: link:../../packages/voice-server-websocket
-      '@asyncdot/voice-stt-deepgram':
-        specifier: workspace:*
-        version: link:../../packages/voice-stt-deepgram
-      '@asyncdot/voice-test':
-        specifier: workspace:*
-        version: link:../../packages/voice-test
-      '@asyncdot/voice-tts-cartesia':
-        specifier: workspace:*
-        version: link:../../packages/voice-tts-cartesia
-      '@asyncdot/voice-tts-deepgram':
-        specifier: workspace:*
-        version: link:../../packages/voice-tts-deepgram
-      '@asyncdot/voice-tts-gemini':
-        specifier: workspace:*
-        version: link:../../packages/voice-tts-gemini
-      '@asyncdot/voice-turn-pipecat':
-        specifier: workspace:*
-        version: link:../../packages/voice-turn-pipecat
-      '@asyncdot/voice-vad-silero':
-        specifier: workspace:*
-        version: link:../../packages/voice-vad-silero
       '@evan/opus':
         specifier: 1.0.3
         version: 1.0.3
+      '@kuralle-syrinx/aisdk':
+        specifier: workspace:*
+        version: link:../../packages/aisdk
+      '@kuralle-syrinx/browser-client':
+        specifier: workspace:*
+        version: link:../../packages/browser-client
+      '@kuralle-syrinx/cartesia':
+        specifier: workspace:*
+        version: link:../../packages/cartesia
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@kuralle-syrinx/deepgram':
+        specifier: workspace:*
+        version: link:../../packages/deepgram
+      '@kuralle-syrinx/gemini':
+        specifier: workspace:*
+        version: link:../../packages/gemini
+      '@kuralle-syrinx/mastra':
+        specifier: workspace:*
+        version: link:../../packages/mastra
+      '@kuralle-syrinx/pipecat-smart-turn':
+        specifier: workspace:*
+        version: link:../../packages/pipecat-smart-turn
+      '@kuralle-syrinx/recorder':
+        specifier: workspace:*
+        version: link:../../packages/recorder
+      '@kuralle-syrinx/server-websocket':
+        specifier: workspace:*
+        version: link:../../packages/server-websocket
+      '@kuralle-syrinx/silero-vad':
+        specifier: workspace:*
+        version: link:../../packages/silero-vad
+      '@kuralle-syrinx/test':
+        specifier: workspace:*
+        version: link:../../packages/test
       '@mastra/core':
         specifier: ^1.41.0
         version: 1.41.0(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3)
@@ -114,23 +111,14 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-bridge-aisdk:
+  packages/aisdk:
     dependencies:
       '@ai-sdk/openai':
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
-      '@asyncdot/voice':
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice
+        version: link:../core
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
@@ -145,30 +133,14 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice-bridge-mastra:
+  packages/browser-client:
     dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-    devDependencies:
-      '@mastra/core':
-        specifier: ^1.41.0
-        version: 1.41.0(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-client-browser:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
       '@evan/opus':
         specifier: 1.0.3
         version: 1.0.3
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       typescript:
         specifier: ^5.7.0
@@ -180,11 +152,137 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice-recorder:
+  packages/cartesia:
     dependencies:
-      '@asyncdot/voice':
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice
+        version: link:../core
+      '@kuralle-syrinx/ws':
+        specifier: workspace:*
+        version: link:../ws
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+
+  packages/core:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/deepgram:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuralle-syrinx/ws':
+        specifier: workspace:*
+        version: link:../ws
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+
+  packages/gemini:
+    dependencies:
+      '@google/genai':
+        specifier: ^1.0.0
+        version: 1.52.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/google:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuralle-syrinx/ws':
+        specifier: workspace:*
+        version: link:../ws
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.0
+        version: 8.18.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/mastra:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@mastra/core':
+        specifier: ^1.41.0
+        version: 1.41.0(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/pipecat-smart-turn:
+    dependencies:
+      '@huggingface/transformers':
+        specifier: ^4.2.0
+        version: 4.2.0
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+      onnxruntime-node:
+        specifier: 1.24.3
+        version: 1.24.3
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/recorder:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -196,17 +294,17 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice-server-websocket:
+  packages/server-websocket:
     dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-ws':
-        specifier: workspace:*
-        version: link:../voice-ws
       '@evan/opus':
         specifier: 1.0.3
         version: 1.0.3
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuralle-syrinx/ws':
+        specifier: workspace:*
+        version: link:../ws
       ws:
         specifier: ^8.18.0
         version: 8.21.0
@@ -224,29 +322,29 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice-server-workers:
+  packages/server-workers:
     dependencies:
       '@ai-sdk/openai':
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
-      '@asyncdot/voice':
+      '@kuralle-syrinx/aisdk':
         specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-bridge-aisdk':
+        version: link:../aisdk
+      '@kuralle-syrinx/cartesia':
         specifier: workspace:*
-        version: link:../voice-bridge-aisdk
-      '@asyncdot/voice-server-websocket':
+        version: link:../cartesia
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice-server-websocket
-      '@asyncdot/voice-stt-deepgram':
+        version: link:../core
+      '@kuralle-syrinx/deepgram':
         specifier: workspace:*
-        version: link:../voice-stt-deepgram
-      '@asyncdot/voice-tts-cartesia':
+        version: link:../deepgram
+      '@kuralle-syrinx/server-websocket':
         specifier: workspace:*
-        version: link:../voice-tts-cartesia
-      '@asyncdot/voice-ws':
+        version: link:../server-websocket
+      '@kuralle-syrinx/ws':
         specifier: workspace:*
-        version: link:../voice-ws
+        version: link:../ws
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
@@ -270,20 +368,20 @@ importers:
         specifier: ^4.19.0
         version: 4.97.0(@cloudflare/workers-types@4.20260603.1)
 
-  packages/voice-server-workers-mastra:
+  packages/server-workers-mastra:
     dependencies:
       '@ai-sdk/openai':
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
-      '@asyncdot/voice':
+      '@kuralle-syrinx/aisdk':
         specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-bridge-aisdk':
+        version: link:../aisdk
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice-bridge-aisdk
-      '@asyncdot/voice-bridge-mastra':
+        version: link:../core
+      '@kuralle-syrinx/mastra':
         specifier: workspace:*
-        version: link:../voice-bridge-mastra
+        version: link:../mastra
       '@mastra/cloudflare':
         specifier: ^1.4.1
         version: 1.4.1(@cloudflare/workers-types@4.20260603.1)(@mastra/core@1.41.0(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3))
@@ -310,147 +408,11 @@ importers:
         specifier: ^4.19.0
         version: 4.97.0(@cloudflare/workers-types@4.20260603.1)
 
-  packages/voice-stt-deepgram:
+  packages/silero-vad:
     dependencies:
-      '@asyncdot/voice':
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-ws':
-        specifier: workspace:*
-        version: link:../voice-ws
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.0
-
-  packages/voice-stt-google:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-ws':
-        specifier: workspace:*
-        version: link:../voice-ws
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.0
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-test:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-tts-cartesia:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-ws':
-        specifier: workspace:*
-        version: link:../voice-ws
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.0
-
-  packages/voice-tts-deepgram:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@asyncdot/voice-ws':
-        specifier: workspace:*
-        version: link:../voice-ws
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.0
-
-  packages/voice-tts-gemini:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@google/genai':
-        specifier: ^1.0.0
-        version: 1.52.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-turn-pipecat:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
-      '@huggingface/transformers':
-        specifier: ^4.2.0
-        version: 4.2.0
-      onnxruntime-node:
-        specifier: 1.24.3
-        version: 1.24.3
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)
-
-  packages/voice-vad-silero:
-    dependencies:
-      '@asyncdot/voice':
-        specifier: workspace:*
-        version: link:../voice
+        version: link:../core
       onnxruntime-node:
         specifier: 1.24.3
         version: 1.24.3
@@ -465,11 +427,24 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)
 
-  packages/voice-ws:
+  packages/test:
     dependencies:
-      '@asyncdot/voice':
+      '@kuralle-syrinx/core':
         specifier: workspace:*
-        version: link:../voice
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)
+
+  packages/ws:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
       ws:
         specifier: ^8.18.0
         version: 8.21.0

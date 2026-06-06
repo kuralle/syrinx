@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
-import { decodeMuLawToPcm16, encodePcm16ToMuLaw, resamplePcm16 } from "@asyncdot/voice/audio";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, resamplePcm16 } from "@kuralle-syrinx/core/audio";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,

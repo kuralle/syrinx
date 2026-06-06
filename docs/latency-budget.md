@@ -35,7 +35,7 @@ Computed from the `MetricsExporter` histograms emitted by `ObservabilityObserver
 These are definitions + targets, not a deployed alerting stack — the export backend (Prometheus/OTel) is an optional implementation package per the VE-07 bridge; `InMemoryMetricsExporter` + `reconstructTurnTimeline` cover local/test/incident drill-down (VE-07.5).
 
 ## Where the numbers come from
-- Per-stage timings: `TurnMetricsTracker` (`packages/voice-server-websocket/src/turn-metrics.ts`) + the interactive smoke harness + the `obs.turn_boundary` histograms (VE-07.3).
+- Per-stage timings: `TurnMetricsTracker` (`packages/server-websocket/src/turn-metrics.ts`) + the interactive smoke harness + the `obs.turn_boundary` histograms (VE-07.3).
 - EOU sub-budget (VAD stop hangover + STT-final delay + endpoint delay + sum): `eouBudgetMs` (VE-02.3).
 - Monotonic time source + `cancelled` flag: `observability.ts` `monotonicNowMs` + `ObservabilityObserver` (VE-07), so cancelled attempts never pollute the latency histograms and metrics are exporter-agnostic.
 
@@ -43,7 +43,7 @@ These are definitions + targets, not a deployed alerting stack — the export ba
 
 ## Sprint-1 S1-00 baseline — Reasoner-bridge latency gate denominator (2026-06-05, gpt-4.1-mini)
 
-Captured on `v2` HEAD **before** the `Reasoner` re-home (commit `1db701f`), via `pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:websocket-interactive` ×3. This is the **denominator** every Reasoner-bridge latency gate (S1-01, S1-02, S1-03, and Sprints 2–3) compares against per RFC §7a / M3 — *no regression vs our own baseline*, **not** the literature budget and **not** the noisy deployed worker.
+Captured on `v2` HEAD **before** the `Reasoner` re-home (commit `1db701f`), via `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:websocket-interactive` ×3. This is the **denominator** every Reasoner-bridge latency gate (S1-01, S1-02, S1-03, and Sprints 2–3) compares against per RFC §7a / M3 — *no regression vs our own baseline*, **not** the literature budget and **not** the noisy deployed worker.
 
 **Provider:** OpenAI `gpt-4.1-mini` (bridge default since `35601f6`) / Deepgram `nova-3` / Cartesia `sonic-3`. The prior "Measured baseline (2026-06, gemini-3.1-flash-lite)" section above is **stale** for the LLM leg and is superseded by this for Reasoner-bridge gating.
 

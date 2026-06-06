@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { FakeBridge, FakeSTT, FakeTTS, FakeVAD } from "@asyncdot/voice-test";
+import { FakeBridge, FakeSTT, FakeTTS, FakeVAD } from "@kuralle-syrinx/test";
 import { describe, expect, it } from "vitest";
 
 import { runOneTurn, type PerTurnMetrics } from "../../src/run-one-turn.js";

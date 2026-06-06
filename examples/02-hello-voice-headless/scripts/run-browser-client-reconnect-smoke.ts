@@ -11,15 +11,15 @@
 //
 // No real AI keys needed — uses a bare VoiceAgentSession with no plugins.
 //
-// Run: pnpm --filter @asyncdot-example/02-hello-voice-headless smoke:browser-client-reconnect
+// Run: pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:browser-client-reconnect
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { VoiceAgentSession } from "@asyncdot/voice";
-import { createVoiceWebSocketServer, type VoiceWebSocketServer } from "@asyncdot/voice-server-websocket";
-import { SyrinxBrowserClient, type SyrinxBrowserClientEvent } from "@asyncdot/voice-client-browser";
+import { VoiceAgentSession } from "@kuralle-syrinx/core";
+import { createVoiceWebSocketServer, type VoiceWebSocketServer } from "@kuralle-syrinx/server-websocket";
+import { SyrinxBrowserClient, type SyrinxBrowserClientEvent } from "@kuralle-syrinx/browser-client";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(SCRIPT_DIR, "..");

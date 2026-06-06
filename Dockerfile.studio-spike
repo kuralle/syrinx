@@ -20,4 +20,4 @@ EXPOSE 4180
 # Serves the self-contained browser studio (index.html) + the /ws voice endpoint
 # on one HTTP server. Fly fronts it with HTTPS (*.fly.dev), so the page loads over
 # https and the websocket over wss — required for browser microphone access.
-CMD ["pnpm", "--filter", "@asyncdot-example/02-hello-voice-headless", "review:studio"]
+CMD ["pnpm", "--filter", "@kuralle-syrinx-example/02-hello-voice-headless", "review:studio"]

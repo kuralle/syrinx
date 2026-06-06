@@ -8,10 +8,10 @@ The cascading LLM bridge was generalized from "wraps the Vercel AI SDK" to "driv
 
 | Package | Surface | README |
 |---|---|---|
-| `@asyncdot/voice` | the `Reasoner` / `ReasonerTurn` / `ReasoningPart` seam (`src/reasoner.ts`) + `reasoning.*` packets | [README](../packages/voice/README.md) |
-| `@asyncdot/voice-bridge-aisdk` | `ReasoningBridge` (the `VoicePlugin`) + `fromAiSdkAgent`/`fromStreamText`/`fromStreamFactory` + the `RunStore` seam | [README](../packages/voice-bridge-aisdk/README.md) |
-| `@asyncdot/voice-bridge-mastra` | `fromMastraAgent(agent) → Reasoner` (Mastra `output.fullStream` → `ReasoningPart`) | [README](../packages/voice-bridge-mastra/README.md) |
-| `@asyncdot/voice-server-workers-mastra` | dedicated Mastra-on-edge Worker DO for suspend/resume (`CloudflareDOStorage` + pointer `RunStore`) | [README](../packages/voice-server-workers-mastra/README.md) |
+| `@kuralle-syrinx/core` | the `Reasoner` / `ReasonerTurn` / `ReasoningPart` seam (`src/reasoner.ts`) + `reasoning.*` packets | [README](../packages/core/README.md) |
+| `@kuralle-syrinx/aisdk` | `ReasoningBridge` (the `VoicePlugin`) + `fromAiSdkAgent`/`fromStreamText`/`fromStreamFactory` + the `RunStore` seam | [README](../packages/aisdk/README.md) |
+| `@kuralle-syrinx/mastra` | `fromMastraAgent(agent) → Reasoner` (Mastra `output.fullStream` → `ReasoningPart`) | [README](../packages/mastra/README.md) |
+| `@kuralle-syrinx/server-workers-mastra` | dedicated Mastra-on-edge Worker DO for suspend/resume (`CloudflareDOStorage` + pointer `RunStore`) | [README](../packages/server-workers-mastra/README.md) |
 
 ## Sprints (all on `v2`)
 

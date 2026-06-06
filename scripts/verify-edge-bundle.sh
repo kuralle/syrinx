@@ -9,7 +9,7 @@ PROVIDER_OUT_FILE="$OUT_DIR/provider-cartesia.js"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-pnpm --dir "$ROOT" --filter @asyncdot/voice-server-workers exec esbuild "$ROOT/packages/voice-server-workers/src/worker.ts" \
+pnpm --dir "$ROOT" --filter @kuralle-syrinx/server-workers exec esbuild "$ROOT/packages/server-workers/src/worker.ts" \
   --bundle \
   --format=esm \
   --platform=browser \
@@ -17,7 +17,7 @@ pnpm --dir "$ROOT" --filter @asyncdot/voice-server-workers exec esbuild "$ROOT/p
   --outfile="$OUT_FILE" \
   --log-level=warning
 
-pnpm --dir "$ROOT" --filter @asyncdot/voice-server-workers exec esbuild "$ROOT/packages/voice-tts-cartesia/src/index.ts" \
+pnpm --dir "$ROOT" --filter @kuralle-syrinx/server-workers exec esbuild "$ROOT/packages/cartesia/src/index.ts" \
   --bundle \
   --format=esm \
   --platform=browser \

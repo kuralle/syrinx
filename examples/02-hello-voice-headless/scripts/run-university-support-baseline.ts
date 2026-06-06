@@ -11,10 +11,10 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { ReasoningBridge, fromStreamText } from "@asyncdot/voice-bridge-aisdk";
-import { DeepgramSTTPlugin } from "@asyncdot/voice-stt-deepgram";
-import { CartesiaTTSPlugin } from "@asyncdot/voice-tts-cartesia";
-import { SileroVADPlugin } from "@asyncdot/voice-vad-silero";
+import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
+import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
+import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
+import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 import {
   DEFAULT_MODEL,

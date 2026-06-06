@@ -8,13 +8,13 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import WebSocket, { type RawData } from "ws";
-import { type TextToSpeechAudioPacket, type TextToSpeechEndPacket, type VoiceAgentSession } from "@asyncdot/voice";
+import { type TextToSpeechAudioPacket, type TextToSpeechEndPacket, type VoiceAgentSession } from "@kuralle-syrinx/core";
 import {
   assertVoiceSessionRecorderManifest,
   createVoiceSessionRecorder,
   validateVoiceSessionRecorderManifest,
   type VoiceSessionRecorderManifest,
-} from "@asyncdot/voice-recorder";
+} from "@kuralle-syrinx/recorder";
 import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
@@ -22,8 +22,8 @@ import {
   type SmartPbxMediaStreamServer,
   type TelnyxMediaStreamServer,
   type TwilioMediaStreamServer,
-} from "@asyncdot/voice-server-websocket";
-import { decodeMuLawToPcm16, encodePcm16ToMuLaw, resamplePcm16 } from "@asyncdot/voice/audio";
+} from "@kuralle-syrinx/server-websocket";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw, resamplePcm16 } from "@kuralle-syrinx/core/audio";
 
 import {
   GEMINI_UNIVERSITY_FIXTURES,

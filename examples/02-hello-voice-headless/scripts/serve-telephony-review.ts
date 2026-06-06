@@ -8,14 +8,14 @@ import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { type ConversationMetricPacket, type VoiceAgentSession } from "@asyncdot/voice";
-import { createVoiceSessionRecorder } from "@asyncdot/voice-recorder";
+import { type ConversationMetricPacket, type VoiceAgentSession } from "@kuralle-syrinx/core";
+import { createVoiceSessionRecorder } from "@kuralle-syrinx/recorder";
 import {
   createSmartPbxMediaStreamServer,
   createTelnyxMediaStreamServer,
   createTwilioMediaStreamServer,
   installGracefulShutdown,
-} from "@asyncdot/voice-server-websocket";
+} from "@kuralle-syrinx/server-websocket";
 
 import { coerceGoogleGenAiKey, ensureRepoRootDotenv } from "../src/run-one-turn.js";
 import { createUniversitySupportSession, type UniversitySupportTtsProvider } from "../src/university-support-agent.js";

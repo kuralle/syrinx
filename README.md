@@ -18,11 +18,11 @@ transport edge and hands the agent runtime a clean stream of mono PCM16 audio.
 
 ## Edge deployment (Cloudflare Workers)
 
-The `@asyncdot/voice-server-workers` package runs the full engine — live Deepgram
+The `@kuralle-syrinx/server-workers` package runs the full engine — live Deepgram
 STT + OpenAI + Cartesia TTS — inside a Durable Object.
 
 ```
-pnpm --filter @asyncdot/voice-server-workers exec wrangler deploy
+pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy
 # set DEEPGRAM_API_KEY / OPENAI_API_KEY / CARTESIA_API_KEY via `wrangler secret put`
 ```
 
