@@ -335,6 +335,12 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         this.resetPendingTranscript(contextId);
         return;
       }
+      // No buffered text — a silence-only/orphan turn (e.g. an always-on client that rotated its
+      // contextId onto trailing silence). Discard it silently; a finalize timeout on a turn that
+      // never had speech is not an error worth surfacing.
+      this.pushMetric(contextId, "stt_provider_finalize_timeout_empty_discard", this.audioStats(contextId));
+      this.discardUnconfirmedTurn(contextId);
+      return;
     }
 
     this.discardUnconfirmedTurn(contextId);
