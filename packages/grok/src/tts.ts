@@ -20,7 +20,7 @@ import {
 } from "@kuralle-syrinx/core";
 import { WebSocketConnection, type SocketFactory } from "@kuralle-syrinx/ws";
 
-import { base64ToBytes } from "./base64.js";
+import { base64ToBytes } from "@kuralle-syrinx/realtime";
 
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 const EMPTY = new Uint8Array(0);

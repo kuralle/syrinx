@@ -61,9 +61,49 @@ const bridge = new RealtimeBridge(adapter);
 
 OpenAI Realtime-compatible subset on `wss://api.x.ai/v1/realtime?model=grok-voice-latest`. Caps: `supportsTruncate: false`, `supportsConcurrentToolAudio: false`. Barge-in relies on client/kernel VAD plus `response.cancel` (no `speech_started` / truncate).
 
-## Edge deployment
+## Deploy on Cloudflare Workers
 
-All three forms accept an injectable `SocketFactory` — use `createNodeWsSocket` on Node and `createWorkersSocket` on Cloudflare Workers. Source is edge-clean (no `Buffer`, `node:*`, or `process.*` in `src/`).
+`@kuralle-syrinx/grok` is **edge-clean**: no `Buffer`, `process`, or `node:*` in `src/`. All three surfaces (STT, TTS, realtime S2S) accept an injectable `SocketFactory` — on Workers, outbound provider WebSockets that require auth headers use the fetch-upgrade path via `createWorkersSocket` (not the global `WebSocket` constructor, which cannot set headers).
+
+Wire secrets through the Worker **`env` binding** (Wrangler secrets / vars), not `process.env`. Pass `apiKey` as constructor/initialize config:
+
+```ts
+import { VoiceAgentSession } from "@kuralle-syrinx/core";
+import { GrokSTTPlugin } from "@kuralle-syrinx/grok/stt";
+import { GrokTTSPlugin } from "@kuralle-syrinx/grok/tts";
+import { fromGrokRealtime } from "@kuralle-syrinx/grok/realtime";
+import { RealtimeBridge } from "@kuralle-syrinx/realtime";
+import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
+
+/** Bound in wrangler.jsonc / dashboard — e.g. XAI_API_KEY secret. */
+export interface Env {
+  readonly XAI_API_KEY: string;
+}
+
+export function createGrokVoiceSession(env: Env): VoiceAgentSession {
+  const stt = new GrokSTTPlugin(createWorkersSocket);
+  const tts = new GrokTTSPlugin(createWorkersSocket);
+  const adapter = fromGrokRealtime({
+    apiKey: env.XAI_API_KEY,
+    socketFactory: createWorkersSocket,
+    voice: "eve",
+    turnDetection: { type: "server_vad" },
+  });
+
+  const session = new VoiceAgentSession({
+    endpointingOwner: "timer",
+    plugins: { stt: {}, tts: {}, realtime: {} },
+  });
+  session.registerPlugin("stt", stt);
+  session.registerPlugin("tts", tts);
+  session.registerPlugin("realtime", new RealtimeBridge(adapter));
+  return session;
+}
+```
+
+**Durable Object session shape** (see `packages/server-workers`): the Worker `fetch` handler routes `/ws?sessionId=…` to a `VoiceConversation` Durable Object. The DO accepts the client upgrade via `WebSocketPair`, constructs the `VoiceAgentSession` (cascade or bi-model realtime — same env-injection pattern), and pumps audio over the accepted socket. Provider outbound legs (Grok STT/TTS/realtime, Deepgram, Cartesia, …) all dial through `createWorkersSocket` so auth headers ride on the fetch upgrade.
+
+Regression lock: `edge-safety.test.ts` scans `src/` for Node-only primitives and runs the realtime audio path with a mock socket.
 
 ## Live smokes
 
