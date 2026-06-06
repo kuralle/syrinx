@@ -57,6 +57,9 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const readyRef = useRef(false);
+  // The engine finishes a turn per contextId; a NEW turn needs a NEW contextId. The mic streams
+  // continuously, so rotate this on each `turn_complete` — otherwise only the first utterance is heard.
+  const uplinkContextIdRef = useRef<string>("");
   const playbackDecayRef = useRef<number | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -81,6 +84,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const handleMessage = useCallback((message: SyrinxStudioMessage): void => {
     if (message.type === "ready") {
       readyRef.current = true;
+      if (!uplinkContextIdRef.current) uplinkContextIdRef.current = crypto.randomUUID();
       if (message.sessionId) setSessionId(message.sessionId);
       if (message.audio?.inputSampleRateHz) setInputSampleRateHz(message.audio.inputSampleRateHz);
       return;
@@ -89,6 +93,8 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
       setErrorMessage(`${message.component ?? "error"}: ${message.message}`);
       return;
     }
+    // Turn finished server-side — rotate the uplink contextId so the next utterance is a fresh turn.
+    if (message.type === "turn_complete") uplinkContextIdRef.current = crypto.randomUUID();
     setTranscript((current) => reduceTranscriptState(current, message));
   }, []);
 
@@ -110,6 +116,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
       if (!readyRef.current || !client.connected) return;
       const input = event.inputBuffer.getChannelData(0);
       client.sendFloat32Audio(input, {
+        contextId: uplinkContextIdRef.current,
         fromSampleRateHz: captureContext.sampleRate,
         toSampleRateHz: targetRate,
       });
@@ -128,6 +135,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
 
   const disconnect = useCallback((): void => {
     readyRef.current = false;
+    uplinkContextIdRef.current = "";
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
     stopMic();
@@ -212,6 +220,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     const chunk = Math.max(1, Math.round(rate * 0.02));
     for (let offset = 0; offset < samples.length; offset += chunk) {
       client.sendFloat32Audio(samples.subarray(offset, Math.min(offset + chunk, samples.length)), {
+        contextId: uplinkContextIdRef.current,
         fromSampleRateHz: rate,
         toSampleRateHz: inputSampleRateHz,
       });
