@@ -12,6 +12,7 @@ import {
   type VoiceAgentSessionEvents,
 } from "@kuralle-syrinx/core";
 import { TimerScheduler, type Scheduler } from "@kuralle-syrinx/core";
+import { type StreamingPcm16Resampler } from "@kuralle-syrinx/core/audio";
 import {
   createWorkersInboundSocket,
   type WorkersDurableObjectWebSocketContext,
@@ -23,6 +24,12 @@ import {
   type ManagedSession,
   type SessionStore,
 } from "./session-store.js";
+import {
+  decodeInboundBinaryAudio,
+  rememberContextSampleRate,
+  resampleAudioBytes,
+  socketDataToBytes,
+} from "./inbound-audio.js";
 
 /**
  * Sink for per-conversation audio recording. The edge taps inbound caller audio
@@ -62,6 +69,12 @@ export interface VoiceEdgeWebSocketOptions {
    * WebSocket cannot detect via a ping frame. 0 disables idle close.
    */
   readonly idleTimeoutMs?: number;
+  /**
+   * Raw binary inbound PCM16 lacks turn, sample-rate, sequence, and duration
+   * metadata. Keep disabled for production clients; use JSON audio frames or
+   * the Syrinx binary envelope instead.
+   */
+  readonly rawBinaryInput?: boolean;
   readonly sessionStore: SessionStore;
   readonly scheduler?: Scheduler;
 }
@@ -75,11 +88,13 @@ type ClientMessage =
   | { readonly type: "text"; readonly text: string; readonly contextId?: string }
   | { readonly type: "audio"; readonly audio: string; readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number }
   | { readonly type: "client_interrupt"; readonly assistantContextId?: string; readonly contextId?: string }
+  | { readonly type: "codec_capability"; readonly downlinkEncoding: "pcm_s16le" | "opus" }
   | { readonly type: "ping" };
 
 interface EdgeConnectionState {
   managed: ManagedSession | null;
   readonly initialContextId: string;
+  readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
@@ -124,9 +139,11 @@ export async function runVoiceEdgeWebSocketConnection(
   const resumeWindowMs = nonNegativeInteger(options.resumeWindowMs) ?? DEFAULT_RESUME_WINDOW_MS;
   const keepAliveIntervalMs = nonNegativeInteger(options.keepAliveIntervalMs) ?? DEFAULT_KEEP_ALIVE_INTERVAL_MS;
   const idleTimeoutMs = nonNegativeInteger(options.idleTimeoutMs) ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const rawBinaryInput = options.rawBinaryInput ?? false;
   const state: EdgeConnectionState = {
     managed: null,
     initialContextId: contextIdFn(),
+    streamingResamplers: new Map(),
   };
   const disposers: Array<() => void> = [];
   const pendingMessages: Array<{ data: SocketData; isBinary: boolean; byteLength: number }> = [];
@@ -157,7 +174,10 @@ export async function runVoiceEdgeWebSocketConnection(
         stored.currentContextId,
         contextIdFn,
         inputSampleRateHz,
+        rawBinaryInput,
+        stored.contextSampleRates,
         stored.inputSequence,
+        state.streamingResamplers,
       );
     });
   };
@@ -294,6 +314,7 @@ export async function runVoiceEdgeWebSocketConnection(
         supportedInputCodecs: ["pcm_s16le"],
         channels: 1,
         binaryEnvelope: SYRINX_AUDIO_ENVELOPE_NAME,
+        rawBinaryInput,
         maxInboundMessageBytes,
       },
     });
@@ -369,7 +390,7 @@ function wireEdgeSessionEvents(
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;
-      sendJson(socket, { type: "tts_end", turnId: end.contextId });
+      sendJson(socket, { type: "tts_end", ...(end.contextId ? { turnId: end.contextId } : {}) });
     }),
     session.bus.on("eos.turn_complete", (pkt) => {
       const turn = pkt as { contextId: string; text?: string };
@@ -385,20 +406,44 @@ function handleClientMessage(
   currentContextId: string,
   contextId: () => string,
   inputSampleRateHz: number,
+  rawBinaryInput: boolean,
+  contextSampleRates: Map<string, number>,
   inputSequence: AudioSequenceState,
+  streamingResamplers: Map<string, StreamingPcm16Resampler>,
 ): string {
   if (isBinary) {
-    const nextContextId = currentContextId;
+    const binaryAudio = decodeInboundBinaryAudio(
+      socketDataToBytes(data),
+      inputSampleRateHz,
+      rawBinaryInput,
+      inputSampleRateHz,
+      streamingResamplers,
+      null,
+    );
+    const nextContextId = binaryAudio.contextId ?? currentContextId;
+    if (nextContextId !== currentContextId) {
+      session.bus.push(Route.Main, {
+        kind: "turn.change",
+        contextId: nextContextId,
+        previousContextId: currentContextId,
+        reason: "websocket_binary_audio_turn",
+        timestampMs: Date.now(),
+      });
+    }
+    rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
+    rememberInputSequence(session, inputSequence, nextContextId, binaryAudio.sequence);
+    const audio = resampleAudioBytes(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz, streamingResamplers);
     session.bus.push(Route.Main, {
       kind: "user.audio_received",
       contextId: nextContextId,
       timestampMs: Date.now(),
-      audio: typeof data === "string" ? textEncoder.encode(data) : data,
+      audio,
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
   const message = parseClientMessage(JSON.parse(typeof data === "string" ? data : textDecoder.decode(data)));
   if (message.type === "ping") return currentContextId;
+  if (message.type === "codec_capability") return currentContextId; // edge sends pcm_s16le downlink; no-op
   if (message.type === "client_interrupt") {
     const interruptedContextId = message.assistantContextId ?? message.contextId ?? currentContextId;
     if (interruptedContextId) session.requestClientInterrupt(interruptedContextId);
@@ -435,6 +480,12 @@ function handleClientMessage(
 function parseClientMessage(value: unknown): ClientMessage {
   if (!isRecord(value)) throw new Error("Websocket JSON message must be an object");
   if (value.type === "ping") return { type: "ping" };
+  if (value.type === "codec_capability") {
+    // The edge transmits pcm_s16le downlink only (no opus encoder on workerd); accept the client's
+    // capability advert and no-op it. The client decodes per-frame `encoding`, so pcm is always safe.
+    const downlinkEncoding = value.downlinkEncoding === "opus" ? "opus" : "pcm_s16le";
+    return { type: "codec_capability", downlinkEncoding };
+  }
   if (value.type === "client_interrupt") {
     return {
       type: "client_interrupt",
