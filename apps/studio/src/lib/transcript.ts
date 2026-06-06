@@ -34,15 +34,37 @@ export function reduceTranscriptState(
         interimUser: message.transcript,
       };
     case "stt_output": {
-      const id = `user-${message.turnId ?? String(state.entries.length)}-${message.transcript.slice(0, 12)}`;
+      const entries = state.entries.filter((entry) => !entry.interim);
+      // Coalesce finalized STT segments of the same turn into ONE user bubble. Deepgram emits
+      // several is_final segments per utterance (same turnId); without this each becomes a duplicate.
+      const turnId = message.turnId;
+      let lastUserIdx = -1;
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (entries[i]!.role === "user") {
+          if (turnId !== undefined && entries[i]!.turnId === turnId) lastUserIdx = i;
+          break;
+        }
+      }
+      const incoming = message.transcript.trim();
+      if (lastUserIdx >= 0) {
+        const existing = entries[lastUserIdx]!.text;
+        const merged = incoming.includes(existing)
+          ? incoming
+          : existing.includes(incoming)
+            ? existing
+            : `${existing} ${incoming}`.trim();
+        const next = [...entries];
+        next[lastUserIdx] = { ...next[lastUserIdx]!, text: merged };
+        return { entries: next, interimUser: undefined, streamingAssistant: state.streamingAssistant };
+      }
       return {
         entries: [
-          ...state.entries.filter((entry) => !entry.interim),
+          ...entries,
           {
-            id,
+            id: `user-${turnId ?? String(entries.length)}`,
             role: "user",
-            text: message.transcript,
-            turnId: message.turnId,
+            text: incoming,
+            turnId,
           },
         ],
         interimUser: undefined,

@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:live": "SYRINX_LIVE_WORKER_TEST=1 vitest run",
     "verify:edge-bundle": "../../scripts/verify-edge-bundle.sh",
-    "wrangler:dry-run": "wrangler deploy --dry-run"
+    "wrangler:dry-run": "wrangler deploy --dry-run",
+    "deploy:realtime": "wrangler deploy -c wrangler.realtime.jsonc"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
@@ -20,8 +21,10 @@
     "@kuralle-syrinx/server-websocket": "workspace:*",
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/cartesia": "workspace:*",
+    "@kuralle-syrinx/realtime": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*",
-    "ai": "^6.0.0"
+    "ai": "^6.0.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",
