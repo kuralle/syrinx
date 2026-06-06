@@ -30,6 +30,15 @@ Barge-in additions correct: `playedMs` from `tts.playout_progress.playedOutMs`, 
 `packages/realtime/README.md` written with the honest latency characterization (measured bridged numbers
 from the live smokes; explicitly NOT "~0"). OPEN: the rigorous first-audio direct-vs-bridged delta harness.
 
+## Review-WBS execution (autonomous-manager, 2026-06-06)
+Codex review returned not-ready (14 rows). Executed via cursor, manager-reviewed each diff + ran gates:
+- **Chunk 1 — R-04,06,07,08,09,10,11,12,13** ✅ DONE: runtime-agnostic base64 (atob/btoa) + `globalThis.crypto.randomUUID` + injected `debug` (no Buffer/node:crypto/process in src); session-config surface (instructions/modalities/temperature/inputTranscription/toolChoice/in-out rates); delegate-tool mismatch guard; full ReasoningPart contract (never inject ""); `contextProvider` + stateless doc; `requiresResponseCreateAfterToolOutput` gate; assistant-item lifecycle clear on start/done/cancel; audio coalescing to ≤20ms frames + odd-byte guard; pump surfaces llm.error. **20→22 unit tests; live university gate still green.**
+- **Chunk 3 — R-05, R-14, T-07** ✅ DONE: README "Deploy on Cloudflare Workers" (createWorkersSocket + env-binding injection); `edge-safety.test.ts` (source-scan regression lock + functional round-trip — manager fixed cursor's original which crashed vitest by deleting globalThis.process); skip-open doc/test. typecheck 0 errors.
+- **Chunk 2 — R-01,02,03** ⏸ DEFERRED per owner: repo-wide publish gap (ALL 16 packages ship raw TS + workspace:*), spec'd at `docs/npm-publish-setup-task.md`. Not a realtime-only fix.
+- **Spike (decision §5)** ✅ DONE: @openai/agents chain ≈22MB unpacked (openai SDK 9.8 + agents-core 5.5 + ext 2.5 + zod4 4.6). Isolation PASSES (core stays clean) but adapter not Free-edge-friendly → do NOT build the optional fromOpenAIAgentsTransport now (no consumer). Hybrid = keep seam + learn event-shapes.
+- Remaining open (not blockers): event-shape backlog T-01/03/04/05 (each gated on a named consumer), first-audio latency delta harness (WBS-5), repo-wide publish task.
+- Transport decision recorded: `bi-model-research/transport-decision.md` (don't adopt @openai/agents by default).
+
 ## Final state
 - New pkg `@kuralle-syrinx/realtime`: adapter + bridge + 8 unit tests (all green). `pnpm -r typecheck` = 0 errors.
 - 4 live smokes wired (frame/oneturn/university green; bargein logic-green/live-resume flaky).

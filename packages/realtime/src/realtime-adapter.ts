@@ -17,6 +17,17 @@ export interface RealtimeAdapter {
   readonly events: AsyncIterable<RealtimeEvent>;
 }
 
+/**
+ * A function tool advertised to the front model so it can decide when to delegate. Domain-neutral:
+ * the caller (example/app) supplies these — the provider adapter never hardcodes any tool.
+ */
+export interface RealtimeToolDef {
+  readonly name: string;
+  readonly description: string;
+  /** JSON Schema for the tool arguments. */
+  readonly parameters: Record<string, unknown>;
+}
+
 export type RealtimeEvent =
   | { type: "audio"; pcm16: Uint8Array; sampleRateHz: number }
   | { type: "speech_started" }

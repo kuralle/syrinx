@@ -55,8 +55,10 @@ export function wrapWebSocket(ws: WebSocketLike): ManagedSocket {
       }
     },
     onOpen: (handler) => {
-      // A Workers fetch-upgrade socket is already open by the time we attach, so
-      // it never fires "open" — call the handler on the next tick instead.
+      // workerd: after fetch-upgrade + WebSocket.accept(), readyState is already OPEN
+      // and the runtime never emits an "open" event — only sockets that transition
+      // from CONNECTING fire it. queueMicrotask preserves the async onOpen contract
+      // WebSocketConnection expects without waiting for an event that won't come.
       if (ws.readyState === WEBSOCKET_OPEN) {
         queueMicrotask(handler);
         return;

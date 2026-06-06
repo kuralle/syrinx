@@ -11,6 +11,7 @@ import {
   type LlmErrorPacket,
   type LlmToolResultPacket,
   type Reasoner,
+  type ReasonerMessage,
   type RecordAssistantAudioPacket,
   type SttResultPacket,
   type TextToSpeechAudioPacket,
@@ -79,11 +80,16 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
     if (waiter) waiter(event);
     else this.queued.push(event);
   }
+
 }
 
 function pcmFromSamples(samples: readonly number[]): Uint8Array {
   const pcm = Int16Array.from(samples);
   return new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+}
+
+function frameSizedPcm24k(): Uint8Array {
+  return pcmFromSamples(Array.from({ length: 960 }, (_, i) => i));
 }
 
 function frameDurationMs(frame: TextToSpeechAudioPacket): number {
@@ -189,7 +195,29 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
-  it("runDelegate injects finish.text when the Reasoner yields no deltas (R4)", async () => {
+  it("R-04: mints contextId via globalThis.crypto.randomUUID without node:crypto", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const turnChanges: TurnChangePacket[] = [];
+    bus.on("turn.change", (pkt) => { turnChanges.push(pkt as TurnChangePacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    await waitForCondition(() => turnChanges.length >= 1);
+    expect(turnChanges[0]!.contextId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("runDelegate injects finish.text when the Reasoner yields no deltas (R-08)", async () => {
     const adapter = new FakeRealtimeAdapter();
     const answerText = "Submit the Late Add Petition via the Student Relations portal.";
     const reasoner: Reasoner = {
@@ -210,7 +238,7 @@ describe("RealtimeBridge", () => {
     adapter.emit({
       type: "tool_call",
       toolId: "call_delegate_1",
-      toolName: "ask_university",
+      toolName: "consult_knowledge",
       args: { query: "Can I still add Biology 101?" },
     });
 
@@ -225,7 +253,104 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
-  it("runDelegate rejects suspended Reasoner without injecting an answer (R4)", async () => {
+  it("R-08: finish reason length uses accumulated text", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "text-delta", text: "Partial " };
+        yield { type: "finish", reason: "length", text: "Partial answer truncated" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_len",
+      toolName: "consult_knowledge",
+      args: { query: "long query" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(adapter.injectedToolResults[0]!.text).toBe("Partial ");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-08: recoverable error surfaces llm.error without injecting empty output", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "error", cause: new Error("rate limited"), recoverable: true };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_recover",
+      toolName: "consult_knowledge",
+      args: { query: "test" },
+    });
+
+    await waitForCondition(() => errors.length === 1);
+    expect(errors[0]!.isRecoverable).toBe(true);
+    expect(adapter.injectedToolResults).toHaveLength(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-08: nonrecoverable error emits llm.error without injecting output", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "error", cause: new Error("auth failed"), recoverable: false };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_fatal",
+      toolName: "consult_knowledge",
+      args: { query: "test" },
+    });
+
+    await waitForCondition(() => errors.length === 1);
+    expect(errors[0]!.isRecoverable).toBe(false);
+    expect(adapter.injectedToolResults).toHaveLength(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("runDelegate rejects suspended Reasoner without injecting an answer (R-08)", async () => {
     const adapter = new FakeRealtimeAdapter();
     const reasoner: Reasoner = {
       stream: () => (async function* () {
@@ -247,7 +372,7 @@ describe("RealtimeBridge", () => {
     adapter.emit({
       type: "tool_call",
       toolId: "call_delegate_2",
-      toolName: "ask_university",
+      toolName: "consult_knowledge",
       args: { query: "Need advisor approval" },
     });
 
@@ -257,6 +382,142 @@ describe("RealtimeBridge", () => {
     expect(toolResults).toHaveLength(0);
 
     await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-07: mismatched tool_call name emits recoverable llm.error instead of silent ignore", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "never called" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge");
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_wrong",
+      toolName: "wrong_tool",
+      args: { query: "test" },
+    });
+
+    await waitForCondition(() => errors.length === 1);
+    expect(errors[0]!.isRecoverable).toBe(true);
+    expect(errors[0]!.cause.message).toContain("wrong_tool");
+    expect(adapter.injectedToolResults).toHaveLength(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-09: contextProvider messages are passed to reasoner.stream", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const prior: ReasonerMessage[] = [
+      { role: "user", content: "prior question" },
+      { role: "assistant", content: "prior answer" },
+    ];
+    let receivedMessages: readonly ReasonerMessage[] | undefined;
+    const reasoner: Reasoner = {
+      stream: (turn) => {
+        receivedMessages = turn.messages;
+        return (async function* () {
+          yield { type: "finish", reason: "stop", text: "with context" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      contextProvider: () => prior,
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_ctx",
+      toolName: "consult_knowledge",
+      args: { query: "follow up" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(receivedMessages).toEqual(prior);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-12: coalesces tiny audio deltas and never emits odd-length tts.audio", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const audio: TextToSpeechAudioPacket[] = [];
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "audio", pcm16: new Uint8Array([1, 2]), sampleRateHz: 24_000 });
+    adapter.emit({ type: "audio", pcm16: new Uint8Array([3, 4]), sampleRateHz: 24_000 });
+    expect(audio).toHaveLength(0);
+
+    adapter.emit({ type: "audio", pcm16: new Uint8Array([5]), sampleRateHz: 24_000 });
+    expect(audio).toHaveLength(0);
+
+    adapter.emit({ type: "response_done" });
+    await waitForCondition(() => audio.length > 0);
+
+    expect(audio.every((frame) => frame.audio.byteLength % 2 === 0)).toBe(true);
+    expect(audio.every((frame) => frame.audio.byteLength <= 640 || frameDurationMs(frame) <= 20)).toBe(true);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-13: adapter event handler throw emits llm.error; adapter close exits quietly", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    const originalRandomUUID = globalThis.crypto.randomUUID.bind(globalThis.crypto);
+    globalThis.crypto.randomUUID = () => {
+      throw new Error("handler boom");
+    };
+    try {
+      adapter.emit({ type: "response_started" });
+      await waitForCondition(() => errors.length === 1);
+      expect(errors[0]!.isRecoverable).toBe(false);
+      expect(errors[0]!.cause.message).toBe("handler boom");
+    } finally {
+      globalThis.crypto.randomUUID = originalRandomUUID;
+    }
+
+    const errorsBeforeClose = errors.length;
+    await bridge.close();
+    expect(errors.length).toBe(errorsBeforeClose);
+
     bus.stop();
     await started;
   });
@@ -317,7 +578,7 @@ describe("RealtimeBridge", () => {
 
     adapter.emit({
       type: "audio",
-      pcm16: pcmFromSamples([500, 600, 700, 800]),
+      pcm16: frameSizedPcm24k(),
       sampleRateHz: 24_000,
     });
     await waitForCondition(() => recorded.some((p) => p.contextId === contextB));
@@ -334,7 +595,7 @@ describe("RealtimeBridge", () => {
 
     adapter.emit({
       type: "audio",
-      pcm16: pcmFromSamples([900, 1000, 1100, 1200]),
+      pcm16: frameSizedPcm24k(),
       sampleRateHz: 24_000,
     });
     await waitForCondition(() => recorded.some((p) => p.contextId === contextC));
@@ -348,7 +609,7 @@ describe("RealtimeBridge", () => {
     adapter.emit({
       type: "tool_call",
       toolId: "call_barge_delegate",
-      toolName: "ask_university",
+      toolName: "consult_knowledge",
       args: { query: "late add policy" },
     });
     await waitForCondition(() => delegateSignal !== undefined);

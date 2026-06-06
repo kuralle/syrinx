@@ -76,3 +76,19 @@ describe("WebSocketConnection over the standard WebSocket (Workers/browser)", ()
     expect(fake.readyState).toBe(3);
   });
 });
+
+describe("wrapWebSocket skip-open (workerd fetch-upgrade)", () => {
+  it("invokes onOpen via microtask when the socket is already open", async () => {
+    const fake = new FakeWebSocket();
+    fake.readyState = 1;
+
+    let opened = false;
+    wrapWebSocket(fake).onOpen(() => {
+      opened = true;
+    });
+
+    expect(opened).toBe(false);
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(opened).toBe(true);
+  });
+});

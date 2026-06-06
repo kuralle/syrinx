@@ -3,24 +3,11 @@
 import type { SocketFactory } from "@kuralle-syrinx/ws";
 import { RealtimeSocket } from "@kuralle-syrinx/ws/realtime";
 
-import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "./realtime-adapter.js";
 
 const DEFAULT_MODEL = "gpt-realtime-2";
 const DEFAULT_VOICE = "marin";
-const SAMPLE_RATE_HZ = 24_000;
-
-const ASK_UNIVERSITY_TOOL = {
-  type: "function" as const,
-  name: "ask_university",
-  description: "Answer university student-relations questions (enrollment, add/drop, advising).",
-  parameters: {
-    type: "object" as const,
-    properties: {
-      query: { type: "string" as const },
-    },
-    required: ["query"] as const,
-  },
-};
+const DEFAULT_SAMPLE_RATE_HZ = 24_000;
 
 export interface OpenAIRealtimeOptions {
   readonly apiKey: string;
@@ -30,6 +17,21 @@ export interface OpenAIRealtimeOptions {
   readonly url?: () => string;
   /** Server turn-detection config. Defaults to semantic_vad; pass `server_vad` or `null` to override. */
   readonly turnDetection?: Record<string, unknown> | null;
+  /**
+   * Function tools the front model may call (e.g. a delegate tool routed to a Reasoner). Domain-neutral
+   * — the caller supplies these. Empty by default (standalone s2s, no delegation).
+   */
+  readonly tools?: readonly RealtimeToolDef[];
+  readonly debug?: boolean;
+  /** gpt-realtime-2 requires response.create after function_call_output; set false for providers that do not. */
+  readonly requiresResponseCreateAfterToolOutput?: boolean;
+  readonly instructions?: string;
+  readonly modalities?: readonly string[];
+  readonly temperature?: number;
+  readonly inputTranscription?: Record<string, unknown> | boolean;
+  readonly toolChoice?: string | Record<string, unknown>;
+  readonly inputRateHz?: number;
+  readonly outputRateHz?: number;
 }
 
 class RealtimeEventStream implements AsyncIterable<RealtimeEvent> {
@@ -75,12 +77,7 @@ class RealtimeEventStream implements AsyncIterable<RealtimeEvent> {
 }
 
 class OpenAIRealtimeAdapter implements RealtimeAdapter {
-  readonly caps = {
-    inputSampleRateHz: SAMPLE_RATE_HZ,
-    outputSampleRateHz: SAMPLE_RATE_HZ,
-    supportsConcurrentToolAudio: true,
-    supportsTruncate: true,
-  };
+  readonly caps: RealtimeAdapter["caps"];
 
   readonly events: AsyncIterable<RealtimeEvent>;
   private readonly stream = new RealtimeEventStream();
@@ -94,11 +91,21 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
 
   constructor(private readonly opts: OpenAIRealtimeOptions) {
     this.events = this.stream;
+    const inputRateHz = opts.inputRateHz ?? DEFAULT_SAMPLE_RATE_HZ;
+    const outputRateHz = opts.outputRateHz ?? DEFAULT_SAMPLE_RATE_HZ;
+    this.caps = {
+      inputSampleRateHz: inputRateHz,
+      outputSampleRateHz: outputRateHz,
+      supportsConcurrentToolAudio: true,
+      supportsTruncate: true,
+    };
   }
 
   async open(signal: AbortSignal): Promise<void> {
     const model = this.opts.model ?? DEFAULT_MODEL;
     const voice = this.opts.voice ?? DEFAULT_VOICE;
+    const inputRateHz = this.opts.inputRateHz ?? DEFAULT_SAMPLE_RATE_HZ;
+    const outputRateHz = this.opts.outputRateHz ?? DEFAULT_SAMPLE_RATE_HZ;
     const url =
       this.opts.url ??
       (() => `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`);
@@ -134,24 +141,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
     await this.socket.connect();
     this.socket.send({
       type: "session.update",
-      session: {
-        type: "realtime",
-        model,
-        output_modalities: ["audio"],
-        audio: {
-          input: {
-            format: { type: "audio/pcm", rate: SAMPLE_RATE_HZ },
-            turn_detection:
-              "turnDetection" in this.opts ? this.opts.turnDetection : { type: "semantic_vad" },
-          },
-          output: {
-            format: { type: "audio/pcm", rate: SAMPLE_RATE_HZ },
-            voice,
-          },
-        },
-        tools: [ASK_UNIVERSITY_TOOL],
-        tool_choice: "auto",
-      },
+      session: this.buildSessionUpdate(model, voice, inputRateHz, outputRateHz),
     });
 
     await openPromise;
@@ -165,8 +155,6 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
   }
 
   cancelResponse(audioEndMs: number): void {
-    // Only cancel/truncate when a response is actually in flight — cancelling an idle
-    // session errors ("Cancellation failed: no active response").
     if (!this.activeResponse) return;
     const socket = this.requireSocket();
     socket.send({ type: "response.cancel" });
@@ -179,6 +167,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
       });
     }
     this.activeResponse = false;
+    this.currentAssistantItemId = null;
   }
 
   injectToolResult(toolId: string, text: string): void {
@@ -191,7 +180,55 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
         output: text,
       },
     });
-    socket.send({ type: "response.create" });
+    if (this.opts.requiresResponseCreateAfterToolOutput !== false) {
+      socket.send({ type: "response.create" });
+    }
+  }
+
+  private buildSessionUpdate(
+    model: string,
+    voice: string,
+    inputRateHz: number,
+    outputRateHz: number,
+  ): Record<string, unknown> {
+    const inputAudio: Record<string, unknown> = {
+      format: { type: "audio/pcm", rate: inputRateHz },
+      turn_detection:
+        "turnDetection" in this.opts ? this.opts.turnDetection : { type: "semantic_vad" },
+    };
+    if (this.opts.inputTranscription !== undefined) {
+      inputAudio["transcription"] =
+        this.opts.inputTranscription === true ? { model: "whisper-1" } : this.opts.inputTranscription;
+    }
+
+    const session: Record<string, unknown> = {
+      type: "realtime",
+      model,
+      output_modalities: this.opts.modalities ?? ["audio"],
+      audio: {
+        input: inputAudio,
+        output: {
+          format: { type: "audio/pcm", rate: outputRateHz },
+          voice,
+        },
+      },
+      tools: (this.opts.tools ?? []).map((t) => ({
+        type: "function" as const,
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      })),
+      tool_choice: this.opts.toolChoice ?? "auto",
+    };
+
+    if (this.opts.instructions !== undefined) {
+      session["instructions"] = this.opts.instructions;
+    }
+    if (this.opts.temperature !== undefined) {
+      session["temperature"] = this.opts.temperature;
+    }
+
+    return session;
   }
 
   private requireSocket(): RealtimeSocket {
@@ -231,7 +268,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
     }
 
     const type = typeof msg["type"] === "string" ? msg["type"] : "";
-    if (process.env["SYRINX_REALTIME_DEBUG"]) console.error(`[raw] ${type}`);
+    if (this.opts.debug) console.error(`[raw] ${type}`);
     switch (type) {
       case "session.created":
       case "session.updated":
@@ -239,6 +276,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
         break;
       case "response.created":
         this.assistantTranscript = "";
+        this.currentAssistantItemId = null;
         this.activeResponse = true;
         this.stream.push({ type: "response_started" });
         break;
@@ -258,7 +296,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
           this.stream.push({
             type: "audio",
             pcm16: base64ToBytes(delta),
-            sampleRateHz: SAMPLE_RATE_HZ,
+            sampleRateHz: this.caps.outputSampleRateHz,
           });
         }
         break;
@@ -292,6 +330,7 @@ class OpenAIRealtimeAdapter implements RealtimeAdapter {
       }
       case "response.done": {
         this.activeResponse = false;
+        this.currentAssistantItemId = null;
         const toolCall = extractFunctionCall(msg["response"]);
         if (toolCall) {
           this.stream.push(toolCall);
@@ -346,13 +385,22 @@ function extractFunctionCall(response: unknown): RealtimeEvent | null {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return globalThis.btoa(binary);
 }
 
 function base64ToBytes(base64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(base64, "base64"));
+  const raw = globalThis.atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes;
 }
 
 export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter {
   return new OpenAIRealtimeAdapter(opts);
 }
+
+export { bytesToBase64, base64ToBytes };
