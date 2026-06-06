@@ -1,0 +1,4 @@
+# Cloned third-party reference repo (has its own git history/license) — read-only research input.
+moshi-rag/
+# Large source PDF — reproducible from arxiv; the parsed .txt is committed instead.
+*.pdf

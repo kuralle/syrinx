@@ -1,0 +1,1532 @@
+arXiv:2604.12928v3 [cs.CL] 12 May 2026
+
+
+
+
+
+
+
+
+
+
+MoshiR
+     A: Asynchronous Knowledge Retrieval
+     G
+    for Full-Duplex Speech Language Models
+
+
+
+Chung-Ming Chien 1 2 * Manu Orsini 2 Eugene Kharitonov 2 3 ** Neil Zeghidour 2 3 Karen Livescu 1
+                                    Alexandre Defossez ´ 2 3
+
+
+                             Abstract
+          Speech-to-speech language models have recently                 Turn-Based Model    Full-Duplex Model
+           emerged to enhance the naturalness of conver-
+          sational AI. In particular, full-duplex models                      End-of-turn
+        are distinguished by their real-time interactivity,              Figure 1. Illustration of turn-based models versus full-duplex
+         including handling of pauses, interruptions, and                models. The former must explicitly switch between speaking and
+           backchannels. However, improving their factu-                 listening states, while the latter can concurrently speak and listen.
+          ality remains an open challenge. While scaling
+          the model size could address this gap, it would
+         make real-time inference prohibitively expensive.
+    In this work, we propose MoshiR  AG         , a modular ap-          versation experience, allowing users to communicate with
+         proach that combines a compact full-duplex inter-               AI systems as if they were speaking to a real human assistant.
+        face with selective retrieval to access more power-              Earlier approaches typically combined multiple components
+          ful knowledge sources. Our asynchronous frame-                 – such as automatic speech recognition (ASR), text-based
+           work enables the model to identify knowledge-                 dialogue management, and text-to-speech (TTS) synthesis
+           demanding queries and ground its responses in                 – and optimized them for conversational use cases (Sen-
+          external information. By leveraging the natural                eff et al., 1998; Levin et al., 2000; Bohus & Rudnicky,
+            temporal gap between response onset and the                  2009). More recent research has shifted toward end-to-end
+        delivery of core information, the retrieval process              approaches to avoid information loss introduced by speech-
+           can be completed while maintaining a natural                  to-text conversion, such as prosody, rhythm, and intonation,
+           conversation flow. With this approach, MoshiR      AG         while also reducing latency and friction caused by cascaded
+          achieves factuality comparable to the best pub-                pipelines (Zhang et al., 2023; Nachmani et al., 2024; Xie &
+         licly released non-duplex speech language models                Wu, 2024; Fang et al., 2025a; Zeng et al., 2024).
+       while preserving the interactivity inherent to full-              Among modern frameworks, full-duplex models (Defossez ´
+           duplex systems. Moreover, our flexible design                 et al., 2024; Yu et al., 2025) are distinguished by their ability
+         supports plug-and-play retrieval methods without                to “listen while speaking,” in contrast to turn-based methods
+          retraining and demonstrates strong performance                 that process speech in large chunks (e.g., sentences) and al-
+          on out-of-domain mathematical reasoning tasks.                 low transitioning between listening and speaking states only
+                                                                         after each chunk is completed (see Figure 1). The capability
+                                                                         to concurrently receive speech inputs and generate responses
+    1. Introduction                                                      enables full-duplex models to react more promptly to user
+  Building voice interfaces for artificial intelligence (AI) sys-        inputs (Zhang et al., 2025; Chen et al., 2025a) and can better
+   tems capable of assisting humans across a wide range of sce-          model the complex interactivity of real-world conversa-
+   narios has long been central to visions of future technology.         tion (Veluri et al., 2024; Yu et al., 2025; Roy et al., 2026).
+   A user-friendly voice interface should create a natural con-          However, the full-duplex approach also introduces unique
+                                                                         challenges such as the need for real-time speech processing
+           *Work done when visiting Kyutai **Work done while at Kyu-     and generation. Meanwhile, recent studies indicate that na-
+   tai 1Toyota Technological Institute at Chicago, Chicago, USA          tive audio models struggle more than text models with tasks
+2Kyutai, Paris, France 3Gradium, Paris, France. Correspondence to:       requiring factuality, such as question answering (Wang
+     Chung-Ming Chien <cmchien@ttic.edu>, Alexandre Defossez ´           et al., 2025a). This reduced factuality is at least in part due
+    <alex@kyutai.org>.                                                   to the much smaller amounts of speech data than text data
+    Preprint. May 13, 2026.                                              (in terms of number of words) available for training.
+
+                                                                1
+
+     MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+To address the challenge of improving factuality while                                                                  demo videos2                  for public access.
+maintaining interactivity, we propose MoshiR                                            AG ,              the first
+full-duplex voice model equipped with retrieval-augmented                                                               2. Related Work
+generation (RAG) capability, built as an extension of the
+full-duplex speech LM Moshi (Defossez et al. ´, 2024). While                                                            Since dGSLM (Nguyen et al., 2023) initiated research on
+RAG has become a widely adopted technique for enhancing                                                                 end-to-end multi-speaker conversational modeling (Veluri
+the factuality of large language models (LLMs) (Lewis                                                                   et al., 2024; Wang et al., 2025b), duplex models have
+et al., 2020), its integration into full-duplex voice systems                                                           emerged as an increasingly prominent direction. To jointly
+remains largely unexplored due to the strict real-time                                                                  model user and system speech, one line of work adopts
+constraints imposed by continuous speech interaction. We                                                                time-multiplexing approaches (Zhang et al., 2025; Chen
+tackle this challenge by exploiting the natural temporal gap                                                            et al., 2025a; Mai & Carson-Berndsen, 2025), in which the
+between the onset of a spoken response and the emergence                                                                model alternates between processing fixed-duration chunks
+of its key informational content (the “keyword delay” in                                                                of user input and generating responses of the same duration.
+Figure 2). Leveraging this observation, we design special-                                                              In contrast, models with a dual-channel architecture like
+ized fine-tuning data that trains Moshi to predict a retrieval                                                          Moshi (Defossez et al.´       , 2024; Yu et al., 2025; Hu et al., 2025;
+trigger signal when the user poses knowledge-intensive                                                                  Yao et al., 2025; Roy et al., 2026) enable high frame-rate,
+queries. This signal asynchronously invokes an information                                                              simultaneous modeling of input and output speech streams.
+retrieval system to generate reference documents relevant to                                                            To improve the factuality of speech dialogue models,
+the conversation context. The retrieved information is then                                                             recent works have incorporated RAG (Min et al., 2025;
+incorporated into the response generation process before                                                                Rackauckas & Hirschberg, 2025; Chen et al., 2025b; Feng
+the key content is reached. We design the RAG mechanism                                                                 et al., 2025). Concurrent works such as StreamRAG (Arora
+so as to guarantee that the entire retrieval process completes                                                          et al., 2025) and KAME (Kuroki et al., 2026) also
+within two seconds – shorter than the keyword delay of                                                                  exploit temporal gaps in spoken conversations to perform
+many existing speech LMs (see Table 1). In addition to                                                                  information retrieval. However, StreamRAG is restricted
+improving factuality without compromising interactivity,
+MoshiR                                                      A is retrieval-back-end agnostic, enabling seamless in-     to non-full-duplex settings with fixed, pre-indexed corpora,
+tegration of different retrieval methods – such as LLM-basedG                                                           failing to address the strict timing constraints of real-time
+retrievers or search engines – as long as they can provide                                                              full-duplex interaction. While KAME supports full-duplex
+textual references within a reasonable time. This design                                                                modeling, it is limited to LLM-based information sources
+offers flexibility and extensibility for future improvements.                                                           and relies on frequent, fixed-interval LLM calls that are
+                                                                                                                        agnostic to conversational context to generate content,
+Experimental results demonstrate that MoshiR                                         AG               significantly     leading to significant computational waste. In contrast,
+improves the factuality of Moshi on question answering                                                                  MoshiRAG provides a more efficient alternative by dynamically
+(QA) benchmarks while maintaining good interactivity                                                                    triggering retrieval only as needed. By supporting both
+in speech conversation as measured by full-duplex bench-                                                                LLM-based knowledge and direct web-search capabilities,
+marks (Lin et al., 2025; 2026).                                                                We further show that     MoshiRAG extends the RAG paradigm to open-domain full-
+performance can be enhanced at inference time by simply                                                                 duplex conversation. Beyond RAG, alternative approaches
+switching to more powerful retrieval back ends without                                                                  such as chain-of-thought reasoning for audio and speech
+retraining the base model. Finally, we demonstrate that                                                                 models (Zhifei et al., 2025; Ma et al., 2025; Chiang et al.,
+MoshiR                                                      AG   generalizes well to previously unseen mathematical     2026; 2025; Shih et al., 2026) have also been explored;
+reasoning tasks, which are challenging for both the original                                                            these techniques are complementary to our framework and
+Moshi and other speech LMs. This can be viewed as an                                                                    could be naturally combined in future work.
+early exploration of the tool-use capabilities of full-duplex
+models, where Moshi effectively leverages an LLM as                                                                     3. System Design
+an external tool to solve mathematical tasks. Our results
+suggest the broader potential for enabling general tool                                                                 The MoshiR                 AG framework is built upon Moshi (Defossez ´
+use in full-duplex models and demonstrate the promise of                                                                et al., 2024). To integrate external information into Moshi’s
+building more powerful, reliable, and user-friendly voice                                                               response generation, we first analyze the timing constraints
+AI assistants by combining real-time interactive voice                                                                  in human-machine speech conversations. Based on it, we
+interfaces with more capable problem-solving mechanisms.                                                                propose a framework consisting of a full-duplex front end
+We release MoshiR                                                A’s inference code1             along with several     and an asynchronous retrieval back end that operate in
+                                                                 G                                                      parallel, enabling the model to maintain interactivity while
+1https://github.com/kyutai-labs/moshi-rag                                                                               incorporating externally retrieved knowledge in real time.
+                                                                                                                        2https://kyutai.org/blog/2026-04-30-moshi-rag
+
+                                                                                            2
+
+        MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+    User      Where is Emily Cooper from? End-to-End Keyword Delay (E2EKD)                                                   1.                           predicted!
+    Moshi                                 In the Netflix series... Emily is from Chicago before moving to Paris.         Model Speech                 Model Text
+    Retrieval                             Chicago Retrieval Delay                                                                                            Reference
+    Figure 2. Different types of delays in human-machine conversa-                                                                                    Moshi    Text      3. Get retrieval result
+    tions. End-to-end keyword delay (E2EKD) measures the time                                                                                                 Encoder        Retrieval
+    between the end of the user’s question and the most informative                                                      User Speech                                     2. Collect  System
+    word in the response. Retrieval delay measures how long it takes                                                         Streaming                    User Text      conversation
+    for the back end to provide relevant information.                                                                   Streaming                     ASR                context
+Asynchronous                                                                                                                                              Front End      Back End
+    3.1. Timing Constraints                                                                                              Figure 3. Illustration of the front-end and back-end components in
+    Below, we introduce some terminology related to latency                                                              MoshiRAG        . When the model needs external information, it outputs
+    in human-machine conversation (illustrated in Figure 2):                                                             a ⟨ret⟩ token. The conversation transcript is sent to the back end
+                                                                                                                         which operates asynchronously. Once ready, the result is injected
+    • Time-to-first-audio-token (TTFAT): the audio-domain                                                                into Moshi which then adapts its response with no interruption.
+                                                                counterpart of the commonly used time-to-first-token
+                                                                (TTFT) metric for LLMs. We define TTFAT as the delay
+                                                            between the end of a user’s utterance and the moment the     management system belongs to the back end. To optimize
+  model generates the first audio token of its response.3                                                                user experience, the front end must provide immediate
+    • Keyword delay: time interval from the beginning of the                                                             feedback and reactions to user inputs. In contrast, the back
+                                                               model’s spoken response to the point at which the key     end can prioritize factuality and reasoning, such as planning
+                                                            content (i.e., a keyword that directly answer the user’s     dialogue flow, selecting correct information, or managing
+query, if any) first appears. See Section 5.2 for details.                                                               topics, and benefits from greater time flexibility since it
+    • End-to-end keyword delay (E2EKD): the total time                                                                   does not operate under strict real-time constraints.
+                                                             from the end of the user’s query to the moment the key-
+                                                           word is mentioned in the model’s response. By definition,     In this work, we use the original Moshi model (with minor
+    E2EKD is the sum of TTFAT and keyword delay.                                                                         modifications) as the full-duplex front end, while an asyn-
+    • Retrieval delay: the time from the prediction of a re-                                                             chronous information retrieval system operates in parallel
+    trieval trigger to the completion of the retrieval process.                                                          as the back end. Additionally, since most information
+                                                                                                                         retrieval systems are text-based, an additional streaming
+    E2EKD is a critical perceptual metric, as it determines how                                                          ASR model is used to transcribe user speech into text for
+    quickly meaningful information is delivered to the user. For                                                         retrieval purposes.4                   This ASR model directly receives
+    retrieval-augmented systems, assuming that the retrieval                                                             speech inputs and thus, by definition, is part of the front
+    is not triggered before the user query finishes, the retrieval                                                       end. Figure 3 provides a conceptual overview of the system.
+    delay must be shorter than the E2EKD in order for the re-                                                            The lack of synchronization between the front end and back
+    trieved information to be integrated into the response in time.                                                      end allows the system to effectively “think while listening
+    Our preliminary analysis shows that the E2EKD of existing                                                            and speaking,” similar to human’s cognitive abilities.
+    speech LMs often exceeds 3 seconds (see Table 1). Accord-
+    ingly, we target for MoshiR           AG a retrieval delay of no more than                                           During a speech conversation, the front-end Moshi
+    2 seconds during both data construction and model training,                                                          takes user speech tokens encoded by the Mimi codec
+    ensuring that external knowledge can be effectively inte-                                                            encoder (Defossez et al.´         , 2024) as input and autoregressively
+    grated without compromising real-time interaction quality.                                                           predicts both textual transcriptions (with padding tokens
+                                                                                                                         inserted) and corresponding speech tokens for the model’s
+    3.2. System Overview                                                                                                 response in separate channels.                   The only modifications
+                                                                                                                         from the original Moshi model are the introduction of a
+    In this paper, we define the front end as the modules                                                                special retrieval trigger token ⟨ret⟩ and a reference text
+    that directly receive or generate audio to communicate                                                               encoder. As shown in Figures 3 and 4, when the ⟨ret⟩ token
+    with the user in real time, while the back end consists of                                                           is predicted, we collect the textual transcriptions of both
+    components that do not directly interact with the user. For                                                          the user and the assistant from the ASR and Moshi outputs,
+    example, in a traditional cascaded ASR–dialogue–TTS                                                                  respectively, and pass the aggregated conversational context
+    system, the ASR and TTS modules are front-end compo-                                                                 to the retrieval back end. While retrieval is in progress,
+    nents by this definition, whereas the text-based dialogue                                                            the front-end Moshi continues to operate in full duplex,
+        3This definition focuses on content generation latency and ex-                                                         4Although it is possible to build the transcription functionality
+    cludes the time for token-to-waveform conversion, e.g. the codec                                                     into the main Moshi model, we use a separate ASR model to
+    or vocoder, which is orthogonal to the scope of this work.                                                           minimize training efforts.
+
+                                              3
+
+                                                                         MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+Moshi Input                            Retrieved                                Reference                                          where embr                     m,i denotes the embedding for role r (model or
+                            Retrieval Information
+                            Back End                                          Text Encoder                                         user) and modality m (text or speech) at time step i.5
+                                                                     Moshi    & Projection
+ In/Output                                                                                                                         When retrieval is not activated, MoshiR                   A operates like the
+                      Conversation Context                                                                                         original Moshi. When the ⟨ret⟩ signal is predicted at timeG
+    Front-EndMoshi                                                       Back End                                                  step iret, assuming that the retrieval delay is d seconds,
+                                                                     User Speech
+                                                                    Moshi Speech                                                   the retrieved reference text is encoded as a sequence of
+                                                                                                                                   embeddings embref                     , where l is the sequence length. These
+                                                                                                                                                        1:l
+                                                                      Moshi Text                                                   embeddings are projected via a one-layer trainable linear
+                                        Pre-RAG                                    RAG                                             layer and summed to the temporal Transformer input in
+                                    (coarse answer,                             (detailed                                          a streaming fashion over l temporal steps. The resulting
+                                     filler, etc)                                answer)                                           reference-aware input h       ′i is:
+    Figure 4. Text and audio token streams of the inputs and outputs
+    of MoshiR                                                        A. Front-end Moshi receives at all time its previous step         (
+    token predictions and the user speech tokens. When the retrieval G                                                                    hi + h   ref                 if iret +  d < i ≤ iret + fr + ld
+                                                                                                                                  ′h               i−(iret+     frd )             fri =
+    result is ready, its representation is summed with the embeddings                                                                     hi                           otherwise
+    from other token streams and ingested over a number of time steps.                                                                                                                                       (2)
+                                                                                                                                   where hrefi     = proj(embref i     ) and fr is Moshi’s frame rate.
+    receiving incoming speech and generating responses so that                                                                     A potential issue arises if long reference documents are
+    the conversation proceeds without interruption.                                                                                retrieved. For example, with Moshi’s 12.5 Hz frame rate,
+    We refer to the content generated after ⟨ret⟩ is predicted but                                                                 a 250-token reference could correspond to a 20-second
+    before the retrieval process completes as pre-RAG content.                                                                     embedding sequence, far exceeding the duration of a
+    In our training data, pre-RAG content typically includes a                                                                     turn in a normal speech conversation. To address this,
+    coarse answer to the user’s query as well as conversational                                                                    we adopt a pre-trained sequence compression network,
+    filler phrases (e.g., “Let me check that for you...”) that do not                                                              ARC-Encoder (Pilchen et al., 2025), to reduce the reference
+    require domain-specific knowledge to generate. Once the re-                                                                    sequence length by a factor of four.                          More choices of
+    trieval process completes, the retrieved document is encoded                                                                   reference encoders are further explored in Appendix B.1.
+    with a reference text encoder and then injected into Moshi.                                                                    3.3.2. STREAMING ASR
+    This allows the model to ground the remaining parts of its
+    response in external knowledge and thus provide a more                                                                         We employ a pre-trained streaming ASR model with
+    accurate and detailed answer following pre-RAG content.                                                                        0.5-second latency (Zeghidour et al., 2025) to transcribe
+                                                                                                                                   user speech into text for retrieval purposes. The model has
+    3.3. Building Blocks                                                                                                           only 1B parameters, making its computational cost minimal
+                                                                                                                                   relative to other components of MoshiR           A.
+    As shown in Figure 3, MoshiRAG                                                   consists of three main compo-                                                                  G
+    nents: a 7B Moshi model fine-tuned with RAG training data,                                                                     3.3   .3. RETRIEVAL BACK END
+    a 1B streaming ASR model, and a retrieval back end. Com-
+    munication between these components is conducted entirely                                                                      Once ⟨ret⟩ is predicted, we first wait 0.5 seconds for the
+    in text format. This modular design enables independent                                                                        ASR model to produce a complete transcript of the user’s
+    training of each component and provides flexibility to                                                                         utterance. The collected conversation transcript is then
+    upgrade any part of the system without affecting the others.                                                                   sent to the retrieval back end, which is a text-in-text-out
+    Details about individual components are described below.                                                                       system capable of returning reference documents within
+                                                                                                                                   manageable time to facilitate Moshi’s next response. In this
+    3.3.1. RAG AUGMENTED MOSHI MODEL                                                                                               work, we consider two types of retrieval back ends:
+    The original Moshi (Defossez et al. ´, 2024) models auto-                                                                      • LLM-based retrieval: An LLM is prompted to read
+    regressively text and audio tokens corresponding to its                                                                                             the conversation context and generate a concise, factual
+    speech output with an RQ-Transformer (Lee et al., 2022),                                                                                          reference directly helpful to Moshi’s next response, while
+    consisting of a main “temporal” Transformer (Vaswani et al.,                                                                       5 Specifically,     the  text      embedding is embmodel
+    2017) operating at 12.5 Hz and a “depth” Transformer pre-                                                                                                                            text,i                =
+                                                                                                                                   Embtext(tmodel),     where tmodel    is          the           model text to-
+    dicting 8 audio tokens per time step. The temporal Trans-                                                                                 i                        i
+                                                                                                                                   ken at step i and Embtext is the text embedding ta-
+    former is also input with user audio tokens. Formally, at time                                                                 ble.  The speech embedding is given by embr           speech,i              =
+    step i, the input vector hi to the temporal Transformer is:                                                                    Embr  speech,1  (sri,1) + P8j=2 Embr speech,j (sri−1,j ),   where s  r i,j is
+        hi = embmodel                                                                                                              the j-th layer audio token of role r at time i, and Embr          speech,j is
+                                                                         text,i + embmodel
+                                                                                     speech,i + embuser                    (1)     the corresponding embedding table.
+                                                                                         speech,i
+
+                                                                                         4
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+                                             avoiding non-readable content or formatting. The prompts     on external knowledge, a body portion that contains
+used are shown in Table 15 in the appendix.                                                               reference-grounded content, and an optional tail portion
+• Search-based retrieval: We use the AI-optimized search                                                  that concludes the response. This structure is designed
+tool Tavily6                                             to access real-time information from the web     such that, at training time, reference information can be
+                                                and extract key highlights as the reference document.     injected before the body segment begins, mirroring the
+                                          While there exist other search tools such as Perplexity, we     asynchronous RAG mechanism described in Section 3.2.
+                                            choose Tavily as it provides a concise summarized output,     To generate these scripts, we employ three Gemma 3 27B
+reducing the need to post-process retrieved information.                                                  LLMs, each assigned a distinct role: a user LLM, a Moshi
+As our goal is to make MoshiR                                     AG              capable of handling     LLM, and a reference LLM. The user LLM has access
+questions across diverse domains, we intentionally adopt                                                  to the topic and prior conversation context but not the
+general-purpose tools rather than standard RAG databases                                                  reference documents to prevent information leakage. In
+commonly used in research literature.                                                                     contrast, the Moshi and reference LLMs do not observe the
+                                                                                                          topic directly but have full access to the prior conversation
+4. Data and Training                                                                                      context and the reference information. As a result, any
+                                                                                                          topic awareness must be inferred from the user’s utterances,
+4.1. Data Generation                                                                                      as in real human-assistant interaction. When generating
+Training of MoshiR                                           A    relies on synthetic data.  We first     conversation scripts, we maintain a universal record similar
+produce text-based conversational scripts on specified topicsG                                            to the format in Table 14 and generate the scripts line by
+along with associated reference documents using LLMs.                                                     line. Based on the content that has been generated, we call
+These scripts are then converted into spoken conversations                                                the appropriate LLM, organize the record into the format for
+using a dual-speaker conversational TTS system.                                            An             that LLM (e.g. removing references for the user LLM), and
+overview of the data generation process is provided below.                                                then ask the LLM to fill in the next line in the conversation
+                                                                                                          script, until the user LLM decides to end the conversation.
+4.1.1. TOPICS                                                                                             To increase diversity and improve robustness, we design
+To construct conversations involving knowledge-intensive                                                  three prompt variants to elicit different interaction styles:
+queries, we curate a set of topics from existing question-                                                • v1: a basic conversation centered on the selected topic.
+answering datasets. We extract approximately 307k topics                                                  • v2: a conversation where the user challenges Moshi more
+from the training split of Natural Questions (Kwiatkowski                                                 frequently and therefore more back-and-forth exchanges
+et al., 2019), 90k topics from HotpotQA (Yang et al., 2018),                                              and argumentation are included.
+and 76k topics from TriviaQA (Joshi et al., 2017), for a total                                            • v3: a conversation where the user occasionally introduces
+of 474k QA-derived topics. In addition to QA-dataset-based                                                irrelevant remarks or engages in small talk.
+topics, we use LLMs to generate conversation topics in                                                    For each prompt variant, we generate one multi-turn
+specific expert domains. Through iterative discussions with                                               conversation for each topic and append a Moshi greeting
+LLMs, we identify 111 expert domains across 16 large cat-                                                 message to the beginning of the script.7               In addition,
+egories. We then employ a Gemma 3 27B model (Gemma                                                        we construct a single-turn subset for QA-style topics,
+Team et al., 2024) to generate 50 conversation topics for                                                 consisting of a single user question (we directly use the
+each domain, resulting in additional 5.5k LLM-generated                                                   questions from the QA datasets), an LLM-generated
+expert-domain topics. Details on the topic taxonomy and                                                   reference document, and an LLM-generated Moshi
+generation process are provided in Appendix D.                                                            response. These sources combine to form approximately
+4.1.2. CONVERSATION SCRIPTS WITH REFERENCES                                                               1.9M conversation instances. Training and validation data
+                                                                                                          statistics are reported in Tables 4 and 5, and example LLM
+For each topic, we use LLMs to generate multi-turn                                                        prompts for the v1 setting are provided in Table 15.
+conversational scripts that simulate natural human–assistant
+interactions.                                                 Each script is accompanied by reference     4.1.3. SPEECH SYNTHESIS
+documents that support knowledge-intensive responses. An                                                  We employ a multi-channel text-to-speech (TTS) model,
+example can be found in the appendix (Table 14).                                                          similar to the one used to generate the instruction-tuning
+In these scripts, knowledge-intensive turns by Moshi are                                                  data in the original Moshi paper (Defossez et al. ´, 2024),
+explicitly associated with reference documents to simulate                                                   7
+the RAG process. An RAG-enabled response consists                                                             Some benchmarks adopt a user-first setup (Li et al., 2025;
+                                                                                                          Lin et al., 2025; 2026) where the user is assumed to talk first. To
+of three segments: a lead portion that does not depend                                                    make our model robust to different situations, during training, we
+   6https://www.tavily.com                                                                                remove this greeting message with probability 0.3.
+
+                                                                      5
+
+                         MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+    to convert the scripts into audio. Following the original                 16
+    Moshi setup, we use a fixed speaker as Moshi’s voice and                  14               keyword delay
+    randomly sample another speaker from an internal dataset                  12               retrieval delay (training)
+    as the user’s voice. The synthesized speech corpus has an                                  retrieval delay (inference,
+                                                                              10               with a Gemma 3 back end)
+    average duration of approximately 2 minutes for multi-turn                 8
+    conversations and 15 seconds for the single-turn subset.                   6
+                                                                               4
+    4.2. Training                                                              2
+    Our data generation pipeline produces spoken conversations                 0    0         1       2    3    4    5        6
+    between two speakers, along with reference documents as-                                           delay (s)
+    sociated with specific Moshi turns. However, when training
+    the Moshi model, both the timing of the ⟨ret⟩ prediction and             Figure 5. Histograms of the distributions of retrieval and keyword
+    the duration of the retrieval process (i.e. the iret parameters          delays. Our training data covers a wider range of retrieval delays
+    and the retrieval delay d in Equation 2) are unknown. To                 than observed in practice at inference. Keyword delay is almost
+                                                                             always longer than practical retrieval delay, leaving sufficient time
+    place the ⟨ret⟩ token, we leverage the forced alignment                  to integrate retrieved information to improve the model’s answer.
+    between speech and text provided by the multi-channel
+    TTS model. Specifically, we replace the text token before
+    the first text token in the lead portion of an RAG-enabled
+    Moshi turn with the ⟨ret⟩ token. For the retrieval delay, we
+    simulate its value with the following sampling strategy:                 5. Experiments
+            (                                                                Unless otherwise specified, we use a Gemma 3 27B model
+    d′ =     U 0, dlead,             if dlead < 2 or p < 0.2,               with the same prompt as in the data generation phase (see
+             U 1.0, dlead − 1.0,     otherwise.                             Table 15) as the retrieval back end. We note that existing
+                                                                     (3)     benchmarks primarily focus on single-turn cases, and do
+    where d          ′ denotes the simulated retrieval delay used during     not cover MoshiR     AG’s ability for multi-turn conversations.
+    training, dlead is the duration of the lead portion, and
+    p ∼ U(0, 1) is a random variable. This design ensures                    5.1. Factuality
+    that, in most cases, the retrieval delay is sampled from the             We evaluate factuality using                      speech QA datasets.
+    interval (1.0, dlead − 1.0), thereby guaranteeing at least 1.0           Each dataset consists of spoken questions paired with
+    second of buffer time before key information in the body                 ground-truth textual answers. We use audio files from
+    portion is mentioned. Meanwhile, the fallback probability                OpenAudioBench (Li et al., 2025) and follow its evaluation
+    0.2 broadens the distribution to cover edge cases in which               protocol, using LLM judges to assess the correctness
+    retrieval is unusually fast or slow.                                     of MoshiR     AG             ’s responses on the Llama Questions, Web
+    Figure 5 illustrates the distributions of retrieval delay during         Questions, and TriviaQA datasets. In addition, we construct
+    training and inference. While the two distributions overlap,             a more challenging evaluation set based on the HaluEval
+    the broader training-time distribution exposes the model to              corpus.89 We gather the first 1,000 instances from the “qa”
+    edge cases that potentially enhance robustness. It also shows            subset of HaluEval and synthesize spoken questions using
+    that inference-time retrieval delays are almost always shorter           our multi-channel TTS model, with user voices randomly
+    than the keyword delay, confirming that the timing con-                  sampled from the CommonVoice (Ardila et al., 2020)
+    straint described in Section 3.1 is almost always satisfied.             corpus. Results for MoshiR   AG          and competing speech LMs are
+    We initialize MoshiR A        G with the original Moshi and make all     summarized in Table 1.
+    parameters trainable except for the reference text encoder.              We observe a substantial performance gain from Moshi to
+    A dropout probability of 0.2 is applied to each reference                MoshiR     AG        , especially on the more challenging benchmarks.
+    document. When a reference document is dropped, we                       This improvement can be largely attributed to the integration
+    set the embedding in Equation 2 to h    ′      i = hi + hdropout for     of RAG, as MoshiR     AG     also significantly outperforms a vanilla
+    i = i⟨ret⟩ +     frd , where hdropout is a learnable vector. We          Moshi model fine-tuned on the RAG training data. Overall,
+    apply window-based filtering to the raw audio signals                    MoshiR     AG         achieves performance that is comparable to, and
+    using an 80ms window size.        Audio segments with a                  in many cases better than, most existing speech LMs (most
+    root-mean-square level below −65dBFS are zeroed out.                             8The HaluEval (Li et al., 2023) dataset provides ground-truth
+    The Moshi model is trained on the synthetic dataset for 100k             reference documents, suited for evaluating RAG methods. Abla-
+    updates, with a learning rate of 2 × 10−6           and a batch size     tion studies with those are reported in Appendix B.2.
+    of 32. Other training details follow Defossez et al. ´ (2024).           9 https://huggingface.co/datasets/kyutai/HaluEvalAudio 1000
+
+                                                6
+
+
+
+
+
+
+
+
+
+
+percentage
+
+MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+    Table 1. Results for factuality evaluation, delay metrics, and computation consumption of various models. Darker color indicates better
+    performance. Underlined numbers are values reported in the original paper of each model. “-” indicates values inaccessible since part or
+    all of the models are not released. “ref.” and “resp.” show the correctness of retrieved reference and MoshiR                                                                                                   A’s final response, respectively.
+                                                                                                                                                                                                                      G
+
+                                                                                                                                                           Accuracy (%)                                          Delay (sec.)   Computation
+    Model (Base LM Size)                                                                                                                LlamaQ             WebQ TriviaQA                           HaluEval     TTFAT KD E2EKD   FLOPs/sec.
+                                                                                                                                        ref. |resp.               ref. |resp.    ref. |resp.    ref. |resp.
+    GPT-4o Audio (OpenAI, 2024)                                                                                                                88.4                      81.0           90.6           68.7      -    5.5         -       -
+    GLM-4-Voice (9B) (Zeng et al., 2024)                                                                                                       64.7                      32.2           39.1           21.2    0.3    4.2       4.4    0.74
+    Freeze-Omni (7B) (Wang et al., 2025c)                                                                                                      72.0                      44.7           53.9           14.0    1.2    5.2       6.5    0.18
+    MinMo (7B) (Chen et al., 2025a)                                                                                                            78.9                      55.0           48.3              -      -     -          -       -
+    LUCY (7B) (Gao et al., 2025)                                                                                                               59.7                      29.3           27.0              -      -     -          -       -
+    Step-Audio-Chat (130B) (Huang et al., 2025)                                                                                                81.0                      75.1           58.0           21.0    6.2    4.3      10.4    5.03
+    Baichuan-Audio (7B) (Li et al., 2025)                                                                                                      78.4                      64.5           61.7           25.0    1.0    3.8       4.8    0.84
+    LLaMA-Omni2 (14B) (Fang et al., 2025b)                                                                                                     73.0                      40.4           63.8           28.8    0.1    2.8       2.9    2.58
+    Qwen 2.5 Omni (7B) (Xu et al., 2025a)                                                                                                      79.0                      62.0           58.0           33.7    1.1    3.2       4.3    4.57
+    Kimi-Audio (7B) (KimiTeam et al., 2025)                                                                                                    79.3                      70.2           62.1           43.2    0.2    3.3       3.5    6.93
+    SALMONN-omni (8B) (Yu et al., 2025)                                                                                                        80.0                      50.5           66.0              -      -     -          -       -
+    STITCH-S (9B) (Chiang et al., 2026)                                                                                                        73.3                      50.2           50.0              -      -     -          -       -
+    Qwen3-Omni-A3B-Ins. (30B) (Xu et al., 2025b)                                                                                               84.7                      68.8           73.6           38.9    3.7    2.0       5.7    0.57
+    MoshiRAGGemma 3 27B (7B)∗                                                                                                            83.0 |80.3                71.5 |67.2     73.7 |69.6     42.0 |36.3    0.0    3.1       3.1    0.37
+    MoshiRAGGPT 4.1 (7B)                                                                                                                 87.8 |80.6                77.7 |68.9     86.8 |78.2     61.2 |51.3                               -
+    MoshiRAGTavily (7B)                                                                                                                  84.6 |78.2                73.5 |66.1     84.9 |77.5     54.3 |47.0                               -
+    Vanilla Moshi (7B) (Defossez et al. ´, 2024)                                                                                               62.3                      26.6           22.8           10.5    0.0    2.1       2.1    0.22
+    Vanilla Moshi fine-tuned on RAG data (7B)                                                                                                  61.2                      37.0           29.7           18.7    0.0    3.1       3.1    0.22
+    ∗MoshiRG with a Gemma 3 27B back end is used as the default method throughout the paper if not otherwise specified.A
+
+    of which are not full-duplex), except for GPT-4o Audio.10                                                                                                                    each model response (prompt provided in Table 17 in the ap-
+    The “ref.” columns in Table 1 report the accuracy of the                                                                                                                     pendix). We then obtain the onset time of the keyword using
+    retrieved reference information provided by the back ends.                                                                                                                   timestamps marked by the parakeet-tdt-0.6b-v2
+    On average, these scores are about 5% higher than the accu-                                                                                                                  ASR model.13 Computation cost is estimated using the
+    racy of MoshiR                                                                                                      A    ’s final spoken responses. This gap reflects        flops profiler in the DeepSpeed package,14 and the average
+                                                                                                                        G                                                        number of floating-point operations (FLOPs) required to
+    information loss introduced during RAG integration and                                                                                                                       generate one second of audio is reported. All metrics are
+    highlights opportunities for further improvement. On the                                                                                                                     macro-averaged across datasets and shown in Table 1.
+    other hand, the ref. score also marks a performance upper
+    bound for MoshiR                                                                                                         A. Fortunately, this upper bound can be fur-        Compared to the vanilla Moshi model, the conversational
+                                                                                                                             G
+    ther improved by switching to a more powerful knowledge                                                                                                                      template used by MoshiR       A      (i.e., the lead portion in RAG-
+                                                                                                                                                                                                               G
+    source. When GPT-4.1 or Tavily search is used as the re-                                                                                                                     enabled turns) introduces a one-second increase in keyword
+    trieval back end,11 MoshiR                                                                                                     A    achieves substantial gains on the        delay. However, the E2EKD of MoshiR          A is lower than that of
+                                                                                                                                   G                                                                                          G
+    more challenging TriviaQA and HaluEval datasets and out-                                                                                                                     nearly all competing systems. When accounting for retrieval
+    performs all compared speech LMs except GPT-4o Audio.                                                                                                                        overhead, MoshiR A            ’s computation cost remains comparable
+                                                                                                                                                                                                  G
+                                                                                                                                                                                 to other models of similar scale. These results demonstrate
+    5.2. Delay and Computation Consumption                                                                                                                                       that MoshiR    A            achieves strong factual performance with
+                                                                                                                                                                                                G
+    Beyond factuality, the time and computation required to                                                                                                                      reasonable trade-offs in delay and computational efficiency.
+    fulfill users’ requests are also critical factors for speech                                                                                                                 5.3. Interactivity
+    LMs. We measure the TTFAT, as defined in Section 3.1,
+    for publicly available models by recording the time elapsed                                                                                                                  Evaluating the interactivity between voice assistants and
+    until the first audio token is emitted when running each                                                                                                                     human users has long been a challenging open problem.
+    model on a single H100 GPU.12 To compute keyword delay,                                                                                                                      We assess this aspect using Full-Duplex-Bench (Lin et al.,
+    we use a Gemma 3 27B model to extract the keyword from                                                                                                                       2025), which evaluates model behavior in specific conver-
+    10We use checkpoint gpt-4o-audio-preview.                                                                                                                                    sational scenarios. The benchmark consists of pre-recorded
+    11Due to unstable API response times, we assume a uniform                                                                                                                    user audio and evaluates model reactions to the audio input,
+    retrieval delay of 1.5 sec. – higher than 90% of cases with a local                                                                                                          with particular emphasis on turn-taking behavior. Specif-
+    Gemma model – for all experiments with non-Gemma back ends.                                                                                                                  ically, the pause track measures whether a model refrains
+    12Exceptions are MoshiR                                                                                                   A    and Step-Audio-Chat. For MoshiR A, the
+                                                                                                                              G                        G                         13https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+    front-end models run on one GPU, and the local retrieval back end                                                                                                            14https://www.deepspeed.ai/tutorials/flops-profiler
+    runs on another. Step-Audio-Chat runs on four GPUs.
+
+
+                                                                                                                                                                  7
+
+MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+    Table 2. Evaluation results on Full-Duplex-Bench (Lin et al., 2025). Underlined numbers are values reported in the original paper of each
+    model. TORs and TORc in the Pause track correspond to the synthetic subset and the Candor subset, respectively.
+
+    Model                              Pause             Backchannel           Turn Taking               User Interruption
+                                      TORs ↓ TORc ↓ TOR ↓ Freq. (/s) ↑ JSD ↓ TOR ↑ Latency (s) ↓ TOR ↑ GPT Score ↑ Latency (s) ↓
+    dGSLM (Nguyen et al., 2023)        0.93     0.94     0.69    0.015     0.93    0.98     0.35     0.92          0.20     2.53
+    Freeze-Omni                        0.64     0.48     0.64    0.001     1.00    0.34     0.95     0.87          3.62     1.41
+    Gemini (Comanici et al., 2025)     0.26     0.31     0.09    0.012     0.90    0.66     1.30     0.89          3.38     1.18
+    MoshiRAG                           0.32     0.56     0.64    0.010     0.94    0.83     0.18     0.85          3.75     1.02
+    Vanilla Moshi                      0.99     0.98     1.00    0.001     0.96    0.94     0.27     1.00          0.77     0.26
+    Vanilla Moshi fine-tuned           0.39     0.63     0.64    0.017     0.91    0.98     0.18     0.95          4.19     0.52
+
+
+    from taking the turn before the user has finished speaking;             Table 3. Evaluation results on out-of-domain mathematical rea-
+    lower takeover rates (TOR) are therefore preferred. The                 soning datasets. Underlined numbers are values reported in the
+                                                                            STITCH paper (Chiang et al., 2026). MoshiRAGsumm. means that
+    backchannel track evaluates both the backchanneling                     the reference is summarized before being injected into Moshi.
+    frequency per second during user speech and the similarity
+    of their temporal distribution to the ground-truth human-                                            Accuracy (%)
+    to-human conversation, measured by Jensen–Shannon                       Model              AddSub MultiArith    SinglEq                   SVAMP GSM8K
+                                                                                             ref. |resp.  ref. |resp. ref. |resp. ref. |resp. ref. |resp.
+    divergence (JSD). Although there is no consensus on the                 GLM-4-Voice             59.4    62.0     71.0       4.0                  29.0
+    optimal amount of backchanneling, the benchmark favors                  STITCH-S                81.7    87.9     91.7       72.2                 56.7
+    higher backchannel frequency, as many existing speech LMs               MoshiRAG               76.6 |61.7 87.1 |69.0 83.2 |68.2 74.1 |55.0 66.2 |33.9
+    rarely backchannel. The turn taking track assesses whether              MoshiRAGsumm.           62.0    73.1     66.4       57.5                 51.2
+    the model takes the turn promptly after the user finishes               MoshiRAGGPT 4.1 87.9 |64.8 87.1 |76.0 89.6 |72.9 80.5 |61.1 70.8 |43.2
+    speaking. Finally, the user interruption track uses 5-scale             Vanilla Moshi            8.3     9.8     18.4       9.7                   2.1
+    GPT score to evaluate how well the model responds to
+    user interruptions during its own speech and tests whether
+    the model can successfully and smoothly resume the                      sis, we adopt the mathematical reasoning datasets used by
+    conversation after the interruption without excessive delay.            STITCH (Chiang et al., 2026), a speech LM specialized
+    As shown in Table 2, MoshiR
+    A                                                                       for math reasoning, and generate spoken questions follow-
+    G                                       consistently exhibits lower     ing the same procedure used for HaluEval. The results
+    TORs than the original Moshi across all evaluated condi-                are shown in Table 3. While MoshiR       A                 does not yet match
+    tions. As a Moshi model fine-tuned on RAG data demon-                                                            G
+    strates similar behavior, this effect can largely be attributed         models explicitly trained for mathematical reasoning, it sub-
+    to the training data distribution: longer, knowledge-intensive          stantially outperforms non-reasoning speech LMs such as
+    turns result in more conservative turn-taking and therefore             GLM-4-Voice and the vanilla Moshi, demonstrating mean-
+    reduced TOR. At the same time, MoshiR                                   ingful generalization beyond QA-centric tasks.
+                                          A            G maintains con-
+    sistently lower latency than Freeze-Omni and Gemini, pre-               Interestingly, we observe that, rather than directly using the
+    serving the real-time interaction advantages of full-duplex             LLM-generated reference, additionally instructing the LLM
+    systems that the original Moshi also exhibits. Furthermore,             to summarize the reference before knowledge integration
+    both MoshiRAG          and the RAG-fine-tuned Moshi respond signif-     leads to improved performance in Table 3. We hypothesize
+    icantly better to user interruptions than the original Moshi            that, despite prompt instructions to avoid it, the initial LLM-
+    model. This improvement is likely derived from the v2 and               generated references often contain excessive numerical de-
+    v3 training subsets that expose the model to adversarial and            tails, symbolic expressions, and lengthy reasoning processes,
+    distracting conversational scenarios, enabling the model to             which make the knowledge integration less effective, as evi-
+    rapidly adapt to changing conversational topics and contexts            denced by the large gap between the ref. and the resp. scores.
+    and to promptly address the user’s most recent requests.                Compressing this content allows MoshiR           AG           to focus on the
+                                                                            core concepts and leads to more accurate responses.
+    5.4. Generalization to Unseen Tasks
+    Although MoshiRA             is trained primarily on QA-style data,     6. Conclusion
+                   G
+    the system design enables MoshiR   AG         to generalize to out-     We propose MoshiRA                  , the first attempt to integrate RAG into
+    of-distribution queries. As long as the retrieval back end                               G
+                                                                            a full-duplex speech language model. Our system enables
+    can successfully handle a question, MoshiR  AG         can leverage     Moshi to trigger an asynchronous retrieval process when
+    retrieval as an external tool to extend its capabilities be-            encountering knowledge-demanding user queries, while
+    yond the training distribution. To validate this hypothe-               allowing the conversation between the user and the model
+
+                                                             8
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+to continue uninterrupted. Leveraging the natural temporal             References
+gap between the user’s query and the model’s delivery of                             Amazon AGI et al. The Amazon Nova family of mod-
+core information, the retrieval process can obtain supporting           els: Technical report and model card. arXiv preprint
+evidence either from a more knowledgeable LLM or                        arXiv:2506.12103, 2025.
+via web search, and ground Moshi’s response in factual
+references. This approach significantly improves factuality,               Ardila, R., Branson, M., Davis, K., Kohler, M., Meyer, J.,
+outperforming most publicly released turn-based speech                  Henretty, M., Morais, R., Saunders, L., Tyers, F., and
+language models, while preserving the high interactivity                Weber, G. Common Voice: A massively-multilingual
+inherent to full-duplex systems. Experimental results also              speech corpus. In Proc. Lang. Res. Eval., 2020.
+demonstrate strong performance on mathematical reasoning
+tasks that MoshiR   AG    has not been explicitly trained on,               Arora, S., Khan, H., Sun, K., Dong, X. L., Choudhary, S.,
+showing out-of-domain generalization of its tool use ability.           Moon, S., Zhang, X., Sagar, A., Appini, S. T., Patnaik,
+                                                                        K., Sharma, S., Watanabe, S., Kumar, A., Aly, A., Liu, Y.,
+Currently, the retrieval trigger in MoshiRAG     relies entirely on     Metze, F., and Lin, Z. Stream RAG: Instant and accurate
+training data. In future work, we aim to improve this by                spoken dialogue systems with streaming tool usage. arXiv
+linking retrieval decisions to query difficulty, or by applying         preprint arXiv:2510.02044, 2025.
+reinforcement learning to determine whether retrieval is
+necessary. We plan to diversify the set of retrieval tools and                     Bohus, D. and Rudnicky, A. I. The RavenClaw dialog
+enable the model to select appropriate tools based on user              management framework: Architecture and systems. Com-
+input. Meanwhile, improving the robustness of the model                 puter Speech & Language, 23(3):332–361, 2009.
+itself remains crucial, particularly to improve its robustness            Chen, Q., Chen, Y., Chen, Y., Chen, M., Chen, Y., Deng, C.,
+against errors that may occur during the retrieval process.             Du, Z., Gao, R., Gao, C., Gao, Z., Li, Y., Lv, X., Liu, J.,
+                                                                        Luo, H., Ma, B., Ni, C., Shi, X., Tang, J., Wang, H., Wang,
+Acknowledgements                                                        H., Wang, W., Wang, Y., Xu, Y., Yu, F., Yan, Z., Yang, Y.,
+                                                                        Yang, B., Yang, X., Yang, G., Zhao, T., Zhang, Q., Zhang,
+The authors wish to acknowledge Hippolyte Pilchen for                   S., Zhao, N., Zhang, P., Zhang, C., and Zhou, J. MinMo:
+his contributions in incorporating ARC-Encoder into this                A multimodal large language model for seamless voice
+project, and Gabriel de Marmiesse for his support in the                interaction. arXiv preprint arXiv:2501.06282, 2025a.
+MoshiRAG demo.                                                            Chen, Y., Ji, S., Wang, H., Wang, Z., Chen, S., He, J., Xu,
+Impact Statement                                                        J., and Zhao, Z. WavRAG: Audio-integrated retrieval
+                                                                        augmented generation for spoken dialogue models. In
+This work advances research on speech language models                   Proc. ACL, 2025b.
+by enhancing factuality and reliability without compromis-             Chiang, C.-H., Wang, X., Li, L., Lin, C.-C., Lin, K., Liu, S.,
+ing interactivity in full-duplex voice interactions through             Wang, Z., Yang, Z., Lee, H.-y., and Wang, L. SHANKS:
+asynchronous retrieval-augmented generation. By allowing                Simultaneous hearing and thinking for spoken language
+full-duplex models to access external knowledge sources,                models. arXiv preprint arXiv:2510.06917, 2025.
+the proposed approach enables more helpful, accurate, and
+natural voice-based conversations. The improvements have               Chiang, C.-H., Wang, X., Li, L., Lin, C.-C., Lin, K., LIU, S.,
+particularly strong implications for accessibility, benefiting          Wang, Z., Yang, Z., yi Lee, H., and Wang, L. STITCH: Si-
+users who rely on voice interfaces as a primary means of                multaneous thinking and talking with chunked reasoning
+obtaining information.                                                  for spoken language models. In Proc. ICLR, 2026.
+At the same time, increased conversational realism and                 Comanici, G. et al.      Gemini 2.5: Pushing the frontier
+stronger factual grounding may heighten user trust in voice             with advanced reasoning, multimodality, long context,
+assistants, underscoring the importance of incorporating ap-            and next generation agentic capabilities. arXiv preprint
+propriate safeguards against misinformation, over-reliance,             arXiv:2507.06261, 2025.
+and misuse. As with other retrieval-augmented systems, in-
+accuracies or biases in retrieved sources may be propagated                                                                   erez, ´  Defossez, A., Mazar´    e, L., Orsini, M., Royer, A., P´
+in model outputs. Addressing these risks requires careful               P., Jegou, H., Grave, E., and Zeghidour, N.´           Moshi:
+system design, transparent deployment practices, and ongo-              A speech-text foundation model for real-time dialogue.
+ing evaluation. While these considerations fall outside the             arXiv preprint arXiv:2410.00037, 2024.
+scope of this work, they represent important directions for              Fang, Q., Guo, S., Zhou, Y., Ma, Z., Zhang, S., and Feng, Y.
+future research.                                                        LLaMA-Omni: Seamless speech interaction with large
+                                                                        language models. In Proc. ICLR, 2025a.
+
+                              9
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+            Fang, Q., Zhou, Y., Guo, S., Zhang, S., and Feng, Y.                 Levin, E., Narayanan, S., Pieraccini, R., Biatov, K.,
+LLaMA-Omni 2: LLM-based real-time spoken chatbot                     Bocchieri, E., Fabbrizio, G. D., Eckert, W., Lee, S.,
+with autoregressive streaming speech synthesis. In Proc.             Pokrovsky, A., Rahim, M., Ruscitti, P., and Walker, M.
+ACL, 2025b.                                                          The AT&t-DARPA communicator mixed-initiative spo-
+       Feng, P., Ma, Z., Chen, W., Li, Y., Wang, S., Yu, K., and     ken dialog system. In Proc. ICSLP, 2000.
+Chen, X. Enhancing speech-to-speech dialogue model-                      Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V.,
+ing with end-to-end retrieval-augmented generation. In               Goyal, N., Kuttler, H., Lewis, M., Yih, W.-t., Rockt¨    aschel,¨
+Findings of EMNLP, 2025.                                             T., Riedel, S., and Kiela, D. Retrieval-augmented gen-
+                                                                     eration for knowledge-intensive NLP tasks.               In Proc.
+   Gao, H., Shao, H., Wang, X., Qiu, C., Shen, Y., Cai, S., Shi,     NeurIPS, 2020.
+Y., Xu, Z., Long, Z., Zhang, Y., Dong, S., Fu, C., Li, K.,
+Ma, L., and Sun, X. LUCY: Linguistic understanding                      Li, J., Cheng, X., Zhao, X., Nie, J.-Y., and Wen, J.-R. HaluE-
+and control yielding early stage of Her. arXiv preprint              val: A large-scale hallucination evaluation benchmark for
+arXiv:2501.16327, 2025.                                              large language models. In Proc. EMNLP, 2023.
+Gemma Team et al.      Gemma: Open models based                        Li, T., Liu, J., Zhang, T., Fang, Y., Pan, D., Wang, M., Liang,
+on Gemini research and technology.                arXiv preprint     Z., Li, Z., Lin, M., Dong, G., Xu, J., Sun, H., Zhou,
+arXiv:2403.08295, 2024.                                              Z., and Chen, W. Baichuan-Audio: A unified frame-
+        Hu, K., Hosseini-Asl, E., Chen, C., Casanova, E., Ghosh,     work for end-to-end speech interaction. arXiv preprint
+S., Zelasko, P., Chen, Z., Li, J., Balam, J., and Ginsburg,˙         arXiv:2502.17239, 2025.
+B. Efficient and Direct Duplex Modeling for Speech-to-                     Lin, G.-T., Lian, J., Li, T., Wang, Q., Anumanchipalli, G.,
+Speech Language Model. In Proc. Interspeech, 2025.                   Liu, A. H., and Lee, H.-y. Full-Duplex-Bench: A bench-
+     Huang, A. et al. Step-Audio: Unified understanding and gen-     mark to evaluate full-duplex spoken dialogue models on
+eration in intelligent speech interaction. arXiv preprint            turn-taking capabilities. In Proc. ASRU, 2025.
+arXiv:2502.11946, 2025.                                                 Lin, G.-T., Kuan, S.-Y. S., Wang, Q., Lian, J., Li, T., Watan-
+    Joshi, M., Choi, E., Weld, D., and Zettlemoyer, L. TriviaQA:     abe, S., and Lee, H.-Y. Full-Duplex-Bench v1.5: Evaluat-
+A large scale distantly supervised challenge dataset for             ing overlap handling for full-duplex speech models. In
+reading comprehension. In Proc. ACL, 2017.                           Proc. ICASSP, 2026.
+  KimiTeam, Ding, D., Ju, Z., Leng, Y., Liu, S., Liu, T., Shang,                    Ma, Z., Chen, Z., Wang, Y., Chng, E. S., and Chen,
+Z., Shen, K., Song, W., Tan, X., Tang, H., Wang, Z., Wei,            X.  Audio-CoT: Exploring chain-of-thought reason-
+C., Xin, Y., Xu, X., Yu, J., Zhang, Y., Zhou, X., Charles,           ing in large audio language model.                 arXiv preprint
+Y., Chen, J., Chen, Y., Du, Y., He, W., Hu, Z., Lai, G., Li,         arXiv:2501.07246, 2025.
+Q., Liu, Y., Sun, W., Wang, J., Wang, Y., Wu, Y., Wu, Y.,
+Yang, D., Yang, H., Yang, Y., Yang, Z., Yin, A., Yuan,                     Mai, L. and Carson-Berndsen, J. Real-time textless dialogue
+R., Zhang, Y., and Zhou, Z. Kimi-Audio technical report.             generation. arXiv preprint arXiv:2501.04877, 2025.
+arXiv preprint arXiv:2504.18425, 2025.                                       Min, D. J., Mundnich, K., Lapastora, A., Soltanmohammadi,
+        Kuroki, S., Kubo, Y., Akiba, T., and Tang, Y. KAME: Tan-     E., Ronanki, S., and Han, K. Speech retrieval-augmented
+dem architecture for enhancing knowledge in real-time                generation without automatic speech recognition. In Proc.
+speech-to-speech conversational AI. In Proc. ICASSP,                 ICASSP, 2025.
+2026.                                                                           Nachmani, E., Levkovitch, A., Hirsch, R., Salazar, J.,
+       Kwiatkowski, T., Palomaki, J., Redfield, O., Collins, M.,     Asawaroengchai, C., Mariooryad, S., Rivlin, E., Skerry-
+Parikh, A., Alberti, C., Epstein, D., Polosukhin, I., Devlin,        Ryan, R., and Ramanovich, M. T. Spoken question
+J., Lee, K., Toutanova, K., Jones, L., Kelcey, M., Chang,            answering and speech continuation using spectrogram-
+M.-W., Dai, A. M., Uszkoreit, J., Le, Q., and Petrov, S.             powered LLM. In Proc. ICLR, 2024.
+Natural Questions: A benchmark for question answering
+research. Trans. ACL, 7:452–466, 2019.                                         Nguyen, T. A., Kharitonov, E., Copet, J., Adi, Y., Hsu,
+                                                                     W.-N., Elkahky, A., Tomasello, P., Algayres, R., Sagot,
+      Lee, D., Kim, C., Kim, S., Cho, M., and Han, W.-S. Autore-     B., Mohamed, A., and Dupoux, E. Generative spoken
+gressive image generation using residual quantization. In            dialogue language modeling. Trans. ACL, 11:250–266,
+Proc. CVPR, 2022.                                                    2023.
+
+    10
+
+      MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+              OpenAI. GPT-4o system card, 2024. URL https://op      Xu, J., Guo, Z., He, J., Hu, H., He, T., Bai, S., Chen, K.,
+  enai.com/index/gpt-4o-system-card.                               Wang, J., Fan, Y., Dang, K., Zhang, B., Wang, X., Chu,
+                                                                   Y., and Lin, J. Qwen2.5-Omni technical report. arXiv
+   Pilchen, H., Grave, E., and Perez, P. ARC-Encoder: learn- ´     preprint arXiv:2503.20215, 2025a.
+  ing compressed text representations for large language
+  models. arXiv preprint arXiv:2510.20535, 2025.                      Xu, J., Guo, Z., Hu, H., Chu, Y., Wang, X., He, J., Wang,
+                                                                   Y., Shi, X., He, T., Zhu, X., Lv, Y., Wang, Y., Guo, D.,
+          Rackauckas, Z. and Hirschberg, J. VoxRAG: A step to-     Wang, H., Ma, L., Zhang, P., Zhang, X., Hao, H., Guo,
+  ward transcription-free RAG systems in spoken question           Z., Yang, B., Zhang, B., Ma, Z., Wei, X., Bai, S., Chen,
+  answering. In Proc. MAGMaR, 2025.                                K., Liu, X., Wang, P., Yang, M., Liu, D., Ren, X., Zheng,
+                                                                   B., Men, R., Zhou, F., Yu, B., Yang, J., Yu, L., Zhou, J.,
+    Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S.,     and Lin, J. Qwen3-Omni technical report. arXiv preprint
+  Matena, M., Zhou, Y., Li, W., and Liu, P. J. Exploring           arXiv:2509.17765, 2025b.
+  the limits of transfer learning with a unified text-to-text
+  transformer. J. MLR, 21(140):1–67, 2020.                        Yang, Z., Qi, P., Zhang, S., Bengio, Y., Cohen, W., Salakhut-
+                                                                   dinov, R., and Manning, C. D. HotpotQA: A dataset for
+  Roy, R., Raiman, J., Lee, S.-g., Ene, T.-D., Kirby, R., Kim,     diverse, explainable multi-hop question answering. In
+  S., Kim, J., and Catanzaro, B. PersonaPlex: Voice and            Proc. EMNLP, 2018.
+  role control for full duplex conversational speech models.         Yao, Y., Li, X., Jiang, X., Fang, X., Yu, N., Ma, W., Sun,
+  2026.                                                            A., and Wang, Y. FLM-Audio: Natural monologues
+Seneff, S., Hurley, E., Lau, R., Pao, C., Schmid, P., and Zue,     improves native full-duplex chatbots via dual training.
+  V. GALAXY-II: a reference architecture for conversa-             arXiv preprint arXiv:2509.02521, 2025.
+  tional system development. In Proc. ICSLP, 1998.                   Yu, W., Wang, S., Yang, X., Chen, X., Tian, X., Zhang, J.,
+   Shih, Y.-J., Raj, D., Wu, C., Zhou, W., Bong, S., Gaur, Y.,     Sun, G., Lu, L., Wang, Y., and Zhang, C. SALMONN-
+  Mahadeokar, J., Kalinli, O., and Seltzer, M. Can speech          omni: A standalone speech LLM without codec injection
+  LLMs think while listening? In Proc. ICLR, 2026.                 for full-duplex conversation. In Proc. NeurIPS, 2025.
+                                                                        Zeghidour, N., Kharitonov, E., Orsini, M., Volhejn, V.,
+   Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,     de Marmiesse, G., Grave, E., Perez, P., Mazar ´e, L., and´
+  L., Gomez, A. N., and and, L. K. Attention is all you need.      Defossez, A.´    Streaming sequence-to-sequence learn-
+  In Advances in Neural Information Processing Systems             ing with delayed streams modeling.            arXiv preprint
+  (NeurIPS), 2017.                                                 arXiv:2509.08753, 2025.
+ Veluri, B., Peloquin, B. N., Yu, B., Gong, H., and Gollakota,        Zeng, A., Du, Z., Liu, M., Wang, K., Jiang, S., Zhao, L.,
+  S. Beyond turn-based interfaces: Synchronous LLMs as             Dong, Y., and Tang, J. GLM-4-Voice: Towards intelli-
+  full-duplex dialogue agents. In Proc. EMNLP, 2024.               gent and human-like end-to-end spoken chatbot. arXiv
+                                                                   preprint arXiv:2412.02612, 2024.
+ Wang, B., Zou, X., Lin, G., Sun, S., Liu, Z., Zhang, W., Liu,
+  Z., Aw, A., and Chen, N. F. AudioBench: A universal               Zhang, D., Li, S., Zhang, X., Zhan, J., Wang, P., Zhou, Y.,
+  benchmark for audio large language models. In Proc.              and Qiu, X. SpeechGPT: Empowering large language
+  NAACL, 2025a.                                                    models with intrinsic cross-modal conversational abilities.
+                                                                   In Findings of EMNLP, 2023.
+       Wang, Q., Meng, Z., Cui, W., Zhang, Y., Wu, P., Wu, B.,
+  King, I., Chen, L., and Zhao, P. NTPP: Generative speech           Zhang, Q., Cheng, L., Deng, C., Chen, Q., Wang, W., Zheng,
+  language modeling for dual-channel spoken dialogue via           S., Liu, J., Yu, H., Tan, C.-H., Du, Z., and Zhang, S.
+  next-token-pair prediction. In Proc. ICML, 2025b.                OmniFlatten: An end-to-end GPT model for seamless
+                                                                   voice conversation. In Proc. ACL, 2025.
+   Wang, X., Li, Y., Fu, C., Zhang, Y., Shen, Y., Xie, L., Li,      Zhifei, X., Lin, M., Liu, Z., Wu, P., Yan, S., and Miao, C.
+  K., Sun, X., and MA, L. Freeze-Omni: A smart and                 Audio-Reasoner: Improving reasoning capability in large
+  low latency speech-to-speech dialogue model with frozen          audio language models. In Proc. EMNLP, 2025.
+  LLM. In Proc. ICLR, 2025c.
+
+             Xie, Z. and Wu, C. Mini-Omni: Language models can
+  hear, talk while thinking in streaming. arXiv preprint
+  arXiv:2408.16725, 2024.
+
+      11
+
+ MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+ A. Data Statistics
+
+ Table 4 shows the statistics of the synthetic training data, generated following the pipeline described in Section 4.1. We
+ employ a Gemma 3 27B LLM to generate 5.5k conversation topics and extract 472k questions from the training sets of the
+ QA datasets HotpotQA (“fullwiki” split), Natural Questions, and TriviaQA (“rc” split) as the QA-based topics. Using these
+ topics, we synthesize multi-turn conversation scripts with the v1, v2, and v3 prompts, and then convert the scripts to speech
+ using our multi-channel TTS model. After removing failed generation samples, this process produces approximately 475k
+ conversations per subset. Conversation lengths vary across subsets, with v1 averaging 1.5 minutes per conversation and v3
+ averaging 2.5 minutes approximately.
+ In addition, we create a single-turn subset using the QA datasets. Here, the questions in the datasets are used as the user’s
+ query, while a reference LLM generates the reference document and a Moshi LLM produces Moshi’s response. This subset
+ is similar to the format of the QA benchmarks used in Section 5, which exposes Moshi with examples where the user directly
+ asks a question without any greeting – the multi-turn subsets always start with greetings.
+ The statistics of the validation data are shown in Table 5. Similar to the training data, we use the validation sets of the QA
+ datasets to generate both multi-turn and single-turn conversations. Unlike the training data, LLM-generated topics are not
+ used for validation.
+
+                     AGTable 4. MoshiR training data statistics. Values are reported as: number of conversations (hours).
+
+ Subset                             LLM               HotpotQA                     NQ                      TriviaQA              Total
+                     (# conv / hrs)             (# conv / hrs)                (# conv / hrs)         (# conv / hrs)     (# conv / hrs)
+ Multi-turn v1       5457 (231)                   90208 (2201)          305077 (8083)                76068 (1866)       476810 (12381)
+ Multi-turn v2       5549 (236)                   90034 (2433)          303359 (9264)                75515 (2097)       474457 (14030)
+ Multi-turn v3       5550 (298)                   90208 (3459)         306754 (12701)                76061 (2947)       478573 (19405)
+ Single-turn                                       90172 (438)    305364        (333)                 471536 (1954)
+ Total                            (765)                 (8531)                (31231)                        (7243)    1901376 (47770)
+
+       Table 5. MoshiRAG validation data statistics. Values are reported as: number of conversations (hours).
+
+                                      Subset            HotpotQA                              NQ           TriviaQA
+                                                        (# conv / hrs)            (# conv / hrs)     (# conv / hrs)
+                                      Multi-turn v1     7403 (181)                    7830 (208)     9956 (245)
+                                      Multi-turn v2     7391 (199)                    7814 (240)     9939 (271)
+                                      Multi-turn v3     7403 (283)                    7826 (324)     9954 (385)
+                                      Single-turn       7403 (15)                      7830 (10)     9956 (18)
+                                      Total                          (678)                 (882)              (919)
+
+
+ B. Experiments
+
+ B.1. Justification of Model Architecture
+
+ In the early state of our development, we experiment with several different model architectures, primarily focusing on the
+ reference text encoding and information injection modules. For reference encoding, we evaluate T5 (Raffel et al., 2020)
+ and ARC-Encoder (Pilchen et al., 2025). As ARC-Encoder is explicitly designed for sequence length compression, the key
+ difference between the two options is the length of their output sequences. This difference is critical for MoshiRAG       due to its
+ strict timing constraints – shorter encoded sequences allow the Moshi model to consume reference information earlier and
+ more efficiently during streaming inference. For information injection, we consider two strategies: additive injection and
+ insertive injection.15 Additive injection adds the reference embedding to Moshi’s input embedding in a streaming manner,
+ as defined in Equation 2, so the input sequence length remains unchanged. In contrast, insertive injection explicitly inserts
+ the reference embedding sequence into Moshi’s input sequence, thereby increasing the total sequence length.
+ 15Initially, we also experiment with cross-attention-based injection, but the training with cross-attention does not converge as good
+ as the insertive approach so we omit cross-attention from the comparison here to simplify the experimental setup and avoid additional
+ architectural modifications required.
+
+12
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+B.1.1. INFORMATION INJECTION
+
+We construct a modified training set for the comparison of different information injection strategies. In this dataset, all
+references throughout the entire conversation are condensed into a single passage to reduce the total reference length.16
+The primary goal of this experiment is to study the injection strategy. Therefore, to eliminate confounding factors, we
+use ground-truth user transcriptions instead of ASR predictions, and inject reference information at the beginning of the
+conversation rather than following inference-time retrieval delays. The results are reported in Table 6.
+For both reference encoders, insertive injection consistently outperforms additive injection, demonstrating a clear trade-off
+between information integration effectiveness and Moshi’s input sequence length. This performance gap is larger when using
+T5 than ARC-Encoder. We attribute this behavior to the excessive length of T5’s output – with additive injection, reference
+information could be introduced too late for Moshi to effectively utilize it. This result further validates the importance of
+precise timing control in the MoshiR AG framework.
+Despite the better performance of insertive injection, we ultimately adopt the additive strategy to constrain sequence length,
+which preserves Moshi’s ability to sustain long-form conversations. Nevertheless, designing an information injection
+mechanism that jointly optimizes performance and efficiency remains an open research question to be further explored.
+
+Table 6. Performance of MoshiRAG with different information injection strategies. Results are scored with a Gemma 3 27B LLM. The default
+MoshiRAG setup adopts ARC-Encoder with additive injection.
+         Training Data               Ref. Encoder     Injection             Accuracy (%)
+                                                                 LlamaQ         WebQ TriviaQA  HaluEval
+         Single-ref.                 T5               Insertive    81.0     79.0     82.0      47.1
+                                                      Additive     59.6     36.6     28.5      13.9
+         Single-ref.                 ARC-Encoder      Insertive    80.7     78.6     82.2      49.0
+                                                      Additive     76.4     67.4     73.1      41.8
+
+
+
+B.1.2. REFERENCE ENCODER
+
+Next, we evaluate the choice of reference encoder by comparing T5 with two ARC-Encoder variants with compression
+ratios of four and eight. Unlike the controlled setting in Section B.1.1, we revert to the default experimental setup with
+multi-turn training data, ASR-predicted user transcriptions, and additive injection aligned with inference-time retrieval
+delays. Given the sensitivity of additive injection to sequence length when using T5, we additionally experiment with a
+pre-encoding summarization strategy that summarizes reference text prior to encoding, using the prompt shown in Table 15.
+As shown in Table 7, ARC-Encoder with a compression ratio of four consistently outperforms the other configurations.
+While pre-encoding summarization improves performance for T5, it is not as useful for ARC-Encoder. Based on these
+results, we adopt ARC-Encoder with a compression ratio of four, without pre-encoding summarization, and use additive
+injection as the default setup throughout the paper. This configuration corresponds exactly to the system design described in
+Section 3.2.
+
+Table 7. Performance of MoshiRG with different reference text encoders. Results are scored with a Gemma 3 27B LLM. The default MoshiRA                                                                       AG
+setup adopts ARC-Encoder with a compression ratio of four without pre-encoding summarization.
+
+            Summarization                                                                                                                 Ref. Encoder     Injection              Accuracy (%)
+                                                                                                                                                                          LlamaQ      WebQ TriviaQA  HaluEval
+                                                                                                                                          ARC-8            Additive     77.4      66.3     66.2      33.1
+            ✗                                                                                                                             ARC-4            Additive     80.3      74.7     73.2      36.3
+                                                                                                                                          T5               Additive     76.5      70.9     72.1      31.7
+            ✓                                                                                                                             ARC-4            Additive     77.4      75.4     73.5      37.5
+                                                                                                                                          T5               Additive     80.5      71.4     71.5      32.9
+
+
+16Otherwise, the excessive Moshi input sequence length in the “insertive” setting makes training infeasible under our computation
+constraints.
+
+                                                                                                                                                           13
+
+             MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+B.2. Sensitivity to ASR and Reference Correctness
+MoshiRAG                          relies on the retrieval back end to provide factual reference information, while the information retrieval relies
+on the outputs of Moshi and the streaming ASR model to provide accurate conversation context. Errors introduced at
+any stage of this pipeline can propagate and accumulate, ultimately affecting the quality of MoshiR                        AG’s final responses. To
+analyze the impact of such cumulative errors, we evaluate MoshiR          AG                     ’s performance on QA benchmarks using ground-truth
+user transcriptions and its performance on HaluEval when ground-truth reference documents are provided. As shown in
+Table 8, MoshiRAG                             is highly sensitive to ASR errors. Improving ASR accuracy could substantially improve the correctness
+of retrieved references and final responses by up to 15%. Meanwhile, providing ground-truth reference documents also
+leads to an improvement in the response accuracy. However, the gap between reference and response accuracies also
+increases, reflecting significant information loss during the knowledge integration process. This experiment highlights two
+straightforward directions for improving MoshiR    AG                        ’s factuality: more accurate modeling of conversation context and more
+effective integration of retrieved information.
+
+Table 8. Ablation study on QA benchmarks using ground-truth user text and ground-truth reference. Results are scored with a Gemma 3
+27B LLM. Despite the 3 to 6 % correctness loss in the knowledge integration process (the gaps between ref. and resp. columns), the
+significantly improved performance when using ground-truth transcriptions demonstrates the potential of improving MoshiR                  A by more
+                                                                                                                                G
+accurate context modeling. However, the enlarged gap between reference and response accuracies when using HaluEval’s ground-truth
+reference also indicates that the knowledge integration process can be further improved.
+
+                                                                           Accuracy (%)
+                  User Text        Reference          LlamaQ           WebQ                 TriviaQA              HaluEval
+                                                   ref.       resp.    ref.       resp.     ref.         resp.    ref.     resp.
+                  ASR              Gemma LLM       83.3       80.3     79.3       74.7      76.9         73.2     42.0     36.3
+                  ground-truth     Gemma LLM       84.8       80.2     84.7       78.3          85.8     82.5     57.2     50.8
+                  -                ground-truth                                                                   97.2     65.1
+                  ASR Word Error Rate (%)              0.7                 5.2                  4.6               11.5
+
+
+B.3. Experiment of Diverse Retrieval Back Ends
+To further evaluate the architectural flexibility of MoshiRAG                    , we extend the primary evaluation in Section 5 beyond the initial
+Gemma 3, GPT-4.1, and Tavily retrieval back ends. In this section, we examine MoshiR                     AG          ’s performance with a range of
+LLM-based back ends, spanning edge-capable models to large-scale frontier LLMs. We select three representative models
+covering a broad spectrum of parameter scales: Llama 4 Maverick,17 Mistral Medium 3.1,18 and Gemini 2.5 Flash (Comanici
+et al., 2025). Results for the QA and mathematical reasoning benchmarks are reported in Tables 9 and 10, respectively.
+Despite only being trained on synthetic data generated using Gemma 3, MoshiR                AG               exhibits strong cross-model stability.
+Performance remains largely consistent when paired with GPT-4.1, Mistral, or Gemini back ends, suggesting that the RAG
+framework is largely agnostic to the linguistic characteristics of the underlying retriever. This stability across different back
+ends provides important flexibility for real-world system design. While premium models such as GPT-4.1 establish an
+upper bound on performance, smaller LLMs like Gemini Flash achieve competitive baseline results at substantially lower
+inference costs. The strong performance of these smaller models indicates that MoshiR
+                                                                                               A                G may be suitable for deployment in
+resource-constrained or edge environments, reducing reliance on external APIs. Finally, support for multiple back ends
+enables the implementation of redundancy mechanisms, such as using a local small LLM as a fallback strategy for online
+APIs, which potentially improves MoshiRAG’s resilience to API outages or retrieval failures.
+
+B.4. Results on Full-Duplex-Bench v1.5
+To further study MoshiRAG                           ’s interactivity with users, we evaluate it using the Full-Duplex-Bench v1.5 (Lin et al., 2026)
+benchmark. This benchmark is designed to assess how a speech LM reacts when it suddenly receives overlapping speech
+input from the user while it is speaking. Four types of overlapping speech are considered: the user interrupts, the user
+backchannels, the user talks to other people, or non-user speakers talk in the background. The models’ reactions are
+classified into four categories using GPT-4o:
+17https://ai.meta.com/blog/llama-4-multimodal-intelligence
+18https://docs.mistral.ai/models/mistral-medium-3-1-25-08
+
+                                                              14
+
+ MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+ Table 9. Evaluation of MoshiRAG on QA Benchmarks with different retrieval back ends. Results are scored with a Gemma 3 27B LLM. GPT
+ 4.1 consistently shows the best results while web search powered by Tavily also shows competitive performance.
+
+                                                                    Accuracy (%)
+          Retrieval Back End                 LlamaQ             WebQ                TriviaQA            HaluEval
+                                             ref.      resp.    ref.      resp.     ref.      resp.     ref.      resp.
+          Gemma                              83.3      80.3     79.3      74.7      76.9      73.2      42.0      36.3
+          GPT 4.1                            86.6      80.6     81.7      75.4      88.4      82.9      61.2      51.3
+          Llama 4 Maverick                   81.3      78.1     79.3      72.9      81.6      70.5      45.0      33.8
+          Mistral Medium 3.1                 86.6      79.2     83.1      72.9      87.8      80.8      53.7      44.0
+          Gemini 2.5 Flash                   82.6      80.0     76.0      72.4      82.4      77.5      50.5      41.9
+          Tavily Search                      85.4      79.2     81.8      76.2      86.9      81.6      54.3      47.0
+
+ Table 10. Evaluation of MoshiR  AG on mathematical reasoning benchmarks with different retrieval back ends. Results are scored with a
+    Gemma 3 27B LLM. GPT 4.1 again performs the best on all tracks. We do not include Llama 4 Maverick in this experiment as its
+ performance on the QA benchmarks does not provide a favorable trade-off considering its model size and inference cost.
+
+                                                                Accuracy (%)
+ Retrieval Back End                 AddSub             MultiArith  SinglEq                    SVAMP               GSM8K
+                                    ref.     resp.     ref.     resp.     ref.      resp.     ref.      resp.     ref.     resp.
+ Gemma                              76.6     61.7      87.1     69.0      83.2      68.2      74.1      55.0      66.2     33.9
+ GPT 4.1                            87.9     64.8      87.1     76.0      89.6      72.9      80.5      61.1      70.8     43.2
+ Mistral Medium 3.1                 82.2     63.9      84.8     71.8      84.1      72.9      73.5      57.5      60.8     38.4
+ Gemini 2.5 Flash                   84.1     63.0      88.1     67.3      87.9      67.3      75.5      53.1      66.8     38.8
+
+
+ • Respond: the model addresses the content of the overlapping speech.
+
+ • Resume: the model ignores the overlapping speech and continues speaking.
+
+ • Uncertain: the model expresses confusion.
+
+ • Unknown: the model produces an irrelevant response or remains silent.
+
+ Different reactions are expected depending on the type of overlapping event. The evaluation results are presented in Table 11.
+ Compared to vanilla Moshi, MoshiR                   AG                                      shows a higher tendency to resume speaking across all types of overlapping events.
+ This aligns with our earlier findings in Section 5.3, where MoshiR                                AG  consistently exhibits lower TOR than vanilla Moshi.
+ Importantly, when the user really interrupts, the percentage that MoshiR                                      AG            responses to the user inputs is similar to vanilla
+ Moshi. This mirrors its performance on the “user interruption” track in Table 2, where MoshiR                                          AG          successfully addresses most
+ interruptions and achieves high GPT scores, demonstrating the effectiveness of the v2 and v3 training subsets.
+
+ Table 11. Evaluation results on Full-Duplex-Bench 1.5 (Lin et al., 2026) across different types of overlapping speech. Underlined numbers
+ are values reported in the original benchmark paper.
+
+ Model                                   User Interruption                     User Backchannel                     Talking to Other         Background Speech
+              Resp. ↑ Resm. ↓ Unc. ↓ Unk. ↓ Resp. ↓ Resm. ↑ Unc. ↓ Unk. ↓ Resp. ↓ Resm. ↑ Unc. ↑ Unk. ↓ Resp. ↓ Resm. ↑ Unc. ↑ Unk. ↓
+ Freeze-Omni                         0.72     0.12      0.03     0.13     0.07     0.80    0.02        0.11    0.58     0.25    0.00     0.15    0.63     0.25    0.01     0.11
+ Gemini                              0.33     0.55      0.01     0.10     0.01     0.93    0.02        0.04    0.00     0.99    0.00     0.01    0.70     0.30    0.00     0.00
+ Sonic (Amazon AGI et al., 2025)     0.24     0.71      0.01     0.04     0.00     0.98    0.00        0.02    0.10     0.90    0.00     0.00    0.01     0.98    0.00     0.01
+ GPT-4o Audio                        0.78     0.10      0.02     0.12     0.03     0.70    0.01        0.25    0.91     0.02    0.01     0.06    0.93     0.04    0.00     0.03
+ MoshiRAG                            0.51     0.35      0.00     0.15     0.05     0.61    0.00        0.34    0.17     0.58    0.02     0.23    0.29     0.49    0.00     0.22
+ Vanilla Moshi                       0.50     0.26      0.00     0.25     0.02     0.06    0.00        0.92    0.20     0.19    0.02     0.59    0.21     0.07    0.01     0.71
+ Vanilla Moshi fine-tuned            0.68     0.20      0.02     0.11     0.05     0.72    0.00        0.22    0.22     0.58    0.02     0.18    0.13     0.54    0.02     0.31
+
+
+ C. Further Analysis of MoshiR                A
+                                              G         Performance
+ The performance of MoshiR           AG can be evaluated across four primary dimensions: (a) whether retrieval is successfully triggered,
+ (b) the correctness of the retrieved content, (c) the computational overhead and time consumption of the retrieval process,
+
+15
+
+  MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+  100  Dataset  100  Dataset
+  HaluEval  AddSub
+  TriviaQA  GSM8K
+  WebQ  80  HaluEval
+  LlamaQ
+  90  MultiArith
+  SVAMP
+  60  SinglEq
+  TriviaQA
+  80  Instances per bin  WebQ
+  n = 10
+  n = 20
+  n = 50  40
+  n = 100  Instances per bin
+  70  n = 400  n = 10
+  n = 20
+  20  n = 50
+  n = 100
+  60  n = 400
+
+  0
+
+  5  10  15  20  25  30  35  40  0.5  1.0  1.5  2.0  2.5  3.0  3.5
+  WER (%)  Retrieval Delay (s)
+  (b) MoshiR
+  (a) RAG trigger rate versus user speech intelligibility (WER). Lla-  Aâs response accuracy as a function of retrieval delay for
+  G
+  maQ results are excluded as WER remains consistently below 5%.  QA datasets and mathematical reasoning datasets.
+
+  Figure 6. Analysis of MoshiR
+  A performance under different speech intelligibility and retrieval delay conditions.
+  G
+
+
+
+    and (d) whether the retrieved information is successfully integrated and effectively improves MoshiR
+                                                                                             A               ’s final response. Since
+                                                                                             G
+    the results in Table 1 (specifically the ref. and resp. columns) already address retrieval correctness and integration, this
+    section focuses on triggering (a) and time consumption (c) of the retrieval process to provide a more comprehensive view of
+    RAG’s effectiveness in full-duplex conversations.
+    To address the reliability of retrieval triggering, we analyze the relationship between successful RAG triggering and the
+    intelligibility of user speech, as measured by WER. As shown in Figure 6a, while results vary across datasets, RAG is
+    generally triggered more consistently when speech input is clear; trigger rates decline predictably as WER increases.
+    Regarding time consumption, we examine MoshiR         ’s performance across datasets relative to retrieval delay. Although MoshiR
+                                                A                                                                                   A
+                                                G                                                                                   G
+    is trained on a broad distribution of retrieval delay values (see Figure 5), we observe a sharp decline in accuracy when
+    retrieval latency exceeds 1.5 seconds across almost all datasets. This highlights that an efficient retrieval backend is critical
+    for good performance. Fortunately, Figure 5 confirms that most inference-time retrieval delays remain below the 1.5-second
+    threshold when utilizing a local Gemma back end, ensuring the stable operation of MoshiR
+                                                                                           A.
+                                                                                           G
+
+
+
+
+
+
+
+
+
+
+                                                   16
+
+
+
+
+
+
+
+
+
+
+RAG Triggered (%)
+
+
+
+
+
+
+
+
+
+
+    Accuracy (%)
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+D. Data Generation Resources
+
+                  Table 12. Expert conversation domains used for LLM-based topic generation.
+Category          Domains                                          Category         Domains
+                  art history and curation                                          mechanical and structural engineering
+                  music composition and ethnomusicology                             aerospace and nuclear engineering
+                  religion theology and ancient languages                           electrical and electronics engineering
+                  explaining abstract and cultural concepts        Engineering      software engineering and programming
+Arts, Human-      navigating cultural traditions                   & Technol-       robotics and automation
+ities & Cul-      literature and critical studies                  ogy              materials and nanotechnology
+ture              philosophy and ethics                                             cybersecurity and networks
+                  history and archaeology                                           human computer interaction
+                  visual arts and design                                            human factors and user experience design
+                  music and performance arts                                        personal tech troubleshooting
+                  cultural studies and anthropology
+                  creative writing and expression
+                  general medicine                                                  constitutional law
+                  surgery and operational care                                      intellectual property law
+                  pharmacy and drug research                                        legal systems and regulations
+Medicine          medical ethics and policy                        Law, Finance     corporate law and governance
+&        Health   forensic medicine                                & Business       financial management and accounting
+Sciences          medical psychology                                                investment and risk analysis
+                  sports medicine and biomechanics                                  business strategy and operations
+                  veterinary science                                                public policy and government affairs
+                  biomedical engineering and prosthetics                            quantitative finance and risk modeling
+                  physics and astronomy                                             machine learning and data science
+                  chemistry and chemical sciences                                   natural language processing
+                  biology and life sciences                                         computer vision and perception
+Pure Sciences     earth and environmental sciences                 AI and Ma-       explainability ethics and fairness in AI
+& Research        mathematics and statistics                       chine Intelli-   AI theory and algorithms
+                  cognitive science and neuroscience               gence            reinforcement learning and adaptive systems
+                  computational linguistics and technology                          theory of mind and belief tracking
+                  environmental and climate modeling                                dynamic multitask coordination
+                  molecular biology genomics and biotechnology                      tutoring with adaptive feedback
+                  verbal and nonverbal communication                                family and parenting
+                  social cues and context                          Personal      &  romantic relationships
+                  conflict resolution and negotiation              Interpersonal    social etiquette and boundaries
+Communication science communication                                Relations        workplace interactions
+& Interpreta-     digital culture and slang                                         online behavior and harassment
+tion              understanding implicit and ambiguous requests                     emotional triggers and guilt
+                  empathetic and emotional support
+                  decoding vague and cryptic messages
+                  writing emails and apologies
+                  home maintenance and repair                                       travel and event planning
+Home          &   interior design and organization                                  daily scheduling and task management
+Lifestyle         cooking and meal planning                        Planning      &  emergency preparedness
+Management        gardening and plant care                         Logistics        resource and supply management
+                  personal hobbies and leisure                                      spontaneous and creative problem solving
+                  naming mottos and playlist creation                               local navigation and travel suggestions
+                  international relations                          Problem          strategic thinking and game theory
+Geopolitics       political science and governance                 Solving       &  ethical dilemmas
+&        Social   military strategy and security                   Decision         negotiation and compromise
+Systems           urban planning and development                   Making           complex problem solving
+                  group dynamics and sociology                                      managing decision fatigue
+Career            career planning and coaching                     Personal Fi-     budgeting and saving
+&         Self-   productivity and time management                 nance & Con-     investments and retirement planning
+Improvement       learning and memory strategies                   sumerism         consumer rights and shopping
+                  motivation and goal setting                                       taxes and compliance
+Health        &   fitness and exercise                                              personal safety and security
+Wellness          mental health and stress management              Safety & Pre-    first aid and medical emergencies
+(Personal)        sleep and recovery                               paredness        disaster response and preparedness
+                  nutrition and diet                                                cybersecurity awareness
+
+
+
+                  17
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+
+
+
+
+
+
+
+
+Table 13. The prompt for conversation topic generation.
+
+                Topic Generation Prompt
+    Generate a list of 50 long, clear, and specific topics suitable for in-depth discussion in the domain of ‘[DOMAIN]’. Each
+    topic should be a full sentence or phrase, keeping it under 10 words. The topic should detail enough to guide a focused
+    conversation, but still remain simple and easy to read and understand. Aim for a casual, conversational tone. Do not use any
+    abbreviations, apostrophes symbols, or punctuations unless absolutely necessary for clarity.
+
+    For example, below are some possible topics within the domain of ‘artificial intelligence’:
+    - AI impact on daily life
+    - Building smarter home robots
+
+    Below are the 50 topics within the domain of ‘[DOMAIN]’:
+    -
+
+
+
+
+
+
+
+
+
+
+Table 14. An example conversation script between human and Moshi with references.
+
+                               Conversation Script
+    Human: Hey Moshi, ever feel like you’re living in a sci-fi movie these days?
+    Moshi: It definitely feels that way sometimes, doesn’t it? With all the new tech coming out.
+
+    Human: Seriously! Speaking of tech, I was reading about AI and art. It’s kinda wild.
+    Moshi: It is pretty wild. What specifically about AI and art are you curious about?
+
+    Human: Well, do you think AI-generated content will ever truly replace human artists?
+    Moshi (lead): That’s a big question a lot of people are asking.
+    Reference: AI-generated art raises copyright concerns, as ownership is unclear. Current legal frameworks don’t fully
+    address AI authorship. Many argue AI tools assist artists, rather than replace them.
+    Moshi (body)(subtopic: copyright and authorship): Copyright is a big issue with AI art. Right now, it’s unclear who owns
+    the rights, and the law hasn’t caught up yet.
+    Moshi (tail): It’s more likely to be a tool for artists, for now.
+
+    Human: Hmm, a tool. . . I’m not so sure. Doesn’t it devalue the skill involved?
+    Moshi: That’s a valid point. It brings up a lot of questions about what we value in art.
+    ...
+
+
+
+
+
+
+
+
+
+
+    18
+
+MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+        Table 15. v1 LLM prompts used for generating conversation scripts and reference documents.
+
+                                Moshi LLM Prompt
+    You are generating the next line for the chatbot “moshi” in a realistic ongoing conversation between a human and moshi.
+
+    Context:
+    - You see the prior conversation history, including turns from both human and moshi.
+    - You may have access to some reference documents, which provides knowledge-intensive information for your response.
+
+    Moshi Turns:
+    - Each of moshi’s turns may be unaugmented or augmented.
+    - An unaugmented turn is general knowledge or conversational filler, requiring no external information.
+    - An augmented turn consists of three parts:
+       - Lead: The opening part that includes a brief answer, general knowledge, or conversational filler, which does not require
+    external information.
+    - Body: The knowledge-intensive part, requiring external information or retrieval.
+    - Tail: The closing unaugmented part, which can be empty.
+    - If the turn is unaugmented, it consists only of the unaugmented part.
+    - If the turn is augmented, it must have a lead, an augmented body part, and may have a tail.
+    - Each part does not need to be a full sentence; a few words or a short phrase are acceptable, provided they sound natural in
+    speech.
+    - It is acceptable to use filler phrases as the lead or tail. But content like “let me check this for you. . . ”, “let me see”, or “let
+    me think” must be avoided since the user should not know that moshi has access to additional information sources.
+    - Label each part explicitly as (lead), (body)(subtopic: . . . ), (tail), or (unaugmented).
+    - For the body part in any augmented turn, specify the subtopic and use information from the reference document for the
+    augmented body part.
+    - The tail part in an augmented turn is optional; some augmented turns may come with an empty tail.
+    - Try your best to use and follow the information provided by the reference document when generating the body part.
+
+    Reference Document
+    - Several reference documents are provided for each conversation.
+    - The reference documents are concise and factual, providing knowledge-intensive information to enhance moshi’s response,
+    specifically the body parts in augmented turns.
+    - Each reference document contains less than fifty words, labeled as `Reference: [reference content]`.
+    - The reference documents are placed after the lead parts of the augmented turns in the conversation.
+
+    Guidelines:
+    - The generated content will be used as input for a text-to-speech model. Therefore, ensure the conversation is completely
+    readable and sounds like a natural transcription of human speech. Avoid overly complex sentence structures or jargon that
+    would sound unnatural when spoken.
+    - Keep the wording of each sentence simple and easy to understand, while providing enough detail to guide a focused
+    conversation.
+    - Be short and concise. Aim to keep each turn within thirty words if possible to maintain a conversational pace.
+    - Avoid unreadable punctuations and symbols such as asterisks. Only use the most basic punctuations such as period,
+    question mark, exclamation point, comma, hyphen, Apostrophe, quotation marks, and ellipsis.
+    - Convert numbers, dates, abbreviations, etc, to readable text (e.g., 25 to twenty-five, 2509 to twenty-five-oh-nine, 997 to
+    nine hundred ninety-seven, 0.5 to zero point five, 12/21 to December twenty-first, C to euro, kg to kilograms, % to percent,
+    & to and, etc.). Avoid unreadable format such as bullet points, tables, and columns.
+    - Before the conversation, the user will be presented a hello message, so you do not need to say “Hi” or “Hello” again when
+    starting the conversation.
+    - Directly answer the user’s question in a single turn if possible. Avoid backs and forths.
+    - Keep the body part within thirty words.
+    - Feel free to leave the tail part empty if natural.
+    - Use a casual and conversational tone.
+
+    Format Example:
+    Human: [greetings (optional)]
+    (unaugmented)
+    moshi: [greetings (optional)]
+
+    Human: [human question]
+    (augmented)
+    moshi (lead): [general response]
+    Reference: [reference document for the following augmented body]
+
+
+    19
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+
+    moshi (body)(subtopic: [subtopic]): [knowledge-intensive response]
+    moshi (tail): [follow-up general response]
+
+    Human: [human question]
+    (augmented)
+    moshi (lead): [general response]
+    Reference: [reference document for the following augmented body]
+    moshi (body)(subtopic: [subtopic]): [knowledge-intensive response]
+    moshi (tail): [empty]
+
+    Human: [next question]
+    (unaugmented)
+    moshi: [general response]
+
+    Human: [next question]
+    (unaugmented)
+    moshi: [general response]
+
+    Human: [next question]
+    (augmented)
+    moshi (lead): [general response]
+    Reference: [reference document for the following augmented body]
+    moshi (body)(subtopic: [subtopic]): [knowledge-intensive response]
+    moshi (tail): [empty]
+
+    Human: [next question]
+    (unaugmented)
+    moshi: [general response]
+
+
+    Begin the conversation:
+User LLM Prompt
+    You are generating the next user turn in a realistic, domain-specific conversation between a human and a chatbot named
+    “moshi” within the domain of [DOMAIN]. The topic of the conversation is: [TOPIC].
+
+    Context:
+    - You see the prior conversation history, including turns from both human and moshi.
+
+    Guidelines:
+    - You can start the conversation with a question or statement relevant to the topic or just simple greetings.
+    - Do not always use traditional ways to start a conversation. Be creative.
+    - Your turn should be a natural, human-like response or question, relevant to the ongoing conversation and the given topic
+    and domain.
+    - You may ask follow-up questions, request clarification, make statements, hesitate, or express disagreement, as in natural
+    dialogue.
+    - The conversation should be at least [MIN TURNS] turns, but can be longer if natural.
+    - The generated content will be used as input for a text-to-speech model. Ensure the conversation is completely readable and
+    sounds like a natural transcription of human speech.
+    - Avoid using any technical jargon or unnatural phrasing.
+    - Keep your response concise (ideally under thirty words), casual, and easy to understand.
+    - Avoid unreadable punctuations. Only use period, question mark, exclamation point, comma, hyphen, Apostrophe, quotation
+    marks, and ellipsis.
+    - Convert numbers, dates, abbreviations, etc., to readable text (e.g., 25 to twenty-five, % to percent).
+    - Conclude the conversation by outputting “EOC” when appropriate.
+
+    Ways to start a conversation:
+    Below are some ways to start a conversation. Try to be creative.
+    - Hello there!
+    - How have you been?
+    - Good day.
+    - It’s nice to meet you, moshi.
+    - How are things going?
+    - It’s wonderful to see you again, moshi.
+
+        20
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+
+    - Hey moshi, what have you been up to?
+    - It’s been a while, how have you been?
+    - I hope everything is going well on your end.
+    - How’s everything?
+    - I believe you’re having a great week.
+    - Hello, how are you today?
+    - Hi, how are you doing moshi?
+    - Good day.
+    - How are you doing?
+    - Hey, how is it going?
+    - Moshi, how’s your day
+    - Hello, how was your day
+    - What’s up moshi?
+    - What’s going on?
+    You can start the conversation with greetings like above (but do not limit yourself to these sentences) or you can combine
+    these greetings with your question. You can also skip the greeting part and directly ask your question to kick start the
+    conversation related to the specified topic.
+
+
+    Format Example:
+    Human: [greetings - try to be creative]
+    moshi: [greetings]
+
+    Human: [question]
+    moshi: [response]
+
+    Human: [question]
+    moshi: [response]
+
+    Human: [question]
+    moshi: [response]
+
+    Human: EOC
+
+
+    Another format Example:
+    Human: [question]
+    moshi: [response]
+
+    Human: [question]
+    moshi: [response]
+
+    Human: [question]
+    moshi: [response]
+
+    Human: [saying goodbye - try to be creative] EOC
+
+
+    Begin the conversation:
+                      Reference LLM Prompt
+(Underlined content is only for reference LLM with summarization)
+    You are generating a short reference document for a chatbot named “moshi”. This document will directly inform moshi’s
+    next response in an ongoing conversation between a user and Moshi.
+
+    Context:
+    - You see the complete prior conversation history, including all previous user and moshi turns.
+
+    Guidelines:
+    - The reference document should be concise, factual, and directly relevant to the ongoing conversation.
+    - The reference document must be helpful for moshi to generate its responses in the next turn of the conversation.
+    - The reference document should be labeled as `Reference: [reference content]`.
+    - Avoid complex or unreadable punctuations and symbols.
+    - Do not use markdown like asterisks (*) or hashes (#) within the reference content itself.
+
+        21
+
+MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+
+- Each reference document should contain no more than fifty words.
+- Do not include any newline symbol in your results.
+- After generating the reference, please summarize it to include only information that is relevant to the conversation and is
+helpful for moshi to generate its responses.
+- The final summarized reference should be concise, labeled as `Summarized reference: [summarized reference content]` .
+
+Format example:
+Human: [greetings (optional)]
+moshi: [greetings (optional)]
+
+Human: [question]
+Reference: [reference content for moshi’s next response]
+Summarized reference: [summary of the above generated reference]
+moshi: [response]
+
+Human: [question]
+moshi: [response]
+
+Human: [question]
+moshi: [response]
+
+Human: [question]
+Reference: [reference content for moshi’s next response]
+Summarized reference: [summary of the above generated reference]
+moshi: [response]
+
+Human: [question]
+moshi: [response]
+
+Human: [question]
+moshi: [response]
+
+Human: [question]
+Reference: [reference content for moshi’s next response]
+Summarized reference: [summary of the above generated reference]
+
+Begin the conversation:
+
+
+
+
+
+
+
+
+
+
+22
+
+          MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+    E. Evaluation Prompts
+
+    Table 16. The prompt for evaluating the correctness on the HaluEval dataset with a Gemma 3 27B model. This prompt is based on the
+    prompts used in the OpenAudioBench (Li et al., 2025).
+
+HaluEval Evaluation Prompt
+    ## Background
+    You are a professional QA evaluation expert. You need to assess whether the model’s answer is correct based on the standard
+    answer.
+
+    ## Scoring Criteria
+    Correct: The answer matches or is equivalent to the standard answer, or contains the same core concept.
+    Incorrect: The answer is wrong or irrelevant to the question
+
+    ## Evaluation Guidelines
+    1. The expression of answers can be flexible, not requiring exact matches. For example:
+      - Numbers can be expressed in either Arabic numerals or words
+      - Differences in punctuation or simple spelling mistakes can be ignored
+    2. Focus on whether the core meaning of the answer is correct
+
+    ## Output Format
+    Provide the reasoning for your score, then generate the result in “[]” format and make sure it contains “the score is [Correct]”
+    or “the score is [Incorrect]”, for example:
+
+    The answer is correct and equivalent to the standard answer, the score is [Correct]
+
+    or
+
+    The answer is incorrect and does not match the standard answer, the score is [Incorrect]
+
+    ## Question:
+    [QUESTION]
+    ## Standard Answer:
+    [VALID ANSWERS]
+    ## Model’s Answer:
+    [ANSWER]
+
+
+
+
+
+
+
+
+
+
+      23
+
+    MoshiRAG: Asynchronous Knowledge Retrieval for Full-Duplex Speech Language Models
+
+
+
+
+
+Table 17. The prompt for extracting keyword from the model’s response with a Gemma 3 27B model.
+
+                                   Keyword Extraction Prompt
+    You are helping evaluate a question answering model.
+    Identify the single keyword or short phrase in the model answer that directly expresses any of the answer aliases. If the
+    model answer does not directly express any of the answer aliases, return the keyword/phrase that the model intends to
+    answer the question. Respond with that keyword/phrase only.
+    Example:
+    Question: Give me a capital of an European country?
+    Model answer: Berlin is the capital of Germany.
+    Valid answer aliases: [“Paris”, “Madrid”, “Budapest”, “Lisbon”]
+    Response: Berlin
+    Input:
+    Question: [QUESTION]
+    Model answer: [ANSWER]
+    Valid answer aliases: [VALID ANSWERS]
+    Response:
+
+
+
+
+
+
+
+
+
+
+          Table 18. The prompt for evaluating the correctness on the mathematical reasoning datasets with a Gemma 3 27B model.
+
+                           Mathematical Reasoning Evaluation Prompt
+    You are helping evaluate a mathematical question answering model.
+    Determine whether the model’s answer contains the provided Correct Answer. Ignore intermediate calculations or reasoning
+    steps and focus on the numerical correctness of the model’s answer.
+
+    Instructions:
+    1. Compare the value in the model’s answer to the Correct Answer.
+    2. The comparison must be based on numerical equivalence (e.g., 5.0 should match 5). Ignore rounding errors or other small
+    differences.
+    3. Your response must be only the word “Yes” or “No”.
+
+    Example 1: Correct Match
+    Question: If a train travels at 60 mph for 2 hours, how far does it travel?
+    Correct Answer: 120.0
+    Model Answer: The total distance is 120 miles.
+    Response: Yes
+
+    Example 2: Incorrect Match
+    Question: John had 10 apples and ate 3. How many are left?
+    Correct Answer: 7
+    Model Answer: He has 8 apples left.
+    Response: No
+
+    Input:
+    Question: [QUESTION]
+    Correct Answer: [VALID ANSWERS]
+    Model Answer: [ANSWER]
+    Response:
+
+
+
+
+
+
+
+    24

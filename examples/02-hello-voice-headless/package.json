@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx src/cli.ts test/fixtures/university-support-add-drop.wav",
+    "dev": "tsx scripts/run-university-support-baseline.ts",
     "build": "tsc --noEmit -p tsconfig.json && mkdir -p dist && touch dist/.buildstamp",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "fixtures:gemini-university": "tsx scripts/generate-gemini-university-fixtures.ts",
@@ -32,6 +32,10 @@
     "smoke:browser-opus-uplink": "tsx scripts/run-browser-opus-uplink-smoke.ts",
     "smoke:browser-jitter": "tsx scripts/run-browser-jitter-smoke.ts",
     "smoke:latency-filler": "tsx scripts/run-latency-filler-smoke.ts",
+    "smoke:realtime-frame": "tsx scripts/run-realtime-frame-smoke.ts",
+    "smoke:realtime-oneturn": "tsx scripts/run-realtime-oneturn-smoke.ts",
+    "smoke:realtime-bargein": "tsx scripts/run-realtime-bargein-smoke.ts",
+    "smoke:realtime-university": "tsx scripts/run-realtime-university-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
     "test": "vitest run"
   },
@@ -43,6 +47,8 @@
     "@kuralle-syrinx/aisdk": "workspace:*",
     "@kuralle-syrinx/mastra": "workspace:*",
     "@mastra/core": "^1.41.0",
+    "@kuralle-syrinx/realtime": "workspace:*",
+    "@kuralle-syrinx/ws": "workspace:*",
     "@kuralle-syrinx/recorder": "workspace:*",
     "@kuralle-syrinx/server-websocket": "workspace:*",
     "@kuralle-syrinx/deepgram": "workspace:*",
