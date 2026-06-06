@@ -97,17 +97,24 @@ export function ConnectionBar({
               id="ws-url"
               value={localUrl}
               onChange={(event) => onLocalUrlChange(event.target.value)}
-              disabled={connected}
               spellCheck={false}
             />
           ) : target === "hosted" ? (
-            <Input id="ws-url" value={resolvedUrl} readOnly disabled />
+            // Editable: typing a hosted URL switches the target to custom so the value persists.
+            <Input
+              id="ws-url"
+              value={resolvedUrl}
+              onChange={(event) => {
+                onCustomUrlChange(event.target.value);
+                onTargetChange("custom");
+              }}
+              spellCheck={false}
+            />
           ) : (
             <Input
               id="ws-url"
               value={customUrl}
               onChange={(event) => onCustomUrlChange(event.target.value)}
-              disabled={connected}
               spellCheck={false}
               placeholder={DEFAULT_LOCAL_WS_URL}
             />

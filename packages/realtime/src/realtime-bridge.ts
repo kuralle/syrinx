@@ -7,6 +7,8 @@ import {
   type InterruptTtsPacket,
   type InterruptionDetectedPacket,
   type LlmErrorPacket,
+  type LlmDeltaPacket,
+  type LlmResponseDonePacket,
   type LlmToolCallPacket,
   type LlmToolResultPacket,
   type PipelineBus,
@@ -21,6 +23,7 @@ import {
   type TurnChangePacket,
   type VoicePlugin,
 } from "@kuralle-syrinx/core";
+import { pcm16BytesToSamples } from "@kuralle-syrinx/core/audio";
 
 import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
 
@@ -41,6 +44,7 @@ export class RealtimeBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private contextId = "";
   private turnUserText = "";
+  private turnAssistantText = "";
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
   private playedMs = 0;
@@ -117,6 +121,11 @@ export class RealtimeBridge implements VoicePlugin {
         break;
       case "transcript":
         if (ev.final && ev.role === "user") this.onFinalTranscript(bus, ev.text);
+        else if (ev.final && ev.role === "assistant" && ev.text.trim()) {
+          this.turnAssistantText = this.turnAssistantText
+            ? `${this.turnAssistantText} ${ev.text.trim()}`
+            : ev.text.trim();
+        }
         break;
       case "tool_call":
         if (this.reasoner) {
@@ -232,8 +241,9 @@ export class RealtimeBridge implements VoicePlugin {
 
   private onResponseStarted(bus: PipelineBus): void {
     const previousContextId = this.contextId;
-    this.contextId = globalThis.crypto.randomUUID();
+    this.contextId = crypto.randomUUID();
     this.turnUserText = "";
+    this.turnAssistantText = "";
     this.playedMs = 0;
     this.audioRemainder = new Uint8Array(0);
     const packet: TurnChangePacket = {
@@ -293,6 +303,23 @@ export class RealtimeBridge implements VoicePlugin {
       contextId: this.contextId,
       timestampMs,
     };
+    // Surface the assistant's spoken transcript as agent text so UIs (e.g. the studio) render it.
+    // The realtime adapter already produced the audio directly; these packets are display-only.
+    if (this.turnAssistantText.trim()) {
+      const delta: LlmDeltaPacket = {
+        kind: "llm.delta",
+        contextId: this.contextId,
+        timestampMs,
+        text: this.turnAssistantText,
+      };
+      const done: LlmResponseDonePacket = {
+        kind: "llm.done",
+        contextId: this.contextId,
+        timestampMs,
+        text: this.turnAssistantText,
+      };
+      bus.push(Route.Main, delta, done);
+    }
     bus.push(Route.Main, turnComplete, ttsEnd);
   }
 
@@ -364,7 +391,11 @@ function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
 
 function resamplePcm16Bytes(pcm16: Uint8Array, fromHz: number, toHz: number): Uint8Array {
   if (fromHz === toHz) return new Uint8Array(pcm16);
-  const samples = new Int16Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength / 2);
+  // pcm16 may be a view at an ODD byteOffset (decoded envelope payload) — `new Int16Array(buffer, offset)`
+  // throws "start offset … multiple of 2". pcm16BytesToSamples copies via DataView, which is offset-safe.
+  // It requires an even byteLength, so drop a trailing odd byte first (matches the prior truncating view).
+  const even = pcm16.byteLength % 2 === 0 ? pcm16 : pcm16.subarray(0, pcm16.byteLength - 1);
+  const samples = pcm16BytesToSamples(even);
   const out = resamplePcm16(samples, fromHz, toHz);
   const bytes = new Uint8Array(out.byteLength);
   bytes.set(new Uint8Array(out.buffer, out.byteOffset, out.byteLength));

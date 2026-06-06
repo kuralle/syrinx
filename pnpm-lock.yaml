@@ -474,6 +474,9 @@ importers:
       '@kuralle-syrinx/deepgram':
         specifier: workspace:*
         version: link:../deepgram
+      '@kuralle-syrinx/realtime':
+        specifier: workspace:*
+        version: link:../realtime
       '@kuralle-syrinx/server-websocket':
         specifier: workspace:*
         version: link:../server-websocket
@@ -483,6 +486,9 @@ importers:
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
+      zod:
+        specifier: ^4.1.8
+        version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20260601.0
