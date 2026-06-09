@@ -32,6 +32,10 @@ Endpoints: `wss://<worker>/ws?sessionId=<id>` (voice), `GET /health`,
 assistant right, time-aligned) plus `user.wav` / `assistant.wav` stems and a
 `manifest.json`.
 
+## Guides
+
+**[Building a voice agent](docs/guides/building-a-voice-agent.md)** — end-to-end guide: kuralle-agents (brain) + Syrinx (voice), all bridges, Node and Cloudflare deploy.
+
 ## Playground
 
 Live browser demo — **[Syrinx Studio](https://syrinx-studio.mithushancj.workers.dev)**
