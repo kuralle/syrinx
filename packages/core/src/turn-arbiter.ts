@@ -101,6 +101,21 @@ export class TurnArbiter {
     this.tryCommit(pkt.timestampMs);
   }
 
+  // Barge-in evidence for deployments where the provider STT owns endpointing and
+  // no VAD plugin emits vad.speech_started: interim/final transcripts arriving
+  // while TTS playout is active are the speech signal. First evidence opens the
+  // pending window; later evidence commits once sustained past minInterruptionMs,
+  // through the same backchannel / low-confidence / speaker-gate suppression.
+  onProviderSttEvidence(userContextId: string, timestampMs: number, interruptedContextId: string): void {
+    const state = this.turnInterruption;
+    if (state.kind === "pending") {
+      if (state.userContextId !== userContextId) return;
+      this.tryCommit(timestampMs);
+      return;
+    }
+    this.transitionToPending({ contextId: userContextId, timestampMs }, interruptedContextId, false);
+  }
+
   onSpeechEnded(pkt: VadSpeechEndedPacket, hasActiveTts: boolean): void {
     const pending = this.pendingFor(pkt.contextId);
     if (pending) {
@@ -165,7 +180,7 @@ export class TurnArbiter {
   }
 
   private transitionToPending(
-    pkt: VadSpeechStartedPacket,
+    pkt: Pick<VadSpeechStartedPacket, "contextId" | "timestampMs">,
     interruptedContextId: string,
     awaitingAudio: boolean,
   ): void {

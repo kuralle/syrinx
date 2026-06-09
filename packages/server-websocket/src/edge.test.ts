@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PipelineBusImpl,
+  Route,
   encodeSyrinxAudioEnvelope,
   type Scheduler,
   type ScheduledCallback,
@@ -242,5 +243,30 @@ describe("edge inbound binary audio envelopes", () => {
       category: "invalid_input",
       message: "Raw binary websocket audio is disabled; use syrinx.audio.v1 or JSON audio frames",
     });
+  });
+});
+
+describe("edge barge-in downlink", () => {
+  it("sends audio_clear and agent_interrupted when an interrupt is detected", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const session = fakeSession();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => session,
+    });
+    waitForReady(socket);
+
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      source: "vad",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(socket.json()).toContainEqual({ type: "audio_clear", turnId: "assistant-turn", reason: "barge_in" });
+    expect(socket.json()).toContainEqual({ type: "agent_interrupted", turnId: "assistant-turn", reason: "barge_in" });
   });
 });
