@@ -229,7 +229,7 @@ export class RealtimeBridge implements VoicePlugin {
   }
 
   private onSpeechStarted(bus: PipelineBus): void {
-    if (!this.contextId) return;
+    if (!this.adapter.caps.emitsServerSpeechStarted || !this.contextId) return;
     const packet: InterruptionDetectedPacket = {
       kind: "interrupt.detected",
       contextId: this.contextId,

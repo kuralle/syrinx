@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syrinx-voice-realtime-gemini",
+  "main": "src/worker-realtime.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "REALTIME_FRONT": "gemini" },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME_VOICE_CONVERSATIONS",
+        "class_name": "RealtimeVoiceConversation"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RealtimeVoiceConversation"]
+    }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "kuralle-university-kb"
+    }
+  ]
+}

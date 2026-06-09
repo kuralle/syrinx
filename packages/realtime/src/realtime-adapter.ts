@@ -6,6 +6,7 @@ export interface RealtimeAdapter {
     readonly outputSampleRateHz: number;
     readonly supportsConcurrentToolAudio: boolean;
     readonly supportsTruncate: boolean;
+    readonly emitsServerSpeechStarted: boolean;
   };
 
   open(signal: AbortSignal): Promise<void>;

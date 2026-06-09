@@ -53,6 +53,7 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
       outputSampleRateHz: outputRateHz,
       supportsConcurrentToolAudio: true,
       supportsTruncate: true,
+      emitsServerSpeechStarted: true,
     },
     buildSessionUpdate: () => {
       const inputAudio: Record<string, unknown> = {

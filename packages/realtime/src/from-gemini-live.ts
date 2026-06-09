@@ -64,6 +64,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
     supportsConcurrentToolAudio: false,
     supportsTruncate: false,
+    emitsServerSpeechStarted: true,
   } as const;
 
   readonly events: AsyncIterable<RealtimeEvent>;
