@@ -24,6 +24,7 @@ import {
   type VoicePlugin,
   type PluginConfig,
   type SttErrorPacket,
+  type VadSpeechStartedPacket,
   assertAudioFormat,
   assertAudioPayload,
   requireStringConfig,
@@ -59,6 +60,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private endpointUrl: string = "wss://api.deepgram.com/v1/listen";
   private smartFormat: boolean = true;
   private interimResults: boolean = true;
+  private vadEvents: boolean = true;
   private confidenceThreshold: number = 0;
   private finalizeOnSpeechFinal: boolean = true;
   private emitEosOnFinal: boolean = true;
@@ -110,6 +112,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.deepgram.com/v1/listen";
     this.smartFormat = (config["smart_format"] as boolean) ?? true;
     this.interimResults = (config["interim_results"] as boolean) ?? true;
+    this.vadEvents = (config["vad_events"] as boolean) ?? true;
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
@@ -134,6 +137,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
           language: this.language,
           channels: "1",
           no_delay: "true",
+          vad_events: String(this.vadEvents),
         });
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
@@ -206,6 +210,20 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 
     if (isDeepgramProviderError(msg)) {
       this.emitError(this.currentContextId, deepgramProviderError(msg));
+      return;
+    }
+
+    // Provider speech-start (vad_events=true): the generic speech-start signal —
+    // the same packet a local VAD plugin emits — so barge-in works on VAD-less
+    // deployments. The session/TurnArbiter owns what to do with it.
+    if (msg["type"] === "SpeechStarted") {
+      if (!this.vadEvents) return;
+      this.bus?.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: this.currentContextId,
+        timestampMs: Date.now(),
+        confidence: 1,
+      } satisfies VadSpeechStartedPacket);
       return;
     }
 

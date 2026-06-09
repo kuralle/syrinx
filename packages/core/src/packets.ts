@@ -146,6 +146,11 @@ export interface VadAudioPacket extends VoicePacket {
   readonly audio: Uint8Array;
 }
 
+// Producers: local VAD plugins (silero-vad, pipecat-smart-turn) AND provider STT
+// plugins that surface a native speech-start signal (e.g. Deepgram vad_events
+// SpeechStarted, Deepgram Flux StartOfTurn). Provider-agnostic by design: any STT
+// plugin with an equivalent event should emit this packet so barge-in works on
+// VAD-less deployments. The TurnArbiter treats all producers identically.
 export interface VadSpeechStartedPacket extends VoicePacket {
   readonly kind: "vad.speech_started";
   readonly confidence: number;
