@@ -84,6 +84,22 @@ function mergeTranscript(existing: string, next: string): string {
   return `${existing} ${next}`.trim();
 }
 
+async function deepgramDetectLanguage(
+  chunks: readonly Uint8Array[],
+  sampleRateHz: number,
+): Promise<{ lang: string; text: string }> {
+  const key = process.env["DEEPGRAM_API_KEY"];
+  if (!key) return { lang: "?", text: "" };
+  const body = mergeBytes(chunks);
+  const res = await fetch(
+    `https://api.deepgram.com/v1/listen?detect_language=true&encoding=linear16&sample_rate=${sampleRateHz}&model=nova-2`,
+    { method: "POST", headers: { Authorization: `Token ${key}`, "content-type": "audio/raw" }, body: Buffer.from(body) },
+  );
+  const j = (await res.json()) as { results?: { channels?: Array<{ detected_language?: string; alternatives?: Array<{ transcript?: string }> }> } };
+  const ch = j.results?.channels?.[0];
+  return { lang: ch?.detected_language ?? "?", text: (ch?.alternatives?.[0]?.transcript ?? "").slice(0, 80) };
+}
+
 async function expectedSpanishReference(apiKey: string, englishInput: string): Promise<string> {
   const repoRoot = resolve(SCRIPT_DIR, "../../..");
   const genaiPath = require.resolve("@google/genai", {
@@ -96,41 +112,6 @@ async function expectedSpanishReference(apiKey: string, englishInput: string): P
     contents: `Translate to Spanish (one sentence): ${englishInput}`,
   });
   return response.text?.trim() ?? "";
-}
-
-async function verifyAudioMatchesSpanish(
-  apiKey: string,
-  chunks: readonly Uint8Array[],
-  sampleRateHz: number,
-  expectedSpanish: string,
-): Promise<boolean> {
-  const repoRoot = resolve(SCRIPT_DIR, "../../..");
-  const genaiPath = require.resolve("@google/genai", {
-    paths: [resolve(repoRoot, "packages/realtime")],
-  });
-  const { GoogleGenAI } = await import(genaiPath);
-
-  const bytes = mergeBytes(chunks);
-  const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
-  const wav = new WaveFile();
-  wav.fromScratch(1, sampleRateHz, "16", samples);
-  const wavBase64 = Buffer.from(wav.toBuffer()).toString("base64");
-
-  const ai = new GoogleGenAI({ apiKey });
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: [{
-      parts: [
-        { inlineData: { mimeType: "audio/wav", data: wavBase64 } },
-        {
-          text:
-            `Does this spoken audio convey the same meaning as this Spanish reference? ` +
-            `Reference: "${expectedSpanish}". Answer only YES or NO.`,
-        },
-      ],
-    }],
-  });
-  return /^yes\b/i.test(response.text?.trim() ?? "");
 }
 
 async function transcribeOutputAudio(
@@ -259,13 +240,11 @@ async function main(): Promise<void> {
   pushTimeline("translate.expected_spanish_reference", expectedSpanish);
 
   const spanishByText = verifiedTranscript ? looksLikeSpanish(verifiedTranscript) : false;
-  const spanishBySemantics = await verifyAudioMatchesSpanish(
-    apiKey,
-    outputChunks,
-    OUTPUT_SAMPLE_RATE_HZ,
-    expectedSpanish,
-  );
-  pushTimeline("translate.semantic_verify", String(spanishBySemantics));
+  // Deterministic language detection on the output audio (Deepgram detect_language) — replaces the
+  // non-deterministic LLM judge that previously masked the 20ms-chunk echo bug as "preview flakiness".
+  const detected = await deepgramDetectLanguage(outputChunks, OUTPUT_SAMPLE_RATE_HZ);
+  const spanishBySemantics = detected.lang.startsWith("es");
+  pushTimeline("translate.deepgram_detect", `${detected.lang} :: ${detected.text}`);
 
   if (!spanishByText && !spanishBySemantics) {
     throw new Error(

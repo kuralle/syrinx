@@ -51,19 +51,39 @@ export async function createGeminiTranslateSession(
     },
   });
 
+  // Gemini Live Translate needs ~100ms input chunks. Feeding the engine's native 20ms frames
+  // intermittently makes the model echo the SOURCE language instead of translating (~20-33%,
+  // verified deterministically via Deepgram detect_language). Coalesce to 100ms here so callers
+  // can keep sending 20ms frames. 100ms @ 16kHz PCM16 = 1600 samples = 3200 bytes (sample-aligned).
+  const INPUT_CHUNK_BYTES = 3200;
+  let buf = new Uint8Array(0);
+  const flushChunk = (chunk: Uint8Array): void => {
+    session.sendRealtimeInput({ audio: { data: bytesToBase64(chunk), mimeType: "audio/pcm;rate=16000" } });
+  };
+  const flushRemainder = (): void => {
+    if (buf.length > 0) {
+      flushChunk(buf);
+      buf = new Uint8Array(0);
+    }
+  };
+
   return {
     sendAudio(pcm16: Uint8Array): void {
-      session.sendRealtimeInput({
-        audio: {
-          data: bytesToBase64(pcm16),
-          mimeType: "audio/pcm;rate=16000",
-        },
-      });
+      const merged = new Uint8Array(buf.length + pcm16.length);
+      merged.set(buf, 0);
+      merged.set(pcm16, buf.length);
+      buf = merged;
+      while (buf.length >= INPUT_CHUNK_BYTES) {
+        flushChunk(buf.subarray(0, INPUT_CHUNK_BYTES));
+        buf = buf.slice(INPUT_CHUNK_BYTES);
+      }
     },
     signalAudioStreamEnd(): void {
+      flushRemainder();
       session.sendRealtimeInput({ audioStreamEnd: true });
     },
     async close(): Promise<void> {
+      flushRemainder();
       session.close();
     },
   };
