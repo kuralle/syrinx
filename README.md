@@ -32,6 +32,22 @@ Endpoints: `wss://<worker>/ws?sessionId=<id>` (voice), `GET /health`,
 assistant right, time-aligned) plus `user.wav` / `assistant.wav` stems and a
 `manifest.json`.
 
+## Playground
+
+Live browser demo — **[Syrinx Studio](https://syrinx-studio.mithushancj.workers.dev)**
+(`apps/studio`, a Cloudflare static-assets Worker): mic capture (server owns turns — no
+client VAD), a Web-Audio visualizer, and a live transcript over the WebSocket audio
+protocol. Use the `?ws=` switcher to point it at a hosted voice worker:
+
+- **Cascade** (Deepgram STT → kuralle RAG → Deepgram TTS):
+  `https://syrinx-studio.mithushancj.workers.dev/?ws=wss://syrinx-voice-server-workers.mithushancj.workers.dev/ws`
+- **Realtime bi-model** (gpt-realtime front → kuralle back):
+  `https://syrinx-studio.mithushancj.workers.dev/?ws=wss://syrinx-voice-realtime-workers.mithushancj.workers.dev/ws`
+
+Both voice workers run the kuralle agent (RAG + flows + skills) against the
+`kuralle-university-kb` Vectorize index. There's a bundled "Play sample" / `sample.wav`
+no-mic path for a deterministic demo turn.
+
 ## Configuration
 
 Syrinx reads provider credentials from the environment. Copy your keys into a
