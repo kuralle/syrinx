@@ -24,12 +24,18 @@ import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
 import { RealtimeBridge } from "./realtime-bridge.js";
 
 class FakeRealtimeAdapter implements RealtimeAdapter {
-  readonly caps = {
-    inputSampleRateHz: 24_000,
-    outputSampleRateHz: 24_000,
-    supportsConcurrentToolAudio: true,
-    supportsTruncate: true,
-  } as const;
+  readonly caps: RealtimeAdapter["caps"];
+
+  constructor(caps?: Partial<RealtimeAdapter["caps"]>) {
+    this.caps = {
+      inputSampleRateHz: 24_000,
+      outputSampleRateHz: 24_000,
+      supportsConcurrentToolAudio: true,
+      supportsTruncate: true,
+      emitsServerSpeechStarted: true,
+      ...caps,
+    };
+  }
 
   private readonly queued: RealtimeEvent[] = [];
   private readonly waiters: Array<(event: RealtimeEvent | null) => void> = [];
@@ -518,6 +524,28 @@ describe("RealtimeBridge", () => {
     await bridge.close();
     expect(errors.length).toBe(errorsBeforeClose);
 
+    bus.stop();
+    await started;
+  });
+
+  it("does not emit interrupt.detected when emitsServerSpeechStarted is false", async () => {
+    const adapter = new FakeRealtimeAdapter({ emitsServerSpeechStarted: false });
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const interrupts: Array<{ kind: string }> = [];
+    bus.on("interrupt.detected", (pkt) => { interrupts.push(pkt as { kind: string }); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "speech_started" });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(interrupts).toHaveLength(0);
+
+    await bridge.close();
     bus.stop();
     await started;
   });
