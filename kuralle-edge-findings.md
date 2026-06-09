@@ -163,3 +163,145 @@ consistent (~60–90s to become queryable) — ingest is an out-of-band step, no
 because the cost is the OpenAI round-trip(s), which the edge doesn't shrink. Confirms the standing
 conclusion: kuralle = the delegated **back brain** behind a realtime front (bi-model), not the
 voice loop itself.
+
+---
+
+## Phase 3 — AI Gateway
+
+Full kuralle university agent on a **new** Worker (`apps/kuralle-edge-aigateway`) with the same
+Vectorize binding (`kuralle-university-kb`) but OpenAI chat + embeddings routed through
+**Cloudflare AI Gateway** (`kuralle-gateway`) via `createOpenAI` + gateway `baseURL` +
+`cf-aig-authorization` header (Vercel AI SDK, CF-recommended pattern).
+
+### Deployed URL
+
+https://kuralle-edge-aigateway.mithushancj.workers.dev
+
+### Bundle
+
+| metric | value |
+|---|---|
+| Total upload | 1996.89 KiB |
+| gzip | 321.49 KiB |
+| Worker startup time | 63 ms |
+| VECTORIZE binding | `kuralle-university-kb` (reused, no re-ingest) |
+| Secrets | `OPENAI_API_KEY`, `CF_AIG_TOKEN` |
+
+### Edge TTFT measurements (server-side `meta` event)
+
+Grounding verified: deadline answer contains **March 31** on all Q&A runs.
+
+#### Cache-miss (4 distinct questions — fresh gateway/model path each)
+
+| run | question | ttftMs | totalMs | cold |
+|---|---|---|---|---|
+| 1 | application deadline (CS masters) | **5508** | 5848 | true |
+| 2 | in-state tuition | **1976** | 2335 | true |
+| 3 | scholarships + requirements | **6156** | 7178 | true |
+| 4 | CS masters prerequisites | **2472** | 3034 | true |
+
+Range **1976–6156 ms**, median **~3990 ms**.
+
+#### Cache-hit (same deadline question ×3 — AI Gateway response cache)
+
+| run | ttftMs | totalMs | cold | notes |
+|---|---|---|---|---|
+| 1 | **420** | 420 | true | gateway cache hit |
+| 2 | **454** | 454 | true | gateway cache hit |
+| 3 | **814** | 814 | true | gateway cache hit |
+
+**~5–13× faster** than cache-miss on the same question. Caching kicks in from run 1
+(repeat identical prompt after miss-1 populated gateway cache).
+
+#### Flow entry
+
+| run | ttftMs | totalMs | cold |
+|---|---|---|---|
+| *"I'd like to book an advisor appointment"* | **4574** | 4810 | false |
+
+### A/B: Direct Vectorize (Phase 2) vs AI Gateway (Phase 3)
+
+Manager curls against both LIVE workers, same questions, same session.
+
+| scenario | Direct Vectorize | AI Gateway | delta |
+|---|---|---|---|
+| Cache-miss deadline | 1364 ms | 5508 ms | gateway **+4.1s** (first cold) |
+| Cache-miss tuition | 1312 ms | 1976 ms | gateway **+0.7s** |
+| Cache-miss scholarships | 3448 ms | 6156 ms | gateway **+2.7s** |
+| Cache-miss prerequisites | 1070 ms | 2472 ms | gateway **+1.4s** |
+| Cache-miss median | **~1312 ms** | **~3990 ms** | gateway **~3× slower** on miss |
+| Cache-hit deadline (×3) | 1106–1565 ms | **420–814 ms** | gateway **~2–3× faster** with cache |
+| Flow entry | 4350 ms | 4574 ms | ~same |
+
+### Phase 3 conclusion
+
+**Gateway adds latency on cache-miss** (~1.4–4.1s extra vs direct OpenAI, median ~3× slower) —
+the extra hop (Worker → Gateway → OpenAI) plus gateway processing dominates. Embedding +
+chat both traverse the gateway.
+
+**Gateway caching helps dramatically on repeat prompts**: identical deadline question drops
+from ~5.5s (miss) to **420–814 ms** (hit) — below direct Vectorize warm (~1.1–1.6s). For
+high-repeat queries (FAQ, common intents), gateway cache can beat direct OpenAI.
+
+**Trade-off**: use AI Gateway when you need observability, rate limiting, caching of repeated
+prompts, or unified routing — accept ~2–4s TTFT penalty on novel queries. For voice Q&A with
+mostly unique utterances, **direct OpenAI (Phase 2) is faster**; for FAQ-heavy workloads with
+repeated phrasing, **gateway cache-hit (~0.4–0.8s) is competitive**.
+
+Flow entry unchanged (~4.5–4.6s) — routing layer doesn't change flow-routing cost.
+
+### Manager-verified (independent curls) + honest read
+My own runs reproduce the shape:
+- **cache-miss**: 1195 / 1574 / 4941 ms (cursor: 1976–6156). HIGH variance — some misses ~1.2–1.6s
+  (comparable to direct ~1.3s), others spike to ~5–6s on cold isolates + the proxy hop. So the
+  gateway is **noisier and on-median somewhat slower on miss, NOT a reliable +2.7s** — the "3×
+  slower" is median-pulled-by-cold; a warm miss is close to direct.
+- **cache-hit**: best hit **485 ms** (cursor: 420–814) — a real ~2–3× win vs direct. BUT hits need
+  an IDENTICAL upstream prompt: in run 3 the same /chat repeated MISSED (1495 ms) because the
+  kuralle agent's prompt carries session/working-memory context that **changes across turns** →
+  no cache key match. So caching helps **repeated identical FAQ queries from fresh sessions**, not
+  multi-turn conversations.
+
+**Verdict:** the CF AI Gateway is **not a live-path latency win** for a stateful RAG/memory voice
+agent (proxy hop adds variance; cache rarely hits because prompts differ per turn). Its real value
+here is **caching common FAQ queries** (~450ms vs ~1.3s) plus observability / rate-limiting / cost
+control / unified keys — operational, not latency. For the bi-model back brain, route through the
+gateway for the **logging/cost** benefits, but don't expect it to cut TTFT.
+
+### CORRECTION — Cloudflare AI Gateway does NOT cache by default (verified via cf-aig-cache-status)
+Researched the CF docs (Context7 + developers.cloudflare.com/ai-gateway/features/caching) and proved
+it on the wire against kuralle-gateway with the `cf-aig-cache-status` response header:
+- **Default (no `cf-aig-cache-ttl`), identical request ×2 → MISS, MISS.** Caching is **OPT-IN / OFF by
+  default**. Enable via the dashboard "Cache Responses" toggle OR per-request `cf-aig-cache-ttl`.
+- **With `cf-aig-cache-ttl:600` → HIT.** Caching works once opted in — and (contra the doc's "text/image
+  only" note) **streaming also cached**: streaming ×2 gave MISS → HIT.
+- **Our worker sent NO `cf-aig-cache-ttl` and the gateway default is off → it got ZERO gateway caching.**
+  So the earlier Phase-3 "cache-hit ~450–815ms" numbers were **misattributed** — they were NOT gateway
+  cache hits (proven: default off + no ttl header). They were OpenAI latency variance / warm-isolate
+  effects. The gateway added a proxy hop and **no caching** on our setup.
+
+**To actually use gateway caching:** send `cf-aig-cache-ttl` (or flip the dashboard toggle). But it only
+helps **repeated identical requests** — a stateful RAG/memory/multi-turn agent's prompts differ each
+turn, so real hits are limited to identical FAQ queries. Net unchanged: gateway = observability/cost/
+rate-limit + optional FAQ caching, not a live-path latency win.
+
+### Phase 3b — caching turned ON (cf-aig-cache-ttl) + proven via cf-aig-cache-status
+Added `cf-aig-cache-ttl: 600` to the worker's gateway provider and surfaced `cf-aig-cache-status`
+in the SSE meta. Redeployed. Same worker, real curls:
+
+| run | question | ttftMs | cf-aig-cache-status |
+|---|---|---|---|
+| 1 | deadline | 5215 | **MISS** (populates) |
+| 2 | deadline (identical) | **470** | **HIT** |
+| 3 | deadline (identical) | **474** | **HIT** |
+| 4 | tuition (distinct) | 2005 | MISS |
+
+- With ttl, identical requests HIT at **~470 ms** (vs ~2–5s MISS) — a real **~4–11× win**, now PROVEN
+  by the cache-status header (not inferred). Distinct questions MISS (full model latency).
+- Retroactively confirms the earlier correction: the original worker sent NO ttl → gateway MISSed →
+  the prior "485ms hits" were NOT gateway cache. Genuine HITs only appear once caching is enabled.
+- **Scope of the win:** only IDENTICAL requests hit. A multi-turn / varied-prompt agent rarely
+  produces identical upstream requests, so this helps **repeated identical FAQ queries** (e.g. many
+  fresh users asking the exact deadline) — not conversations. Confirms the verdict: gateway cache is
+  an FAQ/cost/observability layer, not a multi-turn latency fix. Provider prompt caching
+  (kuralle-prompt-cache-finding.md) remains the lever that helps every multi-turn session.
