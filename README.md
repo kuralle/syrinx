@@ -37,16 +37,14 @@ assistant right, time-aligned) plus `user.wav` / `assistant.wav` stems and a
 Live browser demo — **[Syrinx Studio](https://syrinx-studio.mithushancj.workers.dev)**
 (`apps/studio`, a Cloudflare static-assets Worker): mic capture (server owns turns — no
 client VAD), a Web-Audio visualizer, and a live transcript over the WebSocket audio
-protocol. Use the `?ws=` switcher to point it at a hosted voice worker:
+protocol. Use the `?ws=` switcher to point it at **your own** hosted voice worker
+(`wss://<your-worker>/ws?sessionId=<id>`) — two reference shapes ship in
+`@kuralle-syrinx/server-workers`: a **cascade** path (Deepgram STT → reasoner → TTS) and a
+**realtime bi-model** path (gpt-realtime front → reasoner back). A bundled "Play sample" /
+`sample.wav` no-mic path gives a deterministic demo turn.
 
-- **Cascade** (Deepgram STT → kuralle RAG → Deepgram TTS):
-  `https://syrinx-studio.mithushancj.workers.dev/?ws=wss://syrinx-voice-server-workers.mithushancj.workers.dev/ws`
-- **Realtime bi-model** (gpt-realtime front → kuralle back):
-  `https://syrinx-studio.mithushancj.workers.dev/?ws=wss://syrinx-voice-realtime-workers.mithushancj.workers.dev/ws`
-
-Both voice workers run the kuralle agent (RAG + flows + skills) against the
-`kuralle-university-kb` Vectorize index. There's a bundled "Play sample" / `sample.wav`
-no-mic path for a deterministic demo turn.
+> Deploy your own voice worker (`wrangler deploy`) and **add auth** before exposing its `/ws`
+> — voice endpoints are unauthenticated by default and incur provider cost per connection.
 
 ## Configuration
 
