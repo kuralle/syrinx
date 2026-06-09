@@ -477,3 +477,91 @@ describe("TurnArbiter", () => {
     expect(lockSpy).toHaveBeenCalledOnce();
   });
 });
+
+describe("TurnArbiter provider STT evidence", () => {
+  it("commits once evidence is sustained past minInterruptionMs", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.noteInterimEvidence("wait actually");
+    arbiter.onProviderSttEvidence("user", 2000, "assistant-turn");
+    await drainBus();
+    expect(interrupts).toHaveLength(0);
+
+    arbiter.noteInterimEvidence("wait actually I need");
+    arbiter.onProviderSttEvidence("user", 2300, "assistant-turn");
+    await drainBus();
+
+    expect(interrupts).toHaveLength(1);
+    expect(interrupts[0]!.contextId).toBe("assistant-turn");
+    expect(metrics).toContain("interrupt.committed_after_ms");
+    expect(metrics).toContain("vaqi.interruption");
+  });
+
+  it("does not commit while evidence is shorter than minInterruptionMs", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onProviderSttEvidence("user", 2000, "assistant-turn");
+    arbiter.noteInterimEvidence("hm wait");
+    arbiter.onProviderSttEvidence("user", 2100, "assistant-turn");
+    await drainBus();
+
+    expect(interrupts).toHaveLength(0);
+  });
+
+  it("suppresses backchannel evidence", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const metrics = metricNames(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onProviderSttEvidence("user", 2000, "assistant-turn");
+    arbiter.noteInterimEvidence("okay");
+    arbiter.onProviderSttEvidence("user", 2300, "assistant-turn");
+    await drainBus();
+
+    expect(interrupts).toHaveLength(0);
+    expect(metrics).toContain("interrupt.suppressed_backchannel");
+  });
+
+  it("ignores evidence for a different user context while a barge-in is pending", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => {
+      interrupts.push(pkt as InterruptionDetectedPacket);
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user-a",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.noteInterimEvidence("something from another stream");
+    arbiter.onProviderSttEvidence("user-b", 2400, "assistant-turn");
+    await drainBus();
+    expect(interrupts).toHaveLength(0);
+
+    arbiter.onProviderSttEvidence("user-a", 2400, "assistant-turn");
+    await drainBus();
+    expect(interrupts).toHaveLength(1);
+    expect(interrupts[0]!.contextId).toBe("assistant-turn");
+  });
+});

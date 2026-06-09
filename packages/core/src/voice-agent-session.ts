@@ -572,6 +572,7 @@ export class VoiceAgentSession {
 
   private handleSttInterim(pkt: SttInterimPacket): void {
     this.turnArbiter.noteInterimEvidence(pkt.text);
+    this.maybeBargeInFromProviderStt(pkt.contextId, pkt.text, pkt.timestampMs);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_partial", {
       tsMs: pkt.timestampMs,
@@ -589,6 +590,7 @@ export class VoiceAgentSession {
   private handleSttResult(pkt: SttResultPacket): void {
     this.watchdogs.clearSttForceFinalizeIfContext(pkt.contextId);
     this.turnArbiter.noteInterimEvidence(pkt.text, pkt.confidence);
+    this.maybeBargeInFromProviderStt(pkt.contextId, pkt.text, pkt.timestampMs);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -621,6 +623,19 @@ export class VoiceAgentSession {
       !this.latestActiveTtsContextId() &&
       this.speakerEnrollmentContextId === contextId
     );
+  }
+
+  // Deployments that delegate endpointing to the provider STT register no VAD
+  // plugin, so vad.speech_started never fires and barge-in would stay dormant.
+  // Provider transcripts arriving while TTS playout is active are the speech
+  // evidence instead (echo of our own playout is mitigated by client AEC plus
+  // the arbiter's backchannel / low-confidence suppression).
+  private maybeBargeInFromProviderStt(contextId: string, text: string, timestampMs: number): void {
+    if (this.endpointingOwner !== "provider_stt") return;
+    if (!text.trim()) return;
+    const interruptedContextId = this.latestActiveTtsContextId();
+    if (!interruptedContextId) return;
+    this.turnArbiter.onProviderSttEvidence(contextId, timestampMs, interruptedContextId);
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {

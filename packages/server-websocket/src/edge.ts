@@ -399,6 +399,14 @@ function wireEdgeSessionEvents(
       const turn = pkt as { contextId: string; text?: string };
       sendJson(socket, { type: "turn_complete", turnId: turn.contextId, transcript: turn.text ?? "" });
     }),
+    // Barge-in: tell the client to flush queued playout immediately (same wire
+    // messages as the Node server path — the browser client flushes its jitter
+    // buffer on either).
+    session.bus.on("interrupt.detected", (pkt) => {
+      const interrupt = pkt as { contextId: string };
+      sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" });
+      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" });
+    }),
   );
 }
 
