@@ -1,28 +1,26 @@
 // SPDX-License-Identifier: MIT
 //
-// Bi-model VoiceAgentSession for Cloudflare Workers: gpt-realtime-2 front model
-// dialed via createWorkersSocket, with an async university Reasoner back model.
+// Bi-model VoiceAgentSession for Cloudflare Workers: gpt-realtime front model
+// dialed via createWorkersSocket, with a kuralle Vectorize-backed Reasoner back model.
 
 import { VoiceAgentSession } from "@kuralle-syrinx/core";
-import { fromStreamText } from "@kuralle-syrinx/aisdk";
-import { createOpenAI } from "@ai-sdk/openai";
-import { tool, stepCountIs } from "ai";
-import { z } from "zod";
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
 import type { RealtimeToolDef } from "@kuralle-syrinx/realtime";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
+import type { VectorizeIndex } from "@cloudflare/workers-types";
+import { createRealtimeKuralleReasoner } from "./kuralle-realtime-agent.js";
 
 export interface RealtimeSessionEnv {
   readonly OPENAI_API_KEY?: string;
   readonly OPENAI_MODEL?: string;
+  readonly VECTORIZE: VectorizeIndex;
 }
 
 export interface RealtimeSessionOptions {
+  readonly sessionId?: string;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
 }
-
-const DEFAULT_REASONER_MODEL = "gpt-4.1-mini";
 
 const ASK_UNIVERSITY_TOOL: RealtimeToolDef = {
   name: "ask_university",
@@ -34,59 +32,16 @@ const ASK_UNIVERSITY_TOOL: RealtimeToolDef = {
   },
 };
 
-const UNIVERSITY_SUPPORT_PROMPT = [
-  "You are Syrinx University's Student Relations voice agent.",
-  "For enrollment, add-drop, advising, account, or case-status questions, call resolveLateAddRequest before answering.",
-  "Never invent deadlines, forms, URLs, account holds, or approvals. If a tool result is incomplete, say what must be checked next.",
-  "For spoken replies, use two concise sentences maximum and lead with the student action.",
-  "If transcription sounds uncertain, ask one short clarification instead of guessing.",
-].join("\n");
-
-const supportTools = {
-  resolveLateAddRequest: tool({
-    description: "Resolve a student's late add request, including student status, policy, form, approvals, and case creation.",
-    inputSchema: z.object({
-      studentId: z.string().optional().describe("Student ID if the caller provided one."),
-      name: z.string().optional().describe("Student name if the caller provided one."),
-      courseCode: z.string().optional().describe("Course code or spoken course name."),
-      term: z.string().optional().describe("Academic term if known."),
-    }),
-    execute: async ({ studentId, name, courseCode, term }) => ({
-      student: {
-        studentId: studentId ?? "S10042",
-        name: name ?? "Maya Chen",
-        academicStanding: "good",
-        activeHolds: [],
-        advisor: "Dr. Priya Raman",
-      },
-      policy: {
-        courseCode: courseCode ?? "Biology 101",
-        term: term ?? "Spring 2027",
-        addDeadline: "2027-02-05",
-        today: "2027-02-09",
-        status: "late_add_required",
-        requiredForm: "Late Add Petition",
-        approvals: ["course instructor", "academic advisor", "registrar"],
-        submissionChannel: "Student Relations portal",
-      },
-      case: {
-        caseId: "SR-2027-004812",
-        nextStep:
-          "Submit the Late Add Petition in the Student Relations portal and route it to the instructor, advisor, and registrar.",
-      },
-    }),
-  }),
-};
-
 export function hasRealtimeSessionCredentials(env: RealtimeSessionEnv): boolean {
   return Boolean(env.OPENAI_API_KEY?.trim());
 }
 
-export function createRealtimeVoiceAgentSession(
+export async function createRealtimeVoiceAgentSession(
   env: RealtimeSessionEnv,
-  _options: RealtimeSessionOptions = {},
-): VoiceAgentSession {
+  options: RealtimeSessionOptions = {},
+): Promise<VoiceAgentSession> {
   const openaiKey = requireKey(env.OPENAI_API_KEY, "OPENAI_API_KEY");
+  const sessionId = options.sessionId?.trim() || crypto.randomUUID();
 
   const adapter = fromOpenAIRealtime({
     apiKey: openaiKey,
@@ -96,16 +51,7 @@ export function createRealtimeVoiceAgentSession(
     tools: [ASK_UNIVERSITY_TOOL],
   });
 
-  const universityReasoner = fromStreamText({
-    model: createOpenAI({ apiKey: openaiKey })(env.OPENAI_MODEL ?? DEFAULT_REASONER_MODEL),
-    system: UNIVERSITY_SUPPORT_PROMPT,
-    tools: supportTools,
-    temperature: 0.2,
-    maxOutputTokens: 180,
-    maxRetries: 0,
-    timeout: 45_000,
-    stopWhen: stepCountIs(4),
-  });
+  const universityReasoner = await createRealtimeKuralleReasoner(env, { sessionId });
 
   const bridge = new RealtimeBridge(adapter, universityReasoner, ASK_UNIVERSITY_TOOL.name);
 

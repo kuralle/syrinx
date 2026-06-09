@@ -13,7 +13,7 @@ import {
 } from "./live-realtime-session.js";
 
 export interface Env extends RealtimeSessionEnv {
-  REALTIME_VOICE_CONVERSATIONS: DurableObjectNamespace;
+  readonly REALTIME_VOICE_CONVERSATIONS: DurableObjectNamespace;
 }
 
 const INPUT_SAMPLE_RATE_HZ = 16000;
@@ -53,6 +53,7 @@ export class RealtimeVoiceConversation {
       scheduler: this.scheduler,
       createSession: () =>
         createRealtimeVoiceAgentSession(this.env, {
+          sessionId,
           inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
           outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
         }),

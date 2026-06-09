@@ -14,28 +14,33 @@ import {
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 
+const mockVectorize = {} as import("@cloudflare/workers-types").VectorizeIndex;
+
 describe("createRealtimeVoiceAgentSession", () => {
-  it("registers the realtime plugin with RealtimeBridge", () => {
+  it("registers the realtime plugin with RealtimeBridge", async () => {
     const registerSpy = vi.spyOn(VoiceAgentSession.prototype, "registerPlugin");
-    const session = createRealtimeVoiceAgentSession({ OPENAI_API_KEY: "test-key" });
+    const session = await createRealtimeVoiceAgentSession({
+      OPENAI_API_KEY: "test-key",
+      VECTORIZE: mockVectorize,
+    });
     expect(session).toBeInstanceOf(VoiceAgentSession);
     expect(registerSpy).toHaveBeenCalledWith("realtime", expect.any(RealtimeBridge));
     registerSpy.mockRestore();
   });
 
-  it("requires OPENAI_API_KEY", () => {
-    expect(() => createRealtimeVoiceAgentSession({})).toThrow(/OPENAI_API_KEY/);
+  it("requires OPENAI_API_KEY", async () => {
+    await expect(createRealtimeVoiceAgentSession({ VECTORIZE: mockVectorize })).rejects.toThrow(/OPENAI_API_KEY/);
   });
 
   it("reports credential presence via hasRealtimeSessionCredentials", () => {
-    expect(hasRealtimeSessionCredentials({ OPENAI_API_KEY: "k" })).toBe(true);
-    expect(hasRealtimeSessionCredentials({})).toBe(false);
+    expect(hasRealtimeSessionCredentials({ OPENAI_API_KEY: "k", VECTORIZE: mockVectorize })).toBe(true);
+    expect(hasRealtimeSessionCredentials({ VECTORIZE: mockVectorize })).toBe(false);
   });
 });
 
 describe("realtime worker edge safety", () => {
   it("live-realtime-session and worker-realtime stay free of Node-only primitives", () => {
-    const files = ["live-realtime-session.ts", "worker-realtime.ts"];
+    const files = ["live-realtime-session.ts", "worker-realtime.ts", "kuralle-realtime-agent.ts"];
     const banned = /\bBuffer\b|from "node:|process\./;
     for (const file of files) {
       const source = readFileSync(path.join(srcDir, file), "utf8");
@@ -56,6 +61,7 @@ describe("realtime worker edge safety", () => {
           .map((line) => `${name}: ${line.trim()}`);
       });
     expect(nodeImports.filter((entry) => entry.startsWith("live-realtime-session")
-      || entry.startsWith("worker-realtime"))).toEqual([]);
+      || entry.startsWith("worker-realtime")
+      || entry.startsWith("kuralle-realtime-agent"))).toEqual([]);
   });
 });

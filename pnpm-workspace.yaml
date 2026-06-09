@@ -27,3 +27,4 @@ minimumReleaseAgeExclude:
   - '@kuralle-agents/core@0.7.1'
   - '@kuralle-agents/rag@0.7.1'
   - '@kuralle-agents/skills@0.7.1'
+  - '@kuralle-agents/vectorize-store@0.7.1'

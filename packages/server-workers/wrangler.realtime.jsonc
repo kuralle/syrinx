@@ -17,5 +17,11 @@
       "tag": "v1",
       "new_sqlite_classes": ["RealtimeVoiceConversation"]
     }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "kuralle-university-kb"
+    }
   ]
 }
