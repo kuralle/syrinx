@@ -7,4 +7,11 @@ export {
   type OpenAiCompatibleRealtimeConfig,
 } from "./openai-compatible-realtime.js";
 export { fromOpenAIRealtime, type OpenAIRealtimeOptions } from "./from-openai-realtime.js";
+export { fromGeminiLive, type GeminiLiveOptions } from "./from-gemini-live.js";
+export {
+  createGeminiTranslateSession,
+  GEMINI_TRANSLATE_MODEL,
+  type GeminiTranslateSession,
+  type GeminiTranslateSessionOptions,
+} from "./gemini-translate.js";
 export { RealtimeBridge } from "./realtime-bridge.js";
