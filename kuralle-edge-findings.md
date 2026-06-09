@@ -305,3 +305,17 @@ in the SSE meta. Redeployed. Same worker, real curls:
   fresh users asking the exact deadline) — not conversations. Confirms the verdict: gateway cache is
   an FAQ/cost/observability layer, not a multi-turn latency fix. Provider prompt caching
   (kuralle-prompt-cache-finding.md) remains the lever that helps every multi-turn session.
+
+### G3 — caching quantified (OpenAI cached_tokens, direct, gateway-cache OFF)
+Measured `usage.prompt_tokens_details.cached_tokens` on identical-prefix requests ×2 (gpt-4.1-mini):
+| prompt | prompt_tokens | cached_tokens (2nd call) |
+|---|---|---|
+| small (≈ our agent's size) | 33 | **0** |
+| large stable prefix | 1926 | **1792 (~93%)** |
+- OpenAI's automatic prompt cache **only triggers above ~1024 prompt tokens**; then it caches ~93% of
+  the stable prefix on a repeat (free, ~50% input discount + latency on the cached span).
+- Our agents sit well under 1024 tokens ⇒ **0 caching, regardless of structure/gateway**. This is the
+  grounded reason nothing cached: it's **threshold-gated**, not only a wiring gap.
+- Implication: explicit `promptCacheKey` (and Anthropic `cache_control`) wiring matters for **large-prompt /
+  long-history agents** (≥1024 tok); a tiny agent like ours wouldn't benefit from OpenAI auto-cache even
+  if kuralle wired it. The win scales with prompt size — so it's a "bigger production agent" lever.

@@ -45,3 +45,32 @@ finalize ≈ **0.3–1.0s** depending on endpointing owner.
 The clean single-run end-to-end V2V needs the smart-turn EOS plugin wired into `runOneTurn`'s
 session (the bare default mis-endpoints → force-finalize). Brain-dependent stages (LLM/TTS) are
 unaffected and were measured cleanly; STT is taken from the repo's production-config baseline.
+
+## Clean cascade (smart-turn EOS) — live 2026-06-09
+Harness: `scripts/run-kuralle-cascade-clean.ts` (`pnpm -C examples/02-hello-voice-headless smoke:kuralle-cascade-clean`).
+Session shell matches `createUniversitySupportKuralleSession` (Silero VAD + Pipecat smart-turn EOS,
+`endpointingOwner: "smart_turn"`, Deepgram nova-3 STT, Cartesia sonic-3 TTS). Brain =
+`createFullUniversityRuntime` kuralle agent (RAG+flows+skills) — the bare
+`createUniversitySupportKuralleSession` defineAgent loops `memory_block` on this fixture without
+emitting a spoken reply. Fixture: `university-support-add-drop.wav` + 1.5s trailing silence,
+realtime 20ms pacing + 5s post-feed silence. Anchor: `eos.turn_complete` for LLM/V2V; STT finalize =
+`vad.speech_ended` → last `stt.result`. 3 reps + median.
+
+| rep | STT finalize | LLM TTFT | TTS TTFB | V2V (eos→audio) |
+|---|---|---|---|---|
+| 1 | 464 ms | 1558 ms | 302 ms | 1860 ms |
+| 2 | 431 ms | 1174 ms | 267 ms | 1441 ms |
+| 3 | 451 ms | 1252 ms | 298 ms | 1550 ms |
+| **median** | **451 ms** | **1252 ms** | **298 ms** | **1550 ms** |
+
+Transcript (rep 3): *"Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline, and what form I should submit."*
+
+Agent reply (rep 3): late-add guidance + offer to book advisor appointment (no grounded Late Add Petition tool path — full-runtime KB lacks student-relations tool).
+
+### Read (clean, measured — replaces composed estimate)
+- **Real STT finalize ≈ 0.45s** (median 451ms) — smart-turn owns endpointing; no 3.8s force-finalize artifact.
+- **Clean cascaded V2V (eos→first audio) ≈ 1.55s** (median 1550ms) — not the ~2.5s composed estimate.
+- LLM TTFT ~1.25s + TTS TTFB ~0.30s dominate after STT; total ≈ 451+1252+298 ≈ 2.0s from vad-end,
+  but eos fires after STT so eos→audio ≈ 1.55s.
+- Prior composed row used repo baseline STT (964ms) + prior LLM/TTS from bare-harness brain runs;
+  this run proves the smart-turn path is faster on STT and lands **~1.5s V2V** for this fixture+brain.

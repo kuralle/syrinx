@@ -36,11 +36,13 @@
     "smoke:realtime-oneturn": "tsx scripts/run-realtime-oneturn-smoke.ts",
     "smoke:realtime-bargein": "tsx scripts/run-realtime-bargein-smoke.ts",
     "smoke:realtime-university": "tsx scripts/run-realtime-university-smoke.ts",
+    "smoke:realtime-kuralle-bimodel": "tsx scripts/run-realtime-kuralle-bimodel-smoke.ts",
     "smoke:grok-stt": "tsx scripts/run-grok-stt-smoke.ts",
     "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
     "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
     "smoke:kuralle-memory": "tsx scripts/run-kuralle-memory-smoke.ts",
+    "smoke:kuralle-cascade-clean": "tsx scripts/run-kuralle-cascade-clean.ts",
     "smoke:kuralle-full-text": "tsx scripts/run-kuralle-full-text-smoke.ts",
     "test": "vitest run"
   },

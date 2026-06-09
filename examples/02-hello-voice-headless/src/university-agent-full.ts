@@ -105,7 +105,8 @@ const createBookingTool = defineTool({
 
 const recordBookingDetails = defineTool({
   name: "record_booking_details",
-  description: "Record the student's name, program, and preferred date once all three are known.",
+  description:
+    "Record the student's name, program, and preferred date once all three are known. preferredDate may be natural language such as 'this Friday'.",
   input: z.object({ name: z.string(), program: z.string(), preferredDate: z.string() }),
   execute: async (details) => details,
 });
@@ -117,40 +118,32 @@ const requestTranscriptTool = defineTool({
   execute: async ({ studentId }) => ({ requestRef: `TR-${studentId}` }),
 });
 
-// Canonical kuralle flow pattern (see restaurant-reservation example): reply nodes
-// with tools + a next(turn) that inspects toolResults, looping on 'stay' to wait for
-// each user turn. Avoids the collect/confirmGate same-turn input-consumption pitfall.
+// One reply node per flow: phase-aware instructions + next() stays after each tool
+// transition so each user turn emits a single utterance (no {goto} same-turn chains).
 
-const replyBooked = reply({
-  id: "reply-booked",
+const bookingTurn = reply({
+  id: "book-advisor",
   grounding: { knowledge: { autoRetrieve: false } },
-  instructions: ({ state }) =>
-    `The advisor appointment is booked. Confirm it to the user and include this exact reference verbatim: ${String(state["bookingRef"] ?? "")}.`,
-  next: () => ({ end: "booked" }),
-});
-
-const confirmBooking = reply({
-  id: "confirm-booking",
-  grounding: { knowledge: { autoRetrieve: false } },
-  instructions: ({ state }) =>
-    `Summarize the advisor appointment — name: ${String(state["name"] ?? "")}, program: ${String(state["program"] ?? "")}, date: ${String(state["preferredDate"] ?? "")} — and ask the user to confirm. ONLY when the user clearly confirms, call create_booking to finalize. If they want changes, ask for the corrected detail.`,
-  tools: buildToolSet({ create_booking: createBookingTool }),
-  next: (turn) => {
-    const r = turn.toolResults.find((t) => t.name === "create_booking");
-    if (r?.result && typeof r.result === "object") return { goto: replyBooked, data: r.result as Record<string, unknown> };
-    return "stay";
+  instructions: ({ state }) => {
+    if (state["bookingRef"]) {
+      return `The advisor appointment is booked. Confirm it to the user and include this exact reference verbatim: ${String(state["bookingRef"])}.`;
+    }
+    if (state["name"] && state["program"] && state["preferredDate"]) {
+      return `Summarize the advisor appointment — name: ${String(state["name"])}, program: ${String(state["program"])}, date: ${String(state["preferredDate"])} — and ask the user to confirm. ONLY when the user clearly confirms, call create_booking. After create_booking returns, repeat the bookingRef from the tool result verbatim in your reply.`;
+    }
+    return `Help the user book an advisor appointment. Read the latest user message for name, program, and preferred date. When all three are present — including relative dates like "this Friday" — call record_booking_details immediately with those values. When name, program, and preferredDate are already in flow state, summarize them and ask the user to confirm before calling create_booking. Do not ask for a field the user already provided.`;
   },
-});
-
-const collectBooking = reply({
-  id: "collect-booking",
-  grounding: { knowledge: { autoRetrieve: false } },
-  instructions:
-    "Help the user book an advisor appointment. If you don't yet have all three of name, program, and preferred date, ask for the missing ones. Once you have all three, call record_booking_details.",
-  tools: buildToolSet({ record_booking_details: recordBookingDetails }),
-  next: (turn) => {
-    const r = turn.toolResults.find((t) => t.name === "record_booking_details");
-    if (r?.result && typeof r.result === "object") return { goto: confirmBooking, data: r.result as Record<string, unknown> };
+  tools: buildToolSet({ record_booking_details: recordBookingDetails, create_booking: createBookingTool }),
+  next: (turn, state) => {
+    const booked = turn.toolResults.find((t) => t.name === "create_booking");
+    if (booked?.result && typeof booked.result === "object") {
+      Object.assign(state, booked.result);
+      return { end: "booked" };
+    }
+    const recorded = turn.toolResults.find((t) => t.name === "record_booking_details");
+    if (recorded?.result && typeof recorded.result === "object") {
+      Object.assign(state, recorded.result);
+    }
     return "stay";
   },
 });
@@ -158,27 +151,26 @@ const collectBooking = reply({
 const bookingFlow = defineFlow({
   name: "book-advisor-appointment",
   description: "Book an appointment with an academic advisor",
-  start: collectBooking,
-  nodes: [collectBooking, confirmBooking, replyBooked],
+  start: bookingTurn,
+  nodes: [bookingTurn],
 });
 
-const replyTranscript = reply({
-  id: "reply-transcript",
+const transcriptTurn = reply({
+  id: "request-transcript",
   grounding: { knowledge: { autoRetrieve: false } },
-  instructions: ({ state }) =>
-    `Confirm the transcript request was submitted. Include this exact request reference verbatim: ${String(state["requestRef"] ?? "")}.`,
-  next: () => ({ end: "requested" }),
-});
-
-const collectTranscript = reply({
-  id: "collect-transcript",
-  grounding: { knowledge: { autoRetrieve: false } },
-  instructions:
-    "Help the user request an official transcript. If you don't have their student ID, ask for it. Once you have it, call request_transcript with that studentId.",
+  instructions: ({ state }) => {
+    if (state["requestRef"]) {
+      return `Confirm the transcript request was submitted. Include this exact request reference verbatim: ${String(state["requestRef"])}.`;
+    }
+    return `Help the user request an official transcript. Ask only if student ID is missing. When the student ID is in the user's latest message, call request_transcript immediately and confirm with the requestRef from the tool result.`;
+  },
   tools: buildToolSet({ request_transcript: requestTranscriptTool }),
-  next: (turn) => {
+  next: (turn, state) => {
     const r = turn.toolResults.find((t) => t.name === "request_transcript");
-    if (r?.result && typeof r.result === "object") return { goto: replyTranscript, data: r.result as Record<string, unknown> };
+    if (r?.result && typeof r.result === "object") {
+      Object.assign(state, r.result);
+      return { end: "requested" };
+    }
     return "stay";
   },
 });
@@ -186,8 +178,8 @@ const collectTranscript = reply({
 const transcriptFlow = defineFlow({
   name: "request-transcript",
   description: "Request an official academic transcript",
-  start: collectTranscript,
-  nodes: [collectTranscript, replyTranscript],
+  start: transcriptTurn,
+  nodes: [transcriptTurn],
 });
 
 export interface FullUniversityRuntime {
@@ -199,6 +191,13 @@ export interface FullUniversityRuntimeOptions {
   /** true (guaranteed) = pre-inject RAG every answering turn; false (on-demand) = wire a
    *  knowledge_search tool the model calls only when answering (routing turns pay no tax). */
   readonly autoRetrieve?: boolean;
+  /** Optional runtime hooks. */
+  readonly hooks?: Parameters<typeof createRuntime>[0]["hooks"];
+  /** Cost instrumentation: called with each OpenAI `usage` object (chat/completions, Responses API, or embeddings). */
+  readonly onUsage?: (usage: {
+    prompt_tokens?: number; completion_tokens?: number; total_tokens?: number;
+    input_tokens?: number; output_tokens?: number;
+  }) => void;
 }
 
 export async function createFullUniversityRuntime(
@@ -206,7 +205,36 @@ export async function createFullUniversityRuntime(
 ): Promise<FullUniversityRuntime> {
   const autoRetrieve = opts.autoRetrieve ?? true;
   const apiKey = requireEnv("OPENAI_API_KEY");
-  const openai = createOpenAI({ apiKey });
+  const onUsage = opts.onUsage;
+  const usageFetch: typeof fetch = onUsage
+    ? async (input, init) => {
+        // Inject stream_options.include_usage so streamed chat completions emit a usage chunk.
+        if (init?.body && typeof init.body === "string" && init.body.includes('"messages"')) {
+          try {
+            const body = JSON.parse(init.body) as Record<string, unknown>;
+            if (body["stream"] === true && body["stream_options"] === undefined) {
+              body["stream_options"] = { include_usage: true };
+              init = { ...init, body: JSON.stringify(body) };
+            }
+          } catch { /* leave body as-is */ }
+        }
+        const res = await fetch(input as RequestInfo, init as RequestInit);
+        try {
+          const text = await res.clone().text();
+          for (const raw of text.split("\n")) {
+            const line = raw.startsWith("data:") ? raw.slice(5).trim() : raw.trim();
+            if (!line || line === "[DONE]") continue;
+            try {
+              const obj = JSON.parse(line) as { usage?: Record<string, number>; response?: { usage?: Record<string, number> } };
+              const usage = obj.usage ?? obj.response?.usage;
+              if (usage) onUsage(usage);
+            } catch { /* not JSON line */ }
+          }
+        } catch { /* clone/read failed */ }
+        return res;
+      }
+    : fetch;
+  const openai = createOpenAI(onUsage ? { apiKey, fetch: usageFetch } : { apiKey });
   const model = openai(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL);
   const embedder = new AiSdkEmbedder({ model: openai.embedding("text-embedding-3-small") });
   const store = new InMemoryVectorStore();
@@ -263,6 +291,7 @@ export async function createFullUniversityRuntime(
     defaultAgentId: "university",
     sessionStore: new MemoryStore(),
     knowledge: { retriever, embedder },
+    ...(opts.hooks ? { hooks: opts.hooks } : {}),
   });
 
   return { runtime, ingestMs };

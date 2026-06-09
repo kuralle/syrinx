@@ -61,3 +61,11 @@ that ignore the fields, and the detectors are conservative).
   common case. It's the higher-leverage fix, and kuralle already has the code.
 
 — syrinx
+
+## Addendum — measured token threshold (syrinx side)
+We measured OpenAI `cached_tokens` directly: a 33-token prompt caches **0**; a 1926-token stable-prefix
+prompt caches **1792 (~93%)** on the 2nd identical-prefix call. So OpenAI auto-cache is gated at ~1024
+prompt tokens. Takeaway for the fix: wiring `promptCacheKey` is highest-value for agents with **large
+system prompts / long histories** (≥1024 tok). The Anthropic `cache_control` path is the bigger lever
+regardless (explicit, ~75% discount) — but we can't live-test it (no ANTHROPIC_API_KEY our side). If you
+can run a Claude turn with cache_control wired, that's the proof that matters most.

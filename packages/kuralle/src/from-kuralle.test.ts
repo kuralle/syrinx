@@ -3,8 +3,14 @@
 import { describe, expect, it } from "vitest";
 import type { Reasoner, ReasonerTurn, ReasoningPart } from "@kuralle-syrinx/core";
 import {
+  buildKuralleTurnRunOptions,
   fromKuralleRuntime,
+  reconcileSpokenPrefix,
+  rewriteLastAssistant,
+  type KuralleMessageLike,
   type KuralleRuntimeLike,
+  type KuralleSessionStoreLike,
+  type KuralleStoredSession,
   type KuralleStreamPart,
 } from "./from-kuralle.js";
 
@@ -172,4 +178,120 @@ describe("fromKuralleRuntime", () => {
     expect(spy.runOpts?.input).toBe("What is my name?");
     expect(spy.runOpts?.sessionId).toBe("sess-42");
   });
+
+  it("flow resume pre-appends user message and omits input", async () => {
+    const sessionId = "sess-flow";
+    const store = createMockSessionStore(sessionId, [{ role: "assistant", content: "What is your name?" }]);
+    const session = (await store.get(sessionId))!;
+    session.durableRuns = {
+      [sessionId]: {
+        runState: {
+          activeFlow: "book-advisor-appointment",
+          messages: [{ role: "assistant", content: "What is your name?" }],
+        },
+        steps: [],
+      },
+    };
+    await store.save(session);
+
+    const runtime: KuralleRuntimeLike = {
+      run: () => ({ events: partsToEvents([done()]) }),
+      getSession: (id) => store.get(id),
+      getSessionStore: () => store,
+    };
+
+    const opts = await buildKuralleTurnRunOptions(runtime, {
+      sessionId,
+      userText: "Priya, CS masters, Friday",
+    });
+
+    expect(opts.input).toBeUndefined();
+    expect(opts.historyDelta).toBeUndefined();
+    const saved = await store.get(sessionId);
+    expect(saved?.messages.at(-1)).toEqual({ role: "user", content: "Priya, CS masters, Friday" });
+    const runMessages = (
+      saved?.durableRuns as Record<string, { runState: { messages: KuralleMessageLike[] } }>
+    )[sessionId]?.runState.messages;
+    expect(runMessages?.at(-1)).toEqual({ role: "user", content: "Priya, CS masters, Friday" });
+  });
+
+  it("rewriteLastAssistant truncates only when spoken prefix is shorter", () => {
+    const messages: KuralleMessageLike[] = [
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello there friend" },
+    ];
+    expect(rewriteLastAssistant(messages, "Hello")).toEqual([
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello" },
+    ]);
+    expect(rewriteLastAssistant(messages, "Hello there friend")).toStrictEqual(messages);
+  });
+
+  it("after barge-in abort, reconciles persisted assistant message to spoken prefix", async () => {
+    const fullText = "Hello there friend";
+    const spokenPrefix = "Hello";
+    const sessionId = "sess-barge";
+    const store = createMockSessionStore(sessionId, []);
+
+    await reconcileSpokenPrefix(
+      { run: () => ({ events: partsToEvents([]) }), getSessionStore: () => store },
+      sessionId,
+      spokenPrefix,
+    );
+    let session = await store.get(sessionId);
+    expect(session?.messages).toEqual([]);
+
+    session = (await store.get(sessionId)) ?? { id: sessionId, messages: [] };
+    session.messages = [{ role: "assistant", content: fullText }];
+    await store.save(session);
+
+    await reconcileSpokenPrefix(
+      { run: () => ({ events: partsToEvents([]) }), getSessionStore: () => store },
+      sessionId,
+      spokenPrefix,
+    );
+    session = await store.get(sessionId);
+    expect(session?.messages.at(-1)).toEqual({ role: "assistant", content: spokenPrefix });
+  });
+
+  it("reconcileSpokenPrefix rewrites durable run messages", async () => {
+    const sessionId = "sess-durable";
+    const store = createMockSessionStore(sessionId, []);
+    const session = (await store.get(sessionId))!;
+    session.messages = [{ role: "assistant", content: "full reply text" }];
+    session.durableRuns = {
+      [sessionId]: {
+        runState: { messages: [{ role: "assistant", content: "full reply text" }] },
+        steps: [],
+      },
+    };
+    await store.save(session);
+
+    await reconcileSpokenPrefix(
+      { run: () => ({ events: partsToEvents([]) }), getSessionStore: () => store },
+      sessionId,
+      "full",
+    );
+
+    const saved = await store.get(sessionId);
+    expect(saved?.messages.at(-1)).toEqual({ role: "assistant", content: "full" });
+    const runState = (saved?.durableRuns as Record<string, { runState: { messages: KuralleMessageLike[] } }>)[sessionId]
+      ?.runState;
+    expect(runState?.messages.at(-1)).toEqual({ role: "assistant", content: "full" });
+  });
 });
+
+function createMockSessionStore(sessionId: string, messages: KuralleMessageLike[]): KuralleSessionStoreLike {
+  const sessions = new Map<string, KuralleStoredSession>([
+    [sessionId, { id: sessionId, messages: [...messages] }],
+  ]);
+  return {
+    async get(id) {
+      const session = sessions.get(id);
+      return session ? structuredClone(session) : null;
+    },
+    async save(session) {
+      sessions.set(session.id, structuredClone(session));
+    },
+  };
+}
