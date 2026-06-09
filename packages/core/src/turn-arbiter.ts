@@ -81,6 +81,11 @@ export class TurnArbiter {
   onSpeechStarted(pkt: VadSpeechStartedPacket, interruptedContextId: string): void {
     const { minInterruptionMs, bus, primarySpeakerGate } = this.deps;
 
+    // Idempotent for an already-pending barge-in: with both a local VAD and a
+    // provider STT emitting speech-start (vad_events), the later event must not
+    // reset firstSpeechMs and delay the commit.
+    if (this.pendingFor(pkt.contextId)) return;
+
     if (minInterruptionMs <= 0) {
       if (this.shouldDeferImmediateBargeInForSpeakerGate()) {
         this.transitionToPending(pkt, interruptedContextId, true);

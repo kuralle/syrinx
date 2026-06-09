@@ -1096,3 +1096,58 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 });
+
+describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
+  it("emits vad.speech_started for the current context when the provider sends SpeechStarted", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.send(JSON.stringify({ type: "SpeechStarted", channel: [0, 1], timestamp: 0.42 }));
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const speechStarts: Array<{ contextId: string; confidence: number }> = [];
+    bus.on("vad.speech_started", (pkt) => {
+      speechStarts.push(pkt as unknown as { contextId: string; confidence: number });
+    });
+
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, { kind: "turn.change", contextId: "turn-1", timestampMs: Date.now() });
+    await waitFor(speechStarts);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(speechStarts.length).toBeGreaterThanOrEqual(1);
+    expect(speechStarts[0]!.confidence).toBe(1);
+  });
+
+  it("does not emit vad.speech_started when vad_events is disabled", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.send(JSON.stringify({ type: "SpeechStarted", channel: [0, 1], timestamp: 0.42 }));
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const speechStarts: unknown[] = [];
+    bus.on("vad.speech_started", (pkt) => {
+      speechStarts.push(pkt);
+    });
+
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      vad_events: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(speechStarts).toHaveLength(0);
+  });
+});

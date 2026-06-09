@@ -171,6 +171,17 @@ export class AudioJitterBuffer {
   private readonly targetBufferMs: number;
   private readonly sampleRateHz: number;
   private readonly contextIds = new Set<string>();
+  private lastEnqueuedContextId: string | null = null;
+
+  /** True while assistant audio is scheduled or playing on the playout clock (not the generation clock). */
+  get isPlayingOut(): boolean {
+    return this.scheduledFrames.size > 0;
+  }
+
+  /** ContextId of the most recently scheduled assistant audio while any audio is still playing out. */
+  get activeContextId(): string | null {
+    return this.scheduledFrames.size > 0 ? this.lastEnqueuedContextId : null;
+  }
 
   constructor(context: AudioContext, options: AudioJitterBufferOptions) {
     this.context = context;
@@ -214,6 +225,7 @@ export class AudioJitterBuffer {
       this.scheduledFrames.add(frame);
       if (contextId) {
         this.contextIds.add(contextId);
+        this.lastEnqueuedContextId = contextId;
       }
 
       // Schedule the audio
@@ -251,6 +263,7 @@ export class AudioJitterBuffer {
         }
       }
       this.contextIds.delete(contextId);
+      if (this.lastEnqueuedContextId === contextId) this.lastEnqueuedContextId = null;
       this.recomputeNextScheduledTime();
     } else {
       // Clear all frames
@@ -265,6 +278,7 @@ export class AudioJitterBuffer {
       }
       this.scheduledFrames.clear();
       this.contextIds.clear();
+      this.lastEnqueuedContextId = null;
       this.nextScheduledTime = 0;
     }
   }

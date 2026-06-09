@@ -156,6 +156,21 @@ export interface SyrinxBrowserClientOptions {
    * Jitter buffer configuration. Only used when audioContext is provided.
    */
   readonly jitterBuffer?: Omit<AudioJitterBufferOptions, "sampleRateHz">;
+  /**
+   * Local barge-in: while assistant audio is playing out, sustained mic energy on
+   * the uplink sends {type:"client_interrupt"} so the server stops the agent at
+   * local-VAD speed instead of waiting for provider STT evidence. Provider-agnostic
+   * (pure PCM energy; works with any STT/TTS). Requires audioContext (playout
+   * knowledge) and benefits from getUserMedia echoCancellation. Set false to disable.
+   */
+  readonly bargeIn?: false | {
+    /** Sustained speech required before interrupting. Default 280 ms (mirrors the server gate). */
+    readonly minSpeechMs?: number;
+    /** Speech threshold as a multiple of the rolling noise floor. Default 3. */
+    readonly thresholdFactor?: number;
+    /** Absolute RMS floor (0..1 full scale) below which audio is never speech. Default 0.015. */
+    readonly minRms?: number;
+  };
 }
 
 const RECONNECT_MAX_ATTEMPTS = 10;
@@ -186,6 +201,9 @@ export class SyrinxBrowserClient {
   private uplinkCodecDecided = false;
   private pendingUplink: Array<() => void> = [];
   private readonly streamingResamplers = new Map<string, StreamingPcm16Resampler>();
+  private bargeInNoiseFloorRms = 0.005;
+  private bargeInSpeechMs = 0;
+  private bargeInInterruptSent = false;
 
   constructor(private readonly options: SyrinxBrowserClientOptions) {
     this.transport = options.transport ?? new WebSocketClientTransport({ protocols: options.protocols });
@@ -249,6 +267,7 @@ export class SyrinxBrowserClient {
     if (options.sequence !== undefined) {
       this.assertAudioSequenceCanAdvance(options.sequence);
     }
+    this.observeUplinkForBargeIn(rmsFromPcm16Bytes(bytes), (bytes.byteLength / 2 / sampleRate) * 1000);
     this.scheduleUplink(() => {
       for (const frame of this.encodeUplinkPcm(bytes, sampleRate, options)) {
         this.requireOpenTransport().sendAudio(frame);
@@ -274,6 +293,7 @@ export class SyrinxBrowserClient {
     if (options.sequence !== undefined) {
       this.assertAudioSequenceCanAdvance(options.sequence);
     }
+    this.observeUplinkForBargeIn(rmsFromFloat32(input), (input.length / options.fromSampleRateHz) * 1000);
     if (this.wireCodec === "opus" && this.opusCodec) {
       const targetRate = readPositiveSampleRate(options.toSampleRateHz);
       const resampled = resampleFloat32Linear(input, options);
@@ -296,6 +316,38 @@ export class SyrinxBrowserClient {
 
   sendText(text: string): void {
     this.sendJson({ type: "text", text });
+  }
+
+  // Local barge-in: pure-energy speech detection on the uplink, gated on the
+  // jitter buffer's playout clock (G12: never the generation clock). One
+  // client_interrupt per assistant playout; the noise floor adapts while the
+  // mic is below threshold so a hot mic doesn't pin the gate open.
+  private observeUplinkForBargeIn(rms: number, durationMs: number): void {
+    const config = this.options.bargeIn;
+    if (config === false) return;
+    const minSpeechMs = config?.minSpeechMs ?? 280;
+    const thresholdFactor = config?.thresholdFactor ?? 3;
+    const minRms = config?.minRms ?? 0.015;
+
+    const playingOut = this.jitterBuffer?.isPlayingOut ?? false;
+    if (!playingOut) {
+      this.bargeInSpeechMs = 0;
+      this.bargeInInterruptSent = false;
+    }
+
+    const threshold = Math.max(minRms, this.bargeInNoiseFloorRms * thresholdFactor);
+    if (rms < threshold) {
+      this.bargeInNoiseFloorRms = this.bargeInNoiseFloorRms * 0.95 + rms * 0.05;
+      this.bargeInSpeechMs = 0;
+      return;
+    }
+
+    if (!playingOut || this.bargeInInterruptSent) return;
+    this.bargeInSpeechMs += durationMs;
+    if (this.bargeInSpeechMs < minSpeechMs) return;
+    this.bargeInInterruptSent = true;
+    const assistantContextId = this.jitterBuffer?.activeContextId ?? undefined;
+    this.sendJson({ type: "client_interrupt", ...(assistantContextId ? { assistantContextId } : {}) });
   }
 
   sendJson(value: unknown): void {
@@ -750,6 +802,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) throw new Error(`${name} must be a non-empty string`);
   return value;
+}
+
+function rmsFromPcm16Bytes(bytes: Uint8Array): number {
+  const sampleCount = Math.floor(bytes.byteLength / 2);
+  if (sampleCount === 0) return 0;
+  const samples = new Int16Array(bytes.buffer, bytes.byteOffset, sampleCount);
+  let sumSquares = 0;
+  for (const sample of samples) {
+    const normalized = sample / 32768;
+    sumSquares += normalized * normalized;
+  }
+  return Math.sqrt(sumSquares / sampleCount);
+}
+
+function rmsFromFloat32(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sumSquares = 0;
+  for (const sample of samples) {
+    sumSquares += sample * sample;
+  }
+  return Math.sqrt(sumSquares / samples.length);
 }
 
 function optionalString(value: unknown, name: string): string | undefined {

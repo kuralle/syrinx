@@ -671,3 +671,115 @@ describe("SyrinxBrowserClient — metrics", () => {
     });
   });
 });
+
+describe("local barge-in (client_interrupt)", () => {
+  beforeEach(() => {
+    sockets = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+  });
+
+  class BargeInMockAudioContext {
+    currentTime = 0;
+    destination = {};
+    createBuffer(_channels: number, length: number, sampleRate: number) {
+      return {
+        numberOfChannels: 1,
+        length,
+        sampleRate,
+        duration: length / sampleRate,
+        copyToChannel: () => undefined,
+      };
+    }
+    createBufferSource() {
+      return {
+        buffer: null,
+        onended: null as (() => void) | null,
+        connect: () => undefined,
+        start: () => undefined,
+      };
+    }
+  }
+
+  function pcm16Chunk(amplitude: number, samples = 320): Uint8Array {
+    const data = new Int16Array(samples).fill(amplitude);
+    return new Uint8Array(data.buffer);
+  }
+
+  function clientInterrupts(socket: FakeWebSocket): Array<Record<string, unknown>> {
+    return socket.sent
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => JSON.parse(entry) as Record<string, unknown>)
+      .filter((msg) => msg.type === "client_interrupt");
+  }
+
+  async function playingClient() {
+    const audioContext = new BargeInMockAudioContext() as unknown as AudioContext;
+    const client = makeClient({ audioContext });
+    client.connect();
+    const socket = sockets.at(-1)!;
+    socket.dispatch("open", {});
+    await dispatchPcmReady(socket);
+    const jitterBuffer = (client as unknown as { jitterBuffer: { enqueue(b: ArrayBuffer, c?: string): void } })
+      .jitterBuffer;
+    jitterBuffer.enqueue(new Int16Array(1600).fill(1000).buffer, "assistant-turn");
+    return { client, socket };
+  }
+
+  it("sends client_interrupt once after sustained loud speech during assistant playout", async () => {
+    const { client, socket } = await playingClient();
+
+    // 15 × 20ms loud chunks = 300ms sustained ≥ 280ms gate.
+    for (let i = 0; i < 15; i += 1) {
+      client.sendAudioPcm(pcm16Chunk(8000), 16000);
+    }
+    const interrupts = clientInterrupts(socket);
+    expect(interrupts).toHaveLength(1);
+    expect(interrupts[0]!.assistantContextId).toBe("assistant-turn");
+
+    // Further loud audio in the same playout must not re-send.
+    for (let i = 0; i < 15; i += 1) {
+      client.sendAudioPcm(pcm16Chunk(8000), 16000);
+    }
+    expect(clientInterrupts(socket)).toHaveLength(1);
+  });
+
+  it("does not interrupt for quiet audio during playout", async () => {
+    const { client, socket } = await playingClient();
+    for (let i = 0; i < 30; i += 1) {
+      client.sendAudioPcm(pcm16Chunk(100), 16000);
+    }
+    expect(clientInterrupts(socket)).toHaveLength(0);
+  });
+
+  it("does not interrupt when no assistant audio is playing out", async () => {
+    const client = makeClient();
+    client.connect();
+    const socket = sockets.at(-1)!;
+    socket.dispatch("open", {});
+    await dispatchPcmReady(socket);
+    for (let i = 0; i < 30; i += 1) {
+      client.sendAudioPcm(pcm16Chunk(8000), 16000);
+    }
+    expect(clientInterrupts(socket)).toHaveLength(0);
+  });
+
+  it("can be disabled via bargeIn: false", async () => {
+    const audioContext = new BargeInMockAudioContext() as unknown as AudioContext;
+    const client = makeClient({ audioContext, bargeIn: false });
+    client.connect();
+    const socket = sockets.at(-1)!;
+    socket.dispatch("open", {});
+    await dispatchPcmReady(socket);
+    const jitterBuffer = (client as unknown as { jitterBuffer: { enqueue(b: ArrayBuffer, c?: string): void } })
+      .jitterBuffer;
+    jitterBuffer.enqueue(new Int16Array(1600).fill(1000).buffer, "assistant-turn");
+    for (let i = 0; i < 30; i += 1) {
+      client.sendAudioPcm(pcm16Chunk(8000), 16000);
+    }
+    expect(clientInterrupts(socket)).toHaveLength(0);
+  });
+});
