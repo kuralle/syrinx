@@ -51,6 +51,12 @@ CARTESIA_VOICE_ID=
 See `docs/websocket-audio-protocol.md` for the wire protocol and
 `PROVIDER-TESTING.md` for the provider test matrix.
 
+## Contributing
+
+New here? Start with **[`CONTRIBUTING.md`](./CONTRIBUTING.md)** — it's the
+orientation guide: what to read in what order, the package map, how to run the
+engine locally, and the bar a change clears before it ships.
+
 ## License
 
 MIT

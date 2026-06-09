@@ -40,6 +40,8 @@
     "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
     "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
+    "smoke:kuralle-memory": "tsx scripts/run-kuralle-memory-smoke.ts",
+    "smoke:kuralle-full-text": "tsx scripts/run-kuralle-full-text-smoke.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -49,6 +51,7 @@
     "@kuralle-syrinx/browser-client": "workspace:*",
     "@kuralle-syrinx/aisdk": "workspace:*",
     "@kuralle-syrinx/mastra": "workspace:*",
+    "@kuralle-syrinx/kuralle": "workspace:*",
     "@mastra/core": "^1.41.0",
     "@kuralle-syrinx/realtime": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*",
@@ -59,6 +62,9 @@
     "@kuralle-syrinx/cartesia": "workspace:*",
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/gemini": "workspace:*",
+    "@kuralle-agents/core": "^0.7.1",
+    "@kuralle-agents/rag": "^0.7.1",
+    "@kuralle-agents/skills": "^0.7.1",
     "@kuralle-syrinx/grok": "workspace:*",
     "@kuralle-syrinx/pipecat-smart-turn": "workspace:*",
     "@kuralle-syrinx/silero-vad": "workspace:*",
