@@ -37,6 +37,8 @@
     "smoke:realtime-bargein": "tsx scripts/run-realtime-bargein-smoke.ts",
     "smoke:realtime-university": "tsx scripts/run-realtime-university-smoke.ts",
     "smoke:realtime-kuralle-bimodel": "tsx scripts/run-realtime-kuralle-bimodel-smoke.ts",
+    "smoke:realtime-gemini-bimodel": "tsx scripts/run-realtime-gemini-bimodel-smoke.ts",
+    "smoke:gemini-translate": "tsx scripts/run-gemini-translate-smoke.ts",
     "smoke:grok-stt": "tsx scripts/run-grok-stt-smoke.ts",
     "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
     "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
