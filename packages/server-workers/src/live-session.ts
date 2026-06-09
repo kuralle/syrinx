@@ -1,54 +1,48 @@
 // SPDX-License-Identifier: MIT
 //
 // Live VoiceAgentSession for the Cloudflare Workers Durable Object: real
-// Deepgram STT + OpenAI (AI SDK bridge) + Cartesia TTS, all dialed over the
-// Workers fetch-upgrade socket (createWorkersSocket) so no Node `ws` is pulled
+// Deepgram STT + kuralle (Vectorize RAG) + Deepgram Aura TTS, all dialed over
+// the Workers fetch-upgrade socket (createWorkersSocket) so no Node `ws` is pulled
 // into the edge bundle. Turn-taking is owned by Deepgram endpointing
 // (endpointingOwner: "provider_stt"), so no Silero VAD / Smart Turn ONNX is
 // needed on the hot path.
 
 import { VoiceAgentSession } from "@kuralle-syrinx/core";
-import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
-import { createOpenAI } from "@ai-sdk/openai";
-import { stepCountIs } from "ai";
-import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
-import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
+import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
+import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
+import type { VectorizeIndex } from "@cloudflare/workers-types";
+import { createRealtimeKuralleReasoner } from "./kuralle-realtime-agent.js";
 
 /** Provider secrets + optional tuning, supplied as Workers env/secret bindings. */
 export interface LiveSessionEnv {
   readonly DEEPGRAM_API_KEY?: string;
   readonly OPENAI_API_KEY?: string;
-  readonly CARTESIA_API_KEY?: string;
-  readonly CARTESIA_VOICE_ID?: string;
   readonly OPENAI_MODEL?: string;
-  readonly SYRINX_SYSTEM_PROMPT?: string;
+  readonly VECTORIZE: VectorizeIndex;
 }
 
 export interface LiveSessionOptions {
+  readonly sessionId?: string;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
 }
 
-const DEFAULT_SYSTEM_PROMPT = [
-  "You are a helpful voice assistant.",
-  "Answer in one or two short, complete sentences, and always end with punctuation.",
-].join(" ");
-const DEFAULT_VOICE_ID = "694f9389-aac1-45b6-b726-9d9369183238";
-const DEFAULT_MODEL = "gpt-4.1-mini";
+const DEFAULT_DEEPGRAM_TTS_MODEL = "aura-2-thalia-en";
 
 /** True when every provider secret needed for a live turn is present. */
 export function hasLiveSessionCredentials(env: LiveSessionEnv): boolean {
-  return Boolean(env.DEEPGRAM_API_KEY && env.OPENAI_API_KEY && env.CARTESIA_API_KEY);
+  return Boolean(env.DEEPGRAM_API_KEY?.trim() && env.OPENAI_API_KEY?.trim() && env.VECTORIZE);
 }
 
-export function createLiveVoiceAgentSession(
+export async function createLiveVoiceAgentSession(
   env: LiveSessionEnv,
   options: LiveSessionOptions = {},
-): VoiceAgentSession {
+): Promise<VoiceAgentSession> {
   const deepgramKey = requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM_API_KEY");
-  const openaiKey = requireKey(env.OPENAI_API_KEY, "OPENAI_API_KEY");
-  const cartesiaKey = requireKey(env.CARTESIA_API_KEY, "CARTESIA_API_KEY");
+  requireKey(env.OPENAI_API_KEY, "OPENAI_API_KEY");
+  if (!env.VECTORIZE) throw new Error("VECTORIZE binding is required to start a live voice session");
+  const sessionId = options.sessionId?.trim() || crypto.randomUUID();
   const inputSampleRateHz = options.inputSampleRateHz ?? 16000;
   const outputSampleRateHz = options.outputSampleRateHz ?? 16000;
 
@@ -60,36 +54,24 @@ export function createLiveVoiceAgentSession(
         model: "nova-3",
         language: "en-US",
         endpointing: 300,
-        // Workers→Deepgram round-trip is higher latency than a local server: give the Finalize
-        // confirmation more time (default 1200ms is too tight here), and fall back to the best
-        // transcript instead of erroring if it still times out (the transcript has already arrived).
         provider_finalize_timeout_ms: 2500,
         finalize_timeout_fallback: true,
       },
       bridge: {},
       tts: {
-        api_key: cartesiaKey,
-        voice_id: env.CARTESIA_VOICE_ID ?? DEFAULT_VOICE_ID,
-        model_id: "sonic-3",
+        api_key: deepgramKey,
+        model: DEFAULT_DEEPGRAM_TTS_MODEL,
         sample_rate: outputSampleRateHz,
-        language: "en",
       },
     },
     sttForceFinalizeTimeoutMs: 3500,
     endpointingOwner: "provider_stt",
   });
 
+  const reasoner = await createRealtimeKuralleReasoner(env, { sessionId });
   session.registerPlugin("stt", new DeepgramSTTPlugin(createWorkersSocket));
-  session.registerPlugin("bridge", new ReasoningBridge(fromStreamText({
-    model: createOpenAI({ apiKey: openaiKey })(env.OPENAI_MODEL ?? DEFAULT_MODEL),
-    system: env.SYRINX_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
-    temperature: 0.4,
-    maxOutputTokens: 256,
-    maxRetries: 0,
-    timeout: 30_000,
-    stopWhen: stepCountIs(1),
-  })));
-  session.registerPlugin("tts", new CartesiaTTSPlugin(createWorkersSocket));
+  session.registerPlugin("bridge", new ReasoningBridge(reasoner));
+  session.registerPlugin("tts", new DeepgramTTSPlugin(createWorkersSocket));
   return session;
 }
 

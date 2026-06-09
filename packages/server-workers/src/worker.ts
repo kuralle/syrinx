@@ -66,6 +66,7 @@ export class VoiceConversation {
       recorder,
       createSession: () =>
         createLiveVoiceAgentSession(this.env, {
+          sessionId,
           inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
           outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
         }),

@@ -16,8 +16,13 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
+    "@kuralle-agents/core": "^0.7.1",
+    "@kuralle-agents/rag": "^0.7.1",
+    "@kuralle-agents/skills": "^0.7.1",
+    "@kuralle-agents/vectorize-store": "^0.7.1",
     "@kuralle-syrinx/core": "workspace:*",
     "@kuralle-syrinx/aisdk": "workspace:*",
+    "@kuralle-syrinx/kuralle": "workspace:*",
     "@kuralle-syrinx/server-websocket": "workspace:*",
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/cartesia": "workspace:*",

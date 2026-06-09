@@ -3,11 +3,15 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it } from "vitest";
+
+const execFileAsync = promisify(execFile);
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 type WorkersWebSocket = WebSocket & { accept(): void };
 
@@ -22,10 +26,9 @@ loadRepoEnv();
 const liveEnv = {
   DEEPGRAM_API_KEY: process.env["DEEPGRAM_API_KEY"]?.trim() ?? "",
   OPENAI_API_KEY: process.env["OPENAI_API_KEY"]?.trim() ?? "",
-  CARTESIA_API_KEY: process.env["CARTESIA_API_KEY"]?.trim() ?? "",
-  CARTESIA_VOICE_ID: process.env["CARTESIA_VOICE_ID"]?.trim() ?? "",
+  VECTORIZE: {},
 };
-const hasLiveKeys = Boolean(liveEnv.DEEPGRAM_API_KEY && liveEnv.OPENAI_API_KEY && liveEnv.CARTESIA_API_KEY);
+const hasLiveKeys = Boolean(liveEnv.DEEPGRAM_API_KEY && liveEnv.OPENAI_API_KEY);
 // The live turn hits paid, non-deterministic provider APIs, so it is opt-in
 // (SYRINX_LIVE_WORKER_TEST=1) rather than running on every `pnpm -r test`.
 // Run it with: pnpm --filter @kuralle-syrinx/server-workers test:live
@@ -39,20 +42,15 @@ afterEach(async () => {
 async function buildWorker(): Promise<string> {
   const tmp = await mkdtemp(join(tmpdir(), "syrinx-worker-"));
   tempDirs.push(tmp);
-  const outfile = join(tmp, "worker.js");
-  await build({
-    entryPoints: [fileURLToPath(new URL("./worker.ts", import.meta.url))],
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    conditions: ["workerd", "worker", "browser"],
-    outfile,
-    logLevel: "silent",
-  });
-  return readFile(outfile, "utf8");
+  await execFileAsync(
+    "npx",
+    ["wrangler", "deploy", "--dry-run", "--outdir", tmp, "-c", "wrangler.jsonc"],
+    { cwd: PKG_ROOT },
+  );
+  return readFile(join(tmp, "worker.js"), "utf8");
 }
 
-function newMiniflare(script: string, bindings: Record<string, string>): Miniflare {
+function newMiniflare(script: string, bindings: Record<string, unknown>): Miniflare {
   return new Miniflare({
     modules: true,
     script,
@@ -60,6 +58,9 @@ function newMiniflare(script: string, bindings: Record<string, string>): Minifla
     compatibilityFlags: ["nodejs_compat"],
     durableObjects: {
       VOICE_CONVERSATIONS: { className: "VoiceConversation", useSQLite: true },
+    },
+    vectorize: {
+      VECTORIZE: { dimensions: 1536, metric: "cosine", index_name: "kuralle-university-kb" },
     },
     bindings,
   });
@@ -92,7 +93,7 @@ describe("VoiceConversation worker runtime", () => {
   // Live: drives a real STT -> LLM -> TTS turn through real providers inside
   // workerd. Skipped when provider keys are absent so offline CI stays green.
   it.skipIf(!liveTurnEnabled)(
-    "drives a real audio turn through Deepgram + OpenAI + Cartesia in workerd",
+    "drives a real audio turn through Deepgram STT + kuralle + Deepgram TTS in workerd",
     async () => {
       expect(existsSync(TURN_DETECTION_FIXTURE)).toBe(true);
       const pcm16 = readWav16kMono(TURN_DETECTION_FIXTURE);
@@ -141,7 +142,7 @@ describe("VoiceConversation worker runtime", () => {
           () => messages.some((m) => typeof m === "string" && m.includes('"type":"stt_output"')),
           15_000,
         );
-        // Real Cartesia TTS audio frames back from the LLM reply.
+        // Real Deepgram TTS audio frames back from the kuralle reply.
         await waitFor(
           () => messages.some((m) => typeof m === "string" && m.includes('"type":"tts_chunk"')),
           30_000,
@@ -246,7 +247,7 @@ function resampleLinear(src: Int16Array, fromHz: number, toHz: number): Int16Arr
   return out;
 }
 
-/** Load DEEPGRAM/OPENAI/CARTESIA keys from the repo-root .env if not already set. */
+/** Load DEEPGRAM/OPENAI keys from the repo-root .env if not already set. */
 function loadRepoEnv(): void {
   const envPath = join(REPO_ROOT, ".env");
   if (!existsSync(envPath)) return;

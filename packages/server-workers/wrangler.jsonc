@@ -23,5 +23,11 @@
       "tag": "v1",
       "new_sqlite_classes": ["VoiceConversation"]
     }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "kuralle-university-kb"
+    }
   ]
 }
