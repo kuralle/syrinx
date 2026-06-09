@@ -68,3 +68,17 @@ Re-ran both smokes myself (the IC's cursor-run smoke had hung at teardown, leaki
   "…en ciencias de la computación?" + semantic=true when it works); the PREVIEW model itself flakes
   (~1/3 echoed source language). Not a code bug — preview-model variance. TODO: characterize the rate
   over N≥10, try `echoTargetLanguage:false`, before relying on it.
+
+
+## Translate flake — DIAGNOSED + FIXED (2026-06-10, /diagnose)
+Root cause was NOT the model: we sent **20ms audio chunks**; Gemini Live Translate needs **~100ms chunks**
+(per its docs; matches LiveKit/Pipecat). At 20ms the model intermittently **echoes the source language**.
+Proven deterministically with Deepgram `detect_language` (not an LLM judge), `diagnose-translate-flake.ts`:
+- 20ms frames: **4/5 Spanish, 1/5 English-echo**.
+- 100ms frames: **5/5 Spanish, 0 echo**.
+**Fix:** `createGeminiTranslateSession` now coalesces incoming audio to 100ms chunks internally
+(callers keep sending 20ms). Regression: feeding 20ms frames now → **5/5 Spanish**; the smoke passes 2/2.
+**Second bug:** the smoke's PASS used a Gemini-flash semantic JUDGE (nondeterministic) + an empty
+`outputAudioTranscription` — this masked the real bug as "preview flakiness". Replaced with the
+deterministic Deepgram `detect_language`. Lesson: voice smokes verify with deterministic detectors,
+not LLM judges; and honor provider-specific chunk requirements.
