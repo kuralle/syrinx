@@ -1,5 +1,5 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { CloudflareVectorizeStore } from "@kuralle-agents/vectorize-store";
+import { CloudflareVectorizeStore, type VectorizeBinding } from "@kuralle-agents/vectorize-store";
 import { AiSdkEmbedder } from "@kuralle-agents/rag";
 import type { VectorizeIndex } from "@cloudflare/workers-types";
 import { createFullUniversityRuntime } from "./agent";
@@ -7,6 +7,17 @@ import { createFullUniversityRuntime } from "./agent";
 interface Env {
   readonly OPENAI_API_KEY: string;
   readonly VECTORIZE: VectorizeIndex;
+  readonly EDGE_TOKEN: string;
+}
+
+function unauthorized(): Response {
+  return new Response("unauthorized", { status: 401 });
+}
+
+function requireEdgeToken(request: Request, env: Env): Response | null {
+  const token = request.headers.get("x-edge-token");
+  if (!env.EDGE_TOKEN || token !== env.EDGE_TOKEN) return unauthorized();
+  return null;
 }
 
 interface StreamPart {
@@ -17,7 +28,7 @@ interface StreamPart {
 let rtPromise: ReturnType<typeof createFullUniversityRuntime> | undefined;
 
 function getStore(env: Env) {
-  return new CloudflareVectorizeStore({ binding: env.VECTORIZE });
+  return new CloudflareVectorizeStore({ binding: env.VECTORIZE as unknown as VectorizeBinding });
 }
 
 function getRt(env: Env) {
@@ -44,6 +55,9 @@ export default {
     }
 
     if (url.pathname === "/ingest" && request.method === "POST") {
+      const authFailure = requireEdgeToken(request, env);
+      if (authFailure) return authFailure;
+
       const start = performance.now();
       const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY });
       const embedder = new AiSdkEmbedder({ model: openai.embedding("text-embedding-3-small") });
@@ -65,6 +79,9 @@ export default {
     }
 
     if (url.pathname === "/chat" && request.method === "GET") {
+      const authFailure = requireEdgeToken(request, env);
+      if (authFailure) return authFailure;
+
       const q = url.searchParams.get("q");
       if (!q) {
         return new Response("missing q", { status: 400 });

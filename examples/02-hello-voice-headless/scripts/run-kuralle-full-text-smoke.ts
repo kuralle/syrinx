@@ -5,10 +5,11 @@ import { pathToFileURL } from "node:url";
 
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 import { createFullUniversityRuntime } from "../src/university-agent-full.js";
+import { buildKuralleTurnRunOptions, awaitKuralleTurn, runKuralleTurn, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
 
 
-const SESSION_ID = "kuralle-full-text-smoke";
-const USER_ID = "priya";
+const SESSION_ID = `kuralle-full-text-smoke-${Date.now()}`;
+const USER_ID = `priya-smoke-${Date.now()}`;
 
 interface TurnSpec {
   readonly label: string;
@@ -31,6 +32,7 @@ interface TurnResult extends TurnContext {
   readonly totalMs: number;
   readonly mode: "flow" | "keep";
   readonly partTrace: string[];
+  readonly textStartCount: number;
 }
 
 interface StreamPart {
@@ -47,7 +49,12 @@ async function runTurn(
   spec: TurnSpec,
 ): Promise<TurnResult> {
   const t0 = performance.now();
-  const handle = runtime.run({ input: spec.input, sessionId: SESSION_ID, userId: USER_ID });
+  const runOpts = await buildKuralleTurnRunOptions(runtime as unknown as KuralleRuntimeLike, {
+    userText: spec.input,
+    sessionId: SESSION_ID,
+    userId: USER_ID,
+  });
+  const handle = runKuralleTurn(runtime as unknown as KuralleRuntimeLike, runOpts);
 
   const partTrace: string[] = [];
   const flowEnters: string[] = [];
@@ -57,10 +64,22 @@ async function runTurn(
   let ttftMs = 0;
   let textDeltaCount = 0;
   let firstTextDeltaLogged = false;
+  let textStartCount = 0;
 
   for await (const raw of handle.events) {
     const part = raw as StreamPart;
     const elapsed = performance.now() - t0;
+
+    if (part.type === "text-start") {
+      textStartCount += 1;
+      partTrace.push(`+${Math.round(elapsed)}ms text-start`);
+      continue;
+    }
+
+    if (part.type === "text-end") {
+      partTrace.push(`+${Math.round(elapsed)}ms text-end`);
+      continue;
+    }
 
     if (part.type === "text-delta") {
       textDeltaCount += 1;
@@ -98,7 +117,7 @@ async function runTurn(
     partTrace.push(`text-delta x${textDeltaCount} (collapsed)`);
   }
 
-  await handle;
+  await awaitKuralleTurn(handle);
 
   const totalMs = performance.now() - t0;
   const mode: "flow" | "keep" = flowEnters.length > 0 ? "flow" : "keep";
@@ -111,6 +130,7 @@ async function runTurn(
     totalMs,
     mode,
     partTrace,
+    textStartCount,
     flowEnters,
     knowledgeSearches,
     toolCalls,
@@ -129,6 +149,7 @@ function printTurnBlock(result: TurnResult): void {
   }
   if (result.toolCalls.length > 0) console.log(`  tool-calls: ${result.toolCalls.join(", ")}`);
   console.log(`reply: ${result.reply}`);
+  console.log(`utterances: ${result.textStartCount} text-start block(s)`);
   console.log(`TTFT: ${Math.round(result.ttftMs)}ms  total: ${Math.round(result.totalMs)}ms`);
 }
 
@@ -200,11 +221,19 @@ async function main(): Promise<void> {
   const results: TurnResult[] = [];
   const hardFailures: string[] = [];
   const softWarnings: string[] = [];
+  const utteranceFailures: string[] = [];
 
   for (const spec of turns) {
     const result = await runTurn(runtime, spec);
     results.push(result);
     printTurnBlock(result);
+
+    if (result.textStartCount !== 1) {
+      utteranceFailures.push(`${spec.label}: expected 1 text-start, got ${result.textStartCount}`);
+      console.log(`FAIL (utterance): expected 1 text-start, got ${result.textStartCount}`);
+    } else {
+      console.log(`PASS (utterance)`);
+    }
 
     const ctx: TurnContext = {
       flowEnters: result.flowEnters,
@@ -268,7 +297,12 @@ async function main(): Promise<void> {
     for (const f of hardFailures) console.log(`FAIL: ${f}`);
     process.exit(1);
   }
+  if (utteranceFailures.length > 0) {
+    for (const f of utteranceFailures) console.log(`FAIL: ${f}`);
+    process.exit(1);
+  }
   console.log("ALL HARD ASSERTIONS PASSED");
+  console.log("ALL UTTERANCE ASSERTIONS PASSED (1 text-start per turn)");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

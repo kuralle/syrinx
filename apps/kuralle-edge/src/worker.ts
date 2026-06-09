@@ -2,6 +2,17 @@ import { createFullUniversityRuntime } from "./agent";
 
 interface Env {
   readonly OPENAI_API_KEY: string;
+  readonly EDGE_TOKEN: string;
+}
+
+function unauthorized(): Response {
+  return new Response("unauthorized", { status: 401 });
+}
+
+function requireEdgeToken(request: Request, env: Env): Response | null {
+  const token = request.headers.get("x-edge-token");
+  if (!env.EDGE_TOKEN || token !== env.EDGE_TOKEN) return unauthorized();
+  return null;
 }
 
 interface StreamPart {
@@ -32,6 +43,9 @@ export default {
     }
 
     if (url.pathname === "/chat" && request.method === "GET") {
+      const authFailure = requireEdgeToken(request, env);
+      if (authFailure) return authFailure;
+
       const q = url.searchParams.get("q");
       if (!q) {
         return new Response("missing q", { status: 400 });
