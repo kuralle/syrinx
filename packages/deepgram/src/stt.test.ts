@@ -1114,6 +1114,7 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
       api_key: "test",
       endpoint_url: endpointUrl,
       sample_rate: 16000,
+      vad_events: true,
     });
     bus.push(Route.Main, { kind: "turn.change", contextId: "turn-1", timestampMs: Date.now() });
     await waitFor(speechStarts);
@@ -1125,7 +1126,7 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
     expect(speechStarts[0]!.confidence).toBe(1);
   });
 
-  it("does not emit vad.speech_started when vad_events is disabled", async () => {
+  it("does not emit vad.speech_started by default (opt-in for VAD-less deployments)", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.send(JSON.stringify({ type: "SpeechStarted", channel: [0, 1], timestamp: 0.42 }));
     });
@@ -1141,7 +1142,6 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
       api_key: "test",
       endpoint_url: endpointUrl,
       sample_rate: 16000,
-      vad_events: false,
     });
     await new Promise((resolve) => setTimeout(resolve, 150));
     await plugin.close();
