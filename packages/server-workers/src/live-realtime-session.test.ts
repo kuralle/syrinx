@@ -10,6 +10,7 @@ import { RealtimeBridge } from "@kuralle-syrinx/realtime";
 import {
   createRealtimeVoiceAgentSession,
   hasRealtimeSessionCredentials,
+  resolveRealtimeFront,
 } from "./live-realtime-session.js";
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,27 @@ describe("createRealtimeVoiceAgentSession", () => {
   it("reports credential presence via hasRealtimeSessionCredentials", () => {
     expect(hasRealtimeSessionCredentials({ OPENAI_API_KEY: "k", VECTORIZE: mockVectorize })).toBe(true);
     expect(hasRealtimeSessionCredentials({ VECTORIZE: mockVectorize })).toBe(false);
+    expect(hasRealtimeSessionCredentials({
+      REALTIME_FRONT: "gemini",
+      GEMINI_API_KEY: "g",
+      VECTORIZE: mockVectorize,
+    })).toBe(true);
+    expect(hasRealtimeSessionCredentials({
+      REALTIME_FRONT: "gemini",
+      VECTORIZE: mockVectorize,
+    })).toBe(false);
+  });
+
+  it("requires GEMINI_API_KEY when REALTIME_FRONT=gemini", async () => {
+    await expect(createRealtimeVoiceAgentSession({
+      REALTIME_FRONT: "gemini",
+      VECTORIZE: mockVectorize,
+    })).rejects.toThrow(/GEMINI_API_KEY/);
+  });
+
+  it("defaults REALTIME_FRONT to openai", () => {
+    expect(resolveRealtimeFront({ VECTORIZE: mockVectorize })).toBe("openai");
+    expect(resolveRealtimeFront({ REALTIME_FRONT: "gemini", VECTORIZE: mockVectorize })).toBe("gemini");
   });
 });
 
