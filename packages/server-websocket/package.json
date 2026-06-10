@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./edge": "./src/edge.ts",
+    "./edge-twilio": "./src/edge-twilio.ts",
     "./session-store": "./src/session-store.ts"
   },
   "scripts": {
