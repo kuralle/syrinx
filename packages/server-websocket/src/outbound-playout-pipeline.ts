@@ -15,7 +15,7 @@ export interface TelephonyOutboundCallbacks {
   encodeFrames(audio: Uint8Array, sourceSampleRateHz: number, contextId: string): PacedPlayoutFrame[];
   onInterrupt(contextId: string): void;
   onDrain(contextId: string, playout: PacedPlayoutQueue, progress: PlayoutProgressEmitter): void;
-  onStop(reason: "overflow" | "send_buffer"): void;
+  onStop(reason: "send_buffer"): void;
   onClear?(): void;
 }
 
@@ -56,9 +56,9 @@ export function wireTelephonyOutboundPipeline(args: {
   const playout = new PacedPlayoutQueue(
     outboundFrameDurationMs,
     maxQueuedOutputAudioMs,
-    (discardedMs) => {
-      callbacks.onStop("overflow");
-      recordDiscardedPlayout(discardedMs, "overflow");
+    (droppedMs) => {
+      // Non-fatal: the tail that did not fit was dropped; playout continues.
+      recordDiscardedPlayout(droppedMs, "overflow");
     },
     (discardedMs) => {
       callbacks.onStop("send_buffer");

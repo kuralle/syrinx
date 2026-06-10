@@ -100,7 +100,7 @@ describe("wireTelephonyOutboundPipeline.interrupt.tts", () => {
 });
 
 describe("wireTelephonyOutboundPipeline overflow", () => {
-  it("clears queued playout once at the 200ms cap without closing the socket", async () => {
+  it("drops the overflow tail at the cap without stopping playout or closing the socket", async () => {
     const socket = createMockSocket();
     const session = new VoiceAgentSession({ plugins: {} });
     await session.start();
@@ -154,7 +154,7 @@ describe("wireTelephonyOutboundPipeline overflow", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(stops).toEqual(["overflow"]);
+    expect(stops).toEqual([]); // overflow is non-fatal — playout continues
     expect(discardedMetrics).toEqual([
       expect.objectContaining({
         name: "test.overflow_playout_cleared_ms",

@@ -58,6 +58,7 @@ interface TurnState {
   finalized: boolean;
   analysisSequence: number;
   finalizeTimer: ReturnType<typeof setTimeout> | null;
+  sttQuietTimer: ReturnType<typeof setTimeout> | null;
   maxTimer: ReturnType<typeof setTimeout> | null;
   deferTimer: ReturnType<typeof setTimeout> | null;
 }
@@ -124,6 +125,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private disposers: Array<() => void> = [];
   private turns = new Map<string, TurnState>();
   private finalizeDelayMs = 250;
+  private sttQuietFallbackMs = 2500;
   private maxDelayMs = 2000;
   private incompleteFallbackMs = 2000;
   private semanticShortcutDelayMs = 50;
@@ -138,6 +140,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
     this.finalizeDelayMs = readNonNegativeNumber(config["finalize_delay_ms"], 250);
+    this.sttQuietFallbackMs = readNonNegativeNumber(config["stt_quiet_fallback_ms"], 2500);
     this.maxDelayMs = readNonNegativeNumber(config["max_delay_ms"], 2000);
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
     this.semanticShortcutDelayMs = readNonNegativeNumber(config["semantic_shortcut_delay_ms"], 50);
@@ -209,6 +212,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     if (!pkt.text.trim()) return;
     const state = this.stateFor(pkt.contextId);
     state.latestInterim = pkt.text.trim();
+    if (state.sttQuietTimer) this.armSttQuietFallback(state);
     this.bus?.push(Route.Main, {
       kind: "eos.interim",
       contextId: pkt.contextId,
@@ -248,6 +252,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
       return;
     }
     if (state.speechActive) {
+      this.armSttQuietFallback(state);
       return;
     }
     this.scheduleMaxFinalize(state);
@@ -256,6 +261,10 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private handleSpeechStarted(pkt: VadSpeechStartedPacket): void {
     if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
+    if (state.sttQuietTimer) {
+      clearTimeout(state.sttQuietTimer);
+      state.sttQuietTimer = null;
+    }
     state.boundaryAnalyzed = false;
     state.smartTurnComplete = false;
     state.semanticComplete = false;
@@ -268,6 +277,18 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private async handleSpeechEnded(pkt: VadSpeechEndedPacket): Promise<void> {
     if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
+    if (state.sttQuietTimer) {
+      clearTimeout(state.sttQuietTimer);
+      state.sttQuietTimer = null;
+    }
+    await this.analyzeBoundary(state);
+  }
+
+  // Shared end-of-speech boundary analysis: used by the VAD speech_ended path
+  // and by the STT-quiet fallback (when the provider transcript has gone quiet
+  // but the VAD never closed the segment — e.g. model state saturation on long
+  // telephony audio). The turn must never be held hostage by a wedged VAD.
+  private async analyzeBoundary(state: TurnState): Promise<void> {
     state.speechActive = false;
     const sequence = ++state.analysisSequence;
     const probability = await this.predictor.predict(Float32Array.from(state.audio));
@@ -330,6 +351,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
       finalized: false,
       analysisSequence: 0,
       finalizeTimer: null,
+      sttQuietTimer: null,
       maxTimer: null,
       deferTimer: null,
     };
@@ -399,6 +421,23 @@ export class PipecatEOSPlugin implements VoicePlugin {
     };
   }
 
+  private armSttQuietFallback(state: TurnState): void {
+    if (this.sttQuietFallbackMs <= 0 || state.finalized) return;
+    if (state.sttQuietTimer) clearTimeout(state.sttQuietTimer);
+    state.sttQuietTimer = setTimeout(() => {
+      state.sttQuietTimer = null;
+      if (state.finalized || !state.speechActive || state.finalPackets.length === 0) return;
+      this.bus?.push(Route.Main, {
+        kind: "metric.conversation",
+        contextId: state.contextId,
+        timestampMs: Date.now(),
+        name: "eos.stt_quiet_fallback",
+        value: String(this.sttQuietFallbackMs),
+      });
+      void this.analyzeBoundary(state);
+    }, this.sttQuietFallbackMs);
+  }
+
   private scheduleMaxFinalize(state: TurnState): void {
     if (state.finalized || state.maxTimer || this.maxDelayMs <= 0) return;
     state.maxTimer = setTimeout(() => {
@@ -462,9 +501,11 @@ function appendFinalPacket(state: TurnState, packet: SttResultPacket): void {
 
 function clearTurnTimers(state: TurnState): void {
   if (state.finalizeTimer) clearTimeout(state.finalizeTimer);
+  if (state.sttQuietTimer) clearTimeout(state.sttQuietTimer);
   if (state.maxTimer) clearTimeout(state.maxTimer);
   if (state.deferTimer) clearTimeout(state.deferTimer);
   state.finalizeTimer = null;
+  state.sttQuietTimer = null;
   state.maxTimer = null;
   state.deferTimer = null;
 }

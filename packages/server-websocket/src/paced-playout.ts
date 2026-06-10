@@ -41,8 +41,18 @@ export class PacedPlayoutQueue {
     if (this.closed || frames.length === 0) return !this.closed;
     const additionalDurationMs = frames.length * this.frameDurationMs;
     if (this.queuedDurationMs + additionalDurationMs > this.maxQueuedDurationMs) {
-      const discardedDurationMs = this.clear();
-      this.onOverflow(discardedDurationMs);
+      // Overflow drops only the tail that does not fit. Never clear queued audio
+      // and never stop the stream: TTS providers burst faster than realtime
+      // (Deepgram delivers a whole reply at once) and a phone call must keep
+      // playing what it already has. onOverflow reports the dropped duration.
+      const roomMs = Math.max(0, this.maxQueuedDurationMs - this.queuedDurationMs);
+      const acceptCount = Math.min(frames.length, Math.floor(roomMs / this.frameDurationMs));
+      const accepted = frames.slice(0, acceptCount);
+      const droppedDurationMs = (frames.length - acceptCount) * this.frameDurationMs;
+      this.frames.push(...accepted.map((frame) => ({ ...frame, durationMs: this.frameDurationMs })));
+      this.queuedDurationMs += acceptCount * this.frameDurationMs;
+      this.onOverflow(droppedDurationMs);
+      this.maybePump();
       return false;
     }
     this.frames.push(...frames.map((frame) => ({ ...frame, durationMs: this.frameDurationMs })));
