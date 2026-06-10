@@ -1012,7 +1012,11 @@ export class VoiceAgentSession {
     });
 
     this.latencyFiller.clear(pkt.contextId);
-    if (!isRecoverable(pkt.category)) {
+    // The packet's own recoverability verdict is authoritative when present: the
+    // bus marks handler exceptions (pipeline.error) recoverable by design — one
+    // misbehaving handler must degrade the turn, not kill the whole call.
+    const recoverable = typeof pkt.isRecoverable === "boolean" ? pkt.isRecoverable : isRecoverable(pkt.category);
+    if (!recoverable) {
       // Fatal error — close session
       void this.close().catch(() => {
         // Best effort

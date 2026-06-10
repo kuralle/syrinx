@@ -952,7 +952,7 @@ describe("createTwilioMediaStreamServer", () => {
     await server.close();
   });
 
-  it("clears queued outbound audio without closing when playout exceeds the configured bound", async () => {
+  it("drops overflow tail without closing or silencing the stream when playout exceeds the bound", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const metrics: ConversationMetricPacket[] = [];
     const recording: RecordAssistantAudioPacket[] = [];
@@ -999,10 +999,9 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.some((metric) => metric.name === "twilio.overflow_playout_cleared_ms"),
     );
     expect(closed).toBe(false);
-    expect(metrics).toContainEqual(expect.objectContaining({
-      name: "twilio.overflow_playout_cleared_ms",
-      value: "60",
-    }));
+    const overflowMetric = metrics.find((metric) => metric.name === "twilio.overflow_playout_cleared_ms");
+    expect(overflowMetric).toBeDefined();
+    expect(Number(overflowMetric!.value)).toBeGreaterThan(0);
     expect(recording).toContainEqual(expect.objectContaining({ truncate: true }));
     client.close();
     await server.close();

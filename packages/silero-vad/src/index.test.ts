@@ -266,3 +266,64 @@ describe("SileroVADPlugin — odd byteOffset PCM (browser buffer alignment)", ()
     await plugin.close();
   });
 });
+
+describe("SileroVADPlugin — telephony saturation hardening", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    mockControl.confidence = 0.9;
+    mockControl.stateCallArgs.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function frame(plugin: SileroVADPlugin, confidence: number): Promise<void> {
+    mockControl.confidence = confidence;
+    await plugin.processAudio(makePcmFrame(), "ctx-flap");
+  }
+
+  it("absorbs single-frame confidence spikes during stopping so speech still ends", async () => {
+    const { bus, emitted } = makeBus();
+    const plugin = await initPlugin(bus);
+
+    await frame(plugin, 0.9); // speech_started → speaking
+    expect(countKind(emitted, "vad.speech_started")).toBe(1);
+
+    // Saturation flap: real silence with an isolated spike in the middle.
+    for (const confidence of [0.2, 0.2, 0.2, 0.2, 0.9, 0.2, 0.2, 0.2, 0.2, 0.2]) {
+      await frame(plugin, confidence);
+    }
+
+    expect(countKind(emitted, "vad.speech_ended")).toBe(1);
+    expect(metricValue(emitted, "vad.stop_hangover_ms")).toBeDefined();
+  });
+
+  it("two consecutive speech frames during stopping resume speaking (real speech is unaffected)", async () => {
+    const { bus, emitted } = makeBus();
+    const plugin = await initPlugin(bus);
+
+    await frame(plugin, 0.9); // speaking
+    for (const confidence of [0.2, 0.2, 0.2]) await frame(plugin, confidence); // stopping
+    for (const confidence of [0.9, 0.9]) await frame(plugin, confidence); // sustained speech → resume
+    expect(countKind(emitted, "vad.speech_ended")).toBe(0);
+
+    for (let i = 0; i < 9; i += 1) await frame(plugin, 0.2); // genuine end
+    expect(countKind(emitted, "vad.speech_ended")).toBe(1);
+  });
+
+  it("resets model state during prolonged continuous speech (saturation guard)", async () => {
+    const { bus, emitted } = makeBus();
+    const plugin = await initPlugin(bus);
+
+    await frame(plugin, 0.9); // speaking, state seeded
+    vi.setSystemTime(13_000); // past speaking_state_reset_interval_ms (12 s)
+    await frame(plugin, 0.9); // reset fires after this frame's inference
+    await frame(plugin, 0.9); // this inference must receive the zeroed state
+
+    expect(metricValue(emitted, "vad.state_reset_in_speech")).toBe("1");
+    const stateForThirdFrame = mockControl.stateCallArgs[2]!;
+    expect(stateForThirdFrame.every((value) => value === 0)).toBe(true);
+  });
+});

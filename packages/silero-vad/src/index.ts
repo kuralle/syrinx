@@ -45,10 +45,12 @@ export class SileroVADPlugin implements VoicePlugin {
   private speechFrames = 0;
   private confidenceThreshold = 0.5;
   private minSilenceDurationMs = 200;
+  private speakingStateResetIntervalMs = 12_000;
   private speechPadMs = 80;
   private speechStartDurationMs = 32;
   private sampleRate = DEFAULT_SAMPLE_RATE;
   private silenceFrames = 0;
+  private stoppingSpikeFrames = 0;
   private lastResetMs = 0;
   private disposers: Array<() => void> = [];
 
@@ -56,6 +58,7 @@ export class SileroVADPlugin implements VoicePlugin {
     this.bus = bus;
     this.confidenceThreshold = readNumber(config, "threshold", 0.5);
     this.minSilenceDurationMs = readNumber(config, "min_silence_duration_ms", 200);
+    this.speakingStateResetIntervalMs = readNumber(config, "speaking_state_reset_interval_ms", 12_000);
     this.speechPadMs = readNumber(config, "speech_pad_ms", 80);
     this.speechStartDurationMs = readNumber(config, "speech_start_duration_ms", 32);
     this.sampleRate = readNumber(config, "sample_rate", DEFAULT_SAMPLE_RATE);
@@ -178,27 +181,55 @@ export class SileroVADPlugin implements VoicePlugin {
 
       case "speaking":
         if (isSpeech) {
+          // Silero v5 LSTM state saturates on long continuous segments
+          // (telephony monologues): confidence then flaps high through genuine
+          // silence and the end never fires. Periodically reset model state
+          // mid-speech; the spike debounce in "stopping" makes the brief
+          // post-reset confidence dip harmless for real speech.
+          if (now - this.lastResetMs >= this.speakingStateResetIntervalMs) {
+            this.resetModelState();
+            this.bus.push(Route.Main, {
+              kind: "metric.conversation",
+              contextId,
+              timestampMs: now,
+              name: "vad.state_reset_in_speech",
+              value: "1",
+            });
+          }
           this.emitSpeechActivity(contextId, now);
         } else {
           this.vadState = "stopping";
           this.silenceFrames = 1;
+          this.stoppingSpikeFrames = 0;
         }
         break;
 
       case "stopping":
         if (isSpeech) {
-          this.vadState = "speaking";
-          this.silenceFrames = 0;
-          this.emitSpeechActivity(contextId, now);
-        } else {
-          this.silenceFrames += 1;
-          if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) break;
-          if (this.silenceFrames < silenceFrameTarget) break;
+          // Single-frame confidence spikes are a known Silero failure mode on
+          // long telephony segments (state saturation flaps high through real
+          // silence). Require sustained speech to leave "stopping" so one
+          // spike cannot reset the silence countdown forever.
+          this.stoppingSpikeFrames += 1;
+          if (this.stoppingSpikeFrames >= 2) {
+            this.vadState = "speaking";
+            this.silenceFrames = 0;
+            this.stoppingSpikeFrames = 0;
+            this.emitSpeechActivity(contextId, now);
+          }
+          break;
+        }
+        this.stoppingSpikeFrames = 0;
+        this.silenceFrames += 1;
+        if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) break;
+        if (this.silenceFrames < silenceFrameTarget) break;
 
+        {
           const hangoverMs = this.silenceFrames * 32;
           this.vadState = "quiet";
           this.silenceFrames = 0;
           this.speechFrames = 0;
+          this.stoppingSpikeFrames = 0;
           const ended: VadSpeechEndedPacket = {
             kind: "vad.speech_ended",
             contextId,

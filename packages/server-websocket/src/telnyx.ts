@@ -124,7 +124,11 @@ interface TelnyxConnectionState {
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
-const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 200;
+// Bounds queue memory + sanity only. TTS providers legitimately burst entire
+// replies ahead of realtime (Deepgram); the pacer drains at wire rate and
+// barge-in clear is O(1), so a generous cap is safe. A tiny cap turns every
+// long reply into dropped audio.
+const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 60_000;
 const DEFAULT_MAX_INBOUND_REORDER_FRAMES = 4;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;

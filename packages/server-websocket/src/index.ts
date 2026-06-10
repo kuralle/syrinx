@@ -145,7 +145,10 @@ const DEFAULT_MAX_BUFFERED_AMOUNT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INBOUND_MESSAGE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
 const DEFAULT_OUTBOUND_FRAME_DURATION_MS = 20;
-const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 200;
+// Bounds queue memory + sanity only — interrupt/clear keeps barge-in instant
+// regardless of queue depth, and TTS providers burst whole replies ahead of
+// realtime. A tiny cap silently drops the tail of every long reply.
+const DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS = 60_000;
 
 export async function createVoiceWebSocketServer(
   options: VoiceWebSocketServerOptions,

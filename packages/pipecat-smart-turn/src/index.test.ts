@@ -712,3 +712,92 @@ describe("PipecatEOSPlugin", () => {
     await started;
   });
 });
+
+describe("PipecatEOSPlugin — STT-quiet fallback (wedged VAD)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("completes the turn when transcripts go quiet but VAD never ends the segment", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const turns: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      turns.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, stt_quiet_fallback_ms: 40, max_delay_ms: 0 });
+
+    // Speech starts and NEVER ends (saturated VAD on a long telephony segment).
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-quiet",
+      timestampMs: Date.now(),
+      confidence: 0.95,
+    });
+    // Provider STT delivers the user's whole question, then goes quiet.
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-quiet",
+      timestampMs: Date.now(),
+      text: "what is the application deadline",
+      confidence: 0.99,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(turns).toHaveLength(0); // not yet — quiet window still open
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(turns).toEqual([
+      expect.objectContaining({
+        kind: "eos.turn_complete",
+        contextId: "turn-quiet",
+        text: "what is the application deadline",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not fire the fallback while transcripts keep arriving", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const turns: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      turns.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, stt_quiet_fallback_ms: 60, max_delay_ms: 0 });
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-active",
+      timestampMs: Date.now(),
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-active",
+      timestampMs: Date.now(),
+      text: "first part",
+      confidence: 0.99,
+    });
+    // Keep the transcript active: interims every ~30ms push the quiet deadline back.
+    for (let i = 0; i < 4; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      bus.push(Route.Main, {
+        kind: "stt.interim",
+        contextId: "turn-active",
+        timestampMs: Date.now(),
+        text: `still talking ${String(i)}`,
+      });
+    }
+    expect(turns).toHaveLength(0);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+});

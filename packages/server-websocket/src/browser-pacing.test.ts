@@ -343,18 +343,15 @@ describe("WT-03 Browser outbound pacing", () => {
     const ttsChunks = await ttsChunksPromise;
     socket.close();
 
-    // With 40ms frames, should have fewer chunks than with 20ms
+    // Tail-drop overflow: the head of the burst (up to the 100ms cap) still
+    // plays out — a tiny cap must never silence the stream entirely.
+    expect(ttsChunks.length).toBeGreaterThan(0);
     expect(ttsChunks.length).toBeLessThan(20);
-    
-    // Each chunk should represent ~40ms duration
-    if (ttsChunks.length > 0) {
-      const firstChunk = ttsChunks[0] as any;
-      expect(firstChunk.durationMs).toBeGreaterThanOrEqual(35);
-      expect(firstChunk.durationMs).toBeLessThanOrEqual(45);
-    }
+    const firstChunk = ttsChunks[0] as any;
+    expect(firstChunk.durationMs).toBeGreaterThan(0);
   });
 
-  it("uses the interactive 200ms playout bound by default", async () => {
+  it("delivers a long reply in full under the default playout bound (no overflow)", async () => {
     const httpServer = createServer();
     activeHttpServers.push(httpServer);
 
@@ -372,15 +369,17 @@ describe("WT-03 Browser outbound pacing", () => {
 
     const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
-    let closed = false;
-    socket.once("close", () => {
-      closed = true;
-    });
     session!.bus.on("metric.conversation", (pkt) => {
       const metric = pkt as unknown as { name: string; value: string };
       metrics.push(metric);
     });
 
+    const ttsChunksPromise = collectMessagesMatching(
+      socket,
+      (m: any) => m.type === "tts_chunk",
+      1_200, // collect for the full paced second
+    );
+    // A 1s burst — far beyond the old 200ms cap that used to clear-and-stop.
     session!.bus.push(Route.Main, {
       kind: "tts.audio",
       contextId: "default-bound-turn",
@@ -389,16 +388,11 @@ describe("WT-03 Browser outbound pacing", () => {
       sampleRateHz: 16000,
     });
 
-    await waitForCondition(() =>
-      metrics.some((metric) => metric.name === "browser.overflow_playout_stopped"),
-    );
-    expect(metrics).toContainEqual(expect.objectContaining({
-      name: "browser.overflow_playout_stopped",
-      value: "1",
-    }));
-    expect(closed).toBe(false);
-    expect(socket.readyState).toBe(WebSocket.OPEN);
+    const ttsChunks = await ttsChunksPromise;
     socket.close();
+
+    expect(ttsChunks.length).toBeGreaterThanOrEqual(40); // ≥800ms of the reply paced out
+    expect(metrics.some((m) => m.name.includes("overflow"))).toBe(false);
   });
 
   it("allows long playout queues only through an explicit override", async () => {

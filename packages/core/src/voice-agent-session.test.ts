@@ -2441,3 +2441,47 @@ describe("VoiceAgentSession", () => {
     });
   });
 });
+
+describe("VoiceAgentSession — handler errors must not kill the call", () => {
+  it("a throwing bus handler surfaces a recoverable pipeline.error and the session stays alive", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const errors: Array<{ stage: string }> = [];
+    const partials: Array<{ text: string }> = [];
+    await session.start();
+    session.on("error", (event) => {
+      errors.push(event);
+    });
+    session.on("user_input_partial", (event) => {
+      partials.push(event);
+    });
+    session.bus.on("tts.text", () => {
+      throw new Error("plugin bug: scripted batches missing");
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-boom",
+      timestampMs: Date.now(),
+      text: "speak this",
+    } satisfies TextToSpeechTextPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(errors).toEqual([
+      expect.objectContaining({ stage: "pipeline.error" }),
+    ]);
+
+    // The call must continue: later packets still flow end to end.
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "turn-after",
+      timestampMs: Date.now(),
+      text: "still alive",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(partials).toEqual([
+      expect.objectContaining({ text: "still alive" }),
+    ]);
+
+    await closeSession(session);
+  });
+});
