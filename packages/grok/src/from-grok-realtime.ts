@@ -46,6 +46,7 @@ export function fromGrokRealtime(opts: GrokRealtimeOptions): RealtimeAdapter {
       outputSampleRateHz: outputRateHz,
       supportsConcurrentToolAudio: false,
       supportsTruncate: false,
+      emitsServerSpeechStarted: false,
     },
     buildSessionUpdate: () => {
       const turnDetection =

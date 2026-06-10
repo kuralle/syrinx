@@ -273,6 +273,7 @@ describe("fromGrokRealtime", () => {
       outputSampleRateHz: 16000,
       supportsConcurrentToolAudio: false,
       supportsTruncate: false,
+      emitsServerSpeechStarted: false,
     });
   });
 });
