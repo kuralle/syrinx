@@ -16,6 +16,13 @@ allowBuilds:
   sharp: true
   workerd: true
 
+# The committed lockfile is reviewed/vetted. pnpm's lockfile re-verification pass
+# ignores minimumReleaseAgeExclude, so it would otherwise reject freshly-published
+# first-party @kuralle-agents/* entries on every install/run. trustLockfile tells
+# pnpm to trust the committed lockfile and not re-gate its existing entries; the
+# cooldown still applies when RESOLVING newly-added packages. Requires pnpm >= 11.3.
+trustLockfile: true
+
 minimumReleaseAgeExclude:
   - '@mastra/core@1.41.0'
   - '@kuralle-agents/core@0.6.1'
@@ -28,3 +35,7 @@ minimumReleaseAgeExclude:
   - '@kuralle-agents/rag@0.7.1'
   - '@kuralle-agents/skills@0.7.1'
   - '@kuralle-agents/vectorize-store@0.7.1'
+  - '@kuralle-agents/core@0.8.5'
+  - '@kuralle-agents/rag@0.8.5'
+  - '@kuralle-agents/skills@0.8.5'
+  - '@kuralle-agents/vectorize-store@0.8.5'
