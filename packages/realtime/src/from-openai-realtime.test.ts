@@ -236,6 +236,7 @@ describe("fromOpenAIRealtime", () => {
       outputSampleRateHz: 24000,
       supportsConcurrentToolAudio: true,
       supportsTruncate: true,
+      emitsServerSpeechStarted: true,
     });
   });
 
