@@ -609,6 +609,7 @@ async function importBotSecrets(app: string): Promise<void> {
   const names = [
     "DEEPGRAM_API_KEY",
     "GOOGLE_GENERATIVE_AI_API_KEY",
+    "OPENAI_API_KEY",
     "CARTESIA_API_KEY",
     "CARTESIA_VOICE_ID",
     "SYRINX_DEEPGRAM_MODEL",
@@ -621,7 +622,7 @@ async function importBotSecrets(app: string): Promise<void> {
     const value = process.env[name]?.trim();
     if (value) lines.push(`${name}=${value}`);
   }
-  for (const name of ["DEEPGRAM_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "CARTESIA_API_KEY"]) {
+  for (const name of ["DEEPGRAM_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "OPENAI_API_KEY", "CARTESIA_API_KEY"]) {
     if (!process.env[name]?.trim()) throw new Error(`${name} is required in .env for the Fly bot spike`);
   }
   await run("fly", ["secrets", "import", "--stage", "--app", app], { stdin: `${lines.join("\n")}\n`, redactOutput: true });
