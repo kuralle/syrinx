@@ -26,14 +26,14 @@ importers:
         specifier: ^3.0.0
         version: 3.0.67(zod@4.4.3)
       '@kuralle-agents/core':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/rag':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/skills':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
@@ -54,17 +54,17 @@ importers:
         specifier: ^3.0.0
         version: 3.0.67(zod@4.4.3)
       '@kuralle-agents/core':
-        specifier: ^0.7.0
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/rag':
-        specifier: ^0.7.0
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/skills':
-        specifier: ^0.7.0
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/vectorize-store':
-        specifier: ^0.7.0
-        version: 0.7.1(@kuralle-agents/rag@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
+        specifier: ^0.8.5
+        version: 0.8.5(@kuralle-agents/rag@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
@@ -85,17 +85,17 @@ importers:
         specifier: ^3.0.0
         version: 3.0.67(zod@4.4.3)
       '@kuralle-agents/core':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/rag':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/skills':
-        specifier: ^0.7.0
-        version: 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/vectorize-store':
-        specifier: ^0.7.0
-        version: 0.7.1(@kuralle-agents/rag@0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
+        specifier: ^0.8.5
+        version: 0.8.5(@kuralle-agents/rag@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
@@ -207,14 +207,14 @@ importers:
         specifier: 1.0.3
         version: 1.0.3
       '@kuralle-agents/core':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/rag':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/skills':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-syrinx/aisdk':
         specifier: workspace:*
         version: link:../../packages/aisdk
@@ -471,8 +471,8 @@ importers:
         version: link:../core
     devDependencies:
       '@kuralle-agents/core':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -584,17 +584,17 @@ importers:
         specifier: ^3.0.67
         version: 3.0.67(zod@4.4.3)
       '@kuralle-agents/core':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/rag':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/skills':
-        specifier: ^0.7.1
-        version: 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.8.5
+        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       '@kuralle-agents/vectorize-store':
-        specifier: ^0.7.1
-        version: 0.7.1(@kuralle-agents/rag@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
+        specifier: ^0.8.5
+        version: 0.8.5(@kuralle-agents/rag@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3))
       '@kuralle-syrinx/aisdk':
         specifier: workspace:*
         version: link:../aisdk
@@ -1849,44 +1849,27 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@kuralle-agents/core@0.7.0':
-    resolution: {integrity: sha512-/RwmbZhziKUjcZpg3Uq6xU0T3W4YuIU714ZZqFpotSFdeguBkV+qz3I8CmnVAGK5oluuufNyP1TSTKJv1Ekfow==}
+  '@kuralle-agents/core@0.8.5':
+    resolution: {integrity: sha512-uGVSm/s9T5lbDg7RuTSf2Vb6DuFUZ/doFUmB3fENmnh3WevfxxfgHr1oienhOzfNxbn3Pcn9pQsB3Ck1oQlVTA==}
     peerDependencies:
       ai: ^6.0.0
       zod: ^4.0.0
 
-  '@kuralle-agents/core@0.7.1':
-    resolution: {integrity: sha512-f9tEWeQAOIsYEC1QvUPLKwoESvc0XNfnVbFS510DB2m9919ZTSGxBNqa0dQN2fPTE5t+/l05RX3YfhirjrN77A==}
+  '@kuralle-agents/rag@0.8.5':
+    resolution: {integrity: sha512-cCaIzkmqIlUxJihQrhhk0DGL2B6JiCreZGJcl7mZOc5F6DhSkrNL9HPRIxL0Pazn4Sl7S4HGUxgNr+nIFUp0fQ==}
     peerDependencies:
       ai: ^6.0.0
       zod: ^4.0.0
 
-  '@kuralle-agents/rag@0.7.0':
-    resolution: {integrity: sha512-J2ltyubHiBODenY07QzaUQTqkWeuhaZga6IsfJfSwY10ZRGzZFUbLCcHjIZlYORBokaPKfB+NXu0YzFxGxQjZA==}
-    peerDependencies:
-      ai: ^6.0.0
-      zod: ^4.0.0
-
-  '@kuralle-agents/rag@0.7.1':
-    resolution: {integrity: sha512-s27RuVWwTqdFZxnzaE8Q2Vj0mxozwxppo3mflo5wa8y7Ob8iCM3m/CUB/4FCJ3BP3nHsue8kGphCeIIOdT5GWQ==}
-    peerDependencies:
-      ai: ^6.0.0
-      zod: ^4.0.0
-
-  '@kuralle-agents/skills@0.7.0':
-    resolution: {integrity: sha512-CLUKJRwntsDfzwSXBVukL1dlv6nnQ6itluo0NKLBB7Cp/pWrKIIW58zXle8tTirjZX/PGN3AT4uu9uiFgFT5VA==}
+  '@kuralle-agents/skills@0.8.5':
+    resolution: {integrity: sha512-XtFQ4YhUhn171hdpHjExx2fcLi6DGxftLudI/sZ39GwAHjO/dqoadKrgtHp8eO4CVRDQTIVtutyUDtFW8hvk+A==}
     peerDependencies:
       zod: ^4.0.0
 
-  '@kuralle-agents/skills@0.7.1':
-    resolution: {integrity: sha512-9vTfQi++8NS4GnLeUtWnOHB63HWV3u0s/lAOwPuAlWrf99M6IkCvnsd4/8MJzKWzG5jgBEPsG4uJM/8bdZ0F/A==}
+  '@kuralle-agents/vectorize-store@0.8.5':
+    resolution: {integrity: sha512-fHSUFw9ddJbSLKeXSjPl0MhucATScLdx/O5/uPS3QQQsr8tvYn8QHkQxjvlzmEcvHVwG990mhgqR/H1IJyOTWA==}
     peerDependencies:
-      zod: ^4.0.0
-
-  '@kuralle-agents/vectorize-store@0.7.1':
-    resolution: {integrity: sha512-7kUWwiJtLAP6XlceAjEVCRH5n8kJsmx+gFr5KKTqk7huFmx5kevoNnctbPxzOzhQy1myqGms18mhqz7vA15+yQ==}
-    peerDependencies:
-      '@kuralle-agents/rag': 0.7.1
+      '@kuralle-agents/rag': 0.8.5
 
   '@lukeed/csprng@1.1.0':
     resolution: {integrity: sha512-Z7C/xXCiGWsg0KuKsHTKJxbWhpI3Vs5GwLfOean7MGyVFGqdRgBbAjOCh6u4bbjPc/8MJ2pZmK/0DLdCbivLDA==}
@@ -5447,51 +5430,28 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@kuralle-agents/core@0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
+  '@kuralle-agents/core@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       ai: 6.0.191(zod@4.4.3)
       chrono-node: 2.9.1
       zod: 4.4.3
 
-  '@kuralle-agents/core@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
+  '@kuralle-agents/rag@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
     dependencies:
-      ai: 6.0.191(zod@4.4.3)
-      chrono-node: 2.9.1
-      zod: 4.4.3
-
-  '@kuralle-agents/rag@0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
-    dependencies:
-      '@kuralle-agents/core': 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+      '@kuralle-agents/core': 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       ai: 6.0.191(zod@4.4.3)
       zod: 4.4.3
 
-  '@kuralle-agents/rag@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
+  '@kuralle-agents/skills@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
     dependencies:
-      '@kuralle-agents/core': 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
-      ai: 6.0.191(zod@4.4.3)
-      zod: 4.4.3
-
-  '@kuralle-agents/skills@0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
-    dependencies:
-      '@kuralle-agents/core': 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+      '@kuralle-agents/core': 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - ai
 
-  '@kuralle-agents/skills@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
+  '@kuralle-agents/vectorize-store@0.8.5(@kuralle-agents/rag@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3))':
     dependencies:
-      '@kuralle-agents/core': 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
-      zod: 4.4.3
-    transitivePeerDependencies:
-      - ai
-
-  '@kuralle-agents/vectorize-store@0.7.1(@kuralle-agents/rag@0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3))':
-    dependencies:
-      '@kuralle-agents/rag': 0.7.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
-
-  '@kuralle-agents/vectorize-store@0.7.1(@kuralle-agents/rag@0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3))':
-    dependencies:
-      '@kuralle-agents/rag': 0.7.1(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+      '@kuralle-agents/rag': 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
 
   '@lukeed/csprng@1.1.0': {}
 
