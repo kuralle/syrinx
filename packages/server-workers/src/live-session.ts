@@ -56,6 +56,9 @@ export async function createLiveVoiceAgentSession(
         endpointing: 300,
         provider_finalize_timeout_ms: 2500,
         finalize_timeout_fallback: true,
+        // No local VAD on the edge: Deepgram SpeechStarted is the barge-in
+        // speech-start signal (vad.speech_started producer).
+        vad_events: true,
       },
       bridge: {},
       tts: {

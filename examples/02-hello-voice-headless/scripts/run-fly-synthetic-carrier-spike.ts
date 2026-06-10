@@ -102,9 +102,9 @@ async function main(): Promise<void> {
     await createFlyApp(botApp);
     await createFlyApp(carrierApp);
     await importBotSecrets(botApp);
-    await run("fly", ["deploy", "-c", botConfigPath, "--dockerfile", "Dockerfile.telephony-spike", "--ha=false", "--wait-timeout", "10m"]);
+    await run("fly", ["deploy", "-c", botConfigPath, "--dockerfile", "Dockerfile.telephony-spike", "--ha=false", "--no-cache", "--wait-timeout", "10m"]);
     await waitForOkJson(`${botBaseUrl}/healthz`, 180_000);
-    await run("fly", ["deploy", "-c", carrierConfigPath, "--dockerfile", "Dockerfile.telephony-spike", "--ha=false", "--wait-timeout", "10m"]);
+    await run("fly", ["deploy", "-c", carrierConfigPath, "--dockerfile", "Dockerfile.telephony-spike", "--ha=false", "--no-cache", "--wait-timeout", "10m"]);
     await waitForOkJson(`${carrierBaseUrl}/healthz`, 180_000);
 
     let knownBotArtifacts = await readBotArtifactPaths(botBaseUrl);
@@ -546,13 +546,17 @@ function readPcm16WavInfo(buffer: Buffer): {
 }
 
 function renderBotFlyToml(app: string, region: string, memoryMb: number, publicBaseUrl: string): string {
+  // Default to Deepgram TTS: the Cartesia account is currently 402ing, which
+  // surfaces as outboundFrames=0 (the bot answers with silence). Override with
+  // SYRINX_REVIEW_TTS when Cartesia is healthy again.
+  const reviewTts = process.env["SYRINX_REVIEW_TTS"]?.trim() || "deepgram";
   return `app = "${app}"
 primary_region = "${region}"
 
 [env]
   NODE_ENV = "production"
   SYRINX_SPIKE_ROLE = "bot"
-  SYRINX_REVIEW_TTS = "cartesia"
+  SYRINX_REVIEW_TTS = "${reviewTts}"
   SYRINX_TELEPHONY_REVIEW_HOST = "0.0.0.0"
   SYRINX_TELEPHONY_REVIEW_PORT = "4180"
   SYRINX_TELEPHONY_PUBLIC_BASE_URL = "${publicBaseUrl}"

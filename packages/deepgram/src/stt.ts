@@ -112,7 +112,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.deepgram.com/v1/listen";
     this.smartFormat = (config["smart_format"] as boolean) ?? true;
     this.interimResults = (config["interim_results"] as boolean) ?? true;
-    this.vadEvents = (config["vad_events"] as boolean) ?? true;
+    // Opt-in: provider SpeechStarted → vad.speech_started is for VAD-less
+    // deployments (edge cascade). On sessions with a local VAD the duplicate,
+    // laggier speech-start signal corrupts VAD/EOS-owned turn-taking (the turn
+    // never completes) — proven by the Fly telephony spike.
+    this.vadEvents = (config["vad_events"] as boolean) ?? false;
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
