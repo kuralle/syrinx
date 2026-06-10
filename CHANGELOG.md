@@ -2,6 +2,15 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 2.1.1 — 2026-06-10
+
+### Fixed
+- `silero-vad`: the Workers variant (`/workers`, onnxruntime-web) had drifted from the Node
+  variant — v2.1.0's telephony saturation hardening (stopping-state spike debounce, in-speech
+  model-state reset) only landed in the Node copy. The VAD turn state machine and PCM windowing
+  are now extracted into a single shared module (`vad-state-machine.ts`) used by both runtimes,
+  with parity regression tests on the Workers entry, so the variants cannot drift again.
+
 ## 2.1.0 — 2026-06-10
 
 First published release (npm, `@kuralle-syrinx` scope).
