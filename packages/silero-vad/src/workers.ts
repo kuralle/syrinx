@@ -1,28 +1,33 @@
 // SPDX-License-Identifier: MIT
+//
+// Syrinx Kernel v2 — Silero VAD Plugin (Cloudflare Workers, onnxruntime-web)
+//
+// Same plugin as ./index.ts but for workerd: WASM execution provider and model
+// bytes supplied via `model_bytes` or fetched from `model_url` (no filesystem).
+// All turn/state decisions live in the shared SileroVadStateMachine
+// (vad-state-machine.ts), so the Node and Workers variants can never drift.
 
 import type { PipelineBus } from "@kuralle-syrinx/core";
 import {
   ErrorCategory,
   Route,
   type PluginConfig,
-  type VadSpeechActivityPacket,
-  type VadSpeechEndedPacket,
-  type VadSpeechStartedPacket,
   type VoiceErrorPacket,
   type VoicePlugin,
   isRecoverable,
   optionalStringConfig,
 } from "@kuralle-syrinx/core";
-import { pcm16BytesToSamples } from "@kuralle-syrinx/core/audio";
+import {
+  CONTEXT_SAMPLES_16K,
+  Pcm16WindowBuffer,
+  SileroVadStateMachine,
+  readVadTuning,
+} from "./vad-state-machine.js";
 
 type Ort = typeof import("onnxruntime-web");
 type InferenceSession = import("onnxruntime-web").InferenceSession;
 
 const DEFAULT_SAMPLE_RATE = 16000;
-const WINDOW_SAMPLES_16K = 512;
-const CONTEXT_SAMPLES_16K = 64;
-
-type VadState = "quiet" | "starting" | "speaking" | "stopping";
 
 export class SileroVADPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
@@ -30,34 +35,22 @@ export class SileroVADPlugin implements VoicePlugin {
   private ort: Ort | null = null;
   private state = new Float32Array(2 * 1 * 128);
   private context = new Float32Array(CONTEXT_SAMPLES_16K);
-  private pendingSamples: number[] = [];
-  private vadState: VadState = "quiet";
-  private speechFrames = 0;
-  private confidenceThreshold = 0.5;
-  private minSilenceDurationMs = 200;
-  private speechPadMs = 80;
-  private speechStartDurationMs = 32;
+  private readonly windows = new Pcm16WindowBuffer();
+  private machine: SileroVadStateMachine | null = null;
   private sampleRate = DEFAULT_SAMPLE_RATE;
-  private silenceFrames = 0;
-  private lastResetMs = 0;
   private disposers: Array<() => void> = [];
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
-    this.confidenceThreshold = readNumber(config, "threshold", 0.5);
-    this.minSilenceDurationMs = readNumber(config, "min_silence_duration_ms", 200);
-    this.speechPadMs = readNumber(config, "speech_pad_ms", 80);
-    this.speechStartDurationMs = readNumber(config, "speech_start_duration_ms", 32);
-    this.sampleRate = readNumber(config, "sample_rate", DEFAULT_SAMPLE_RATE);
-    if (this.sampleRate !== 16000) {
-      throw new Error(`SileroVADPlugin requires 16 kHz PCM input, got ${String(this.sampleRate)} Hz`);
-    }
+    this.sampleRate = readSampleRate(config);
+    this.machine = new SileroVadStateMachine(bus, readVadTuning(config), () => this.resetModelState());
 
     this.ort = await import("onnxruntime-web");
     this.session = await this.ort.InferenceSession.create(await readModelBytes(config), {
       executionProviders: ["wasm"],
     });
     this.resetModelState();
+    this.machine.noteModelReset();
 
     this.disposers.push(
       bus.on("vad.audio", async (pkt: unknown) => {
@@ -68,24 +61,16 @@ export class SileroVADPlugin implements VoicePlugin {
   }
 
   async processAudio(audio: Uint8Array, contextId: string): Promise<void> {
-    if (!this.bus || !this.session || !this.ort) return;
+    if (!this.bus || !this.session || !this.ort || !this.machine) return;
     if (audio.byteLength % 2 !== 0) {
       this.emitError(contextId, new Error("VAD audio must be 16-bit PCM with even byte length"));
       return;
     }
 
-    const samples = pcm16BytesToSamples(audio);
-    for (let i = 0; i < samples.length; i += 1) {
-      this.pendingSamples.push(samples[i]! / 32768);
-    }
-
-    while (this.pendingSamples.length >= WINDOW_SAMPLES_16K) {
-      const window = new Float32Array(WINDOW_SAMPLES_16K);
-      for (let i = 0; i < WINDOW_SAMPLES_16K; i += 1) {
-        window[i] = this.pendingSamples.shift()!;
-      }
+    this.windows.push(audio);
+    for (let window = this.windows.next(); window; window = this.windows.next()) {
       const confidence = await this.runModel(window, contextId);
-      this.emitVadState(confidence, contextId);
+      this.machine.observe(confidence, contextId);
     }
   }
 
@@ -94,14 +79,14 @@ export class SileroVADPlugin implements VoicePlugin {
     this.bus = null;
     this.session = null;
     this.ort = null;
-    this.pendingSamples = [];
+    this.windows.clear();
     this.resetModelState();
   }
 
   private async runModel(window: Float32Array, contextId: string): Promise<number> {
     if (!this.session || !this.ort) return 0;
 
-    const input = new Float32Array(CONTEXT_SAMPLES_16K + WINDOW_SAMPLES_16K);
+    const input = new Float32Array(CONTEXT_SAMPLES_16K + window.length);
     input.set(this.context, 0);
     input.set(window, CONTEXT_SAMPLES_16K);
 
@@ -119,11 +104,6 @@ export class SileroVADPlugin implements VoicePlugin {
       }
       this.context = input.slice(-CONTEXT_SAMPLES_16K);
 
-      const now = Date.now();
-      if (this.vadState === "quiet" && now - this.lastResetMs >= 5000) {
-        this.resetModelState();
-      }
-
       return typeof probability === "number" ? probability : 0;
     } catch (err) {
       this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
@@ -131,112 +111,9 @@ export class SileroVADPlugin implements VoicePlugin {
     }
   }
 
-  private emitVadState(confidence: number, contextId: string): void {
-    if (!this.bus) return;
-
-    const now = Date.now();
-    const isSpeech = confidence >= this.confidenceThreshold;
-    const silenceFrameTarget = Math.max(1, Math.ceil(this.minSilenceDurationMs / 32));
-
-    switch (this.vadState) {
-      case "quiet":
-        if (isSpeech) {
-          this.vadState = "starting";
-          this.speechFrames = 1;
-          this.promoteStartingToSpeakingIfReady(confidence, contextId, now);
-        }
-        break;
-      case "starting":
-        if (isSpeech) {
-          if (!this.promoteStartingToSpeakingIfReady(confidence, contextId, now)) {
-            this.speechFrames += 1;
-            this.promoteStartingToSpeakingIfReady(confidence, contextId, now);
-          }
-        } else {
-          this.vadState = "quiet";
-          this.speechFrames = 0;
-        }
-        break;
-      case "speaking":
-        if (isSpeech) {
-          this.emitSpeechActivity(contextId, now);
-        } else {
-          this.vadState = "stopping";
-          this.silenceFrames = 1;
-        }
-        break;
-      case "stopping":
-        if (isSpeech) {
-          this.vadState = "speaking";
-          this.silenceFrames = 0;
-          this.emitSpeechActivity(contextId, now);
-        } else {
-          this.silenceFrames += 1;
-          if (this.silenceFrames * 32 < this.minSilenceDurationMs + this.speechPadMs) break;
-          if (this.silenceFrames < silenceFrameTarget) break;
-
-          const hangoverMs = this.silenceFrames * 32;
-          this.vadState = "quiet";
-          this.silenceFrames = 0;
-          this.speechFrames = 0;
-          const ended: VadSpeechEndedPacket = {
-            kind: "vad.speech_ended",
-            contextId,
-            timestampMs: now,
-          };
-          this.bus.push(Route.Main, ended);
-          this.bus.push(Route.Main, {
-            kind: "metric.conversation",
-            contextId,
-            timestampMs: now,
-            name: "vad.stop_hangover_ms",
-            value: String(hangoverMs),
-          });
-        }
-        break;
-    }
-  }
-
-  private promoteStartingToSpeakingIfReady(confidence: number, contextId: string, now: number): boolean {
-    if (!this.bus || this.vadState !== "starting") return false;
-    if (this.speechFrames * 32 < this.speechStartDurationMs) return false;
-
-    const startDelayMs = this.speechFrames * 32;
-    this.vadState = "speaking";
-    this.speechFrames = 0;
-    const started: VadSpeechStartedPacket = {
-      kind: "vad.speech_started",
-      contextId,
-      timestampMs: now,
-      confidence,
-    };
-    this.bus.push(Route.Main, started);
-    this.bus.push(Route.Main, {
-      kind: "metric.conversation",
-      contextId,
-      timestampMs: now,
-      name: "vad.start_delay_ms",
-      value: String(startDelayMs),
-    });
-    this.emitSpeechActivity(contextId, now);
-    return true;
-  }
-
-  private emitSpeechActivity(contextId: string, now: number): void {
-    if (!this.bus) return;
-    const activity: VadSpeechActivityPacket = {
-      kind: "vad.speech_activity",
-      contextId,
-      timestampMs: now,
-      isAsync: true,
-    };
-    this.bus.push(Route.Main, activity);
-  }
-
   private resetModelState(): void {
     this.state = new Float32Array(2 * 1 * 128);
     this.context = new Float32Array(CONTEXT_SAMPLES_16K);
-    this.lastResetMs = Date.now();
   }
 
   private emitError(contextId: string, err: Error): void {
@@ -266,7 +143,11 @@ async function readModelBytes(config: PluginConfig): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function readNumber(config: PluginConfig, key: string, fallback: number): number {
-  const value = config[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function readSampleRate(config: PluginConfig): number {
+  const value = config["sample_rate"];
+  const sampleRate = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_SAMPLE_RATE;
+  if (sampleRate !== 16000) {
+    throw new Error(`SileroVADPlugin requires 16 kHz PCM input, got ${String(sampleRate)} Hz`);
+  }
+  return sampleRate;
 }
