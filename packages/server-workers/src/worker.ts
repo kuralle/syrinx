@@ -4,6 +4,7 @@ import {
   createVoiceEdgeWebSocketUpgrade,
   type VoiceEdgeWebSocketUpgrade,
 } from "@kuralle-syrinx/server-websocket/edge";
+import { createTwilioEdgeWebSocketUpgrade } from "@kuralle-syrinx/server-websocket/edge-twilio";
 import type { WorkersInboundSocketController } from "@kuralle-syrinx/ws/workers";
 import { DurableObjectAlarmScheduler } from "./alarm-scheduler.js";
 import { DurableObjectSessionStore } from "./durable-session-store.js";
@@ -24,7 +25,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/recordings") return await listRecordings(url, env);
-    if (url.pathname !== "/ws") return new Response("not found", { status: 404 });
+    if (url.pathname !== "/ws" && url.pathname !== "/twilio") {
+      return new Response("not found", { status: 404 });
+    }
     const sessionId = url.searchParams.get("sessionId") ?? crypto.randomUUID();
     const id = env.VOICE_CONVERSATIONS.idFromName(sessionId);
     return await env.VOICE_CONVERSATIONS.get(id).fetch(request);
@@ -56,7 +59,25 @@ export class VoiceConversation {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
-    const sessionId = new URL(request.url).searchParams.get("sessionId") ?? crypto.randomUUID();
+    const requestUrl = new URL(request.url);
+    const sessionId = requestUrl.searchParams.get("sessionId") ?? crypto.randomUUID();
+    if (requestUrl.pathname === "/twilio") {
+      const upgrade = createTwilioEdgeWebSocketUpgrade(request, {
+        sessionStore: this.store,
+        scheduler: this.scheduler,
+        createSession: () =>
+          createLiveVoiceAgentSession(this.env, {
+            sessionId,
+            inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+            outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
+          }),
+        engineSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+      }, {
+        acceptWebSocket: (socket) => this.ctx.acceptWebSocket(socket as WebSocket),
+      });
+      this.activeUpgrade = upgrade;
+      return upgrade.response;
+    }
     const recorder = this.env.RECORDINGS
       ? new R2EdgeRecorder({ bucket: this.env.RECORDINGS, sessionId, startedAtMs: Date.now() })
       : undefined;
