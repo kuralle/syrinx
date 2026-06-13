@@ -3,6 +3,7 @@
 import type { Session, LiveServerMessage } from "@google/genai";
 
 import { bytesToBase64, base64ToBytes } from "./base64.js";
+import { RealtimeEventStream } from "./realtime-event-stream.js";
 import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "./realtime-adapter.js";
 
 const DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
@@ -14,48 +15,6 @@ export interface GeminiLiveOptions {
   readonly model?: string;
   readonly systemInstruction?: string;
   readonly tools?: readonly RealtimeToolDef[];
-}
-
-class RealtimeEventStream implements AsyncIterable<RealtimeEvent> {
-  private readonly queue: RealtimeEvent[] = [];
-  private readonly waiters: Array<(result: IteratorResult<RealtimeEvent>) => void> = [];
-  private closed = false;
-
-  push(event: RealtimeEvent): void {
-    if (this.closed) return;
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter({ value: event, done: false });
-      return;
-    }
-    this.queue.push(event);
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      waiter?.({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<RealtimeEvent> {
-    return {
-      next: () =>
-        new Promise<IteratorResult<RealtimeEvent>>((resolve) => {
-          if (this.queue.length > 0) {
-            resolve({ value: this.queue.shift()!, done: false });
-            return;
-          }
-          if (this.closed) {
-            resolve({ value: undefined, done: true });
-            return;
-          }
-          this.waiters.push(resolve);
-        }),
-    };
-  }
 }
 
 class GeminiLiveAdapter implements RealtimeAdapter {

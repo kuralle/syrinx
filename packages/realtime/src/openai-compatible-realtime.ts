@@ -4,6 +4,7 @@ import type { SocketFactory } from "@kuralle-syrinx/ws";
 import { RealtimeSocket } from "@kuralle-syrinx/ws/realtime";
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
+import { RealtimeEventStream } from "./realtime-event-stream.js";
 import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
 
 export interface OpenAiCompatibleRealtimeConfig {
@@ -28,48 +29,6 @@ export interface OpenAiCompatibleRealtimeConfig {
       caps: RealtimeAdapter["caps"];
     },
   ) => boolean;
-}
-
-class RealtimeEventStream implements AsyncIterable<RealtimeEvent> {
-  private readonly queue: RealtimeEvent[] = [];
-  private readonly waiters: Array<(result: IteratorResult<RealtimeEvent>) => void> = [];
-  private closed = false;
-
-  push(event: RealtimeEvent): void {
-    if (this.closed) return;
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter({ value: event, done: false });
-      return;
-    }
-    this.queue.push(event);
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      waiter?.({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<RealtimeEvent> {
-    return {
-      next: () =>
-        new Promise<IteratorResult<RealtimeEvent>>((resolve) => {
-          if (this.queue.length > 0) {
-            resolve({ value: this.queue.shift()!, done: false });
-            return;
-          }
-          if (this.closed) {
-            resolve({ value: undefined, done: true });
-            return;
-          }
-          this.waiters.push(resolve);
-        }),
-    };
-  }
 }
 
 class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
