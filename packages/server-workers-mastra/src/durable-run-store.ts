@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
+//
+// RunStore for the mastra HITL suspend/resume flow, backed by the Durable Object's
+// SQLite (the storage Mastra's own CloudflareDOStorage uses). Stale run pointers
+// expire lazily on read — no scheduled-alarm cleanup needed, so the DO does not
+// re-implement a task scheduler.
 
 import type { RunPointer, RunStore } from "@kuralle-syrinx/aisdk";
-import type { DurableObjectAlarmScheduler } from "./alarm-scheduler.js";
 
 type SqlCursor<T> = Iterable<T>;
 
@@ -18,7 +22,6 @@ export const DEFAULT_RUN_POINTER_TTL_MS = 15 * 60 * 1000;
 export class DurableObjectRunStore implements RunStore {
   constructor(
     private readonly storage: DurableRunStorage,
-    private readonly scheduler: DurableObjectAlarmScheduler,
     private readonly ttlMs = DEFAULT_RUN_POINTER_TTL_MS,
   ) {
     this.storage.sql.exec(
@@ -37,21 +40,23 @@ export class DurableObjectRunStore implements RunStore {
       runId,
       Date.now(),
     );
-    this.scheduler.schedule(`run.ttl:${contextId}`, this.ttlMs, () => {
-      this.discard(contextId);
-    });
   }
 
   takePending(contextId: string): RunPointer | null {
     const [row] = [...this.storage.sql.exec(
-      "SELECT run_id FROM reasoning_run_pointers WHERE context_id = ?",
+      "SELECT run_id, created_at_ms FROM reasoning_run_pointers WHERE context_id = ?",
       contextId,
-    )] as Array<{ run_id: string }>;
-    return row ? { runId: row.run_id } : null;
+    )] as Array<{ run_id: string; created_at_ms: number }>;
+    if (!row) return null;
+    // Lazy TTL: a pointer past its window is treated as absent and swept on read.
+    if (Date.now() - Number(row.created_at_ms) > this.ttlMs) {
+      this.discard(contextId);
+      return null;
+    }
+    return { runId: row.run_id };
   }
 
   discard(contextId: string): void {
-    this.scheduler.cancel(`run.ttl:${contextId}`);
     this.storage.sql.exec("DELETE FROM reasoning_run_pointers WHERE context_id = ?", contextId);
   }
 }
