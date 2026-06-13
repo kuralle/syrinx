@@ -48,6 +48,20 @@ describe("buildVoiceSession", () => {
     expect(session).toBeInstanceOf(VoiceAgentSession);
   });
 
+  it("carries sttForceFinalizeTimeoutMs through to the cascaded session", () => {
+    // Provider-endpointed cascades (e.g. Deepgram) tune this below the engine default; the mixin
+    // must thread it through instead of silently reverting to 7000ms.
+    const pipeline: VoicePipeline<unknown> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: stubPlugin(), config: { model: "nova-3" } }),
+      tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
+      endpointingOwner: "provider_stt",
+      sttForceFinalizeTimeoutMs: 3500,
+    };
+    const session = buildVoiceSession(pipeline, {}, stubReasoner(), ctx);
+    expect(session).toBeInstanceOf(VoiceAgentSession);
+  });
+
   it("throws a clear error when a cascaded pipeline has no reasoner", () => {
     const pipeline: VoicePipeline<unknown> = {
       kind: "cascaded",
