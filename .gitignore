@@ -16,6 +16,15 @@ research-notes/
 # Research, notes & internal reviews live in the private repo octalpixel/kuralle-syrinx-research.
 # Keep this checkout free of them (ignored if cloned in here locally for reference).
 knowledge-research/
+bi-model-research/
+
+# Internal working notes — never belong in the public repo (findings, manager hand-offs,
+# per-effort implementation notes, scratchpads). Root-anchored so real docs under docs/ are kept.
+/*-finding.md
+/*-findings.md
+/*-manager-notes.md
+/*-implementation-notes.md
+/*-scratchpad.md
 
 # edge-bundle verification artifact
 .edge-build/
