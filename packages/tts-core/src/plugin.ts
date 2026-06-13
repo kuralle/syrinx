@@ -21,8 +21,6 @@ export interface StreamingTtsSpec {
   readonly retry: RetryConfig;
   readonly finishTimeoutMs: number;
   readonly metricPrefix: string;
-  /** Emit `${metricPrefix}.reconnect_replay_*` metrics on replay activity (opt-in per provider). */
-  readonly replayMetrics?: boolean;
   readonly socketFactory: SocketFactory;
   readonly maxReconnectAttempts?: number;
   readonly connectTimeoutMs?: number;
@@ -69,16 +67,14 @@ export async function startStreamingTtsSession(
     onMessage: (data, isBinary) => engine.onMessage(data, isBinary),
     onConnectionLost: (err) => engine.onConnectionLost(err),
     onUnrecoverable: (err) => engine.onConnectionLost(err),
-    onReplay: spec.replayMetrics
-      ? (event, count) =>
-          bus.push(Route.Background, {
-            kind: "metric.conversation",
-            contextId: "",
-            timestampMs: Date.now(),
-            name: `${spec.metricPrefix}.reconnect_replay_${event}`,
-            value: String(count),
-          })
-      : undefined,
+    onReplay: (event, count) =>
+      bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: "",
+        timestampMs: Date.now(),
+        name: `${spec.metricPrefix}.reconnect_replay_${event}`,
+        value: String(count),
+      }),
   });
   await conn.connect();
 

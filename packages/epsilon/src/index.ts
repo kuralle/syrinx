@@ -114,7 +114,6 @@ export class EpsilonTTSPlugin implements VoicePlugin {
       retry: readProviderRetryConfig(config),
       finishTimeoutMs: readNonNegativeInteger(config["finish_timeout_ms"], 2000),
       metricPrefix: "tts.epsilon",
-      replayMetrics: true,
       socketFactory: this.socketFactory ?? (await defaultNodeSocketFactory()),
       maxReconnectAttempts: 1,
       connectTimeoutMs: readPositiveInteger(config["connect_timeout_ms"], DEFAULT_CONNECT_TIMEOUT_MS),

@@ -161,7 +161,6 @@ export class CartesiaTTSPlugin implements VoicePlugin {
       retry: readProviderRetryConfig(config),
       finishTimeoutMs: readNonNegativeInteger(config["finish_timeout_ms"], 2000),
       metricPrefix: "tts.cartesia",
-      replayMetrics: true,
       socketFactory: this.socketFactory ?? (await defaultNodeSocketFactory()),
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 32,
       keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,

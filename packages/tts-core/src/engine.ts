@@ -63,7 +63,6 @@ class TtsEngineImpl implements TtsEngine {
   private readonly keyToContext = new Map<AttributionKey, string>();
   private readonly contextKeys = new Map<string, Set<AttributionKey>>();
   private readonly cancelledContexts = new Set<string>();
-  private readonly cancelledKeys = new Set<AttributionKey>();
   private readonly carry = new Map<AttributionKey, Uint8Array>();
   private readonly pendingEnd = new Set<string>();
   private readonly finishTimers = new Map<string, TimerHandle>();
@@ -157,7 +156,6 @@ class TtsEngineImpl implements TtsEngine {
   async close(): Promise<void> {
     this.pendingEnd.clear();
     this.cancelledContexts.clear();
-    this.cancelledKeys.clear();
     this.keyToContext.clear();
     this.contextKeys.clear();
     this.carry.clear();
@@ -178,9 +176,7 @@ class TtsEngineImpl implements TtsEngine {
 
   private handleAudio(key: AttributionKey, pcm: Uint8Array): void {
     const contextId = this.keyToContext.get(key);
-    if (contextId === undefined || this.cancelledContexts.has(contextId) || this.cancelledKeys.has(key)) {
-      return;
-    }
+    if (contextId === undefined || this.cancelledContexts.has(contextId)) return;
     if (pcm.byteLength === 0) return;
 
     const prev = this.carry.get(key) ?? EMPTY;
@@ -216,7 +212,6 @@ class TtsEngineImpl implements TtsEngine {
   // `tts.done` has been seen (the refcount/multiplex model, e.g. epsilon).
   private handleUtteranceEnd(key: AttributionKey): void {
     const contextId = this.keyToContext.get(key);
-    this.cancelledKeys.delete(key);
     this.untrack(key);
     if (contextId === undefined) return;
     if (this.cancelledContexts.has(contextId)) {
@@ -230,21 +225,17 @@ class TtsEngineImpl implements TtsEngine {
   // (the single-stream model: cartesia `done:true`, grok `audio.done`).
   private handleContextEnd(key: AttributionKey): void {
     const contextId = this.keyToContext.get(key);
-    this.cancelledKeys.delete(key);
     this.untrack(key);
     if (contextId === undefined) return;
     if (this.cancelledContexts.has(contextId)) {
       this.clearCancelledIfDrained(contextId);
       return;
     }
-    this.pendingEnd.delete(contextId);
-    this.clearFinishTimeout(contextId);
-    this.emitEnd(contextId);
+    this.endContextNow(contextId);
   }
 
   private handleCancelled(key: AttributionKey): void {
     const contextId = this.keyToContext.get(key);
-    this.cancelledKeys.delete(key);
     this.untrack(key);
     if (contextId !== undefined && this.cancelledContexts.has(contextId)) this.clearCancelledIfDrained(contextId);
   }
@@ -258,20 +249,22 @@ class TtsEngineImpl implements TtsEngine {
     }
     this.emitError(contextId ?? "", error);
     if (contextId === undefined) return;
-    if (endsContext) {
-      // The provider coupled the error with a terminal `done` → end the context now,
-      // using the contextId captured before untrack.
-      this.pendingEnd.delete(contextId);
-      this.clearFinishTimeout(contextId);
-      this.emitEnd(contextId);
-    } else {
-      this.tryEmitEnd(contextId);
-    }
+    // A terminal error (provider coupled it with `done`) ends the context now, using the
+    // contextId captured above before untrack; otherwise end only if the refcount allows.
+    if (endsContext) this.endContextNow(contextId);
+    else this.tryEmitEnd(contextId);
   }
 
   /** Once a cancelled context fully drains, drop the cancelled flag so the id can be reused. */
   private clearCancelledIfDrained(contextId: string): void {
     if (!this.hasActiveKeys(contextId)) this.cancelledContexts.delete(contextId);
+  }
+
+  /** Emit `tts.end` for a context immediately and clear its pending/timeout state. */
+  private endContextNow(contextId: string): void {
+    this.pendingEnd.delete(contextId);
+    this.clearFinishTimeout(contextId);
+    this.emitEnd(contextId);
   }
 
   // ── bookkeeping ───────────────────────────────────────────────────────────
@@ -306,7 +299,6 @@ class TtsEngineImpl implements TtsEngine {
     this.pendingEnd.delete(contextId);
     this.clearFinishTimeout(contextId);
     for (const key of [...(this.contextKeys.get(contextId) ?? [])]) {
-      this.cancelledKeys.add(key);
       for (const frame of this.deps.protocol.encodeCancel(key, contextId)) {
         await this.trySend(frame, contextId);
       }
