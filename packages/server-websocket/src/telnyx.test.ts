@@ -848,6 +848,50 @@ describe("createTelnyxMediaStreamServer", () => {
     await server.close();
   });
 
+  it("attributes the final paced frame to its contextId (playout clock not short by one frame)", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      outputSampleRateHz: 16000,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const progress: Array<{ playedOutMs: number; complete: boolean }> = [];
+    session.bus.on("tts.playout_progress", (pkt) => {
+      const p = pkt as TextToSpeechPlayoutProgressPacket;
+      if (p.contextId === "telnyx-final-frame") progress.push({ playedOutMs: p.playedOutMs, complete: p.complete });
+    });
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart()));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // 200ms @ 16 kHz = exactly 10 paced frames of 20ms; the playout clock must count all 10.
+    const samples = new Int16Array(3200);
+    for (let i = 0; i < samples.length; i += 1) samples[i] = i % 2 === 0 ? 1200 : -1200;
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "telnyx-final-frame",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(samples),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "telnyx-final-frame",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => progress.at(-1)?.complete === true);
+
+    // BUG: the final frame was rebuilt without contextId, so its 20ms was dropped (reported 180, not 200).
+    expect(progress.at(-1)?.playedOutMs).toBe(200);
+
+    client.close();
+    await server.close();
+  });
+
   it("uses configured L16 bidirectional output rather than assuming the inbound codec", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = registerServer(await createTelnyxMediaStreamServer({

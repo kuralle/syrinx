@@ -241,6 +241,7 @@ export async function createTelnyxMediaStreamServer(
             const finalFrame = frames.at(-1);
             if (finalFrame) {
               frames[frames.length - 1] = {
+                contextId,
                 send: finalFrame.send,
                 afterSend: () => {
                   if (state.stopped) return;
