@@ -21,6 +21,7 @@ import {
   runVoiceEdgeWebSocketConnection,
   type EdgeRecorder,
 } from "@kuralle-syrinx/server-websocket/edge";
+import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
 import type { Reasoner } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
@@ -44,6 +45,14 @@ type AgentLike = Constructor<
 >;
 
 export interface WithVoiceOptions<Env> {
+  /**
+   * The connection wire protocol this host speaks. `"edge"` (default) is the Syrinx
+   * browser/edge JSON+envelope protocol (`runVoiceEdgeWebSocketConnection`). `"twilio"`
+   * speaks the Twilio Media Streams protocol (μ-law 8 kHz both ways,
+   * `runTwilioEdgeWebSocketConnection`) for a PSTN leg. One transport per Agent class —
+   * route `/ws` to an `"edge"` agent and `/twilio` to a `"twilio"` agent.
+   */
+  readonly transport?: "edge" | "twilio";
   /** The voice pipeline: `{ kind: "realtime", ... }` or `{ kind: "cascaded", ... }`. */
   readonly pipeline: VoicePipeline<Env>;
   /**
@@ -52,7 +61,7 @@ export interface WithVoiceOptions<Env> {
    * agents without a `runtime`.
    */
   readonly reasoner?: (env: Env, ctx: VoicePipelineContext) => Reasoner | Promise<Reasoner>;
-  /** Optional per-call recorder (e.g. an R2-backed `EdgeRecorder`). */
+  /** Optional per-call recorder (e.g. an R2-backed `EdgeRecorder`). Applies to the `"edge"` transport. */
   readonly recorder?: (env: Env, ctx: VoicePipelineContext) => EdgeRecorder | undefined;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
@@ -175,6 +184,30 @@ export function withVoice<Env, TBase extends AgentLike>(
           // isolate live), it is just not protected from idle eviction.
         });
 
+      // Both runners assemble the session the same way — pipeline + (resolved) reasoner.
+      const createSession = async () => {
+        const reasoner = await this.#resolveReasoner(env, sessionId);
+        return buildVoiceSession(options.pipeline, env, reasoner, { sessionId });
+      };
+      // The runner reports startup failures to the client and disposes the socket
+      // itself; nothing to do here beyond not crashing the isolate.
+      const onRunnerSettled = () => undefined;
+
+      if (options.transport === "twilio") {
+        // Twilio Media Streams: μ-law 8 kHz both ways. The runner derives the session
+        // id from the `?sessionId=` query (the callSid), resamples to the engine rate,
+        // and manages its own lease/heartbeat. Recorder is edge-only.
+        void runTwilioEdgeWebSocketConnection(socket, request, {
+          sessionStore: this.#store,
+          createSession,
+          ...(options.inputSampleRateHz !== undefined
+            ? { engineSampleRateHz: options.inputSampleRateHz }
+            : {}),
+          ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
+        }).catch(onRunnerSettled);
+        return;
+      }
+
       let recorder: EdgeRecorder | undefined;
       try {
         recorder = options.recorder?.(env, { sessionId });
@@ -196,14 +229,8 @@ export function withVoice<Env, TBase extends AgentLike>(
           ? { outputSampleRateHz: options.outputSampleRateHz }
           : {}),
         ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
-        createSession: async () => {
-          const reasoner = await this.#resolveReasoner(env, sessionId);
-          return buildVoiceSession(options.pipeline, env, reasoner, { sessionId });
-        },
-      }).catch(() => {
-        // The edge runner reports startup failures to the client and disposes the
-        // socket itself; nothing to do here beyond not crashing the isolate.
-      });
+        createSession,
+      }).catch(onRunnerSettled);
     }
 
     /** Pump the close so the edge runner tears down; the lease releases via #releaseConnection. */
