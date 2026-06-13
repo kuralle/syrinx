@@ -106,7 +106,16 @@ export class VoiceConversation {
     await this.scheduler.runDue();
   }
 
-  webSocketMessage(_ws: WebSocket, message: string | ArrayBuffer): void {
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    if (!this.activeUpgrade) {
+      // Woken from hibernation with no in-memory session: the live provider sockets
+      // did not survive eviction, so the controller cannot be revived in place.
+      // Close cleanly (rather than silently dropping the frame and hanging the call)
+      // so the client reconnects within the resume window — re-attaching conversation
+      // memory by sessionId, the proven mid-call drop/resume path.
+      ws.close(1012, "session_evicted_reconnect");
+      return;
+    }
     this.controller?.message(message);
   }
 
