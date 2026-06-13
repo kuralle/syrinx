@@ -6,7 +6,8 @@
 // Only the leaf providers (stt/tts plugins, reasoner) are stubbed.
 
 import { describe, it, expect, vi } from "vitest";
-import type { Reasoner, VoicePlugin } from "@kuralle-syrinx/core";
+import type { PipelineBus, Reasoner, UserAudioReceivedPacket, VoicePlugin } from "@kuralle-syrinx/core";
+import { encodePcm16ToMuLaw } from "@kuralle-syrinx/core/audio";
 import { withVoice } from "./with-voice.js";
 import type { VoicePipeline } from "./build-session.js";
 
@@ -218,6 +219,48 @@ describe("withVoice(Agent)", () => {
     expect(sidA).not.toBe(sidB); // not shared -> no cross-wiring
     expect(sidA).not.toBe("inst-1"); // not defaulted to the agent name
     expect(sidB).not.toBe("inst-1");
+  });
+
+  it("transport:\"twilio\" speaks Media Streams — a μ-law media frame reaches the engine", async () => {
+    // Capture engine-ward audio so we can prove the Twilio runner decoded the μ-law
+    // media event and pushed it onto the session bus (no edge-protocol error frame).
+    const captured: UserAudioReceivedPacket[] = [];
+    const capturingStt = (): VoicePlugin => ({
+      initialize: async (bus: PipelineBus) => {
+        bus.on<UserAudioReceivedPacket>("user.audio_received", (pkt) => { captured.push(pkt); });
+      },
+      close: async () => {},
+    });
+    const twilioPipeline: VoicePipeline<Record<string, unknown>> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: capturingStt(), config: { model: "nova-3" } }),
+      tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
+    };
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      { transport: "twilio", pipeline: twilioPipeline, reasoner: () => stubReasoner() },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+
+    // Twilio handshake, then a non-silent μ-law 8 kHz frame (160 samples = 20ms).
+    const tone = Int16Array.from({ length: 160 }, (_, i) => Math.round(8000 * Math.sin(i / 4)));
+    const payload = Buffer.from(encodePcm16ToMuLaw(tone)).toString("base64");
+    agent.onMessage(conn, JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
+    agent.onMessage(conn, JSON.stringify({
+      event: "start",
+      streamSid: "MZ1",
+      start: { streamSid: "MZ1", callSid: "CA1", mediaFormat: { encoding: "audio/x-mulaw", sampleRate: 8000, channels: 1 } },
+    }));
+    agent.onMessage(conn, JSON.stringify({ event: "media", streamSid: "MZ1", media: { payload } }));
+
+    await vi.waitFor(() => expect(captured.length).toBeGreaterThan(0));
+    // Resampled 8 kHz → 16 kHz engine PCM: non-empty audio reached the engine.
+    expect(captured[0]!.audio.byteLength).toBeGreaterThan(0);
+    // No edge-protocol error frame (the Twilio runner accepted the handshake).
+    expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
   });
 
   it("forceEndVoice closes the connection", () => {
