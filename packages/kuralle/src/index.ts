@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 export {
   fromKuralleRuntime,
-  streamFromKuralle,
   runKuralleTurn,
   awaitKuralleTurn,
   buildKuralleTurnRunOptions,
