@@ -14,4 +14,4 @@ export {
   type GeminiTranslateSession,
   type GeminiTranslateSessionOptions,
 } from "./gemini-translate.js";
-export { RealtimeBridge } from "./realtime-bridge.js";
+export { RealtimeBridge, type RealtimeBridgeOptions } from "./realtime-bridge.js";
