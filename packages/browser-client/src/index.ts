@@ -579,6 +579,11 @@ export class SyrinxBrowserClient {
   }
 
   private reportDownlinkCodecCapability(): void {
+    // The socket can drop during async codec negotiation (opus load) — e.g. a forced
+    // reconnect. The capability advert is re-sent on the next `ready` after reconnect,
+    // so skip it on a closed socket rather than throwing (which would crash the
+    // negotiation promise as an unhandled rejection).
+    if (!this.transport.connected) return;
     const downlinkEncoding = this.opusCodec ? "opus" : "pcm_s16le";
     this.sendJson({ type: "codec_capability", downlinkEncoding });
   }
