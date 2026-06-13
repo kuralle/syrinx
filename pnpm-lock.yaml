@@ -478,6 +478,9 @@ importers:
       '@kuralle-syrinx/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@kuralle-syrinx/tts-core':
+        specifier: workspace:*
+        version: link:../tts-core
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../ws
