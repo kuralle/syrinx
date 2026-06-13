@@ -11,7 +11,6 @@ import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
 import type { EndOfSpeechPacket } from "@kuralle-syrinx/core";
 import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
 import { fromMastraAgent, type MastraAgentLike } from "@kuralle-syrinx/mastra";
-import { DurableObjectAlarmScheduler } from "./alarm-scheduler.js";
 import { DurableObjectRunStore } from "./durable-run-store.js";
 import { createSpikeMockModel, resetMockModelCalls } from "./mock-model.js";
 
@@ -140,8 +139,7 @@ async function driveTurn(
   pointer: { runId: string } | null;
   mastraTables: string[];
 }> {
-  const scheduler = new DurableObjectAlarmScheduler(storage);
-  const runStore = new DurableObjectRunStore(storage, scheduler);
+  const runStore = new DurableObjectRunStore(storage);
   const { agent } = createMastra(storage.sql, apiKey);
   const bridge = new ReasoningBridge(fromMastraAgent(toMastraAgentLike(agent)), {
     runStore,
@@ -226,11 +224,6 @@ export class MastraAgentDO extends DurableObject<Env> {
       const message = error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error);
       return Response.json({ error: message }, { status: 500 });
     }
-  }
-
-  async alarm(): Promise<void> {
-    const scheduler = new DurableObjectAlarmScheduler(this.ctx.storage);
-    await scheduler.runDue();
   }
 }
 
