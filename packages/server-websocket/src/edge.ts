@@ -6,6 +6,7 @@ import {
   encodeSyrinxAudioEnvelope,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
+  type TextToSpeechPlayoutProgressPacket,
   type UserAudioReceivedPacket,
   type UserTextReceivedPacket,
   type VoiceAgentSession,
@@ -88,6 +89,7 @@ type ClientMessage =
   | { readonly type: "text"; readonly text: string; readonly contextId?: string }
   | { readonly type: "audio"; readonly audio: string; readonly contextId?: string; readonly sampleRateHz: number; readonly sequence?: number }
   | { readonly type: "client_interrupt"; readonly assistantContextId?: string; readonly contextId?: string }
+  | { readonly type: "playout_progress"; readonly contextId?: string; readonly playedOutMs: number; readonly complete?: boolean }
   | { readonly type: "codec_capability"; readonly downlinkEncoding: "pcm_s16le" | "opus" }
   | { readonly type: "ping" };
 
@@ -467,6 +469,23 @@ function handleClientMessage(
     if (interruptedContextId) session.requestClientInterrupt(interruptedContextId);
     return currentContextId;
   }
+  if (message.type === "playout_progress") {
+    // On client-rendered-audio transports the browser is the playout clock: the server streams
+    // audio envelopes and the client schedules them. Map its reported position onto the same
+    // `tts.playout_progress` packet the server-paced path emits, so turn-truncation (realtime
+    // barge-in) and turn-metrics consume an accurate played-out offset instead of a stale 0.
+    const progressContextId = message.contextId ?? currentContextId;
+    if (progressContextId) {
+      session.bus.push(Route.Main, {
+        kind: "tts.playout_progress",
+        contextId: progressContextId,
+        timestampMs: Date.now(),
+        playedOutMs: message.playedOutMs,
+        complete: message.complete ?? false,
+      } satisfies TextToSpeechPlayoutProgressPacket);
+    }
+    return currentContextId;
+  }
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
     session.bus.push(Route.Main, {
@@ -520,6 +539,18 @@ function parseClientMessage(value: unknown): ClientMessage {
       type: "client_interrupt",
       assistantContextId: optionalString(value.assistantContextId),
       contextId: optionalString(value.contextId),
+    };
+  }
+  if (value.type === "playout_progress") {
+    const playedOutMs = nonNegativeInteger(value.playedOutMs);
+    if (playedOutMs === null) {
+      throw new Error("Websocket playout_progress playedOutMs must be a non-negative integer");
+    }
+    return {
+      type: "playout_progress",
+      contextId: optionalString(value.contextId),
+      playedOutMs,
+      complete: typeof value.complete === "boolean" ? value.complete : undefined,
     };
   }
   if (value.type === "text") {

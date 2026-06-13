@@ -380,3 +380,73 @@ describe("edge barge-in downlink", () => {
     expect(socket.json()).toContainEqual({ type: "agent_interrupted", turnId: "assistant-turn", reason: "barge_in" });
   });
 });
+
+describe("edge client playout progress", () => {
+  interface ProgressPacket {
+    contextId: string;
+    playedOutMs: number;
+    complete: boolean;
+  }
+
+  function sessionCapturingProgress(progress: ProgressPacket[]): VoiceAgentSession {
+    const bus = new PipelineBusImpl();
+    bus.on("tts.playout_progress", (p) => {
+      progress.push(p as unknown as ProgressPacket);
+    });
+    return {
+      bus,
+      async start() {
+        void bus.start();
+      },
+      async close() {
+        bus.stop();
+      },
+      on() {},
+      off() {},
+      requestClientInterrupt() {},
+    } as unknown as VoiceAgentSession;
+  }
+
+  it("maps a client playout_progress message onto a tts.playout_progress bus packet", async () => {
+    const progress: ProgressPacket[] = [];
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => sessionCapturingProgress(progress),
+    });
+    waitForReady(socket);
+
+    socket.emit(
+      JSON.stringify({ type: "playout_progress", contextId: "assistant-turn", playedOutMs: 1280 }),
+    );
+    socket.emit(
+      JSON.stringify({ type: "playout_progress", contextId: "assistant-turn", playedOutMs: 2400, complete: true }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(progress).toEqual([
+      { kind: "tts.playout_progress", contextId: "assistant-turn", playedOutMs: 1280, complete: false, timestampMs: expect.any(Number) },
+      { kind: "tts.playout_progress", contextId: "assistant-turn", playedOutMs: 2400, complete: true, timestampMs: expect.any(Number) },
+    ]);
+  });
+
+  it("rejects a playout_progress message without a numeric playedOutMs", async () => {
+    const progress: ProgressPacket[] = [];
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => sessionCapturingProgress(progress),
+    });
+    waitForReady(socket);
+
+    socket.emit(JSON.stringify({ type: "playout_progress", contextId: "assistant-turn" }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(progress).toHaveLength(0);
+    expect(socket.json().some((m) => m.type === "error" && m.category === "invalid_input")).toBe(true);
+  });
+});
