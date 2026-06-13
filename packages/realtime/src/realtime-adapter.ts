@@ -11,6 +11,11 @@ export interface RealtimeAdapter {
 
   open(signal: AbortSignal): Promise<void>;
   sendAudio(pcm16: Uint8Array): void;
+  /**
+   * Send a typed user turn to the front model and request a response. Optional: adapters whose
+   * provider cannot accept text input omit it, and the bridge silently ignores typed turns for them.
+   */
+  sendText?(text: string): void;
   cancelResponse(audioEndMs: number): void;
   injectToolResult(toolId: string, text: string): void;
   /** Close the provider socket and end the event stream. */

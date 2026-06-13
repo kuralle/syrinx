@@ -104,6 +104,13 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     });
   }
 
+  sendText(text: string): void {
+    this.requireSession().sendClientContent({
+      turns: [{ role: "user", parts: [{ text }] }],
+      turnComplete: true,
+    });
+  }
+
   cancelResponse(_audioEndMs: number): void {
     // Gemini handles interruption server-side via `interrupted`; no truncate API.
   }

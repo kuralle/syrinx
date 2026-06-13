@@ -39,6 +39,7 @@
     "smoke:realtime-sinhala-tts": "tsx scripts/run-realtime-sinhala-tts-smoke.ts",
     "smoke:realtime-kuralle-bimodel": "tsx scripts/run-realtime-kuralle-bimodel-smoke.ts",
     "smoke:realtime-gemini-bimodel": "tsx scripts/run-realtime-gemini-bimodel-smoke.ts",
+    "smoke:realtime-gemini-sendtext": "tsx scripts/run-realtime-gemini-sendtext-smoke.ts",
     "smoke:realtime-gemini-bargein": "tsx scripts/run-realtime-gemini-bargein-smoke.ts",
     "smoke:realtime-gemini-multiturn": "tsx scripts/run-realtime-gemini-multiturn-smoke.ts",
     "smoke:realtime-gemini-bargein": "tsx scripts/run-realtime-gemini-bargein-smoke.ts",
