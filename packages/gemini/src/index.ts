@@ -59,6 +59,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private apiKey: string = "";
   private model: string = DEFAULT_MODEL;
   private voiceName: string = DEFAULT_VOICE;
+  private instruction = "";
   private timeoutMs = 45_000;
   private abortController: AbortController | null = null;
   private textByContextId = new Map<string, string>();
@@ -71,6 +72,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
     this.apiKey = requireStringConfig(config, "api_key");
     this.model = optionalStringConfig(config, "model") ?? DEFAULT_MODEL;
     this.voiceName = optionalStringConfig(config, "voice_name") ?? DEFAULT_VOICE;
+    this.instruction = optionalStringConfig(config, "instruction") ?? "";
     this.timeoutMs = readPositiveInteger(config["timeout_ms"], 45_000);
     this.retryConfig = readRetryConfig(config);
     assertAudioFormat(this.audioFormat);
@@ -171,7 +173,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
     const response = await withTimeout(
       client.models.generateContent({
         model: this.model,
-        contents: [{ parts: [{ text: `Read this aloud in a natural student-support phone voice: ${text}` }] }],
+        contents: [{ parts: [{ text: this.instruction ? `${this.instruction}: ${text}` : text }] }],
         config: {
           responseModalities: ["AUDIO"],
           speechConfig: {
