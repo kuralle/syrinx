@@ -9,6 +9,10 @@
       {
         "name": "VOICE_CONVERSATIONS",
         "class_name": "VoiceConversation"
+      },
+      {
+        "name": "TWILIO_VOICE_CONVERSATIONS",
+        "class_name": "TwilioVoiceConversation"
       }
     ]
   },
@@ -22,6 +26,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["VoiceConversation"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["TwilioVoiceConversation"]
     }
   ],
   "vectorize": [

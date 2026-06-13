@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it } from "vitest";
+import { decodeMuLawToPcm16, encodePcm16ToMuLaw } from "@kuralle-syrinx/core/audio";
 
 const execFileAsync = promisify(execFile);
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,6 +59,7 @@ function newMiniflare(script: string, bindings: Record<string, unknown>): Minifl
     compatibilityFlags: ["nodejs_compat"],
     durableObjects: {
       VOICE_CONVERSATIONS: { className: "VoiceConversation", useSQLite: true },
+      TWILIO_VOICE_CONVERSATIONS: { className: "TwilioVoiceConversation", useSQLite: true },
     },
     vectorize: {
       VECTORIZE: { dimensions: 1536, metric: "cosine", index_name: "kuralle-university-kb" },
@@ -162,6 +164,126 @@ describe("VoiceConversation worker runtime", () => {
     90_000,
   );
 });
+
+describe("TwilioVoiceConversation worker runtime", () => {
+  // Deterministic, no keys: the Twilio Media Streams front accepts a WS upgrade at /twilio
+  // through withVoice(Agent, { transport: "twilio" }) — the cf-agents telephony front bundles
+  // and boots in workerd.
+  it("accepts a Twilio Media Streams WebSocket upgrade at /twilio", async () => {
+    const script = await buildWorker();
+    const mf = newMiniflare(script, {});
+    try {
+      const response = await mf.dispatchFetch("http://localhost/twilio?sessionId=twilio-boot", {
+        headers: { Upgrade: "websocket" },
+      });
+      expect(response.status).toBe(101);
+      const ws = (response as unknown as Response & { webSocket?: WorkersWebSocket }).webSocket;
+      expect(ws).toBeTruthy();
+      ws!.accept();
+      ws!.close();
+    } finally {
+      await mf.dispose();
+    }
+  }, 20_000);
+
+  // Live: EMULATE A PSTN CALL — speak the Twilio Media Streams protocol (connected/start/media
+  // as base64 μ-law 8 kHz) at /twilio and assert the agent answers with non-silent μ-law media
+  // frames on the phone leg. No carrier, no phone number — the protocol is just a WebSocket.
+  it.skipIf(!liveTurnEnabled)(
+    "answers an emulated Twilio Media Streams call end-to-end in workerd",
+    async () => {
+      expect(existsSync(TURN_DETECTION_FIXTURE)).toBe(true);
+      const pcm16k = readWav16kMono(TURN_DETECTION_FIXTURE);
+      const pcm8k = downsampleTo8k(pcm16k);
+      const script = await buildWorker();
+      const mf = newMiniflare(script, liveEnv);
+      try {
+        const response = await mf.dispatchFetch("http://localhost/twilio?sessionId=twilio-live", {
+          headers: { Upgrade: "websocket" },
+        });
+        expect(response.status).toBe(101);
+        const ws = (response as unknown as Response & { webSocket?: WorkersWebSocket }).webSocket;
+        expect(ws).toBeTruthy();
+
+        let downlinkFrames = 0;
+        let downlinkPeak = 0;
+        let clearReceived = false;
+        ws!.addEventListener("message", (event) => {
+          const data = event.data as string | ArrayBuffer;
+          if (typeof data !== "string" || !data.startsWith("{")) return;
+          const msg = JSON.parse(data) as Record<string, unknown>;
+          if (msg.event === "media") {
+            downlinkFrames += 1;
+            const media = msg.media as { payload?: string } | undefined;
+            if (media?.payload) {
+              const pcm = decodeMuLawToPcm16(base64ToBytes(media.payload));
+              for (const s of pcm) downlinkPeak = Math.max(downlinkPeak, Math.abs(s));
+            }
+          } else if (msg.event === "clear") {
+            clearReceived = true;
+          }
+        });
+        ws!.accept();
+
+        const streamSid = "MZtwiliolivesmoke";
+        ws!.send(JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
+        ws!.send(JSON.stringify({
+          event: "start",
+          streamSid,
+          start: { streamSid, callSid: "CAtwiliolivesmoke", mediaFormat: { encoding: "audio/x-mulaw", sampleRate: 8000, channels: 1 } },
+        }));
+
+        const sendMulaw = (frame: Int16Array): void => {
+          ws!.send(JSON.stringify({
+            event: "media",
+            streamSid,
+            media: { payload: bytesToBase64(encodePcm16ToMuLaw(frame)) },
+          }));
+        };
+
+        const frameSamples8k = 160; // 20ms at 8 kHz
+        for (let offset = 0; offset < pcm8k.length; offset += frameSamples8k) {
+          const frame = new Int16Array(frameSamples8k);
+          frame.set(pcm8k.subarray(offset, Math.min(offset + frameSamples8k, pcm8k.length)));
+          sendMulaw(frame);
+          await sleep(20);
+        }
+
+        // Pad silence until the agent answers (Deepgram endpointing + kuralle + TTS).
+        const deadline = Date.now() + 60_000;
+        while (downlinkFrames === 0 && Date.now() < deadline) {
+          sendMulaw(new Int16Array(frameSamples8k));
+          await sleep(20);
+        }
+
+        ws!.send(JSON.stringify({ event: "stop", streamSid }));
+        ws!.close();
+
+        // eslint-disable-next-line no-console
+        console.log(`[twilio-live] downlink media frames=${downlinkFrames} peak=${downlinkPeak} clear=${clearReceived}`);
+        expect(downlinkFrames).toBeGreaterThan(0);
+        expect(downlinkPeak).toBeGreaterThan(100); // non-silent answer on the phone leg
+      } finally {
+        await mf.dispose();
+      }
+    },
+    120_000,
+  );
+});
+
+function downsampleTo8k(samples: Int16Array): Int16Array {
+  const out = new Int16Array(Math.floor(samples.length / 2));
+  for (let i = 0; i < out.length; i += 1) out[i] = samples[i * 2]!;
+  return out;
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  return new Uint8Array(Buffer.from(value, "base64"));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("base64");
+}
 
 function firstSessionError(messages: ReadonlyArray<string | ArrayBuffer>): string | null {
   for (const m of messages) {
