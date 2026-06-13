@@ -1,6 +1,10 @@
 # RFC: First-party Cloudflare deployment (browser + telephony)
 
-> **Status:** Draft · **Owner:** octalpixel · **Date:** 2026-06-13
+> **Status:** Implemented in **3.0.0** (2026-06-14) — W1–W6 + W8 shipped; live deploy verified
+> (browser `/ws` + Twilio `/twilio`). Remaining: telnyx-on-edge runner, an optional budgeted CI
+> latency gate, and `/ws` shared-secret auth. See `CHANGELOG.md` and issue #10. Deviations from
+> this plan (W2 mastra, W5 template, W6 reconnect) are recorded in the merged PRs.
+> **Owner:** octalpixel · **Date:** 2026-06-13
 > **Scope:** BOTH browser/edge voice AND telephony parity.
 > **Builds on:** `@kuralle-syrinx/cf-agents` (`withVoice(Agent)`, shipped on `feat/agents-with-voice`),
 > [`rfc-realtime-bridge.md`](./rfc-realtime-bridge.md), [`rfc-reasoner-bridge.md`](./rfc-reasoner-bridge.md),

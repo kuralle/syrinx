@@ -2,41 +2,75 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
-## Unreleased
+## 3.0.0 — 2026-06-14
+
+Breaking, multi-package. Cloudflare is promoted from a spike to a **first-party, documented
+runtime** — both Workers voice hosts are rebuilt onto the `agents` SDK via `withVoice(Agent)`,
+with telephony, a deploy template, and a how-to (#10). New shared `tts-core`, `epsilon`, and
+`cf-agents` packages. Realtime gains typed text input; edge barge-in truncates accurately.
+
+### Breaking
+- `server-workers`: both voice hosts are rebuilt onto `withVoice(Agent)` (the `cf-agents` mixin
+  over the Cloudflare `agents` SDK). The Durable Objects are now `agents` Agents — `agents` is a
+  new dependency. The session-assembly exports `createLiveVoiceAgentSession` /
+  `createRealtimeVoiceAgentSession` are **removed**; the pipeline is now a `withVoice` descriptor
+  (`liveCascadedPipeline` / `realtimeVoicePipeline` + reasoner factories). Deleted
+  `alarm-scheduler.ts`, `durable-session-store.ts`, the manual `webSocketMessage/Close/Error`
+  lifecycle, and the `1012` eviction-orphan path — the Agent's `keepAlive()` lease holds the
+  isolate for the call, so mid-call eviction (and its workaround) cannot occur. The
+  `/ws?sessionId=` URL scheme is unchanged.
+- `server-workers-mastra`: the hand-rolled `alarm-scheduler` is removed (run pointers now expire
+  lazily on read). The host stays a raw `DurableObject` — Mastra's own Cloudflare pattern.
+- `kuralle`: the dead `streamFromKuralle` export is removed (`fromKuralleRuntime` wraps it).
+- `gemini`: the TTS instruction lead-in defaults to **empty** (raw text). Deployments that want a
+  persona must set `instruction` (previously every utterance was silently wrapped).
 
 ### Added
-- `cf-agents`: new `@kuralle-syrinx/cf-agents` package — `withVoice(Agent, options)`, a mixin over the
-  Cloudflare `agents` SDK `Agent` that adds a Syrinx voice pipeline (realtime **or** cascaded). It
-  reuses the Agent's native hibernation, `keepAlive()` lease, `Connection`, and SQL rather than
-  reimplementing a Durable Object, and drives the published
-  `runVoiceEdgeWebSocketConnection(socket, request, …)` over each `Connection` wrapped as a
-  `ManagedSocket`. The reasoner defaults to `fromKuralleRuntime(this.runtime)` (the agent is the
-  brain) and can be overridden. `agents` is a `peerDependency` so the coupling is quarantined to
-  this package. See `examples/03-cf-agent-voice`.
+- `cf-agents`: new `@kuralle-syrinx/cf-agents` — `withVoice(Agent, options)`, a mixin over the
+  Cloudflare `agents` SDK `Agent` that adds a Syrinx voice pipeline (realtime **or** cascaded),
+  reusing the Agent's hibernation, `keepAlive()` lease, `Connection`, and SQL. `transport:
+  "edge" | "twilio"` selects the Syrinx browser/edge protocol or the Twilio Media Streams (μ-law
+  8 kHz) wire. The R2 `EdgeRecorder` ships at the `@kuralle-syrinx/cf-agents/r2-recorder`
+  subexport. The reasoner defaults to `fromKuralleRuntime(this.runtime)` and can be overridden.
+  `agents` is a `peerDependency`. See `examples/03-cf-agent-voice`.
+- `tts-core`: new shared streaming-TTS deep module; `cartesia`, `grok`, and `epsilon` are built on
+  it.
+- `epsilon`: new multiplexed WebSocket TTS provider package.
+- `realtime`: `RealtimeAdapter.sendText` — typed user turns on the realtime path, implemented for
+  OpenAI Realtime and Gemini Live; `RealtimeBridge` forwards `user.text_received` to it. Also:
+  front-level tool calls + full delegate-arg forwarding; `RealtimeBridgeOptions` is exported.
+- `server-websocket` (edge): an inbound `{type:"playout_progress"}` client message maps onto a
+  `tts.playout_progress` bus packet, so client-rendered-audio transports report true playout and
+  realtime barge-in truncates the model's turn to the actually-heard offset.
+- `server-workers`: a `TwilioVoiceConversation` telephony host (`/twilio`) and a `POST
+  /incoming-call` Twilio Voice webhook that returns `<Connect><Stream>` TwiML bridging the PSTN
+  leg to it.
+- Docs: a **[Deploy Syrinx on Cloudflare](docs/guides/deploy-on-cloudflare.md)** how-to; Cloudflare
+  is documented as a first-party runtime.
 
 ### Changed
-- `kuralle`: dropped the dead `streamFromKuralle` export from the package entry point. It had no
-  consumers — `fromKuralleRuntime` wraps it internally. The function itself is unchanged.
+- `realtime`: a shared `RealtimeEventStream` is extracted; the delegate query-arg name is
+  configurable (`RealtimeBridgeOptions.delegateQueryArg`, default `"query"`); the assistant
+  transcript now surfaces for delta-only providers (Gemini Live streams non-final fragments and
+  never a final) without double-counting providers that send a final (OpenAI).
+- `recorder`: runtime-agnostic WAV/stereo builders are extracted to the `/wav` subexport for
+  Workers hosts.
+- `browser-client`: codec negotiation no longer crashes when the socket drops mid-handshake — the
+  advisory `codec_capability` is skipped on a closed socket and re-sent on the next `ready` after
+  reconnect (the client already auto-reconnects with backoff + sessionId-resume).
 
 ### Fixed
-- `realtime`: the delegate Reasoner's query argument name is now configurable via
-  `RealtimeBridgeOptions.delegateQueryArg` (default `"query"`). A delegate `tool_call` whose
-  arguments lack a string query now emits a clear recoverable `llm.error` instead of silently
-  reasoning over an empty string.
-- `server-websocket` (edge): JSON `audio` frames are now resampled from the client's
-  `sampleRateHz` to the engine input rate and emit `turn.change` on contextId rotation — matching
-  the binary and Node paths. Previously a non-engine-rate JSON client got pitch/speed-corrupted
-  audio with no error.
+- `realtime`: a delegate `tool_call` whose arguments lack a string query now emits a clear
+  recoverable `llm.error` instead of silently reasoning over an empty string.
+- `server-websocket` (edge): JSON `audio` frames are resampled from the client's `sampleRateHz` to
+  the engine input rate and emit `turn.change` on contextId rotation — matching the binary and
+  Node paths (previously a non-engine-rate JSON client got pitch/speed-corrupted audio).
+- `server-websocket` (edge): the recording is finalized on an error-path disconnect, not only a
+  clean close (a Workers `webSocketError` with no matching close no longer loses the recording or
+  leaks the session lease).
 - `server-websocket` (telnyx): the final paced outbound frame retains its `contextId`, so the
-  playout clock counts it (was under-reporting played-out ms by one frame per burst and skewing
-  turn completion).
-- `server-workers`: a Durable Object woken from hibernation with no in-memory session now closes
-  the socket (`1012`) so the client reconnects within the resume window, instead of silently
-  dropping the frame and hanging the call.
-- `gemini`: the TTS instruction lead-in is now configurable via the `instruction` config key and
-  defaults to **empty** (the raw text is synthesized). Previously every utterance was silently
-  wrapped with a hardcoded `"…student-support phone voice…"` persona. **Behavior change:**
-  deployments that want a persona must now set `instruction`.
+  playout clock counts it (was under-reporting played-out ms by one frame per burst).
+- `tts-core`: a cancelled context no longer errors on connection loss.
 
 ## 2.1.1 — 2026-06-10
 
