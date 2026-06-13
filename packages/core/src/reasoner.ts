@@ -27,6 +27,12 @@ export interface ReasonerTurn {
   readonly userText: string;
   /** Full prior conversation context. The BRIDGE owns history (see §4.5). */
   readonly messages: readonly ReasonerMessage[];
+  /**
+   * The front-model delegate tool-call arguments that triggered this turn, verbatim — so a
+   * realtime front can pass structured context (e.g. `reply_language`) to the reasoner beyond
+   * the extracted `userText`. Absent for cascade STT turns.
+   */
+  readonly toolArgs?: Record<string, unknown>;
   /** Barge-in / supersede cancellation. */
   readonly signal: AbortSignal;
   /** Present only when resuming a previously-suspended run (step 3). */

@@ -505,6 +505,75 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("R-10: routes a non-delegate tool call to onFrontToolCall and injects its result (no error)", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "delegate not called" };
+      })(),
+    };
+    const frontCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      onFrontToolCall: (c) => {
+        frontCalls.push({ toolName: c.toolName, args: c.args });
+        return "acknowledged";
+      },
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "tool_call", toolId: "call_front", toolName: "wait_for_user", args: { reason: "hold music" } });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(frontCalls).toEqual([{ toolName: "wait_for_user", args: { reason: "hold music" } }]);
+    expect(adapter.injectedToolResults[0]).toEqual({ toolId: "call_front", text: "acknowledged" });
+    expect(errors).toEqual([]); // front tools must NOT abort the turn
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-11: forwards the full tool-call args to the Reasoner, not just the query", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    let receivedArgs: Record<string, unknown> | undefined;
+    const reasoner: Reasoner = {
+      stream: (turn) => {
+        receivedArgs = turn.toolArgs;
+        return (async function* () {
+          yield { type: "finish", reason: "stop", text: "ok" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge");
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_args",
+      toolName: "consult_knowledge",
+      args: { query: "What's the deadline?", reply_language: "si" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(receivedArgs).toEqual({ query: "What's the deadline?", reply_language: "si" });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("R-12: coalesces tiny audio deltas and never emits odd-length tts.audio", async () => {
     const adapter = new FakeRealtimeAdapter();
     const bridge = new RealtimeBridge(adapter);

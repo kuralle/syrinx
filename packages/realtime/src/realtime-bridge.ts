@@ -43,6 +43,17 @@ export interface RealtimeBridgeOptions {
    * Must match the argument name in the registered delegate tool's schema. Defaults to "query".
    */
   readonly delegateQueryArg?: string;
+  /**
+   * Handle a front-model tool call whose name is NOT the delegate tool — front-level tools like
+   * `wait_for_user`, `escalate_to_human`, or `finish_session` that must not hit the reasoner.
+   * Return the string to inject back to the front model as the tool result (default `""`). When
+   * omitted, a non-delegate tool call remains a recoverable error (the prior behavior).
+   */
+  readonly onFrontToolCall?: (call: {
+    readonly toolId: string;
+    readonly toolName: string;
+    readonly args: Record<string, unknown>;
+  }) => string | undefined | Promise<string | undefined>;
 }
 
 export class RealtimeBridge implements VoicePlugin {
@@ -133,17 +144,7 @@ export class RealtimeBridge implements VoicePlugin {
         }
         break;
       case "tool_call":
-        if (this.reasoner) {
-          if (ev.toolName !== this.delegateToolName) {
-            const cause = new Error(
-              `Unexpected tool call "${ev.toolName}" (expected "${this.delegateToolName}")`,
-            );
-            if (this.opts.debug) console.error("[realtime-bridge]", cause.message);
-            this.onError(bus, cause, true);
-            break;
-          }
-          await this.runDelegate(bus, ev);
-        }
+        await this.handleToolCall(bus, ev);
         break;
       case "response_done":
         this.onResponseDone(bus);
@@ -157,6 +158,42 @@ export class RealtimeBridge implements VoicePlugin {
       default:
         break;
     }
+  }
+
+  private async handleToolCall(
+    bus: PipelineBus,
+    ev: { toolId: string; toolName: string; args: Record<string, unknown> },
+  ): Promise<void> {
+    if (ev.toolName === this.delegateToolName) {
+      if (this.reasoner) await this.runDelegate(bus, ev);
+      return;
+    }
+    if (this.opts.onFrontToolCall) {
+      await this.handleFrontTool(bus, ev);
+      return;
+    }
+    // No front-tool handler: with a reasoner, an unexpected tool is a recoverable error
+    // (without one, tool calls are ignored, as before).
+    if (this.reasoner) {
+      const cause = new Error(`Unexpected tool call "${ev.toolName}" (expected "${this.delegateToolName}")`);
+      if (this.opts.debug) console.error("[realtime-bridge]", cause.message);
+      this.onError(bus, cause, true);
+    }
+  }
+
+  private async handleFrontTool(
+    bus: PipelineBus,
+    ev: { toolId: string; toolName: string; args: Record<string, unknown> },
+  ): Promise<void> {
+    if (!this.opts.onFrontToolCall) return;
+    let result: string;
+    try {
+      result = (await this.opts.onFrontToolCall({ toolId: ev.toolId, toolName: ev.toolName, args: ev.args })) ?? "";
+    } catch (err) {
+      this.onError(bus, err instanceof Error ? err : new Error(String(err)), true);
+      return;
+    }
+    this.adapter.injectToolResult(ev.toolId, result);
   }
 
   private async runDelegate(
@@ -194,6 +231,7 @@ export class RealtimeBridge implements VoicePlugin {
       const messages = this.opts.contextProvider?.() ?? [];
       for await (const part of this.reasoner!.stream({
         userText,
+        toolArgs: ev.args,
         messages,
         signal: this.inflight.signal,
       })) {
