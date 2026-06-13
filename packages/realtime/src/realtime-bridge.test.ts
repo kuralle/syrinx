@@ -66,6 +66,12 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
     this.sentAudio.push(pcm16);
   }
 
+  readonly sentText: string[] = [];
+
+  sendText(text: string): void {
+    this.sentText.push(text);
+  }
+
   readonly cancelCalls: number[] = [];
 
   cancelResponse(audioEndMs: number): void {
@@ -171,6 +177,36 @@ describe("RealtimeBridge", () => {
     expect(audio.every((frame) => frame.sampleRateHz === 16_000)).toBe(true);
     expect(audio.every((frame) => frameDurationMs(frame) <= 20)).toBe(true);
     expect(adapter.sentAudio.length).toBeGreaterThan(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("forwards a user.text_received turn to adapter.sendText (typed input), ignoring blank text", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    bus.push(Route.Main, {
+      kind: "user.text_received",
+      contextId: "transport-turn",
+      timestampMs: Date.now(),
+      text: "when is the late-add deadline?",
+    });
+    bus.push(Route.Main, {
+      kind: "user.text_received",
+      contextId: "transport-turn",
+      timestampMs: Date.now(),
+      text: "   ",
+    });
+
+    await waitForCondition(() => adapter.sentText.length > 0);
+    expect(adapter.sentText).toEqual(["when is the late-add deadline?"]);
 
     await bridge.close();
     bus.stop();
@@ -599,6 +635,60 @@ describe("RealtimeBridge", () => {
     await waitForCondition(() => dones.length === 1);
     expect(deltas.map((d) => d.text).join("")).toContain("The deadline is March 31.");
     expect(dones[0]!.text).toContain("The deadline is March 31.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("surfaces a delta-only assistant transcript (Gemini Live: no final transcript event)", async () => {
+    // Gemini Live streams the assistant transcript as non-final fragments and never emits a
+    // final transcript. The bridge must still surface the concatenated words as llm.delta/llm.done
+    // so client captions work — without double-counting providers (OpenAI) that DO send a final.
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const dones: LlmResponseDonePacket[] = [];
+    bus.on("llm.done", (pkt) => { dones.push(pkt as LlmResponseDonePacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The capital", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: " of France", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: " is", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: " Paris.", final: false });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => dones.length === 1);
+    expect(dones[0]!.text).toBe("The capital of France is Paris.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("prefers the final transcript over deltas (OpenAI: deltas + final, no double-count)", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const dones: LlmResponseDonePacket[] = [];
+    bus.on("llm.done", (pkt) => { dones.push(pkt as LlmResponseDonePacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "Let me ", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: "check that.", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: "Let me check that.", final: true });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => dones.length === 1);
+    expect(dones[0]!.text).toBe("Let me check that.");
 
     await bridge.close();
     bus.stop();

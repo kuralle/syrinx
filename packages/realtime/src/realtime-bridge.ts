@@ -16,6 +16,7 @@ import {
   type Reasoner,
   type ReasonerMessage,
   type UserAudioReceivedPacket,
+  type UserTextReceivedPacket,
   type SttResultPacket,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
@@ -60,7 +61,10 @@ export class RealtimeBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private contextId = "";
   private turnUserText = "";
+  /** Authoritative full assistant transcript(s) — providers that emit a final transcript (OpenAI). */
   private turnAssistantText = "";
+  /** Concatenated streamed transcript fragments — providers that emit deltas only, no final (Gemini Live). */
+  private turnAssistantDeltas = "";
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
   private playedMs = 0;
@@ -86,6 +90,9 @@ export class RealtimeBridge implements VoicePlugin {
           this.adapter.caps.inputSampleRateHz,
         );
         this.adapter.sendAudio(resampled);
+      }),
+      bus.on<UserTextReceivedPacket>("user.text_received", (pkt) => {
+        if (pkt.text.trim().length > 0) this.adapter.sendText?.(pkt.text);
       }),
       bus.on<TextToSpeechPlayoutProgressPacket>("tts.playout_progress", (pkt) => {
         if (pkt.contextId === this.contextId) this.playedMs = pkt.playedOutMs;
@@ -136,11 +143,15 @@ export class RealtimeBridge implements VoicePlugin {
         this.onAudio(bus, ev.pcm16, ev.sampleRateHz);
         break;
       case "transcript":
-        if (ev.final && ev.role === "user") this.onFinalTranscript(bus, ev.text);
-        else if (ev.final && ev.role === "assistant" && ev.text.trim()) {
+        if (ev.role === "user") {
+          if (ev.final) this.onFinalTranscript(bus, ev.text);
+        } else if (ev.final && ev.text.trim()) {
           this.turnAssistantText = this.turnAssistantText
             ? `${this.turnAssistantText} ${ev.text.trim()}`
             : ev.text.trim();
+        } else if (!ev.final && ev.text) {
+          // Streamed fragments already carry their own leading spaces — concatenate verbatim.
+          this.turnAssistantDeltas += ev.text;
         }
         break;
       case "tool_call":
@@ -299,6 +310,7 @@ export class RealtimeBridge implements VoicePlugin {
     this.contextId = crypto.randomUUID();
     this.turnUserText = "";
     this.turnAssistantText = "";
+    this.turnAssistantDeltas = "";
     this.playedMs = 0;
     this.audioRemainder = new Uint8Array(0);
     const packet: TurnChangePacket = {
@@ -360,18 +372,21 @@ export class RealtimeBridge implements VoicePlugin {
     };
     // Surface the assistant's spoken transcript as agent text so UIs (e.g. the studio) render it.
     // The realtime adapter already produced the audio directly; these packets are display-only.
-    if (this.turnAssistantText.trim()) {
+    // Prefer the authoritative final transcript (OpenAI); fall back to the streamed fragments for
+    // providers that only emit non-final deltas (Gemini Live).
+    const assistantText = this.turnAssistantText.trim() || this.turnAssistantDeltas.trim();
+    if (assistantText) {
       const delta: LlmDeltaPacket = {
         kind: "llm.delta",
         contextId: this.contextId,
         timestampMs,
-        text: this.turnAssistantText,
+        text: assistantText,
       };
       const done: LlmResponseDonePacket = {
         kind: "llm.done",
         contextId: this.contextId,
         timestampMs,
-        text: this.turnAssistantText,
+        text: assistantText,
       };
       bus.push(Route.Main, delta, done);
     }

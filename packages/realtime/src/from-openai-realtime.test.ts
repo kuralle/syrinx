@@ -155,6 +155,31 @@ describe("fromOpenAIRealtime", () => {
     expect(JSON.parse(mock.sent[5]!)).toEqual({ type: "response.create" });
   });
 
+  it("sends a typed user turn as conversation.item.create(input_text) + response.create", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    adapter.sendText!("when is the late-add deadline?");
+    expect(JSON.parse(mock.sent[1]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "when is the late-add deadline?" }],
+      },
+    });
+    expect(JSON.parse(mock.sent[2]!)).toEqual({ type: "response.create" });
+  });
+
   it("normalizes provider server events into RealtimeEvent", async () => {
     const mock = createMockSocketHarness();
     const adapter = fromOpenAIRealtime({

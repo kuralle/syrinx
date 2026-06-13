@@ -10,6 +10,7 @@ import { fromGeminiLive } from "./from-gemini-live.js";
 
 const sendRealtimeInput = vi.fn();
 const sendToolResponse = vi.fn();
+const sendClientContent = vi.fn();
 const closeSession = vi.fn();
 
 let onopen: (() => void) | null = null;
@@ -27,6 +28,7 @@ const liveConnect = vi.fn().mockImplementation(async ({ callbacks }: {
   return {
     sendRealtimeInput,
     sendToolResponse,
+    sendClientContent,
     close: closeSession,
   };
 });
@@ -41,6 +43,7 @@ vi.mock("@google/genai", () => ({
 afterEach(() => {
   sendRealtimeInput.mockClear();
   sendToolResponse.mockClear();
+  sendClientContent.mockClear();
   closeSession.mockClear();
   liveConnect.mockClear();
   onopen = null;
@@ -124,6 +127,17 @@ describe("fromGeminiLive", () => {
 
     adapter.cancelResponse(420);
     expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a typed user turn via sendClientContent with turnComplete", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key" });
+    await adapter.open(new AbortController().signal);
+
+    adapter.sendText!("when is the late-add deadline?");
+    expect(sendClientContent).toHaveBeenCalledWith({
+      turns: [{ role: "user", parts: [{ text: "when is the late-add deadline?" }] }],
+      turnComplete: true,
+    });
   });
 
   it("normalizes provider server messages into RealtimeEvent", async () => {
