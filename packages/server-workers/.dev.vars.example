@@ -1,0 +1,17 @@
+# Syrinx on Cloudflare Workers — local dev secrets.
+# Copy to `.dev.vars` for `wrangler dev`; for production use `wrangler secret put <NAME>`.
+# .dev.vars is gitignored — never commit real keys.
+
+# --- Cascaded host (wrangler.jsonc → VoiceConversation / TwilioVoiceConversation) ---
+# Deepgram Nova-3 STT + Deepgram Aura TTS.
+DEEPGRAM_API_KEY=
+
+# OpenAI (the kuralle reasoner's model).
+OPENAI_API_KEY=
+
+# --- Realtime host (wrangler.realtime.jsonc → RealtimeVoiceConversation) ---
+# Front model select: "openai" (default) or "gemini".
+# REALTIME_FRONT=openai
+# OPENAI_API_KEY is reused for the OpenAI realtime front.
+# GEMINI_API_KEY=            # required when REALTIME_FRONT=gemini
+# GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview

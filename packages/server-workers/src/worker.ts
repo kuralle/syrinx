@@ -53,6 +53,10 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/recordings") return await listRecordings(url, env);
+    // Twilio Voice webhook: returns TwiML that bridges the inbound PSTN call to this
+    // worker's own /twilio Media Streams endpoint over a bidirectional <Stream>. Point a
+    // Twilio number's "A call comes in" webhook at https://<host>/incoming-call.
+    if (url.pathname === "/incoming-call") return await twilioIncomingCallResponse(request, url);
     // Name-addressed routing: one DO per sessionId (callSid for telephony). The Agent
     // (partyserver) resolves its name from ctx.id.name, so a direct stub.fetch() upgrade
     // is valid for both transports.
@@ -66,6 +70,38 @@ export default {
     return await env.VOICE_CONVERSATIONS.get(id).fetch(request);
   },
 };
+
+/**
+ * Twilio Voice webhook → TwiML connecting the PSTN leg to /twilio over a bidirectional
+ * <Stream>. The Twilio CallSid becomes the session id, so the call's media stream and any
+ * resume/recording key off the same stable id.
+ */
+async function twilioIncomingCallResponse(request: Request, url: URL): Promise<Response> {
+  let callSid = url.searchParams.get("CallSid") ?? "";
+  if (!callSid && request.method === "POST") {
+    const form = await request.formData().catch(() => null);
+    const value = form?.get("CallSid");
+    if (typeof value === "string") callSid = value;
+  }
+  const sessionId = callSid || crypto.randomUUID();
+  const wsScheme = url.protocol === "https:" ? "wss" : "ws";
+  const streamUrl = `${wsScheme}://${url.host}/twilio?sessionId=${encodeURIComponent(sessionId)}`;
+  const twiml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<Response>",
+    "  <Connect>",
+    `    <Stream url="${xmlEscape(streamUrl)}" />`,
+    "  </Connect>",
+    "</Response>",
+  ].join("\n");
+  return new Response(twiml, { headers: { "content-type": "text/xml; charset=utf-8" } });
+}
+
+function xmlEscape(value: string): string {
+  return value.replace(/[<>&"']/g, (c) =>
+    ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c] ?? c,
+  );
+}
 
 /** List recorded objects for a session: GET /recordings?sessionId=<id>. */
 async function listRecordings(url: URL, env: Env): Promise<Response> {
