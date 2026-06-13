@@ -232,4 +232,12 @@ describe("TtsEngine — fallbacks and failures", () => {
     h.engine.onConnectionLost(new Error("dropped"));
     expect(h.errors().some((e) => e["contextId"] === "ctxG")).toBe(true);
   });
+
+  it("does not error a cancelled context when the connection then drops (barge-in race)", async () => {
+    const h = harness(new MultiplexProtocol());
+    await h.engine.onText("a", "ctxCancelled");
+    await h.engine.onInterrupt(); // cancel sent; key still tracked pending the provider ack
+    h.engine.onConnectionLost(new Error("dropped"));
+    expect(h.errors().some((e) => e["contextId"] === "ctxCancelled")).toBe(false);
+  });
 });

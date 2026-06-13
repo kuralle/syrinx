@@ -320,11 +320,17 @@ class TtsEngineImpl implements TtsEngine {
     this.contextKeys.clear();
     this.keyToContext.clear();
     this.carry.clear();
+    let emitted = 0;
     for (const contextId of contexts) {
       this.clearFinishTimeout(contextId);
+      // Don't surface an error for a context the caller deliberately cancelled (e.g. a
+      // barge-in) when the socket drops before the provider acks the cancel.
+      if (this.cancelledContexts.has(contextId)) continue;
       this.emitError(contextId, error);
+      emitted += 1;
     }
-    if (contexts.size === 0) this.emitError("", error);
+    this.cancelledContexts.clear();
+    if (emitted === 0 && contexts.size === 0) this.emitError("", error);
   }
 
   // ── timers ────────────────────────────────────────────────────────────────
