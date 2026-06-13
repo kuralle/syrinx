@@ -9,12 +9,12 @@
 
 import { Agent } from "agents";
 import { withVoice } from "@kuralle-syrinx/cf-agents";
+import { R2EdgeRecorder } from "@kuralle-syrinx/cf-agents/r2-recorder";
 import {
   createLiveReasoner,
   liveCascadedPipeline,
   type LiveSessionEnv,
 } from "./live-session.js";
-import { R2EdgeRecorder } from "./r2-recorder.js";
 
 export interface Env extends LiveSessionEnv {
   VOICE_CONVERSATIONS: DurableObjectNamespace;
