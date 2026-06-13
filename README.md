@@ -18,19 +18,27 @@ transport edge and hands the agent runtime a clean stream of mono PCM16 audio.
 
 ## Edge deployment (Cloudflare Workers)
 
-The `@kuralle-syrinx/server-workers` package runs the full engine — live Deepgram
-STT + OpenAI + Cartesia TTS — inside a Durable Object.
+The `@kuralle-syrinx/server-workers` package is the deployable template: it runs the
+full engine — live Deepgram STT + OpenAI + Deepgram Aura TTS — on
+`withVoice(Agent)` (the `@kuralle-syrinx/cf-agents` mixin over the Cloudflare `agents`
+SDK), one hibernatable Durable Object per session. The Agent provides hibernation, the
+`keepAlive()` lease, and SQLite natively — no hand-rolled schedulers or session stores.
 
 ```
 pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy
-# set DEEPGRAM_API_KEY / OPENAI_API_KEY / CARTESIA_API_KEY via `wrangler secret put`
+# set DEEPGRAM_API_KEY / OPENAI_API_KEY via `wrangler secret put` (see .dev.vars.example)
 ```
 
-Endpoints: `wss://<worker>/ws?sessionId=<id>` (voice), `GET /health`,
-`GET /recordings?sessionId=<id>` (lists R2 recordings). Bind an R2 bucket as
-`RECORDINGS` to capture, per call, a stereo `conversation.wav` (user left /
+Endpoints: `wss://<worker>/ws?sessionId=<id>` (browser/edge voice),
+`wss://<worker>/twilio?sessionId=<callSid>` (Twilio Media Streams phone leg),
+`POST /incoming-call` (Twilio Voice webhook → `<Connect><Stream>` TwiML),
+`GET /health`, `GET /recordings?sessionId=<id>` (lists R2 recordings). Bind an R2
+bucket as `RECORDINGS` to capture, per call, a stereo `conversation.wav` (user left /
 assistant right, time-aligned) plus `user.wav` / `assistant.wav` stems and a
 `manifest.json`.
+
+Full walkthrough — bindings, secrets, browser + phone, local verify:
+**[Deploy Syrinx on Cloudflare](docs/guides/deploy-on-cloudflare.md)**.
 
 ## Guides
 

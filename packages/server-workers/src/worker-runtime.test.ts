@@ -186,6 +186,28 @@ describe("TwilioVoiceConversation worker runtime", () => {
     }
   }, 20_000);
 
+  // Deterministic: the Twilio Voice webhook returns TwiML that bridges the call to /twilio.
+  it("returns <Connect><Stream> TwiML from /incoming-call pointing at /twilio", async () => {
+    const script = await buildWorker();
+    const mf = newMiniflare(script, {});
+    try {
+      const res = await mf.dispatchFetch("http://localhost/incoming-call", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA0123456789abcdef&From=%2B15551234567",
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/xml");
+      const twiml = await res.text();
+      expect(twiml).toContain("<Connect>");
+      expect(twiml).toContain("<Stream");
+      // The Twilio CallSid becomes the /twilio sessionId.
+      expect(twiml).toContain("/twilio?sessionId=CA0123456789abcdef");
+    } finally {
+      await mf.dispose();
+    }
+  }, 20_000);
+
   // Live: EMULATE A PSTN CALL — speak the Twilio Media Streams protocol (connected/start/media
   // as base64 μ-law 8 kHz) at /twilio and assert the agent answers with non-silent μ-law media
   // frames on the phone leg. No carrier, no phone number — the protocol is just a WebSocket.
