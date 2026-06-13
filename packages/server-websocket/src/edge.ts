@@ -207,7 +207,12 @@ export async function runVoiceEdgeWebSocketConnection(
     }
   });
 
-  socket.onClose(() => {
+  // Tear down on EITHER a clean close or an error-path disconnect, exactly once (guarded by
+  // `closed`). On Cloudflare Workers a DO webSocketError surfaces here as onError with no
+  // matching onClose, so finalize/release must also run on the error path — otherwise the
+  // in-memory recording is lost and the session lease never releases.
+  const teardownConnection = (): void => {
+    if (closed) return;
     closed = true;
     for (const dispose of disposers.splice(0)) dispose();
     if (state.managed) {
@@ -219,7 +224,9 @@ export async function runVoiceEdgeWebSocketConnection(
         options.recorder.finalize({ sessionId: state.managed?.id ?? "unknown", closedAtMs: Date.now() }),
       ).catch(() => undefined);
     }
-  });
+  };
+  socket.onClose(teardownConnection);
+  socket.onError(teardownConnection);
 
   try {
     const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(request) ?? sessionIdFn(request));

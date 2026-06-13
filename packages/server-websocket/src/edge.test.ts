@@ -13,7 +13,7 @@ import {
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 import type { ManagedSocket, SocketData } from "@kuralle-syrinx/ws";
 import { InMemorySessionStore } from "./session-store.js";
-import { runVoiceEdgeWebSocketConnection } from "./edge.js";
+import { runVoiceEdgeWebSocketConnection, type EdgeRecorder } from "./edge.js";
 
 const KEEP_ALIVE_KEY = "voice.edge.keep_alive";
 
@@ -39,6 +39,7 @@ class FakeSocket implements ManagedSocket {
   readonly sent: SocketData[] = [];
   #onMessage?: (data: SocketData, isBinary: boolean) => void;
   #onClose?: (code: number, reason: string) => void;
+  #onError?: (err: Error) => void;
   get isOpenValue(): boolean {
     return this.isOpen;
   }
@@ -61,9 +62,14 @@ class FakeSocket implements ManagedSocket {
   onClose(handler: (code: number, reason: string) => void): void {
     this.#onClose = handler;
   }
-  onError(): void {}
+  onError(handler: (err: Error) => void): void {
+    this.#onError = handler;
+  }
   emit(data: SocketData, isBinary = false): void {
     this.#onMessage?.(data, isBinary);
+  }
+  emitError(err: Error = new Error("socket error")): void {
+    this.#onError?.(err);
   }
   json(): Array<Record<string, unknown>> {
     return this.sent
@@ -296,6 +302,57 @@ describe("edge inbound JSON audio (sample-rate handling)", () => {
     expect(audio[0]!.audio.byteLength).toBeGreaterThan(pcm8k.byteLength * 1.5);
     // BUG: JSON path never emitted turn.change on contextId rotation (text/binary branches do).
     expect(turns.some((t) => t.contextId === "json-turn")).toBe(true);
+  });
+});
+
+describe("edge recorder finalize on disconnect", () => {
+  function fakeRecorder() {
+    const calls: Array<{ sessionId: string; closedAtMs: number }> = [];
+    const rec: EdgeRecorder = {
+      onUserAudio() {},
+      onAssistantAudio() {},
+      finalize(meta) {
+        calls.push(meta);
+      },
+    };
+    return { rec, calls };
+  }
+
+  it("finalizes the recording on an error-path disconnect, not just a clean close", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const { rec, calls } = fakeRecorder();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => fakeSession(),
+      recorder: rec,
+    });
+    waitForReady(socket);
+
+    socket.emitError(new Error("abnormal disconnect")); // error path, no clean onClose
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toHaveLength(1); // recording must still be finalized
+  });
+
+  it("finalizes exactly once when both an error and a close fire", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const { rec, calls } = fakeRecorder();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => fakeSession(),
+      recorder: rec,
+    });
+    waitForReady(socket);
+
+    socket.emitError(new Error("drop"));
+    socket.dispose(); // fires onClose
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toHaveLength(1); // idempotent teardown — not twice
   });
 });
 
