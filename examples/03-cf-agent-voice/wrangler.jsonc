@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syrinx-cf-agent-voice-example",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "RealtimeVoiceAgent", "class_name": "RealtimeVoiceAgent" },
+      { "name": "CascadedVoiceAgent", "class_name": "CascadedVoiceAgent" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RealtimeVoiceAgent", "CascadedVoiceAgent"]
+    }
+  ]
+}

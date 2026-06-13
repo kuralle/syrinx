@@ -1,0 +1,46 @@
+{
+  "name": "@kuralle-syrinx/cf-agents",
+  "version": "2.1.1",
+  "private": false,
+  "type": "module",
+  "license": "MIT",
+  "description": "withVoice(Agent) — add a Syrinx realtime or cascaded voice pipeline to a Cloudflare agents SDK Agent",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kuralle-syrinx/core": "workspace:*",
+    "@kuralle-syrinx/realtime": "workspace:*",
+    "@kuralle-syrinx/aisdk": "workspace:*",
+    "@kuralle-syrinx/kuralle": "workspace:*",
+    "@kuralle-syrinx/server-websocket": "workspace:*",
+    "@kuralle-syrinx/ws": "workspace:*"
+  },
+  "peerDependencies": {
+    "agents": ">=0.14.0 <1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260601.0",
+    "agents": "0.14.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "kuralle",
+    "syrinx",
+    "voice",
+    "cloudflare",
+    "agents",
+    "durable-objects",
+    "realtime",
+    "cascaded",
+    "stt",
+    "tts"
+  ]
+}

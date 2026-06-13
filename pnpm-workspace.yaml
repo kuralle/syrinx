@@ -10,6 +10,7 @@ packageExtensions:
 
 allowBuilds:
   "@google/genai": true
+  core-js-pure: false
   esbuild: true
   onnxruntime-node: true
   protobufjs: true

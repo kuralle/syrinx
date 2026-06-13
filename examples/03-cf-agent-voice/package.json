@@ -1,0 +1,27 @@
+{
+  "name": "@kuralle-syrinx-example/03-cf-agent-voice",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dry-run": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@kuralle-syrinx/cf-agents": "workspace:*",
+    "@kuralle-syrinx/realtime": "workspace:*",
+    "@kuralle-syrinx/aisdk": "workspace:*",
+    "@kuralle-syrinx/deepgram": "workspace:*",
+    "@kuralle-syrinx/cartesia": "workspace:*",
+    "@kuralle-syrinx/ws": "workspace:*",
+    "@ai-sdk/openai": "^3.0.67",
+    "agents": "0.14.0",
+    "ai": "^6.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260601.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.19.0"
+  }
+}

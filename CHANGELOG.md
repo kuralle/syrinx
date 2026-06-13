@@ -4,6 +4,16 @@ All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
 ## Unreleased
 
+### Added
+- `cf-agents`: new `@kuralle-syrinx/cf-agents` package — `withVoice(Agent, options)`, a mixin over the
+  Cloudflare `agents` SDK `Agent` that adds a Syrinx voice pipeline (realtime **or** cascaded). It
+  reuses the Agent's native hibernation, `keepAlive()` lease, `Connection`, and SQL rather than
+  reimplementing a Durable Object, and drives the published
+  `runVoiceEdgeWebSocketConnection(socket, request, …)` over each `Connection` wrapped as a
+  `ManagedSocket`. The reasoner defaults to `fromKuralleRuntime(this.runtime)` (the agent is the
+  brain) and can be overridden. `agents` is a `peerDependency` so the coupling is quarantined to
+  this package. See `examples/03-cf-agent-voice`.
+
 ### Changed
 - `kuralle`: dropped the dead `streamFromKuralle` export from the package entry point. It had no
   consumers — `fromKuralleRuntime` wraps it internally. The function itself is unchanged.
