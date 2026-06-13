@@ -20,7 +20,7 @@ import {
 } from "@kuralle-syrinx/core";
 import type { SocketData } from "@kuralle-syrinx/ws";
 
-import type { AttributionKey, PacketSink, TimerHandle, TimerPort, Transport, WireProtocol } from "./types.js";
+import type { AttributionKey, PacketSink, TimerHandle, TimerPort, Transport, WireEvent, WireProtocol } from "./types.js";
 
 const EMPTY = new Uint8Array(0);
 
@@ -112,13 +112,17 @@ class TtsEngineImpl implements TtsEngine {
   }
 
   onMessage(data: SocketData, isBinary: boolean): void {
-    let event;
+    let events: readonly WireEvent[];
     try {
-      event = this.deps.protocol.decode(data, isBinary);
+      events = this.deps.protocol.decode(data, isBinary);
     } catch (err) {
       this.failAll(err instanceof Error ? err : new Error(String(err)));
       return;
     }
+    for (const event of events) this.dispatch(event);
+  }
+
+  private dispatch(event: WireEvent): void {
     switch (event.type) {
       case "audio":
         this.handleAudio(event.key, event.pcm);
@@ -126,12 +130,14 @@ class TtsEngineImpl implements TtsEngine {
       case "utterance_end":
         this.handleUtteranceEnd(event.key);
         return;
+      case "context_end":
+        this.handleContextEnd(event.key);
+        return;
       case "cancelled":
-        this.cancelledKeys.delete(event.key);
-        this.untrack(event.key);
+        this.handleCancelled(event.key);
         return;
       case "error":
-        this.handleError(event.key, event.error);
+        this.handleError(event.key, event.error, event.endsContext ?? false);
         return;
       case "sideband": {
         const contextId = this.keyToContext.get(event.key);
@@ -206,20 +212,66 @@ class TtsEngineImpl implements TtsEngine {
     this.carry.set(key, evenLen < buf.byteLength ? buf.subarray(evenLen) : EMPTY);
   }
 
+  // One attribution unit finished. The context ends only when all its units are done AND
+  // `tts.done` has been seen (the refcount/multiplex model, e.g. epsilon).
   private handleUtteranceEnd(key: AttributionKey): void {
     const contextId = this.keyToContext.get(key);
     this.cancelledKeys.delete(key);
     this.untrack(key);
-    if (contextId === undefined || this.cancelledContexts.has(contextId)) return;
+    if (contextId === undefined) return;
+    if (this.cancelledContexts.has(contextId)) {
+      this.clearCancelledIfDrained(contextId);
+      return;
+    }
     this.tryEmitEnd(contextId);
   }
 
-  private handleError(key: AttributionKey | null, error: Error): void {
+  // The provider declared the whole context complete — end now, regardless of `tts.done`
+  // (the single-stream model: cartesia `done:true`, grok `audio.done`).
+  private handleContextEnd(key: AttributionKey): void {
+    const contextId = this.keyToContext.get(key);
+    this.cancelledKeys.delete(key);
+    this.untrack(key);
+    if (contextId === undefined) return;
+    if (this.cancelledContexts.has(contextId)) {
+      this.clearCancelledIfDrained(contextId);
+      return;
+    }
+    this.pendingEnd.delete(contextId);
+    this.clearFinishTimeout(contextId);
+    this.emitEnd(contextId);
+  }
+
+  private handleCancelled(key: AttributionKey): void {
+    const contextId = this.keyToContext.get(key);
+    this.cancelledKeys.delete(key);
+    this.untrack(key);
+    if (contextId !== undefined && this.cancelledContexts.has(contextId)) this.clearCancelledIfDrained(contextId);
+  }
+
+  private handleError(key: AttributionKey | null, error: Error, endsContext: boolean): void {
     const contextId = key !== null ? this.keyToContext.get(key) : undefined;
     if (key !== null) this.untrack(key);
-    if (contextId !== undefined && this.cancelledContexts.has(contextId)) return;
+    if (contextId !== undefined && this.cancelledContexts.has(contextId)) {
+      this.clearCancelledIfDrained(contextId);
+      return;
+    }
     this.emitError(contextId ?? "", error);
-    if (contextId !== undefined) this.tryEmitEnd(contextId);
+    if (contextId === undefined) return;
+    if (endsContext) {
+      // The provider coupled the error with a terminal `done` → end the context now,
+      // using the contextId captured before untrack.
+      this.pendingEnd.delete(contextId);
+      this.clearFinishTimeout(contextId);
+      this.emitEnd(contextId);
+    } else {
+      this.tryEmitEnd(contextId);
+    }
+  }
+
+  /** Once a cancelled context fully drains, drop the cancelled flag so the id can be reused. */
+  private clearCancelledIfDrained(contextId: string): void {
+    if (!this.hasActiveKeys(contextId)) this.cancelledContexts.delete(contextId);
   }
 
   // ── bookkeeping ───────────────────────────────────────────────────────────
@@ -280,6 +332,7 @@ class TtsEngineImpl implements TtsEngine {
       this.clearFinishTimeout(contextId);
       this.emitError(contextId, error);
     }
+    if (contexts.size === 0) this.emitError("", error);
   }
 
   // ── timers ────────────────────────────────────────────────────────────────

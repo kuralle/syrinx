@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
+    "@kuralle-syrinx/tts-core": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*"
   },
   "devDependencies": {

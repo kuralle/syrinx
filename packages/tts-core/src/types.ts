@@ -20,12 +20,29 @@ export function attributionKey(value: string): AttributionKey {
   return value as AttributionKey;
 }
 
-/** Decoded result of one inbound provider frame. Exactly one variant. */
+/**
+ * Decoded result of one inbound provider frame — a list, because a single frame can carry
+ * several aspects (e.g. cartesia ships audio + word-timestamps + a done flag together).
+ *
+ * `utterance_end` vs `context_end` is the one real semantic split between providers:
+ * - `utterance_end` — one attribution unit finished; the context ends only once every unit
+ *   is done AND the engine has seen `tts.done` (the multiplexed/refcount model, e.g. epsilon).
+ * - `context_end` — the provider declares the whole context complete; emit `tts.end` now,
+ *   regardless of `tts.done` (the single-stream model, e.g. cartesia `done:true`, grok `audio.done`).
+ */
 export type WireEvent =
   | { readonly type: "audio"; readonly key: AttributionKey; readonly pcm: Uint8Array }
   | { readonly type: "utterance_end"; readonly key: AttributionKey }
+  | { readonly type: "context_end"; readonly key: AttributionKey }
   | { readonly type: "cancelled"; readonly key: AttributionKey }
-  | { readonly type: "error"; readonly key: AttributionKey | null; readonly error: Error }
+  | {
+      readonly type: "error";
+      readonly key: AttributionKey | null;
+      readonly error: Error;
+      /** When true, this error is also the context's terminal signal → emit `tts.end` too
+       *  (e.g. cartesia's `{type:"error", done:true}`). Default false: report the error only. */
+      readonly endsContext?: boolean;
+    }
   | {
       readonly type: "sideband";
       readonly key: AttributionKey;
@@ -49,8 +66,8 @@ export interface WireProtocol {
   encodeCancel(key: AttributionKey, contextId: string): readonly SocketData[];
   /** Optional session-teardown frame(s) sent best-effort on close (e.g. `{type:"eos"}`). */
   encodeClose(): readonly SocketData[];
-  /** Decode one inbound socket frame into a domain event. Throwing is treated as fatal. */
-  decode(data: SocketData, isBinary: boolean): WireEvent;
+  /** Decode one inbound socket frame into domain events (0+). Throwing is treated as fatal. */
+  decode(data: SocketData, isBinary: boolean): readonly WireEvent[];
 }
 
 /** DRIVEN PORT — transport. Production wraps a `WebSocketConnection`; tests pass a fake. */

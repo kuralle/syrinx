@@ -45,7 +45,7 @@ class SingleProtocol implements WireProtocol {
   encodeClose(): SocketData[] {
     return [];
   }
-  decode(data: SocketData): WireEvent {
+  decode(data: SocketData): WireEvent[] {
     return decodeTestFrame(data, SESSION);
   }
 }
@@ -70,35 +70,40 @@ class MultiplexProtocol implements WireProtocol {
   encodeClose(): SocketData[] {
     return [JSON.stringify({ op: "eos" })];
   }
-  decode(data: SocketData): WireEvent {
+  decode(data: SocketData): WireEvent[] {
     return decodeTestFrame(data, null);
   }
 }
 
-function decodeTestFrame(data: SocketData, fixedKey: AttributionKey | null): WireEvent {
+function decodeTestFrame(data: SocketData, fixedKey: AttributionKey | null): WireEvent[] {
   const m = JSON.parse(data as string) as { t?: string; key?: string; pcm?: number[]; msg?: string };
   const key = (m.key !== undefined ? attributionKey(m.key) : fixedKey) ?? SESSION;
   switch (m.t) {
     case "audio":
-      return { type: "audio", key, pcm: Uint8Array.from(m.pcm ?? []) };
+      return [{ type: "audio", key, pcm: Uint8Array.from(m.pcm ?? []) }];
     case "done":
-      return { type: "utterance_end", key };
+      return [{ type: "utterance_end", key }];
+    case "end":
+      return [{ type: "context_end", key }];
     case "err":
-      return { type: "error", key: m.key !== undefined ? key : null, error: new Error(m.msg ?? "err") };
+      return [{ type: "error", key: m.key !== undefined ? key : null, error: new Error(m.msg ?? "err") }];
     case "boom":
       throw new Error("decode failure");
     default:
-      return { type: "ignore" };
+      return [];
   }
 }
 
-function harness(protocol: WireProtocol, finishTimeoutMs = 2000) {
+function harness(protocol: WireProtocol, finishTimeoutMs = 2000, opts: { sendThrows?: boolean } = {}) {
   const sent: SocketData[] = [];
   const pushed: Array<{ route: Route; packet: Record<string, unknown> }> = [];
   const timer = new FakeTimer();
   const transport: Transport = {
     ensureReady: async () => {},
-    send: (frame) => sent.push(frame),
+    send: (frame) => {
+      if (opts.sendThrows) throw new Error("WebSocket is not open");
+      sent.push(frame);
+    },
     close: async () => {},
   };
   const engine = createTtsEngine({
@@ -139,6 +144,13 @@ describe("TtsEngine — single-context (grok-shape)", () => {
     expect(h.ends()).toHaveLength(0); // still streaming
     h.engine.onMessage(JSON.stringify({ t: "done", key: "session" }), false);
     expect(h.ends()).toHaveLength(1);
+  });
+
+  it("emits tts.end immediately on a provider context_end, with no prior tts.done", async () => {
+    const h = harness(new SingleProtocol());
+    await h.engine.onText("a", "ctxCE");
+    h.engine.onMessage(JSON.stringify({ t: "end", key: "session" }), false);
+    expect(h.ends()).toHaveLength(1); // single-stream providers end on the provider's own done signal
   });
 
   it("drops audio after interrupt and sends the cancel frame", async () => {
@@ -204,6 +216,14 @@ describe("TtsEngine — fallbacks and failures", () => {
     await h.engine.onText("a", "ctxF");
     h.engine.onMessage(JSON.stringify({ t: "boom" }), false);
     expect(h.errors().some((e) => e["contextId"] === "ctxF")).toBe(true);
+  });
+
+  it("emits tts.error and does not leave the context active when a send fails", async () => {
+    const h = harness(new SingleProtocol(), 2000, { sendThrows: true });
+    await h.engine.onText("a", "ctxSend");
+    expect(h.errors().some((e) => e["contextId"] === "ctxSend")).toBe(true); // send failure → typed error
+    await h.engine.onDone("ctxSend");
+    expect(h.ends().some((e) => e["contextId"] === "ctxSend")).toBe(true); // context drained, turn ends (no hang)
   });
 
   it("fails active contexts on connection loss", async () => {

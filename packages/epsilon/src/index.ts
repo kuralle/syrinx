@@ -68,25 +68,26 @@ class EpsilonWireProtocol implements WireProtocol {
     return [JSON.stringify({ type: "eos" })];
   }
 
-  decode(data: SocketData, isBinary: boolean): WireEvent {
+  decode(data: SocketData, isBinary: boolean): WireEvent[] {
     if (isBinary && typeof data !== "string") {
       // Throws on truncated frames → the engine treats decode failures as fatal.
       const { requestId, pcm } = parseEpsilonBinaryFrame(data);
-      return { type: "audio", key: attributionKey(requestId), pcm };
+      return [{ type: "audio", key: attributionKey(requestId), pcm }];
     }
-    if (typeof data !== "string") return { type: "ignore" };
+    if (typeof data !== "string") return [];
     const msg = JSON.parse(data) as Record<string, unknown>;
     const requestId = typeof msg["request_id"] === "string" ? msg["request_id"] : "";
     const key = requestId ? attributionKey(requestId) : null;
     switch (typeof msg["type"] === "string" ? msg["type"] : "") {
       case "done":
-        return key ? { type: "utterance_end", key } : { type: "ignore" };
+        // One request finished; the context ends when all its requests are done (refcount).
+        return key ? [{ type: "utterance_end", key }] : [];
       case "cancelled":
-        return key ? { type: "cancelled", key } : { type: "ignore" };
+        return key ? [{ type: "cancelled", key }] : [];
       case "error":
-        return { type: "error", key, error: epsilonProviderError(msg) };
+        return [{ type: "error", key, error: epsilonProviderError(msg) }];
       default:
-        return { type: "ignore" };
+        return [];
     }
   }
 }

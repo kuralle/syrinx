@@ -356,6 +356,9 @@ importers:
       '@kuralle-syrinx/core':
         specifier: workspace:*
         version: link:../core
+      '@kuralle-syrinx/tts-core':
+        specifier: workspace:*
+        version: link:../tts-core
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../ws
