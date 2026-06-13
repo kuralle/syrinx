@@ -647,6 +647,9 @@ importers:
       '@kuralle-syrinx/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@kuralle-syrinx/recorder':
+        specifier: workspace:*
+        version: link:../recorder
       '@kuralle-syrinx/server-websocket':
         specifier: workspace:*
         version: link:../server-websocket

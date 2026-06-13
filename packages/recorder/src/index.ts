@@ -14,6 +14,11 @@ import {
   type VoicePacket,
   type VoicePlugin,
 } from "@kuralle-syrinx/core";
+import { interleaveStereoPcm16, pcm16ToWav } from "./wav.js";
+
+// Re-export the runtime-agnostic builders so Workers hosts can `@kuralle-syrinx/recorder/wav`
+// (no node:fs) without reaching through this Node-only entry point.
+export { interleaveStereoPcm16, pcm16ToWav } from "./wav.js";
 
 export interface VoiceSessionRecorderConfig {
   readonly outputDir: string;
@@ -352,9 +357,9 @@ export class VoiceSessionRecorder implements VoicePlugin {
     const resampled = assistantRate !== userRate
       ? resampleLinear(assistantPcm, assistantRate, userRate)
       : assistantPcm;
-    const stereo = interleaveInt16(userPcm, resampled);
+    const stereo = interleaveStereoPcm16(userPcm, resampled);
     this.conversationAudioBytes = stereo.byteLength;
-    await writeFile(this.conversationAudioPath, buildWav(stereo, 2, userRate));
+    await writeFile(this.conversationAudioPath, pcm16ToWav(stereo, userRate, 2));
   }
 
   private async writeManifest(): Promise<void> {
@@ -791,38 +796,3 @@ function resampleLinear(src: Buffer, srcRate: number, dstRate: number): Buffer {
   return dst;
 }
 
-function interleaveInt16(left: Buffer, right: Buffer): Buffer {
-  const leftSamples = left.byteLength >> 1;
-  const rightSamples = right.byteLength >> 1;
-  const maxSamples = Math.max(leftSamples, rightSamples);
-  if (maxSamples === 0) return Buffer.alloc(0);
-  const out = Buffer.alloc(maxSamples * 4);
-  for (let i = 0; i < maxSamples; i++) {
-    const l = i < leftSamples ? left.readInt16LE(i * 2) : 0;
-    const r = i < rightSamples ? right.readInt16LE(i * 2) : 0;
-    out.writeInt16LE(l, i * 4);
-    out.writeInt16LE(r, i * 4 + 2);
-  }
-  return out;
-}
-
-function buildWav(pcm: Buffer, channels: number, sampleRateHz: number): Buffer {
-  const bitsPerSample = 16;
-  const blockAlign = channels * (bitsPerSample >> 3);
-  const byteRate = sampleRateHz * blockAlign;
-  const header = Buffer.allocUnsafe(44);
-  header.write("RIFF", 0, "ascii");
-  header.writeUInt32LE(36 + pcm.byteLength, 4);
-  header.write("WAVE", 8, "ascii");
-  header.write("fmt ", 12, "ascii");
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(channels, 22);
-  header.writeUInt32LE(sampleRateHz, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  header.write("data", 36, "ascii");
-  header.writeUInt32LE(pcm.byteLength, 40);
-  return Buffer.concat([header, pcm]);
-}

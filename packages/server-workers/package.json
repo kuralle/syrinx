@@ -27,6 +27,7 @@
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/cartesia": "workspace:*",
     "@kuralle-syrinx/realtime": "workspace:*",
+    "@kuralle-syrinx/recorder": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*",
     "ai": "^6.0.0",
     "zod": "^4.1.8"

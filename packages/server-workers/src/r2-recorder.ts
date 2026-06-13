@@ -13,6 +13,7 @@
 // piece. Buffered (memory-capped) and flushed once on finalize, off the hot path.
 
 import type { EdgeRecorder } from "@kuralle-syrinx/server-websocket/edge";
+import { interleaveStereoPcm16, pcm16ToWav } from "@kuralle-syrinx/recorder/wav";
 
 export interface R2EdgeRecorderOptions {
   readonly bucket: R2Bucket;
@@ -79,7 +80,7 @@ export class R2EdgeRecorder implements EdgeRecorder {
       this.#assistant.sampleRateHz === rate
         ? assistantRaw
         : resamplePcm16(assistantRaw, this.#assistant.sampleRateHz, rate);
-    const conversation = interleaveStereo(userPcm, assistantPcm);
+    const conversation = interleaveStereoPcm16(userPcm, assistantPcm);
 
     const manifest = {
       schemaVersion: 1 as const,
@@ -155,22 +156,6 @@ function gapFill(buf: StreamBuffer): Uint8Array {
   return out;
 }
 
-/** Interleave two mono PCM16 streams into stereo (left, right); pad the short one. */
-function interleaveStereo(left: Uint8Array, right: Uint8Array): Uint8Array {
-  const leftSamples = left.byteLength >> 1;
-  const rightSamples = right.byteLength >> 1;
-  const frames = Math.max(leftSamples, rightSamples);
-  const out = new Uint8Array(frames * 4);
-  const lv = new DataView(left.buffer, left.byteOffset, left.byteLength);
-  const rv = new DataView(right.buffer, right.byteOffset, right.byteLength);
-  const ov = new DataView(out.buffer);
-  for (let i = 0; i < frames; i += 1) {
-    ov.setInt16(i * 4, i < leftSamples ? lv.getInt16(i * 2, true) : 0, true);
-    ov.setInt16(i * 4 + 2, i < rightSamples ? rv.getInt16(i * 2, true) : 0, true);
-  }
-  return out;
-}
-
 function resamplePcm16(pcm: Uint8Array, fromHz: number, toHz: number): Uint8Array {
   if (fromHz === toHz || pcm.byteLength === 0) return pcm;
   const src = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
@@ -190,29 +175,3 @@ function resamplePcm16(pcm: Uint8Array, fromHz: number, toHz: number): Uint8Arra
   return out;
 }
 
-/** Wrap raw PCM16 little-endian bytes in a canonical 44-byte WAV header. */
-function pcm16ToWav(pcm: Uint8Array, sampleRateHz: number, channels: number): Uint8Array {
-  const blockAlign = channels * 2; // 16-bit
-  const byteRate = sampleRateHz * blockAlign;
-  const out = new Uint8Array(44 + pcm.byteLength);
-  const view = new DataView(out.buffer);
-  writeAscii(view, 0, "RIFF");
-  view.setUint32(4, 36 + pcm.byteLength, true);
-  writeAscii(view, 8, "WAVE");
-  writeAscii(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRateHz, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeAscii(view, 36, "data");
-  view.setUint32(40, pcm.byteLength, true);
-  out.set(pcm, 44);
-  return out;
-}
-
-function writeAscii(view: DataView, offset: number, text: string): void {
-  for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-}
