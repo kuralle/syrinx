@@ -2,6 +2,18 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## Unreleased
+
+### Changed
+- `kuralle`: dropped the dead `streamFromKuralle` export from the package entry point. It had no
+  consumers — `fromKuralleRuntime` wraps it internally. The function itself is unchanged.
+
+### Fixed
+- `realtime`: the delegate Reasoner's query argument name is now configurable via
+  `RealtimeBridgeOptions.delegateQueryArg` (default `"query"`). A delegate `tool_call` whose
+  arguments lack a string query now emits a clear recoverable `llm.error` instead of silently
+  reasoning over an empty string.
+
 ## 2.1.1 — 2026-06-10
 
 ### Fixed

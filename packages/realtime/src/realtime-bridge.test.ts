@@ -426,6 +426,45 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("R-08: delegate tool_call missing the query argument emits recoverable error, never calls reasoner", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    let reasonerCalled = false;
+    const reasoner: Reasoner = {
+      stream: () => {
+        reasonerCalled = true;
+        return (async function* () {
+          yield { type: "finish", reason: "stop", text: "should not run" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge");
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const errors: LlmErrorPacket[] = [];
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_noarg",
+      toolName: "consult_knowledge",
+      args: { question: "wrong arg name" },
+    });
+
+    await waitForCondition(() => errors.length === 1);
+    expect(errors[0]!.isRecoverable).toBe(true);
+    expect(errors[0]!.cause.message).toContain("query");
+    expect(reasonerCalled).toBe(false);
+    expect(adapter.injectedToolResults).toHaveLength(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("R-09: contextProvider messages are passed to reasoner.stream", async () => {
     const adapter = new FakeRealtimeAdapter();
     const prior: ReasonerMessage[] = [

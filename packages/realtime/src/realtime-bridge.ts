@@ -38,6 +38,11 @@ export interface RealtimeBridgeOptions {
    * stateless — each tool call receives only the query extracted from the front-model tool args.
    */
   readonly contextProvider?: () => readonly ReasonerMessage[];
+  /**
+   * Name of the front-model tool argument that carries the user's query for the delegate Reasoner.
+   * Must match the argument name in the registered delegate tool's schema. Defaults to "query".
+   */
+  readonly delegateQueryArg?: string;
 }
 
 export class RealtimeBridge implements VoicePlugin {
@@ -170,13 +175,25 @@ export class RealtimeBridge implements VoicePlugin {
     };
     bus.push(Route.Main, toolCall);
 
+    const queryArg = this.opts.delegateQueryArg ?? "query";
+    const rawQuery = ev.args[queryArg];
+    const userText = typeof rawQuery === "string" ? rawQuery : "";
+    if (userText.trim().length === 0) {
+      this.onError(
+        bus,
+        new Error(`delegate tool "${ev.toolName}" called without a string "${queryArg}" argument`),
+        true,
+      );
+      return;
+    }
+
     this.inflight = new AbortController();
     let answer = "";
 
     try {
       const messages = this.opts.contextProvider?.() ?? [];
       for await (const part of this.reasoner!.stream({
-        userText: String(ev.args["query"] ?? ""),
+        userText,
         messages,
         signal: this.inflight.signal,
       })) {
