@@ -709,6 +709,9 @@ importers:
       '@kuralle-syrinx/cartesia':
         specifier: workspace:*
         version: link:../cartesia
+      '@kuralle-syrinx/cf-agents':
+        specifier: workspace:*
+        version: link:../cf-agents
       '@kuralle-syrinx/core':
         specifier: workspace:*
         version: link:../core
@@ -730,6 +733,9 @@ importers:
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../ws
+      agents:
+        specifier: 0.14.0
+        version: 0.14.0(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/workers-types@4.20260603.1)(ai@6.0.191(zod@4.4.3))(chat@4.30.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3))(react@19.2.7)(rolldown@1.1.1)(zod@4.4.3)
       ai:
         specifier: ^6.0.0
         version: 6.0.191(zod@4.4.3)
