@@ -8,6 +8,8 @@ import {
   VoiceAgentSession,
   type EndOfSpeechPacket,
   type InterruptTtsPacket,
+  type LlmDeltaPacket,
+  type LlmResponseDonePacket,
   type LlmErrorPacket,
   type LlmToolResultPacket,
   type Reasoner,
@@ -568,6 +570,35 @@ describe("RealtimeBridge", () => {
 
     await waitForCondition(() => adapter.injectedToolResults.length === 1);
     expect(receivedArgs).toEqual({ query: "What's the deadline?", reply_language: "si" });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("R-13: surfaces the assistant transcript as llm.delta/llm.done (client captions data)", async () => {
+    // Regression guard for #6: a realtime turn's assistant words must reach the bus as
+    // llm.delta/llm.done — VoiceAgentSession turns those into agent_text_delta/agent_finished,
+    // which the edge protocol forwards to the client as agent_chunk/agent_end.
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    const dones: LlmResponseDonePacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+    bus.on("llm.done", (pkt) => { dones.push(pkt as LlmResponseDonePacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The deadline is March 31.", final: true });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => dones.length === 1);
+    expect(deltas.map((d) => d.text).join("")).toContain("The deadline is March 31.");
+    expect(dones[0]!.text).toContain("The deadline is March 31.");
 
     await bridge.close();
     bus.stop();
