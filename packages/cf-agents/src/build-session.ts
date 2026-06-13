@@ -51,6 +51,12 @@ export interface CascadedPipeline<Env> {
    * "smart_turn" when supplying an `eos` stage.
    */
   readonly endpointingOwner?: "provider_stt" | "smart_turn";
+  /**
+   * Fallback timeout (ms) before the engine force-finalizes a turn when the STT provider's own
+   * endpointing/finalize never fires. Maps to `VoiceAgentSession`'s `sttForceFinalizeTimeoutMs`
+   * (engine default 7000). Set it when a provider-endpointed cascade tunes this (e.g. Deepgram at 3500).
+   */
+  readonly sttForceFinalizeTimeoutMs?: number;
 }
 
 export type VoicePipeline<Env> = RealtimePipeline<Env> | CascadedPipeline<Env>;
@@ -107,6 +113,9 @@ export function buildVoiceSession<Env>(
   const session = new VoiceAgentSession({
     plugins,
     endpointingOwner: pipeline.endpointingOwner ?? "provider_stt",
+    ...(pipeline.sttForceFinalizeTimeoutMs !== undefined
+      ? { sttForceFinalizeTimeoutMs: pipeline.sttForceFinalizeTimeoutMs }
+      : {}),
   });
   session.registerPlugin("stt", stt.plugin);
   session.registerPlugin("bridge", new ReasoningBridge(reasoner));
