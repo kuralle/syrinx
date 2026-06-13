@@ -13,6 +13,20 @@ All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
   `RealtimeBridgeOptions.delegateQueryArg` (default `"query"`). A delegate `tool_call` whose
   arguments lack a string query now emits a clear recoverable `llm.error` instead of silently
   reasoning over an empty string.
+- `server-websocket` (edge): JSON `audio` frames are now resampled from the client's
+  `sampleRateHz` to the engine input rate and emit `turn.change` on contextId rotation — matching
+  the binary and Node paths. Previously a non-engine-rate JSON client got pitch/speed-corrupted
+  audio with no error.
+- `server-websocket` (telnyx): the final paced outbound frame retains its `contextId`, so the
+  playout clock counts it (was under-reporting played-out ms by one frame per burst and skewing
+  turn completion).
+- `server-workers`: a Durable Object woken from hibernation with no in-memory session now closes
+  the socket (`1012`) so the client reconnects within the resume window, instead of silently
+  dropping the frame and hanging the call.
+- `gemini`: the TTS instruction lead-in is now configurable via the `instruction` config key and
+  defaults to **empty** (the raw text is synthesized). Previously every utterance was silently
+  wrapped with a hardcoded `"…student-support phone voice…"` persona. **Behavior change:**
+  deployments that want a persona must now set `instruction`.
 
 ## 2.1.1 — 2026-06-10
 
