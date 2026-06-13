@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 //
-// Live VoiceAgentSession for the Cloudflare Workers Durable Object: real
-// Deepgram STT + kuralle (Vectorize RAG) + Deepgram Aura TTS, all dialed over
-// the Workers fetch-upgrade socket (createWorkersSocket) so no Node `ws` is pulled
-// into the edge bundle. Turn-taking is owned by Deepgram endpointing
-// (endpointingOwner: "provider_stt"), so no Silero VAD / Smart Turn ONNX is
-// needed on the hot path.
+// Cascaded voice pipeline for the Cloudflare Workers host: real Deepgram STT
+// (nova-3, provider-endpointed) + kuralle (Vectorize RAG) Reasoner + Deepgram
+// Aura TTS, all dialed over the Workers fetch-upgrade socket (createWorkersSocket)
+// so no Node `ws` is pulled into the edge bundle. Turn-taking is owned by Deepgram
+// endpointing (endpointingOwner: "provider_stt"), so no Silero VAD / Smart Turn
+// ONNX is needed on the hot path.
+//
+// This is the pipeline/brain layer — the host (worker.ts) composes it via
+// `withVoice(Agent)`; this module owns the plugin slots and the reasoner, not the
+// connection lifecycle.
 
-import { VoiceAgentSession } from "@kuralle-syrinx/core";
-import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
+import type { Reasoner } from "@kuralle-syrinx/core";
+import type { CascadedPipeline, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
 import type { VectorizeIndex } from "@cloudflare/workers-types";
@@ -22,60 +26,55 @@ export interface LiveSessionEnv {
   readonly VECTORIZE: VectorizeIndex;
 }
 
-export interface LiveSessionOptions {
-  readonly sessionId?: string;
-  readonly inputSampleRateHz?: number;
-  readonly outputSampleRateHz?: number;
-}
-
 const DEFAULT_DEEPGRAM_TTS_MODEL = "aura-2-thalia-en";
+const INPUT_SAMPLE_RATE_HZ = 16000;
+const OUTPUT_SAMPLE_RATE_HZ = 16000;
 
 /** True when every provider secret needed for a live turn is present. */
 export function hasLiveSessionCredentials(env: LiveSessionEnv): boolean {
   return Boolean(env.DEEPGRAM_API_KEY?.trim() && env.OPENAI_API_KEY?.trim() && env.VECTORIZE);
 }
 
-export async function createLiveVoiceAgentSession(
-  env: LiveSessionEnv,
-  options: LiveSessionOptions = {},
-): Promise<VoiceAgentSession> {
-  const deepgramKey = requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM_API_KEY");
+/**
+ * Cascaded pipeline descriptor consumed by `withVoice(Agent)`. Deepgram Nova-3 STT
+ * (provider-endpointed, VAD events for barge-in) → kuralle Reasoner → Deepgram Aura
+ * TTS. `sttForceFinalizeTimeoutMs: 3500` keeps the engine's force-finalize tighter
+ * than the 7000ms default for the provider-endpointed cascade.
+ */
+export const liveCascadedPipeline: CascadedPipeline<LiveSessionEnv> = {
+  kind: "cascaded",
+  stt: (env) => ({
+    plugin: new DeepgramSTTPlugin(createWorkersSocket),
+    config: {
+      api_key: requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM_API_KEY"),
+      sample_rate: INPUT_SAMPLE_RATE_HZ,
+      model: "nova-3",
+      language: "en-US",
+      endpointing: 300,
+      provider_finalize_timeout_ms: 2500,
+      finalize_timeout_fallback: true,
+      // No local VAD on the edge: Deepgram SpeechStarted is the barge-in
+      // speech-start signal (vad.speech_started producer).
+      vad_events: true,
+    },
+  }),
+  tts: (env) => ({
+    plugin: new DeepgramTTSPlugin(createWorkersSocket),
+    config: {
+      api_key: requireKey(env.DEEPGRAM_API_KEY, "DEEPGRAM_API_KEY"),
+      model: DEFAULT_DEEPGRAM_TTS_MODEL,
+      sample_rate: OUTPUT_SAMPLE_RATE_HZ,
+    },
+  }),
+  endpointingOwner: "provider_stt",
+  sttForceFinalizeTimeoutMs: 3500,
+};
+
+/** The brain: a kuralle Vectorize-backed Reasoner, keyed by the session id. */
+export async function createLiveReasoner(env: LiveSessionEnv, ctx: VoicePipelineContext): Promise<Reasoner> {
   requireKey(env.OPENAI_API_KEY, "OPENAI_API_KEY");
   if (!env.VECTORIZE) throw new Error("VECTORIZE binding is required to start a live voice session");
-  const sessionId = options.sessionId?.trim() || crypto.randomUUID();
-  const inputSampleRateHz = options.inputSampleRateHz ?? 16000;
-  const outputSampleRateHz = options.outputSampleRateHz ?? 16000;
-
-  const session = new VoiceAgentSession({
-    plugins: {
-      stt: {
-        api_key: deepgramKey,
-        sample_rate: inputSampleRateHz,
-        model: "nova-3",
-        language: "en-US",
-        endpointing: 300,
-        provider_finalize_timeout_ms: 2500,
-        finalize_timeout_fallback: true,
-        // No local VAD on the edge: Deepgram SpeechStarted is the barge-in
-        // speech-start signal (vad.speech_started producer).
-        vad_events: true,
-      },
-      bridge: {},
-      tts: {
-        api_key: deepgramKey,
-        model: DEFAULT_DEEPGRAM_TTS_MODEL,
-        sample_rate: outputSampleRateHz,
-      },
-    },
-    sttForceFinalizeTimeoutMs: 3500,
-    endpointingOwner: "provider_stt",
-  });
-
-  const reasoner = await createRealtimeKuralleReasoner(env, { sessionId });
-  session.registerPlugin("stt", new DeepgramSTTPlugin(createWorkersSocket));
-  session.registerPlugin("bridge", new ReasoningBridge(reasoner));
-  session.registerPlugin("tts", new DeepgramTTSPlugin(createWorkersSocket));
-  return session;
+  return createRealtimeKuralleReasoner(env, { sessionId: ctx.sessionId });
 }
 
 function requireKey(value: string | undefined, name: string): string {

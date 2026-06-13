@@ -3,48 +3,53 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { VoiceAgentSession } from "@kuralle-syrinx/core";
-import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
+import { describe, expect, it } from "vitest";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 
 import {
-  createLiveVoiceAgentSession,
+  createLiveReasoner,
   hasLiveSessionCredentials,
+  liveCascadedPipeline,
 } from "./live-session.js";
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 const mockVectorize = {} as import("@cloudflare/workers-types").VectorizeIndex;
+const ctx = { sessionId: "s1" };
 
-describe("createLiveVoiceAgentSession", () => {
-  it("registers stt, kuralle bridge, and Deepgram TTS plugins", async () => {
-    const registerSpy = vi.spyOn(VoiceAgentSession.prototype, "registerPlugin");
-    const session = await createLiveVoiceAgentSession({
-      DEEPGRAM_API_KEY: "dg-key",
-      OPENAI_API_KEY: "oa-key",
-      VECTORIZE: mockVectorize,
-    });
-    expect(session).toBeInstanceOf(VoiceAgentSession);
-    expect(registerSpy).toHaveBeenCalledWith("stt", expect.any(DeepgramSTTPlugin));
-    expect(registerSpy).toHaveBeenCalledWith("bridge", expect.any(ReasoningBridge));
-    expect(registerSpy).toHaveBeenCalledWith("tts", expect.any(DeepgramTTSPlugin));
-    registerSpy.mockRestore();
+describe("liveCascadedPipeline", () => {
+  it("is a provider-endpointed cascade with a tightened force-finalize timeout", () => {
+    expect(liveCascadedPipeline.kind).toBe("cascaded");
+    expect(liveCascadedPipeline.endpointingOwner).toBe("provider_stt");
+    expect(liveCascadedPipeline.sttForceFinalizeTimeoutMs).toBe(3500);
   });
 
-  it("requires DEEPGRAM_API_KEY, OPENAI_API_KEY, and VECTORIZE", async () => {
-    await expect(createLiveVoiceAgentSession({
-      OPENAI_API_KEY: "k",
-      VECTORIZE: mockVectorize,
-    })).rejects.toThrow(/DEEPGRAM_API_KEY/);
-    await expect(createLiveVoiceAgentSession({
-      DEEPGRAM_API_KEY: "k",
-      VECTORIZE: mockVectorize,
-    })).rejects.toThrow(/OPENAI_API_KEY/);
-    await expect(createLiveVoiceAgentSession({
-      DEEPGRAM_API_KEY: "k",
-      OPENAI_API_KEY: "k",
-      VECTORIZE: undefined as unknown as typeof mockVectorize,
-    })).rejects.toThrow(/VECTORIZE/);
+  it("builds Deepgram Nova-3 STT (VAD events) and Aura TTS stages from the env", () => {
+    const env = { DEEPGRAM_API_KEY: "dg-key", OPENAI_API_KEY: "oa-key", VECTORIZE: mockVectorize };
+    const stt = liveCascadedPipeline.stt(env, ctx);
+    expect(stt.plugin).toBeInstanceOf(DeepgramSTTPlugin);
+    expect(stt.config).toMatchObject({ model: "nova-3", endpointing: 300, vad_events: true, api_key: "dg-key" });
+
+    const tts = liveCascadedPipeline.tts(env, ctx);
+    expect(tts.plugin).toBeInstanceOf(DeepgramTTSPlugin);
+    expect(tts.config).toMatchObject({ model: "aura-2-thalia-en", api_key: "dg-key" });
+  });
+
+  it("requires DEEPGRAM_API_KEY to build the stt/tts stages", () => {
+    const env = { OPENAI_API_KEY: "k", VECTORIZE: mockVectorize };
+    expect(() => liveCascadedPipeline.stt(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
+    expect(() => liveCascadedPipeline.tts(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
+  });
+});
+
+describe("createLiveReasoner", () => {
+  it("requires OPENAI_API_KEY and VECTORIZE", async () => {
+    await expect(createLiveReasoner({ VECTORIZE: mockVectorize }, ctx)).rejects.toThrow(/OPENAI_API_KEY/);
+    await expect(
+      createLiveReasoner(
+        { OPENAI_API_KEY: "k", VECTORIZE: undefined as unknown as typeof mockVectorize },
+        ctx,
+      ),
+    ).rejects.toThrow(/VECTORIZE/);
   });
 
   it("reports credential presence via hasLiveSessionCredentials", () => {

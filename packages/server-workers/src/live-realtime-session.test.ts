@@ -3,34 +3,40 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
-import { VoiceAgentSession } from "@kuralle-syrinx/core";
-import { RealtimeBridge } from "@kuralle-syrinx/realtime";
+import { describe, expect, it } from "vitest";
 
 import {
-  createRealtimeVoiceAgentSession,
   hasRealtimeSessionCredentials,
+  realtimeVoicePipeline,
   resolveRealtimeFront,
 } from "./live-realtime-session.js";
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 
 const mockVectorize = {} as import("@cloudflare/workers-types").VectorizeIndex;
+const ctx = { sessionId: "s1" };
 
-describe("createRealtimeVoiceAgentSession", () => {
-  it("registers the realtime plugin with RealtimeBridge", async () => {
-    const registerSpy = vi.spyOn(VoiceAgentSession.prototype, "registerPlugin");
-    const session = await createRealtimeVoiceAgentSession({
-      OPENAI_API_KEY: "test-key",
-      VECTORIZE: mockVectorize,
-    });
-    expect(session).toBeInstanceOf(VoiceAgentSession);
-    expect(registerSpy).toHaveBeenCalledWith("realtime", expect.any(RealtimeBridge));
-    registerSpy.mockRestore();
+describe("realtimeVoicePipeline", () => {
+  it("is a realtime pipeline routed through the ask_university delegate tool", () => {
+    expect(realtimeVoicePipeline.kind).toBe("realtime");
+    expect(realtimeVoicePipeline.delegateToolName).toBe("ask_university");
   });
 
-  it("requires OPENAI_API_KEY", async () => {
-    await expect(createRealtimeVoiceAgentSession({ VECTORIZE: mockVectorize })).rejects.toThrow(/OPENAI_API_KEY/);
+  it("builds an OpenAI front by default and a Gemini front when REALTIME_FRONT=gemini", () => {
+    const openai = realtimeVoicePipeline.front({ OPENAI_API_KEY: "k", VECTORIZE: mockVectorize }, ctx);
+    expect(openai).toBeTruthy();
+    const gemini = realtimeVoicePipeline.front(
+      { REALTIME_FRONT: "gemini", GEMINI_API_KEY: "g", VECTORIZE: mockVectorize },
+      ctx,
+    );
+    expect(gemini).toBeTruthy();
+  });
+
+  it("requires the front model's key (OPENAI_API_KEY default; GEMINI_API_KEY for gemini)", () => {
+    expect(() => realtimeVoicePipeline.front({ VECTORIZE: mockVectorize }, ctx)).toThrow(/OPENAI_API_KEY/);
+    expect(() =>
+      realtimeVoicePipeline.front({ REALTIME_FRONT: "gemini", VECTORIZE: mockVectorize }, ctx),
+    ).toThrow(/GEMINI_API_KEY/);
   });
 
   it("reports credential presence via hasRealtimeSessionCredentials", () => {
@@ -45,13 +51,6 @@ describe("createRealtimeVoiceAgentSession", () => {
       REALTIME_FRONT: "gemini",
       VECTORIZE: mockVectorize,
     })).toBe(false);
-  });
-
-  it("requires GEMINI_API_KEY when REALTIME_FRONT=gemini", async () => {
-    await expect(createRealtimeVoiceAgentSession({
-      REALTIME_FRONT: "gemini",
-      VECTORIZE: mockVectorize,
-    })).rejects.toThrow(/GEMINI_API_KEY/);
   });
 
   it("defaults REALTIME_FRONT to openai", () => {
