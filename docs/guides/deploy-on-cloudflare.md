@@ -49,10 +49,10 @@ wrangler secret put OPENAI_API_KEY
 ## 4. Deploy
 
 ```
-pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy --no-cache
+pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy
 ```
 
-> `--no-cache`: the build cache can ship stale source and give a false "fixed" signal.
+Deploys to `https://<worker-name>.<account>.workers.dev` and applies the DO migrations.
 
 ## 5. Endpoints
 
@@ -99,3 +99,22 @@ pnpm --filter @kuralle-syrinx/server-workers test:live
 
 `test:live` emulates a phone call by speaking the Twilio Media Streams protocol at
 `/twilio` — so you can prove the phone leg end-to-end without a carrier or a number.
+
+## 9. Verify the live deployment (cold/warm v2v + phone)
+
+Against the deployed worker (`SYRINX_CF_CASCADE_URL`), from `examples/02-hello-voice-headless`:
+
+```
+SYRINX_CF_CASCADE_URL=https://<worker>.<account>.workers.dev \
+  pnpm tsx scripts/run-cascade-cf-smoke.ts     # browser /ws — first-audio (v2v) latency
+SYRINX_CF_CASCADE_URL=https://<worker>.<account>.workers.dev \
+  pnpm tsx scripts/run-twilio-cf-smoke.ts      # phone /twilio — Media Streams + barge-in
+```
+
+Observed on the reference deployment (cascaded Deepgram + kuralle RAG + Aura):
+first-audio v2v ≈ **4.2 s cold**, **~1.6 s warm**; the Twilio leg returns non-silent
+μ-law and honors barge-in (`clear`). The cascade+RAG path runs above the ~800 ms–1 s
+aspirational v2v target — realtime fronts (Gemini Live / gpt-realtime, via
+`wrangler.realtime.jsonc`) are the low-latency path. These smokes are the on-demand
+latency guard; they hit paid providers, so run them deliberately rather than on every CI
+push.
