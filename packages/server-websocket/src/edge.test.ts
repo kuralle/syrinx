@@ -246,6 +246,59 @@ describe("edge inbound binary audio envelopes", () => {
   });
 });
 
+describe("edge inbound JSON audio (sample-rate handling)", () => {
+  function sessionCapturing(
+    audio: UserAudioReceivedPacket[],
+    turns: Array<{ contextId: string; previousContextId?: string }>,
+  ): VoiceAgentSession {
+    const bus = new PipelineBusImpl();
+    bus.on("user.audio_received", (p) => {
+      audio.push(p as UserAudioReceivedPacket);
+    });
+    bus.on("turn.change", (p) => {
+      turns.push(p as { contextId: string; previousContextId?: string });
+    });
+    return {
+      bus,
+      async start() {
+        void bus.start();
+      },
+      async close() {
+        bus.stop();
+      },
+      on() {},
+      off() {},
+      requestClientInterrupt() {},
+    } as unknown as VoiceAgentSession;
+  }
+
+  it("resamples JSON audio from the client sampleRateHz to the engine input rate", async () => {
+    const audio: UserAudioReceivedPacket[] = [];
+    const turns: Array<{ contextId: string; previousContextId?: string }> = [];
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => sessionCapturing(audio, turns),
+    });
+    waitForReady(socket);
+
+    // 8 kHz mono PCM16 → engine default 16 kHz: sample count (and byte length) should ~double.
+    const pcm8k = pcm16SamplesToBytes(new Int16Array(80).fill(1000));
+    socket.emit(
+      JSON.stringify({ type: "audio", audio: Buffer.from(pcm8k).toString("base64"), sampleRateHz: 8000, contextId: "json-turn" }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(audio).toHaveLength(1);
+    // BUG: JSON path pushed raw 8 kHz bytes unchanged instead of resampling to 16 kHz.
+    expect(audio[0]!.audio.byteLength).toBeGreaterThan(pcm8k.byteLength * 1.5);
+    // BUG: JSON path never emitted turn.change on contextId rotation (text/binary branches do).
+    expect(turns.some((t) => t.contextId === "json-turn")).toBe(true);
+  });
+});
+
 describe("edge barge-in downlink", () => {
   it("sends audio_clear and agent_interrupted when an interrupt is detected", async () => {
     const socket = new FakeSocket();

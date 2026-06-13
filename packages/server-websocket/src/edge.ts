@@ -478,12 +478,23 @@ function handleClientMessage(
     return nextContextId;
   }
   const nextContextId = message.contextId ?? currentContextId;
+  if (nextContextId !== currentContextId) {
+    session.bus.push(Route.Main, {
+      kind: "turn.change",
+      contextId: nextContextId,
+      previousContextId: currentContextId,
+      reason: "websocket_audio_turn",
+      timestampMs: Date.now(),
+    });
+  }
+  rememberContextSampleRate(contextSampleRates, nextContextId, message.sampleRateHz);
   rememberInputSequence(session, inputSequence, nextContextId, message.sequence);
+  const audio = resampleAudioBytes(decodeBase64(message.audio), message.sampleRateHz, inputSampleRateHz, streamingResamplers);
   session.bus.push(Route.Main, {
     kind: "user.audio_received",
     contextId: nextContextId,
     timestampMs: Date.now(),
-    audio: decodeBase64(message.audio),
+    audio,
   } satisfies UserAudioReceivedPacket);
   return nextContextId;
 }
