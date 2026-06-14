@@ -65,9 +65,11 @@ export class SupportVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<E
 
 | Option | Description |
 | --- | --- |
-| `pipeline` | `{ kind: "realtime", front, delegateToolName? }` or `{ kind: "cascaded", stt, tts, vad?, eos?, endpointingOwner? }`. |
+| `transport` | `"edge"` (default — Syrinx browser/edge protocol over `/ws`) or `"twilio"` (Twilio Media Streams, μ-law 8 kHz, for a PSTN leg). One transport per Agent class. |
+| `pipeline` | `{ kind: "realtime", front, delegateToolName? }` or `{ kind: "cascaded", stt, tts, vad?, eos?, endpointingOwner?, sttForceFinalizeTimeoutMs? }`. |
 | `reasoner` | `(env, { sessionId }) => Reasoner`. Defaults to `fromKuralleRuntime(this.runtime)` when the Agent exposes a kuralle `runtime`. Required for cascaded agents without one. |
-| `recorder` | `(env, { sessionId }) => EdgeRecorder \| undefined` — optional per-call recorder (e.g. R2). |
+| `recorder` | `(env, { sessionId }) => EdgeRecorder \| undefined` — optional per-call recorder (e.g. the R2 recorder at `@kuralle-syrinx/cf-agents/r2-recorder`). Edge transport. |
+| `onToolCallStart` | `(ctx: { toolName, args, sessionId, connection }) => void \| Promise<void>` — fired the instant the front model invokes the delegate tool, **before** the reasoner runs. The seam for a deterministic latency-masking preamble / "thinking" earcon: `ctx.connection.send(...)` to trigger a cached client-side cue. A throwing callback never affects the call. |
 | `inputSampleRateHz` / `outputSampleRateHz` | Edge audio rates (default 16000). |
 | `resumeWindowMs` | How long a dropped connection can resume its session. |
 | `sessionId` | `(request, agentName) => string`. Defaults to the `?sessionId=` query param (so a reconnecting client can resume), else a per-connection random id. (Not the Agent name — concurrent connections to one instance must not share a session.) |

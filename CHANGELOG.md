@@ -2,7 +2,7 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
-## Unreleased
+## 3.1.0 — 2026-06-14
 
 ### Added
 - `cf-agents`: `withVoice` gains an `onToolCallStart?(ctx)` hook (`ctx = { toolName, args, sessionId,
