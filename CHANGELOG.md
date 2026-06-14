@@ -2,6 +2,16 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## Unreleased
+
+### Added
+- `cf-agents`: `withVoice` gains an `onToolCallStart?(ctx)` hook (`ctx = { toolName, args, sessionId,
+  connection }`), fired the instant the front model invokes the delegate tool — **before** the
+  reasoner runs. Lets a consumer emit a deterministic, in-language preamble or a "thinking" earcon
+  that masks the 2–6 s reasoner wait (e.g. `connection.send(...)` to trigger a cached client-side
+  earcon), instead of relying on the realtime front LLM to remember to speak one. A throwing app
+  callback never affects the call. Exported `ToolCallStartContext`. (#21)
+
 ## 3.0.0 — 2026-06-14
 
 Breaking, multi-package. Cloudflare is promoted from a spike to a **first-party, documented

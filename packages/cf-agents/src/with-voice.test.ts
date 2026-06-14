@@ -8,8 +8,46 @@
 import { describe, it, expect, vi } from "vitest";
 import type { PipelineBus, Reasoner, UserAudioReceivedPacket, VoicePlugin } from "@kuralle-syrinx/core";
 import { encodePcm16ToMuLaw } from "@kuralle-syrinx/core/audio";
-import { withVoice } from "./with-voice.js";
+import type { RealtimeAdapter, RealtimeEvent } from "@kuralle-syrinx/realtime";
+import { withVoice, type ToolCallStartContext } from "./with-voice.js";
 import type { VoicePipeline } from "./build-session.js";
+
+/** Controllable fake realtime front — `emit()` pushes provider events into the bridge. */
+class FakeFront implements RealtimeAdapter {
+  readonly caps = {
+    inputSampleRateHz: 24_000,
+    outputSampleRateHz: 24_000,
+    supportsConcurrentToolAudio: true,
+    supportsTruncate: true,
+    emitsServerSpeechStarted: true,
+  } as const;
+  #queued: RealtimeEvent[] = [];
+  #waiters: Array<(e: RealtimeEvent | null) => void> = [];
+  #closed = false;
+  readonly events: AsyncIterable<RealtimeEvent> = {
+    [Symbol.asyncIterator]: () => ({
+      next: async (): Promise<IteratorResult<RealtimeEvent>> => {
+        if (this.#queued.length) return { value: this.#queued.shift()!, done: false };
+        if (this.#closed) return { value: undefined, done: true };
+        const e = await new Promise<RealtimeEvent | null>((r) => this.#waiters.push(r));
+        return e === null ? { value: undefined, done: true } : { value: e, done: false };
+      },
+    }),
+  };
+  async open(): Promise<void> {}
+  sendAudio(): void {}
+  cancelResponse(): void {}
+  injectToolResult(): void {}
+  async close(): Promise<void> {
+    this.#closed = true;
+    for (const w of this.#waiters.splice(0)) w(null);
+  }
+  emit(e: RealtimeEvent): void {
+    const w = this.#waiters.shift();
+    if (w) w(e);
+    else this.#queued.push(e);
+  }
+}
 
 // --- Fakes ---------------------------------------------------------------
 
@@ -261,6 +299,65 @@ describe("withVoice(Agent)", () => {
     expect(captured[0]!.audio.byteLength).toBeGreaterThan(0);
     // No edge-protocol error frame (the Twilio runner accepted the handshake).
     expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
+  });
+
+  it("fires onToolCallStart with the tool + the live connection when the delegate tool is invoked", async () => {
+    const front = new FakeFront();
+    const calls: ToolCallStartContext[] = [];
+    const realtimePipeline: VoicePipeline<Record<string, unknown>> = {
+      kind: "realtime",
+      front: () => front,
+      delegateToolName: "consult_knowledge",
+    };
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: realtimePipeline,
+        reasoner: () => stubReasoner(),
+        onToolCallStart: (c) => { calls.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    // The front model starts the turn, then invokes the delegate tool — the latency-mask moment.
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "fees" } });
+
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    expect(calls[0]!.toolName).toBe("consult_knowledge");
+    expect(calls[0]!.args).toEqual({ query: "fees" });
+    expect(calls[0]!.sessionId).toBe("test-session");
+    // The app gets the real connection — it can `connection.send(...)` a preamble/earcon trigger.
+    expect(calls[0]!.connection).toBe(conn);
+  });
+
+  it("a throwing onToolCallStart never breaks the call", async () => {
+    const front = new FakeFront();
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => stubReasoner(),
+        onToolCallStart: () => { throw new Error("app hook blew up"); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    expect(() => {
+      front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "x" } });
+    }).not.toThrow();
+    // The connection stays usable (a ping after the throwing hook is still handled).
+    await new Promise((r) => setTimeout(r, 10));
+    expect(() => agent.onMessage(conn, JSON.stringify({ type: "ping" }))).not.toThrow();
   });
 
   it("forceEndVoice closes the connection", () => {

@@ -44,6 +44,21 @@ type AgentLike = Constructor<
   Pick<Agent<Record<string, unknown>>, "sql" | "getConnections" | "keepAlive">
 >;
 
+/**
+ * Fired the instant the front model invokes the delegate tool — BEFORE the reasoner runs.
+ * Lets an app emit a deterministic, in-language preamble or a "thinking" earcon that masks the
+ * reasoner's wait, instead of relying on the realtime front LLM to remember to speak one (cf.
+ * Vapi/Pipecat `on_function_calls_started`). Use `connection.send(...)` to signal the client
+ * (the idiomatic agents-SDK pattern) — e.g. trigger a cached client-side earcon/preamble.
+ */
+export interface ToolCallStartContext {
+  readonly toolName: string;
+  readonly args: Record<string, unknown>;
+  readonly sessionId: string;
+  /** The live agents-SDK connection — `connection.send(json)` to message the client. */
+  readonly connection: VoiceConnection;
+}
+
 export interface WithVoiceOptions<Env> {
   /**
    * The connection wire protocol this host speaks. `"edge"` (default) is the Syrinx
@@ -63,6 +78,12 @@ export interface WithVoiceOptions<Env> {
   readonly reasoner?: (env: Env, ctx: VoicePipelineContext) => Reasoner | Promise<Reasoner>;
   /** Optional per-call recorder (e.g. an R2-backed `EdgeRecorder`). Applies to the `"edge"` transport. */
   readonly recorder?: (env: Env, ctx: VoicePipelineContext) => EdgeRecorder | undefined;
+  /**
+   * Fired when the front model starts a delegate tool call, before the reasoner runs — the seam
+   * for a deterministic latency-masking preamble / "thinking" earcon. Throwing here never affects
+   * the call. See {@link ToolCallStartContext}.
+   */
+  readonly onToolCallStart?: (ctx: ToolCallStartContext) => void | Promise<void>;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   readonly resumeWindowMs?: number;
@@ -156,9 +177,8 @@ export function withVoice<Env, TBase extends AgentLike>(
       // (workerd's WebSocket.send accepts string/ArrayBuffer/ArrayBufferView), but
       // its lib type is nominally stricter (ArrayBuffer- vs ArrayBufferLike-backed
       // views). Bridge that single boundary structurally.
-      const { socket, controller } = connectionManagedSocket(
-        connection as unknown as VoiceConnection,
-      );
+      const voiceConnection = connection as unknown as VoiceConnection;
+      const { socket, controller } = connectionManagedSocket(voiceConnection);
       this.#controllers.set(connection.id, controller);
 
       // Release the keepAlive lease + drop the controller on ANY close — a client
@@ -187,7 +207,22 @@ export function withVoice<Env, TBase extends AgentLike>(
       // Both runners assemble the session the same way — pipeline + (resolved) reasoner.
       const createSession = async () => {
         const reasoner = await this.#resolveReasoner(env, sessionId);
-        return buildVoiceSession(options.pipeline, env, reasoner, { sessionId });
+        const session = buildVoiceSession(options.pipeline, env, reasoner, { sessionId });
+        // Surface the tool-call-start seam: VoiceAgentSession emits `agent_tool_call` the instant
+        // the front model invokes the delegate tool, before the reasoner runs. A throwing app
+        // callback must never break the call, so it is fully isolated.
+        if (options.onToolCallStart) {
+          session.on("agent_tool_call", (e) => {
+            try {
+              void Promise.resolve(
+                options.onToolCallStart!({ toolName: e.name, args: e.args, sessionId, connection: voiceConnection }),
+              ).catch(() => undefined);
+            } catch {
+              /* app hook threw synchronously — ignore */
+            }
+          });
+        }
+        return session;
       };
       // The runner reports startup failures to the client and disposes the socket
       // itself; nothing to do here beyond not crashing the isolate.
