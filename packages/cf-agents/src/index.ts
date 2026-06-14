@@ -3,7 +3,12 @@
 // @kuralle-syrinx/cf-agents — add a Syrinx voice pipeline (realtime or cascaded) to
 // a Cloudflare `agents` SDK Agent via the `withVoice(Agent, options)` mixin.
 
-export { withVoice, type WithVoiceOptions, type WithVoiceMembers } from "./with-voice.js";
+export {
+  withVoice,
+  type WithVoiceOptions,
+  type WithVoiceMembers,
+  type ToolCallStartContext,
+} from "./with-voice.js";
 export type {
   VoicePipeline,
   RealtimePipeline,
