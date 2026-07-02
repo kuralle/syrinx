@@ -97,6 +97,7 @@ comes with —
 | `onDelegateQuery` / `onDelegateResult` | G2 observability hooks around the reasoner run. `onDelegateResult` is self-contained (`{ query, answer, durationMs, grounded, toolId?, toolName?, turnId, sessionId, connection }`) — the one hook for logging/persisting grounded Q&A pairs. Throwing never affects the call. |
 | `durableHistory` | G4 durable session state over the Agent's SQLite (default `true`). Set `false` for ephemeral pre-G4 behavior. |
 | `delayCueAfterMs` | G3: ms before a pending tool call fires the `tool_call_delayed` ("still working") cue. 0 disables. Default 2000. |
+| `backgroundAudio` | `{ ambient?, thinking?, duckWhileSpeaking? }` — looped ambient bed + thinking loop (raw mono PCM16 sources), mixed (ducked) under assistant speech; on the `"twilio"` transport the bed also fills between-turn gaps as comfort noise. Thinking follows the G3 cues. |
 | `inputSampleRateHz` / `outputSampleRateHz` | Edge audio rates (default 16000). |
 | `resumeWindowMs` | How long a dropped connection can resume its session. |
 | `sessionId` | `(request, agentName) => string`. Defaults to the `?sessionId=` query param (so a reconnecting client can resume), else a per-connection random id. (Not the Agent name — concurrent connections to one instance must not share a session.) |

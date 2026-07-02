@@ -32,6 +32,7 @@ import { closeWebSocketWithFallback, waitForWebSocketClose } from "./websocket-c
 import { isRecord, parseJsonRecord, optionalString, requiredString } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
+import { BackgroundAudioMixer, type BackgroundAudioConfig } from "./background-audio.js";
 import { wireTelephonyOutboundPipeline, type TelephonyOutboundCallbacks, type TelephonyOutboundHandle } from "./outbound-playout-pipeline.js";
 import { TurnMetricsTracker, type TurnTimestampState } from "./turn-metrics.js";
 import { type PacedPlayoutFrame } from "./paced-playout.js";
@@ -59,6 +60,12 @@ export * from "./telnyx.js";
 export * from "./smartpbx.js";
 export * from "./session-store.js";
 export { validateTwilioSignature } from "./twilio-auth.js";
+export {
+  BackgroundAudioMixer,
+  wireBackgroundThinking,
+  type BackgroundAudioConfig,
+  type BackgroundAudioSource,
+} from "./background-audio.js";
 export { installGracefulShutdown, type GracefulClosable } from "./websocket-lifecycle.js";
 
 export interface VoiceWebSocketServerOptions {
@@ -97,6 +104,12 @@ export interface VoiceWebSocketServerOptions {
    * envelope. Set false only for tests or legacy clients that require PCM envelopes.
    */
   readonly browserOpusDownlink?: boolean;
+  /**
+   * Ambient/thinking bed mixed (ducked) under assistant speech. No idle bed is
+   * sent between turns on the browser path — a web client can loop ambience
+   * locally; the server-side idle bed exists for telephony wires.
+   */
+  readonly backgroundAudio?: BackgroundAudioConfig;
   readonly sessionStore?: SessionStore;
   readonly maxConcurrentSessions?: number;
   readonly maxConcurrentSessionsScope?: "path" | "server";
@@ -253,6 +266,7 @@ export async function createVoiceWebSocketServer(
         () => state.browserOpusDownlink,
         managed.turnMetricsTurns,
         state.streamingResamplers,
+        options.backgroundAudio ? new BackgroundAudioMixer(options.backgroundAudio) : undefined,
       );
       gracefulCloseRegistry.set(socket, (deadlineMs) => {
         if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
@@ -432,6 +446,7 @@ function wireBrowserSessionEvents(
   getBrowserOpusDownlink: () => boolean,
   turnMetricsTurns: Map<string, TurnTimestampState>,
   streamingResamplers: Map<string, StreamingPcm16Resampler>,
+  backgroundAudio?: BackgroundAudioMixer,
 ): TelephonyOutboundHandle {
   const ttsSequences = new Map<string, number>();
   const speechEndedSent = new Set<string>();
@@ -656,6 +671,7 @@ function wireBrowserSessionEvents(
     outboundFrameDurationMs,
     maxQueuedOutputAudioMs,
     callbacks,
+    ...(backgroundAudio ? { backgroundAudio } : {}),
   });
 }
 

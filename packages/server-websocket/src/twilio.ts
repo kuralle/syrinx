@@ -22,6 +22,7 @@ import {
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
+import { BackgroundAudioMixer, type BackgroundAudioConfig } from "./background-audio.js";
 import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
@@ -45,6 +46,8 @@ export interface TwilioMediaStreamServerOptions {
   readonly twilioSampleRateHz?: number;
   readonly outboundFrameDurationMs?: number;
   readonly maxQueuedOutputAudioMs?: number;
+  /** Ambient/thinking bed mixed (ducked) under assistant speech (see BackgroundAudioConfig). */
+  readonly backgroundAudio?: BackgroundAudioConfig;
   readonly heartbeatIntervalMs?: number;
   readonly startupTimeoutMs?: number;
   readonly maxSessionDurationMs?: number;
@@ -200,6 +203,7 @@ export async function createTwilioMediaStreamServer(
         disposers,
         outboundFrameDurationMs,
         maxQueuedOutputAudioMs,
+        ...(options.backgroundAudio ? { backgroundAudio: new BackgroundAudioMixer(options.backgroundAudio) } : {}),
         callbacks: {
           carrierLabel: "twilio",
           getContextId: () => state.contextId,

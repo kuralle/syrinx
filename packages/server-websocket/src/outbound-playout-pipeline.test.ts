@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
+import { BackgroundAudioMixer } from "./background-audio.js";
 import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation, type RotatableTurnContext } from "./outbound-playout-pipeline.js";
 
 function createMockSocket(): WebSocket {
@@ -259,6 +260,54 @@ describe("installTelephonyTurnRotation", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(state.contextId).toBe("");
     expect(state.turnCounter).toBe(0);
+    for (const dispose of disposers) dispose();
+    await session.close();
+  });
+
+  it("mixes the background bed into speech before per-carrier encoding", async () => {
+    const socket = createMockSocket();
+    const session = new VoiceAgentSession({ plugins: {} });
+    void session.start();
+    const disposers: Array<() => void> = [];
+    const encodedChunks: Int16Array[] = [];
+    wireTelephonyOutboundPipeline({
+      session,
+      socket,
+      disposers,
+      outboundFrameDurationMs: 20,
+      maxQueuedOutputAudioMs: 30_000,
+      backgroundAudio: new BackgroundAudioMixer({
+        ambient: { pcm: new Int16Array(160).fill(1000), sampleRateHz: 16000, gain: 0.5 },
+        duckWhileSpeaking: 0.5,
+        fadeMs: 0,
+      }),
+      callbacks: {
+        carrierLabel: "test",
+        getContextId: () => "turn-mix",
+        isActive: () => true,
+        encodeFrames: (audio) => {
+          encodedChunks.push(new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength)));
+          return [{ contextId: "turn-mix", send: () => true }];
+        },
+        onInterrupt: () => undefined,
+        onDrain: () => undefined,
+        onStop: () => undefined,
+      },
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-mix",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(4)), // silence in → ambient-only out
+      sampleRateHz: 16000,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(encodedChunks).toHaveLength(1);
+    // ambient 1000 × gain 0.5 × duck 0.5 = 250 layered under the (silent) speech
+    expect(Array.from(encodedChunks[0]!)).toEqual([250, 250, 250, 250]);
+
     for (const dispose of disposers) dispose();
     await session.close();
   });

@@ -2,6 +2,8 @@
 
 import { Route, type InterruptTtsPacket, type TextToSpeechAudioPacket, type TextToSpeechEndPacket, type VoiceAgentSession } from "@kuralle-syrinx/core";
 import { WebSocket } from "ws";
+import type { BackgroundAudioMixer } from "./background-audio.js";
+import { wireBackgroundThinking } from "./background-audio.js";
 import type { PacedPlayoutFrame } from "./paced-playout.js";
 import { PacedPlayoutQueue } from "./paced-playout.js";
 import { PlayoutProgressEmitter } from "./playout-progress.js";
@@ -70,8 +72,16 @@ export function wireTelephonyOutboundPipeline(args: {
   readonly outboundFrameDurationMs: number;
   readonly maxQueuedOutputAudioMs: number;
   readonly callbacks: TelephonyOutboundCallbacks;
+  /**
+   * Mixes the ambient/thinking bed under every outbound speech chunk (ducked).
+   * Idle comfort-noise frames are not generated on this path yet — the paced
+   * queue's per-encode mark machinery needs a per-carrier background-frame
+   * encoder first (see background-audio-implementation-notes.md).
+   */
+  readonly backgroundAudio?: BackgroundAudioMixer;
 }): TelephonyOutboundHandle {
-  const { session, socket, disposers, outboundFrameDurationMs, maxQueuedOutputAudioMs, callbacks } = args;
+  const { session, socket, disposers, outboundFrameDurationMs, maxQueuedOutputAudioMs, callbacks, backgroundAudio } = args;
+  if (backgroundAudio) wireBackgroundThinking(session, backgroundAudio);
 
   const recordDiscardedPlayout = (discardedMs: number, reason: string): void => {
     if (discardedMs <= 0) return;
@@ -147,11 +157,11 @@ export function wireTelephonyOutboundPipeline(args: {
         });
         return;
       }
-      const frames = callbacks.encodeFrames(
-        audioPacket.audio,
-        requireTtsAudioSampleRate(audioPacket.sampleRateHz),
-        audioPacket.contextId,
-      );
+      const sampleRateHz = requireTtsAudioSampleRate(audioPacket.sampleRateHz);
+      const audio = backgroundAudio
+        ? backgroundAudio.mix(audioPacket.audio, sampleRateHz)
+        : audioPacket.audio;
+      const frames = callbacks.encodeFrames(audio, sampleRateHz, audioPacket.contextId);
       playout.enqueue(frames);
     }),
     session.bus.on("tts.end", (pkt) => {

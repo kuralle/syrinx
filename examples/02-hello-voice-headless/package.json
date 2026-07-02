@@ -24,6 +24,7 @@
     "smoke:telephony-university-live": "tsx scripts/run-telephony-university-live-smoke.ts",
     "smoke:university-support": "tsx scripts/run-university-support-baseline.ts",
     "smoke:telnyx-emulator": "tsx scripts/run-telnyx-emulator-smoke.ts",
+    "smoke:background-audio-listen": "tsx scripts/run-background-audio-listen-demo.ts",
     "smoke:flux-live": "tsx scripts/run-flux-live-smoke.ts",
     "smoke:flux-speculative-ab": "tsx scripts/run-flux-speculative-ab.ts",
     "smoke:smartpbx-emulator": "tsx scripts/run-smartpbx-emulator-smoke.ts",

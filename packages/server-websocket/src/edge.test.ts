@@ -529,3 +529,63 @@ describe("edge client playout progress", () => {
     expect(socket.json().some((m) => m.type === "error" && m.category === "invalid_input")).toBe(true);
   });
 });
+
+describe("edge background audio", () => {
+  it("mixes the bed into the wire audio while the recorder keeps the clean track", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const recorded: Int16Array[] = [];
+    const rec: EdgeRecorder = {
+      onUserAudio() {},
+      onAssistantAudio(_contextId: string, audio: Uint8Array) {
+        recorded.push(new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength)));
+      },
+      finalize() {},
+    };
+    const bus = new PipelineBusImpl();
+    const session = {
+      bus,
+      async start() {
+        void bus.start();
+      },
+      async close() {
+        bus.stop();
+      },
+      on() {},
+      off() {},
+      requestClientInterrupt() {},
+    } as unknown as VoiceAgentSession;
+
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => session,
+      recorder: rec,
+      backgroundAudio: {
+        ambient: { pcm: new Int16Array(160).fill(2000), sampleRateHz: 16000, gain: 0.5 },
+        duckWhileSpeaking: 0.5,
+        fadeMs: 0,
+      },
+    });
+    waitForReady(socket);
+
+    bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "bg-turn",
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(4)), // silent speech chunk
+      sampleRateHz: 16000,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Recorder saw the CLEAN chunk.
+    expect(recorded).toHaveLength(1);
+    expect(Array.from(recorded[0]!)).toEqual([0, 0, 0, 0]);
+
+    // The wire envelope carries the bed: 2000 × 0.5 gain × 0.5 duck = 500.
+    const binary = socket.sent.find((d): d is Uint8Array => d instanceof Uint8Array);
+    expect(binary).toBeDefined();
+    const wireSamples = new Int16Array(binary!.buffer.slice(binary!.byteOffset + (binary!.byteLength - 8)));
+    expect(Array.from(wireSamples)).toEqual([500, 500, 500, 500]);
+  });
+});

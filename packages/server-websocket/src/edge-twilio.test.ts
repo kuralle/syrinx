@@ -78,7 +78,10 @@ function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
 }
 
-async function startConnection(received: UserAudioReceivedPacket[] = []) {
+async function startConnection(
+  received: UserAudioReceivedPacket[] = [],
+  extraOptions: Record<string, unknown> = {},
+) {
   const socket = new FakeSocket();
   const session = fakeSession(received);
   await runTwilioEdgeWebSocketConnection(
@@ -88,6 +91,7 @@ async function startConnection(received: UserAudioReceivedPacket[] = []) {
       sessionStore: new InMemorySessionStore(),
       createSession: () => session,
       keepAliveIntervalMs: 0,
+      ...extraOptions,
     },
   );
   socket.emit(JSON.stringify({ event: "connected", protocol: "Call" }));
@@ -137,6 +141,54 @@ describe("Twilio edge ingress", () => {
     const decoded = decodeMuLawToPcm16(new Uint8Array(Buffer.from(payload, "base64")));
     expect(decoded.length).toBe(320); // 16k → 8k halves the samples
     expect(Math.abs(decoded[100]! - 6000)).toBeLessThan(600);
+  });
+
+  it("mixes the background bed (ducked) under TTS media", async () => {
+    const { socket, session } = await startConnection([], {
+      backgroundAudio: {
+        ambient: { pcm: new Int16Array(320).fill(4000), sampleRateHz: 16000, gain: 0.5 },
+        duckWhileSpeaking: 0.5,
+        fadeMs: 0,
+      },
+      backgroundIdleFrameMs: 10_000, // keep the idle ticker out of this test
+    });
+
+    const silence = new Uint8Array(new Int16Array(640).buffer.slice(0)); // 40ms @16k of silence
+    session.bus.push(Route.Critical, {
+      kind: "tts.audio",
+      contextId: "twilio-CA456",
+      timestampMs: Date.now(),
+      audio: silence,
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const media = socket.json().filter((msg) => msg.event === "media");
+    expect(media).toHaveLength(1);
+    const payload = (media[0]!.media as { payload: string }).payload;
+    const decoded = decodeMuLawToPcm16(new Uint8Array(Buffer.from(payload, "base64")));
+    // ambient 4000 × gain 0.5 × duck 0.5 = 1000 under the silent speech
+    expect(Math.abs(decoded[100]! - 1000)).toBeLessThan(120); // mu-law quantization tolerance
+  });
+
+  it("sends idle comfort-noise frames between turns", async () => {
+    const { socket } = await startConnection([], {
+      backgroundAudio: {
+        ambient: { pcm: new Int16Array(320).fill(4000), sampleRateHz: 8000, gain: 0.5 },
+        fadeMs: 0,
+      },
+      backgroundIdleFrameMs: 25,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const media = socket.json().filter((msg) => msg.event === "media");
+    expect(media.length).toBeGreaterThanOrEqual(2); // ticker fills the silence
+    const payload = (media[0]!.media as { payload: string }).payload;
+    const decoded = decodeMuLawToPcm16(new Uint8Array(Buffer.from(payload, "base64")));
+    // full-gain bed between turns: 4000 × 0.5 = 2000
+    expect(Math.abs(decoded[10]! - 2000)).toBeLessThan(220);
+    expect(decoded.length).toBe(200); // 25ms @ 8k
   });
 
   it("sends a clear event on interrupt.detected (barge-in)", async () => {

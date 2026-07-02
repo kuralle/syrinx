@@ -15,6 +15,12 @@ import {
 import { TimerScheduler, type Scheduler } from "@kuralle-syrinx/core";
 import { type StreamingPcm16Resampler } from "@kuralle-syrinx/core/audio";
 import {
+  BackgroundAudioMixer,
+  wireBackgroundThinking,
+  type BackgroundAudioConfig,
+} from "./background-audio.js";
+export type { BackgroundAudioConfig, BackgroundAudioSource } from "./background-audio.js";
+import {
   createWorkersInboundSocket,
   type WorkersDurableObjectWebSocketContext,
   type WorkersInboundSocketController,
@@ -76,6 +82,12 @@ export interface VoiceEdgeWebSocketOptions {
    * the Syrinx binary envelope instead.
    */
   readonly rawBinaryInput?: boolean;
+  /**
+   * Ambient/thinking bed mixed (ducked) under assistant speech. Browser edge
+   * sends no idle bed between turns — a web client can loop ambience locally;
+   * the server-side bed exists for wires with no client runtime (telephony).
+   */
+  readonly backgroundAudio?: BackgroundAudioConfig;
   readonly sessionStore: SessionStore;
   readonly scheduler?: Scheduler;
 }
@@ -265,7 +277,14 @@ export async function runVoiceEdgeWebSocketConnection(
       await options.sessionStore.release(leased.managed.id, 0);
       return;
     }
-    wireEdgeSessionEvents(session, socket, disposers, outputSampleRateHz, options.recorder);
+    wireEdgeSessionEvents(
+      session,
+      socket,
+      disposers,
+      outputSampleRateHz,
+      options.recorder,
+      options.backgroundAudio ? new BackgroundAudioMixer(options.backgroundAudio) : undefined,
+    );
     if (options.recorder) {
       const recorder = options.recorder;
       disposers.push(
@@ -349,7 +368,9 @@ function wireEdgeSessionEvents(
   disposers: Array<() => void>,
   outputSampleRateHz: number,
   recorder?: EdgeRecorder,
+  backgroundAudio?: BackgroundAudioMixer,
 ): void {
+  if (backgroundAudio) wireBackgroundThinking(session, backgroundAudio);
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
     handler: VoiceAgentSessionEvents[K],
@@ -391,27 +412,29 @@ function wireEdgeSessionEvents(
     session.bus.on("tts.audio", (pkt) => {
       const audio = pkt as TextToSpeechAudioPacket;
       const ttsSampleRate = requireTtsAudioSampleRate(audio.sampleRateHz) ?? outputSampleRateHz;
+      // Recorder gets the CLEAN assistant track; the bed is a wire-level effect.
       recorder?.onAssistantAudio(audio.contextId, audio.audio, ttsSampleRate);
+      const wireAudio = backgroundAudio ? backgroundAudio.mix(audio.audio, ttsSampleRate) : audio.audio;
       sendJson(socket, {
         type: "tts_chunk",
         turnId: audio.contextId,
         sequence: 1,
-        sampleRateHz: requireTtsAudioSampleRate(audio.sampleRateHz) ?? outputSampleRateHz,
+        sampleRateHz: ttsSampleRate,
         encoding: "pcm_s16le",
         channels: 1,
-        byteLength: audio.audio.byteLength,
-        durationMs: pcm16DurationMs(audio.audio, outputSampleRateHz),
+        byteLength: wireAudio.byteLength,
+        durationMs: pcm16DurationMs(wireAudio, outputSampleRateHz),
       });
       socket.send(encodeSyrinxAudioEnvelope({
         type: "audio",
         contextId: audio.contextId,
         sequence: 1,
-        sampleRateHz: requireTtsAudioSampleRate(audio.sampleRateHz) ?? outputSampleRateHz,
+        sampleRateHz: ttsSampleRate,
         encoding: "pcm_s16le",
         channels: 1,
-        byteLength: audio.audio.byteLength,
-        durationMs: pcm16DurationMs(audio.audio, outputSampleRateHz),
-      }, audio.audio));
+        byteLength: wireAudio.byteLength,
+        durationMs: pcm16DurationMs(wireAudio, outputSampleRateHz),
+      }, wireAudio));
     }),
     session.bus.on("tts.end", (pkt) => {
       const end = pkt as TextToSpeechEndPacket;

@@ -463,6 +463,28 @@ generation, Deepgram Flux, Sierra's latency playbook):
   decomposition (`e2e = EOU delay + LLM TTFT + TTS TTFB`) — wire it to your metrics sink and
   optimize the term that dominates.
 
+### Background audio (ambience, thinking sound, comfort noise)
+
+A continuous ambient bed makes a synthetic voice sound situated, masks turn gaps, and — on a
+phone line — replaces the digital silence that callers read as "the call died". Every server
+host takes a `backgroundAudio` option (LiveKit `BackgroundAudioPlayer` / Pipecat
+`SoundfileMixer` semantics, mixed server-side into the one wire stream):
+
+```ts
+backgroundAudio: {
+  ambient:  { pcm: officePcm, sampleRateHz: 16000, gain: 0.25 }, // looped, always on
+  thinking: { pcm: typingPcm, sampleRateHz: 16000, gain: 0.4 },  // loops while a tool call is pending (G3 cues)
+  duckWhileSpeaking: 0.5, // bed attenuates further under the assistant's voice
+}
+```
+
+Sources are raw mono PCM16 (`ffmpeg -i office.mp3 -ac 1 -ar 16000 -f s16le office.pcm`), looped
+and resampled to the wire rate automatically. The bed is mixed (ducked) under speech on **all**
+transports; on **telephony** transports it also plays alone between turns as comfort noise.
+Browser paths get no server-side idle bed — a web client can loop ambience locally for free.
+The recorder always captures the clean assistant track; barge-in cuts speech but the bed plays
+on, exactly like a real call center.
+
 ---
 
 ## Make it feel instant (bi-model)

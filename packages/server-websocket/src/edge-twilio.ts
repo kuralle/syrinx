@@ -27,6 +27,11 @@ import {
 } from "@kuralle-syrinx/core/audio";
 import type { ManagedSocket, SocketData } from "@kuralle-syrinx/ws";
 import {
+  BackgroundAudioMixer,
+  wireBackgroundThinking,
+  type BackgroundAudioConfig,
+} from "./background-audio.js";
+import {
   createWorkersInboundSocket,
   type WorkersDurableObjectWebSocketContext,
 } from "@kuralle-syrinx/ws/workers";
@@ -45,6 +50,14 @@ export interface TwilioEdgeWebSocketOptions {
   readonly scheduler?: Scheduler;
   /** Engine-side PCM rate (default 16000). Twilio's leg is always 8 kHz μ-law. */
   readonly engineSampleRateHz?: number;
+  /**
+   * Ambient/thinking bed: mixed (ducked) under assistant speech, and sent as
+   * comfort-noise frames between turns — pure digital silence on a phone line
+   * reads as "the call died". Thinking loop follows the G3 tool-call cues.
+   */
+  readonly backgroundAudio?: BackgroundAudioConfig;
+  /** Cadence of idle comfort-noise frames (ms). @default 200 */
+  readonly backgroundIdleFrameMs?: number;
   readonly resumeWindowMs?: number;
   readonly keepAliveIntervalMs?: number;
   readonly idleTimeoutMs?: number;
@@ -187,13 +200,34 @@ export async function runTwilioEdgeWebSocketConnection(
       return;
     }
 
+    // Background bed: ducked under speech in the tts.audio handler below, and
+    // sent as idle comfort-noise frames between turns — a phone line carrying
+    // pure digital silence reads as "the call died". Twilio's `clear` on
+    // barge-in drops any queued bed audio; the ticker refills on the next tick.
+    const backgroundAudio = options.backgroundAudio
+      ? new BackgroundAudioMixer(options.backgroundAudio)
+      : null;
+    if (backgroundAudio) {
+      wireBackgroundThinking(session, backgroundAudio);
+      const idleFrameMs = options.backgroundIdleFrameMs ?? 200;
+      const idleTimer = setInterval(() => {
+        if (!streamSid || stopped || closed || !socket.isOpen) return;
+        const frame = backgroundAudio.idleFrame(idleFrameMs, TWILIO_SAMPLE_RATE_HZ);
+        if (!frame) return;
+        const mulaw = encodePcm16ToMuLaw(pcm16BytesToSamples(frame));
+        sendTwilioJson({ event: "media", streamSid, media: { payload: bytesToBase64(mulaw) } });
+      }, idleFrameMs);
+      disposers.push(() => clearInterval(idleTimer));
+    }
+
     // Downlink: engine PCM → 8 kHz μ-law media frames; barge-in → clear.
     disposers.push(
       session.bus.on("tts.audio", (pkt) => {
         if (!streamSid) return;
         const audio = pkt as TextToSpeechAudioPacket;
-        const samples = pcm16BytesToSamples(audio.audio);
         const sourceRate = audio.sampleRateHz ?? engineRate;
+        const wireAudio = backgroundAudio ? backgroundAudio.mix(audio.audio, sourceRate) : audio.audio;
+        const samples = pcm16BytesToSamples(wireAudio);
         const resampled = resamplePcm16Streaming(downlinkResamplers, samples, sourceRate, TWILIO_SAMPLE_RATE_HZ);
         const mulaw = encodePcm16ToMuLaw(resampled);
         sendTwilioJson({

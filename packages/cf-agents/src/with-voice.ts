@@ -19,6 +19,7 @@
 import type { Agent, Connection, ConnectionContext, WSMessage } from "agents";
 import {
   runVoiceEdgeWebSocketConnection,
+  type BackgroundAudioConfig,
   type EdgeRecorder,
 } from "@kuralle-syrinx/server-websocket/edge";
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
@@ -118,6 +119,14 @@ export interface WithVoiceOptions<Env> {
   readonly reasoner?: (env: Env, ctx: VoicePipelineContext) => Reasoner | Promise<Reasoner>;
   /** Optional per-call recorder (e.g. an R2-backed `EdgeRecorder`). Applies to the `"edge"` transport. */
   readonly recorder?: (env: Env, ctx: VoicePipelineContext) => EdgeRecorder | undefined;
+  /**
+   * Ambient/thinking bed mixed (ducked) under assistant speech on both transports.
+   * On the `"twilio"` transport the bed also fills the gaps between turns as
+   * comfort noise — pure digital silence on a phone line reads as "the call died".
+   * The thinking loop follows the G3 tool-call cues. Sources are raw mono PCM16
+   * (e.g. `ffmpeg -i office.mp3 -ac 1 -ar 16000 -f s16le office.pcm`).
+   */
+  readonly backgroundAudio?: BackgroundAudioConfig;
   /**
    * Fired when the front model starts a delegate tool call, before the reasoner runs — the seam
    * for a deterministic latency-masking preamble / "thinking" earcon. Throwing here never affects
@@ -416,6 +425,7 @@ export function withVoice<Env, TBase extends AgentLike>(
             ? { engineSampleRateHz: options.inputSampleRateHz }
             : {}),
           ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
+          ...(options.backgroundAudio ? { backgroundAudio: options.backgroundAudio } : {}),
         }).catch(onRunnerSettled);
         return;
       }
@@ -441,6 +451,7 @@ export function withVoice<Env, TBase extends AgentLike>(
           ? { outputSampleRateHz: options.outputSampleRateHz }
           : {}),
         ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
+        ...(options.backgroundAudio ? { backgroundAudio: options.backgroundAudio } : {}),
         createSession,
       }).catch(onRunnerSettled);
     }
