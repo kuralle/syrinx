@@ -105,6 +105,41 @@ Cartesia, …) all dial through `createWorkersSocket` so auth headers ride on th
 Regression lock: `edge-safety.test.ts` runs the adapter + bridge with `Buffer` and `process` removed from
 `globalThis`.
 
+## The Responder-Thinker primitive (the delegate seam)
+
+The bi-model shape has a name: **Responder-Thinker** — a fast realtime **responder** on the audio
+loop, an async reasoning/RAG **thinker** behind it, delegated to via one tool. `RealtimeBridge` +
+`Reasoner` *is* this architecture, and the delegate seam ships with four built-in behaviors
+(RFC `docs/rfc-bimodel-delegate-seam.md`) so a consumer never hand-rolls them:
+
+- **G1 — structured result envelope (default).** The thinker's answer reaches the responder as
+  authoritative JSON — `{ response_text, require_repeat_verbatim: true, render? }`
+  (`DelegateResultEnvelope`, OpenAI's documented *Tool Output Formatting* shape) — so the front
+  voices it faithfully instead of paraphrasing or inventing. Options:
+  `toolResultFormat: "envelope" | "string"` (default `"envelope"`), `renderDirective` (e.g.
+  `"translate_faithfully"`). Applied synchronously to the already-buffered delegate answer —
+  latency-neutral; bus packets keep the raw answer.
+- **G2 — delegate observability.** The bridge emits `delegate.query` / `delegate.result`
+  (Background route) around every `reasoner.stream(...)`: query, answer, `durationMs`,
+  `grounded` (the stream surfaced a `tool-result` part). Subscribe on the bus — or via
+  `VoiceAgentSession`'s `delegate_query` / `delegate_result` events — instead of wrapping the
+  `Reasoner` to log.
+- **G3 — typed preamble/filler lifecycle.** `VoiceAgentSession` turns each delegate tool call into
+  a `tool_call_cue` lifecycle — `started` (before the thinker runs) / `delayed` (time-triggered
+  "still working" after `delayCueAfterMs`) / `complete` / `failed` (error, barge-in, supersede) —
+  and the WS transports surface it as `tool_call_*` wire messages the standard clients parse.
+  Decoupled from any blocking-tool contract: it wraps the thinker-latency window itself.
+- **G4 — durable session + resume.** `caps.supportsNativeResume` splits providers: Gemini Live
+  resumes server-side (`sessionResumptionHandle` option in + `resumption_handle` events out —
+  never replay on top of it); OpenAI-compatible fronts replay via `resumeHistory: () => [...]`
+  (sent as `conversation.item.create` after every (re)connect's `session.update`, never a
+  `response.create` — a resumed session cannot double-answer). The thinker side re-seeds from a
+  `ReasonerSessionStore` (`@kuralle-syrinx/core`), DO-SQLite-backed in `@kuralle-syrinx/cf-agents`.
+
+On Cloudflare, `withVoice(Agent)` (`@kuralle-syrinx/cf-agents`) wires all four up turnkey — a new
+consumer supplies a front + a `Reasoner` and gets envelope + observability + cues + durable resume
+for free.
+
 ## Capability model
 
 `RealtimeAdapter.caps` lets the bridge adapt per provider:
@@ -145,7 +180,9 @@ Syrinx with the provider region to minimize the added leg.
 | Delegate → `Reasoner` (bi-model), `function_call_output` injection | ✅ live-verified (university turn) |
 | Barge-in: `speech_started`→interrupt, `cancel`+`truncate`, abort delegate, cancel-when-idle guard | ✅ logic unit-verified + detection live-confirmed; live "resume-after-barge" smoke is flaky (orchestration) |
 | First-audio direct-vs-bridged latency delta harness | ⏳ open (WBS-5) |
-| `fromGeminiLive` / `fromMoshi` adapters | ⏳ future |
+| `fromGeminiLive` adapter (incl. native session resume) | ✅ shipped |
+| Responder-Thinker delegate seam: envelope + observability + cues + durable resume | ✅ shipped (RFC bimodel-delegate-seam) |
+| `fromMoshi` adapter | ⏳ future |
 
 Tests: `pnpm --filter @kuralle-syrinx/realtime test`. Live gates (need `OPENAI_API_KEY`):
 `smoke:realtime-frame` / `:realtime-oneturn` / `:realtime-university` / `:realtime-bargein` in

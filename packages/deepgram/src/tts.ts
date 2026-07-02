@@ -40,6 +40,19 @@ const FLUSH_MSG = JSON.stringify({ type: "Flush" });
 const CLEAR_MSG = JSON.stringify({ type: "Clear" });
 const EMPTY = new Uint8Array(0);
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
+// Retired-turn guard: contextIds are per-turn (telephony rotates), so cancelled
+// ids accumulate one per barge-in. Keep a recent-turns window to reject late
+// post-cancel audio without leaking over a long call.
+const MAX_CANCELLED_CONTEXTS = 256;
+
+function boundedAdd(set: Set<string>, value: string, cap: number): void {
+  set.add(value);
+  while (set.size > cap) {
+    const oldest = set.values().next().value;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
+}
 
 export class DeepgramTTSPlugin implements VoicePlugin {
   // socketFactory is injectable so the same plugin runs on Node (default) or
@@ -165,7 +178,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
 
   private async cancelActiveContexts(): Promise<void> {
     const contextIds = [...this.activeContexts];
-    for (const contextId of contextIds) this.cancelledContexts.add(contextId);
+    for (const contextId of contextIds) boundedAdd(this.cancelledContexts, contextId, MAX_CANCELLED_CONTEXTS);
     this.activeContexts.clear();
     for (const contextId of contextIds) this.clearFinishTimeout(contextId);
     this.currentContextId = "";

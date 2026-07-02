@@ -239,6 +239,11 @@ export class PipelineBusImpl implements PipelineBus {
   private publishAllPackets(route: Route, packet: VoicePacket): void {
     this.onPacket?.(route, packet);
     if (!this.allPacketsController) return;
+    // Only retain packets when a reader is actually attached. A ReadableStream
+    // buffers enqueue() without bound until read, so with no consumer (the default
+    // deployment — recorder is optional) this would retain every audio buffer of
+    // the whole call and OOM. `locked` is true once getReader() is called.
+    if (!this.allPackets.locked) return;
     try {
       this.allPacketsController.enqueue({ route, packet });
     } catch {

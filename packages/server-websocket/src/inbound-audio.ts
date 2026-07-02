@@ -42,12 +42,19 @@ export function decodeInboundBinaryAudio(
   }
   const { header, audio } = decodeSyrinxAudioEnvelope(data);
   const sampleRateHz = requirePositiveIntegerFromHeader(header.sampleRateHz) ?? defaultSampleRateHz;
-  const wireAudio = header.encoding === "opus"
+  const isOpus = header.encoding === "opus";
+  const wireAudio = isOpus
     ? decodeOpusIngressMessage(audio, sampleRateHz, decodeOpusIngress, engineInputSampleRateHz, streamingResamplers)
     : audio;
+  // Opus ingress is decoded AND resampled to the engine rate inside
+  // decodeOpusIngressMessage, so the returned PCM is already at engineInputSampleRateHz.
+  // Report that as its rate — reporting the 48 kHz *header* rate made the caller
+  // resample the already-16 kHz audio a second time, delivering ~1/3 the samples
+  // (3× sped-up audio → STT garbage). PCM carries its true header source rate.
+  const effectiveSampleRateHz = isOpus ? engineInputSampleRateHz : sampleRateHz;
   return {
     contextId: typeof header.contextId === "string" && header.contextId.length > 0 ? header.contextId : undefined,
-    sampleRateHz,
+    sampleRateHz: effectiveSampleRateHz,
     sequence: header.sequence,
     audio: wireAudio,
   };

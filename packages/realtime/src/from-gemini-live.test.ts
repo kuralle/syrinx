@@ -129,6 +129,35 @@ describe("fromGeminiLive", () => {
     expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
   });
 
+  it("G4/WBS-4: native resume — always enables sessionResumption, passes a prior handle through, surfaces new handles", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key", sessionResumptionHandle: "handle-prev" });
+    expect(adapter.caps.supportsNativeResume).toBe(true);
+
+    const eventsTask = collectEvents(adapter.events, 1);
+    await adapter.open(new AbortController().signal);
+
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    // Handle passthrough — the server restores the conversation; nothing is replayed
+    // client-side (sendClientContent untouched — R6: no double-apply).
+    expect(connectArg.config["sessionResumption"]).toEqual({ handle: "handle-prev" });
+    expect(sendClientContent).not.toHaveBeenCalled();
+
+    inject({ sessionResumptionUpdate: { newHandle: "handle-next", resumable: true } });
+    // Non-resumable updates carry no usable handle and must be ignored.
+    inject({ sessionResumptionUpdate: { newHandle: "", resumable: false } });
+
+    expect(await eventsTask).toEqual([{ type: "resumption_handle", handle: "handle-next" }]);
+    await adapter.close();
+  });
+
+  it("G4/WBS-4: enables handle issuance even without a prior handle", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key" });
+    await adapter.open(new AbortController().signal);
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["sessionResumption"]).toEqual({});
+    await adapter.close();
+  });
+
   it("sends a typed user turn via sendClientContent with turnComplete", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key" });
     await adapter.open(new AbortController().signal);
@@ -203,6 +232,7 @@ describe("fromGeminiLive", () => {
     expect(adapter.caps).toEqual({
       inputSampleRateHz: 16_000,
       outputSampleRateHz: 24_000,
+      supportsNativeResume: true,
       supportsConcurrentToolAudio: false,
       supportsTruncate: false,
       emitsServerSpeechStarted: true,

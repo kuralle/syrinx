@@ -5,7 +5,7 @@ import { RealtimeSocket } from "@kuralle-syrinx/ws/realtime";
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
-import type { RealtimeAdapter, RealtimeEvent } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeResumeMessage } from "./realtime-adapter.js";
 
 export interface OpenAiCompatibleRealtimeConfig {
   readonly apiKey: string;
@@ -18,6 +18,15 @@ export interface OpenAiCompatibleRealtimeConfig {
   readonly buildUrl?: (model: string) => string;
   readonly caps: RealtimeAdapter["caps"];
   readonly buildSessionUpdate: () => Record<string, unknown>;
+  /**
+   * G4 resume-by-replay: returns the prior conversation to re-create as
+   * `conversation.item.create` items after each (re)connect's `session.update` —
+   * these providers have no native resume, so the transcript is replayed. Item
+   * creation never triggers a response (no `response.create`), so a resumed
+   * session cannot double-answer (R6). Called on the initial connect AND every
+   * reconnect, so return the *current* durable history, not a snapshot.
+   */
+  readonly buildResumeItems?: () => readonly RealtimeResumeMessage[];
   readonly supportsTruncate: boolean;
   readonly requiresResponseCreateAfterToolOutput?: boolean;
   readonly defaultErrorMessage: string;
@@ -44,6 +53,7 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
   private assistantTranscript = "";
   private activeResponse = false;
   private pendingResponseCreate = false;
+  private opened = false;
 
   constructor(private readonly config: OpenAiCompatibleRealtimeConfig) {
     this.events = this.stream;
@@ -65,6 +75,12 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
       },
       socketFactory: this.config.socketFactory,
       onMessage: (json) => this.handleServerMessage(json),
+      // Re-applied on EVERY (re)connection. WebSocketConnection auto-reconnects after a mid-call
+      // drop; without re-sending session.update the fresh provider session comes back with no
+      // tools and default instructions — the front model silently loses its persona and the
+      // delegate tool (delegation permanently dead). onReady fires after the socket is verified
+      // and before replay frames flush, so config lands ahead of any buffered audio.
+      onReady: () => this.applySessionConfig(),
       onConnectionLost: (err) => {
         this.stream.push({ type: "error", cause: err, recoverable: true });
         this.rejectOpen(err);
@@ -86,13 +102,53 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
     };
     signal.addEventListener("abort", this.abortHandler, { once: true });
 
+    // connect() invokes onReady synchronously once the socket is open, which sends the first
+    // session.update; every subsequent reconnect re-invokes onReady and re-applies it.
     await this.socket.connect();
-    this.socket.send({
+    await openPromise;
+  }
+
+  /**
+   * (Re)configure the provider session — model, audio formats, turn detection, tools,
+   * instructions. Fired on the initial connect and on every reconnect. On a reconnect the provider
+   * session is brand new: config + tools are restored here, but the prior conversation history is
+   * gone, so surface that as a recoverable error rather than silently continuing amnesiac.
+   */
+  private applySessionConfig(): void {
+    const reconnected = this.opened;
+    this.opened = true;
+    this.socket?.send({
       type: "session.update",
       session: this.config.buildSessionUpdate(),
     });
-
-    await openPromise;
+    // G4 resume-by-replay: re-create the prior conversation as items. Providers
+    // without native resume start every (re)connection amnesiac; replaying the
+    // transcript here restores context. No response.create — replay must never
+    // make the model speak (R6).
+    const resumeItems = this.config.buildResumeItems?.() ?? [];
+    for (const message of resumeItems) {
+      this.socket?.send({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: message.role,
+          content: [
+            message.role === "user"
+              ? { type: "input_text", text: message.content }
+              : { type: "text", text: message.content },
+          ],
+        },
+      });
+    }
+    if (reconnected && !this.config.buildResumeItems) {
+      this.stream.push({
+        type: "error",
+        cause: new Error(
+          "Realtime session reconnected: model config and tools restored, but prior conversation history was lost",
+        ),
+        recoverable: true,
+      });
+    }
   }
 
   sendAudio(pcm16: Uint8Array): void {

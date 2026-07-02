@@ -50,7 +50,18 @@ export const liveCascadedPipeline: CascadedPipeline<LiveSessionEnv> = {
       sample_rate: INPUT_SAMPLE_RATE_HZ,
       model: "nova-3",
       language: "en-US",
-      endpointing: 300,
+      // Silence (ms) before Deepgram finalizes a turn. 300ms is too aggressive with
+      // no semantic layer behind it: a natural mid-sentence pause ("my address is
+      // forty-two… Elm Street") finalizes early and the agent answers half an
+      // utterance. 500ms is the middle ground — it stops the worst cut-offs, and the
+      // ~200ms cost is negligible against the LLM-dominated v2v budget. The real fix
+      // for the edge is a semantic/dynamic endpointer (smart-turn has no Workers
+      // build yet); until then this is the sane default. Tune per deployment.
+      endpointing: 500,
+      // Gap-based backstop: on a noisy/continuous line where Deepgram never detects
+      // clean silence, `speech_final` can fail to fire and the turn wedges. UtteranceEnd
+      // completes it. Requires interim_results (on by default).
+      utterance_end_ms: 1000,
       provider_finalize_timeout_ms: 2500,
       finalize_timeout_fallback: true,
       // No local VAD on the edge: Deepgram SpeechStarted is the barge-in

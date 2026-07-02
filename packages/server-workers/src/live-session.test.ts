@@ -27,7 +27,7 @@ describe("liveCascadedPipeline", () => {
     const env = { DEEPGRAM_API_KEY: "dg-key", OPENAI_API_KEY: "oa-key", VECTORIZE: mockVectorize };
     const stt = liveCascadedPipeline.stt(env, ctx);
     expect(stt.plugin).toBeInstanceOf(DeepgramSTTPlugin);
-    expect(stt.config).toMatchObject({ model: "nova-3", endpointing: 300, vad_events: true, api_key: "dg-key" });
+    expect(stt.config).toMatchObject({ model: "nova-3", endpointing: 500, vad_events: true, utterance_end_ms: 1000, api_key: "dg-key" });
 
     const tts = liveCascadedPipeline.tts(env, ctx);
     expect(tts.plugin).toBeInstanceOf(DeepgramTTSPlugin);

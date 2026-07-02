@@ -68,7 +68,7 @@ export function createRoutedWebSocketServer(
     perMessageDeflate: false,
   });
   const router = getOrCreateRouter(httpServer);
-  const handler: UpgradeHandler = (request, socket, head) => {
+  const accept = (request: IncomingMessage, socket: Socket, head: Buffer): void => {
     const maxConcurrentSessions = admission?.maxConcurrentSessions;
     const scope = admission?.maxConcurrentSessionsScope ?? "path";
     const activeSessions = scope === "server"
@@ -85,6 +85,25 @@ export function createRoutedWebSocketServer(
     wsServer.handleUpgrade(request, socket, head, (websocket) => {
       wsServer.emit("connection", websocket, request);
     });
+  };
+  const handler: UpgradeHandler = (request, socket, head) => {
+    if (!admission?.authorize) {
+      accept(request, socket, head);
+      return;
+    }
+    // Authorize before completing the upgrade; reject with 4401 on failure/throw.
+    void Promise.resolve()
+      .then(() => admission.authorize!(request))
+      .then((ok) => {
+        if (ok) {
+          accept(request, socket, head);
+        } else {
+          rejectWebSocketAdmission(wsServer, request, socket, head, 4401, "unauthorized");
+        }
+      })
+      .catch(() => {
+        rejectWebSocketAdmission(wsServer, request, socket, head, 4401, "unauthorized");
+      });
   };
   router.handlers.set(path, handler);
   router.servers.add(wsServer);

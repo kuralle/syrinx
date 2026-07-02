@@ -8,6 +8,7 @@ import {
   reconcileSpokenPrefix,
   rewriteLastAssistant,
   type KuralleMessageLike,
+  type KuralleRunOptions,
   type KuralleRuntimeLike,
   type KuralleSessionStoreLike,
   type KuralleStoredSession,
@@ -73,6 +74,58 @@ async function collectParts(reasoner: Reasoner, turn: ReasonerTurn): Promise<Rea
   }
   return collected;
 }
+
+describe("fromKuralleRuntime G4 resume-by-seed (historyDelta)", () => {
+  const turnWithContext = (): ReasonerTurn => ({
+    userText: "Second question",
+    messages: [
+      { role: "system", content: "sys" },
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+    ],
+    signal: new AbortController().signal,
+  });
+
+  it("seeds prior turn.messages into an EMPTY kuralle session (fresh isolate resume)", async () => {
+    const spy: { runOpts?: KuralleRunOptions } = {};
+    const runtime: KuralleRuntimeLike = {
+      run(opts) {
+        spy.runOpts = opts;
+        return { events: partsToEvents([textDelta("ok"), done()]) };
+      },
+      getSession: async () => null,
+    };
+    const reasoner = fromKuralleRuntime(runtime, { sessionId: "sess-1" });
+
+    await collectParts(reasoner, turnWithContext());
+
+    expect(spy.runOpts?.input).toBe("Second question");
+    expect(spy.runOpts?.historyDelta).toEqual([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+    ]);
+  });
+
+  it("does NOT seed into a non-empty session (no double-applied history, R6)", async () => {
+    const spy: { runOpts?: KuralleRunOptions } = {};
+    const runtime: KuralleRuntimeLike = {
+      run(opts) {
+        spy.runOpts = opts;
+        return { events: partsToEvents([textDelta("ok"), done()]) };
+      },
+      getSession: async () => ({
+        id: "sess-1",
+        messages: [{ role: "user", content: "already there" }],
+      }),
+    };
+    const reasoner = fromKuralleRuntime(runtime, { sessionId: "sess-1" });
+
+    await collectParts(reasoner, turnWithContext());
+
+    expect(spy.runOpts?.input).toBe("Second question");
+    expect(spy.runOpts?.historyDelta).toBeUndefined();
+  });
+});
 
 describe("fromKuralleRuntime", () => {
   it("maps happy path: text deltas and done to finish:stop", async () => {

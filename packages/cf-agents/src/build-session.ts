@@ -3,6 +3,8 @@
 import {
   VoiceAgentSession,
   type Reasoner,
+  type ReasonerMessage,
+  type ReasonerSessionStore,
   type VoicePlugin,
   type PluginConfig,
 } from "@kuralle-syrinx/core";
@@ -12,6 +14,28 @@ import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
 /** Per-session context handed to every pipeline factory. */
 export interface VoicePipelineContext {
   readonly sessionId: string;
+  /**
+   * G4 resume state for the session, present when durable history is on. The
+   * `front()` factory wires it into the adapter: `resumeHistory: ctx.resume.history`
+   * on replay providers (OpenAI), `sessionResumptionHandle: ctx.resume.providerHandle`
+   * on native-resume providers (Gemini — do NOT also replay, R6).
+   */
+  readonly resume?: {
+    /** Live view of the durable transcript (call again on reconnect for the current state). */
+    readonly history: () => readonly { readonly role: "user" | "assistant"; readonly content: string }[];
+    /** Latest provider-native resume handle, when one was issued. */
+    readonly providerHandle?: string;
+  };
+}
+
+/** Host wiring (withVoice) threaded into the assembled session. */
+export interface VoiceSessionWiring {
+  /** G4: durable store for the cascaded ReasoningBridge's conversation history. */
+  readonly reasonerSessionStore?: ReasonerSessionStore;
+  /** G4: prior-context provider for realtime delegate turns (live view of durable history). */
+  readonly contextProvider?: () => readonly ReasonerMessage[];
+  /** G3: ms before a pending tool call fires its "delayed" (still-working) cue. */
+  readonly delayCueAfterMs?: number;
 }
 
 /**
@@ -26,6 +50,14 @@ export interface RealtimePipeline<Env> {
   readonly front: (env: Env, ctx: VoicePipelineContext) => RealtimeAdapter;
   /** Name of the front-model tool routed to the reasoner. @default "consult_knowledge" */
   readonly delegateToolName?: string;
+  /**
+   * How the delegate answer reaches the front model (G1): `"envelope"` (default) wraps
+   * it as a `DelegateResultEnvelope` (`response_text` + `require_repeat_verbatim`);
+   * `"string"` injects the raw answer.
+   */
+  readonly toolResultFormat?: "envelope" | "string";
+  /** Optional `render` directive included in the envelope, e.g. `"translate_faithfully"`. */
+  readonly renderDirective?: string;
 }
 
 /** A cascaded-stage plugin plus its `VoiceAgentSession` plugin config. */
@@ -71,13 +103,19 @@ export function buildVoiceSession<Env>(
   env: Env,
   reasoner: Reasoner | undefined,
   ctx: VoicePipelineContext,
+  wiring: VoiceSessionWiring = {},
 ): VoiceAgentSession {
   if (pipeline.kind === "realtime") {
     const front = pipeline.front(env, ctx);
-    const bridge = new RealtimeBridge(front, reasoner, pipeline.delegateToolName);
+    const bridge = new RealtimeBridge(front, reasoner, pipeline.delegateToolName, {
+      ...(pipeline.toolResultFormat !== undefined ? { toolResultFormat: pipeline.toolResultFormat } : {}),
+      ...(pipeline.renderDirective !== undefined ? { renderDirective: pipeline.renderDirective } : {}),
+      ...(wiring.contextProvider ? { contextProvider: wiring.contextProvider } : {}),
+    });
     const session = new VoiceAgentSession({
       plugins: { realtime: {} },
       endpointingOwner: "timer",
+      ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
     });
     session.registerPlugin("realtime", bridge);
     return session;
@@ -116,9 +154,17 @@ export function buildVoiceSession<Env>(
     ...(pipeline.sttForceFinalizeTimeoutMs !== undefined
       ? { sttForceFinalizeTimeoutMs: pipeline.sttForceFinalizeTimeoutMs }
       : {}),
+    ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
   });
   session.registerPlugin("stt", stt.plugin);
-  session.registerPlugin("bridge", new ReasoningBridge(reasoner));
+  session.registerPlugin(
+    "bridge",
+    new ReasoningBridge(reasoner, {
+      ...(wiring.reasonerSessionStore
+        ? { sessionStore: wiring.reasonerSessionStore, sessionId: ctx.sessionId }
+        : {}),
+    }),
+  );
   session.registerPlugin("tts", tts.plugin);
   if (vad) session.registerPlugin("vad", vad.plugin);
   if (eos) session.registerPlugin("eos", eos.plugin);

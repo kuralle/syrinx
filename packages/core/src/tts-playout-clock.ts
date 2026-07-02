@@ -89,6 +89,20 @@ export class TtsPlayoutClock {
     return this.active.has(contextId);
   }
 
+  /** All still-active contexts, insertion order (oldest first). */
+  activeContexts(): string[] {
+    return [...this.active];
+  }
+
+  /**
+   * Wall-clock estimate of when this context's audio finishes playing out, or
+   * undefined if unknown. Anchors the idle timer to real playout end rather than
+   * chunk-arrival (TTS streams faster than realtime).
+   */
+  playoutEnd(contextId: string): number | undefined {
+    return this.playoutEndMs.get(contextId);
+  }
+
   /** The most-recently-added still-active context (insertion order), or "" if none. */
   latestActive(): string {
     let latest = "";

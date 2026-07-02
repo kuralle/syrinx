@@ -87,7 +87,23 @@ async function buildKuralleRunOptions(
     const appended = await appendFlowResumeUserMessage(runtime, opts.sessionId, turn.userText);
     if (appended) return base;
   }
-  return { ...base, input: turn.userText };
+  // G4 resume-by-seed: the BRIDGE owns history (reasoner seam §4.5). When the kuralle
+  // session is empty (fresh isolate / post-eviction) and the turn carries prior context,
+  // seed it once via historyDelta — kuralle appends it to the (empty) session, so the
+  // runtime resumes with the same context instead of restarting amnesiac. Never seeded
+  // into a non-empty session (that would double-apply history).
+  return { ...base, input: turn.userText, ...seedHistoryDelta(session, turn.messages) };
+}
+
+function seedHistoryDelta(
+  session: KuralleStoredSession | null,
+  messages: ReasonerTurn["messages"],
+): Pick<KuralleRunOptions, "historyDelta"> | Record<string, never> {
+  if (session && session.messages.length > 0) return {};
+  const delta = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({ role: message.role, content: message.content }));
+  return delta.length > 0 ? { historyDelta: delta } : {};
 }
 
 export async function buildKuralleTurnRunOptions(

@@ -58,6 +58,7 @@ export * from "./twilio.js";
 export * from "./telnyx.js";
 export * from "./smartpbx.js";
 export * from "./session-store.js";
+export { validateTwilioSignature } from "./twilio-auth.js";
 export { installGracefulShutdown, type GracefulClosable } from "./websocket-lifecycle.js";
 
 export interface VoiceWebSocketServerOptions {
@@ -100,6 +101,13 @@ export interface VoiceWebSocketServerOptions {
   readonly maxConcurrentSessions?: number;
   readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
+  /**
+   * Authorize each inbound `/ws` upgrade (shared secret / bearer / signature).
+   * Return false or throw to reject with 4401. Unset = OPEN — voice endpoints are
+   * unauthenticated by default and each connection incurs provider cost and can
+   * attach to a live session; set this before exposing the endpoint publicly.
+   */
+  readonly authorize?: (request: import("node:http").IncomingMessage) => boolean | Promise<boolean>;
 }
 
 export type { GracefulCloseOptions } from "./transport-host.js";
@@ -127,6 +135,12 @@ type ClientMessage =
       readonly sequence?: number;
     }
   | { readonly type: "codec_capability"; readonly downlinkEncoding: "pcm_s16le" | "opus" }
+  | {
+      readonly type: "playout_progress";
+      readonly contextId?: string;
+      readonly playedOutMs: number;
+      readonly complete?: boolean;
+    }
   | { readonly type: "ping" };
 
 interface BrowserConnectionState {
@@ -159,6 +173,7 @@ export async function createVoiceWebSocketServer(
     maxConcurrentSessions: positiveInteger(options.maxConcurrentSessions) ?? undefined,
     maxConcurrentSessionsScope: options.maxConcurrentSessionsScope,
     onAdmissionRejected: () => options.onTransportMetric?.(TRANSPORT_ADMISSION_REJECTED_METRIC),
+    authorize: options.authorize,
   });
   const wsServer = routedWebSocket.wsServer;
   const sessionStore = options.sessionStore ?? new InMemorySessionStore();
@@ -462,6 +477,16 @@ function wireBrowserSessionEvents(
   onSession("agent_tool_result", (event) => {
     sendJson(socket, { type: "agent_tool_result", turnId: event.turnId, id: event.id, result: event.result }, maxBufferedAmountBytes);
   });
+  // G3: typed preamble/filler lifecycle — same wire shape as the edge transport.
+  onSession("tool_call_cue", (event) => {
+    sendJson(socket, {
+      type: `tool_call_${event.phase}`,
+      turnId: event.turnId,
+      toolId: event.toolId,
+      toolName: event.toolName,
+      ...(event.afterMs !== undefined ? { afterMs: event.afterMs } : {}),
+    }, maxBufferedAmountBytes);
+  });
   onSession("agent_finished", (event) => {
     sendJson(socket, { type: "agent_end", turnId: event.turnId }, maxBufferedAmountBytes);
   });
@@ -489,6 +514,10 @@ function wireBrowserSessionEvents(
         wireAudio: Uint8Array,
         wireEncoding: "pcm_s16le" | "opus",
         durationMs: number,
+        // The sample rate of THIS frame's payload. Opus frames are encoded at the
+        // codec rate (48 kHz), not outputSampleRateHz — mislabeling them 16 kHz made
+        // the client skip its 48→16 kHz downsample and play assistant audio ~3× slow.
+        wireSampleRateHz: number,
       ): void => {
         const sequence = (ttsSequences.get(contextId) ?? 0) + 1;
         ttsSequences.set(contextId, sequence);
@@ -500,7 +529,7 @@ function wireBrowserSessionEvents(
               type: "tts_chunk",
               turnId: contextId,
               sequence,
-              sampleRateHz: outputSampleRateHz,
+              sampleRateHz: wireSampleRateHz,
               encoding: wireEncoding,
               channels: 1,
               byteLength: wireAudio.byteLength,
@@ -512,7 +541,7 @@ function wireBrowserSessionEvents(
                   type: "audio",
                   contextId,
                   sequence,
-                  sampleRateHz: outputSampleRateHz,
+                  sampleRateHz: wireSampleRateHz,
                   encoding: wireEncoding,
                   channels: 1,
                   byteLength: wireAudio.byteLength,
@@ -532,7 +561,7 @@ function wireBrowserSessionEvents(
             samples = resamplePcm16Streaming(streamingResamplers, samples, outputSampleRateHz, opusCodec.sampleRateHz);
           }
           for (const opus of opusCodec.encodePcm16Frame(samples, false)) {
-            pushWireFrame(opus, "opus", BROWSER_OPUS_FRAME_DURATION_MS);
+            pushWireFrame(opus, "opus", BROWSER_OPUS_FRAME_DURATION_MS, opusCodec.sampleRateHz);
           }
         }
         return frames;
@@ -540,7 +569,7 @@ function wireBrowserSessionEvents(
 
       for (let offset = 0; offset < resampled.byteLength; offset += frameBytesCount) {
         const frameAudio = resampled.subarray(offset, Math.min(resampled.byteLength, offset + frameBytesCount));
-        pushWireFrame(frameAudio, "pcm_s16le", pcm16DurationMs(frameAudio, outputSampleRateHz));
+        pushWireFrame(frameAudio, "pcm_s16le", pcm16DurationMs(frameAudio, outputSampleRateHz), outputSampleRateHz);
       }
       return frames;
     },
@@ -564,7 +593,7 @@ function wireBrowserSessionEvents(
               type: "tts_chunk",
               turnId: contextId,
               sequence,
-              sampleRateHz: outputSampleRateHz,
+              sampleRateHz: opusCodec.sampleRateHz,
               encoding: "opus",
               channels: 1,
               byteLength: opus.byteLength,
@@ -575,7 +604,7 @@ function wireBrowserSessionEvents(
               type: "audio",
               contextId,
               sequence,
-              sampleRateHz: outputSampleRateHz,
+              sampleRateHz: opusCodec.sampleRateHz,
               encoding: "opus",
               channels: 1,
               byteLength: opus.byteLength,
@@ -683,6 +712,22 @@ function handleClientMessage(
     }
     return currentContextId;
   }
+  if (message.type === "playout_progress") {
+    // The browser reports how much assistant audio it has actually played out. This
+    // is a more accurate "heard" clock than the server pacer (which leads the ear by
+    // the client jitter buffer), so barge-in truncates history to what was heard (B2).
+    const progressContextId = message.contextId ?? currentContextId;
+    if (progressContextId) {
+      session.bus.push(Route.Main, {
+        kind: "tts.playout_progress",
+        contextId: progressContextId,
+        timestampMs: Date.now(),
+        playedOutMs: message.playedOutMs,
+        complete: message.complete ?? false,
+      });
+    }
+    return currentContextId;
+  }
   if (message.type === "text") {
     const nextContextId = message.contextId ?? contextId();
     if (nextContextId !== currentContextId) {
@@ -749,6 +794,18 @@ function parseClientMessage(value: unknown): ClientMessage {
       throw new Error("codec_capability.downlinkEncoding must be pcm_s16le or opus");
     }
     return { type, downlinkEncoding };
+  }
+  if (type === "playout_progress") {
+    const playedOutMs = value.playedOutMs;
+    if (typeof playedOutMs !== "number" || !Number.isFinite(playedOutMs) || playedOutMs < 0) {
+      throw new Error("playout_progress.playedOutMs must be a non-negative number");
+    }
+    return {
+      type,
+      contextId: optionalContextId(value.contextId),
+      playedOutMs,
+      complete: value.complete === true ? true : undefined,
+    };
   }
   throw new Error("Unsupported client message type");
 }
@@ -883,9 +940,12 @@ function outboundMessageByteLength(data: string | Buffer): number {
 }
 
 function defaultContextId(): string {
-  return `turn-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  // crypto-random, not Math.random: ids are guessable resource handles. V8's PRNG
+  // is state-recoverable from a few observed outputs, which would let a client
+  // predict other sessions' turn/session ids and attach to a live conversation.
+  return `turn-${globalThis.crypto.randomUUID()}`;
 }
 
 function defaultSessionId(): string {
-  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `session-${globalThis.crypto.randomUUID()}`;
 }

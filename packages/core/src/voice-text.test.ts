@@ -25,6 +25,19 @@ describe("isCompleteVoiceText", () => {
     expect(isCompleteVoiceText("مرحبا؟")).toBe(true); // Arabic question mark
     expect(isCompleteVoiceText("नमस्ते।")).toBe(true); // Devanagari danda
   });
+
+  it("does not treat abbreviation or decimal dots as sentence ends", () => {
+    // These would otherwise be voiced with a falling intonation and split from
+    // their continuation ("Dr." | "Smith", "twelve." | "fifty").
+    expect(isCompleteVoiceText("Dr.")).toBe(false);
+    expect(isCompleteVoiceText("e.g.")).toBe(false);
+    expect(isCompleteVoiceText("The total is $12.")).toBe(false);
+    expect(isCompleteVoiceText("Meet at 3 p.m.")).toBe(false);
+    expect(isCompleteVoiceText("His name is J.")).toBe(false);
+    // But a real sentence end after an abbreviation earlier in the text is fine.
+    expect(isCompleteVoiceText("Dr. Smith will see you now.")).toBe(true);
+    expect(isCompleteVoiceText("The total is $12.50 today.")).toBe(true);
+  });
 });
 
 describe("takeCompleteVoiceText", () => {

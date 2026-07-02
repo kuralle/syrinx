@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   PipelineBusImpl,
   Route,
+  VoiceAgentSession as VoiceAgentSessionImpl,
   encodeSyrinxAudioEnvelope,
   type Scheduler,
   type ScheduledCallback,
@@ -378,6 +379,84 @@ describe("edge barge-in downlink", () => {
 
     expect(socket.json()).toContainEqual({ type: "audio_clear", turnId: "assistant-turn", reason: "barge_in" });
     expect(socket.json()).toContainEqual({ type: "agent_interrupted", turnId: "assistant-turn", reason: "barge_in" });
+  });
+});
+
+describe("edge tool-call cues (G3/WBS-3)", () => {
+  it("surfaces the typed lifecycle as tool_call_* wire messages: started → delayed → complete", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const session = new VoiceAgentSessionImpl({ plugins: {}, delayCueAfterMs: 20 });
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => session,
+    });
+    waitForReady(socket);
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: { query: "fees" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_result",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      result: "answer",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(socket.json()).toContainEqual({
+      type: "tool_call_started", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge",
+    });
+    expect(socket.json()).toContainEqual({
+      type: "tool_call_delayed", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge", afterMs: 20,
+    });
+    expect(socket.json()).toContainEqual({
+      type: "tool_call_complete", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge",
+    });
+  });
+
+  it("surfaces tool_call_failed when a barge-in aborts the pending delegate (R5)", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    const session = new VoiceAgentSessionImpl({ plugins: {}, delayCueAfterMs: 0 });
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => session,
+    });
+    waitForReady(socket);
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      source: "vad",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(socket.json()).toContainEqual({
+      type: "tool_call_failed", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge",
+    });
+    // Barge-in downlink unaffected — the flush messages still went out.
+    expect(socket.json().some((m) => m.type === "audio_clear")).toBe(true);
   });
 });
 

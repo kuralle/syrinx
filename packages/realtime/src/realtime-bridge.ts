@@ -3,6 +3,8 @@
 import {
   Route,
   categorizeLlmError,
+  type DelegateQueryPacket,
+  type DelegateResultPacket,
   type EndOfSpeechPacket,
   type InterruptTtsPacket,
   type InterruptionDetectedPacket,
@@ -13,6 +15,7 @@ import {
   type LlmToolResultPacket,
   type PipelineBus,
   type PluginConfig,
+  type RealtimeResumptionHandlePacket,
   type Reasoner,
   type ReasonerMessage,
   type UserAudioReceivedPacket,
@@ -32,8 +35,39 @@ const ENGINE_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES_20MS = 320;
 const FRAME_BYTES_20MS = FRAME_SAMPLES_20MS * 2;
 
+/**
+ * G1 — the structured delegate-result envelope (RFC bimodel-delegate-seam §4).
+ * The bridge wraps the accumulated reasoner answer in this JSON shape before
+ * `injectToolResult`, so the front model treats it as authoritative tool data
+ * and repeats it faithfully instead of paraphrasing or inventing facts. Field
+ * names mirror OpenAI's Realtime Prompting Guide "Tool Output Formatting"
+ * (`response_text` + `require_repeat_verbatim`) — the only field-validated
+ * envelope shape, and gpt-realtime is the primary front (OQ1).
+ */
+export interface DelegateResultEnvelope {
+  /** The authoritative answer — the front model's ONLY source of facts for the turn. */
+  readonly response_text: string;
+  readonly require_repeat_verbatim: true;
+  /** Optional app directive the front prompt keys on, e.g. "translate_faithfully". */
+  readonly render?: string;
+}
+
 export interface RealtimeBridgeOptions {
   readonly debug?: boolean;
+  /**
+   * How the delegate answer reaches the front model at `injectToolResult` time.
+   * `"envelope"` (default) wraps it as a {@link DelegateResultEnvelope}; `"string"`
+   * injects the raw answer (pre-envelope behavior). The envelope is applied to the
+   * already-buffered delegate answer — a synchronous JSON.stringify, no added latency
+   * (R2) — and never touches the cascade text-delta path. Bus packets
+   * (`llm.tool_result`, `delegate.result`) always carry the raw answer.
+   */
+  readonly toolResultFormat?: "envelope" | "string";
+  /**
+   * Optional `render` directive included in the envelope (e.g. `"translate_faithfully"`),
+   * for front prompts that key a rendering rule on it. Ignored with `toolResultFormat: "string"`.
+   */
+  readonly renderDirective?: string;
   /**
    * Supplies prior conversation context for delegate Reasoner turns. When omitted the delegate is
    * stateless — each tool call receives only the query extracted from the front-model tool args.
@@ -67,6 +101,7 @@ export class RealtimeBridge implements VoicePlugin {
   private turnAssistantDeltas = "";
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
+  private delegateTask: Promise<void> | null = null;
   private playedMs = 0;
   private audioRemainder: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private readonly disposers: Array<() => void> = [];
@@ -109,6 +144,7 @@ export class RealtimeBridge implements VoicePlugin {
 
   async close(): Promise<void> {
     this.sessionAbort?.abort();
+    this.inflight?.abort();
     for (const dispose of this.disposers.splice(0)) dispose();
     await this.adapter.close();
     this.bus = null;
@@ -163,6 +199,18 @@ export class RealtimeBridge implements VoicePlugin {
       case "speech_started":
         this.onSpeechStarted(bus);
         break;
+      case "resumption_handle": {
+        // G4: persist-worthy native-resume handle (Gemini). Background route —
+        // a durable host stores the latest and passes it back on reconnect.
+        const packet: RealtimeResumptionHandlePacket = {
+          kind: "realtime.resumption_handle",
+          contextId: this.contextId,
+          timestampMs: Date.now(),
+          handle: ev.handle,
+        };
+        bus.push(Route.Background, packet);
+        break;
+      }
       case "error":
         this.onError(bus, ev.cause, ev.recoverable);
         break;
@@ -176,7 +224,7 @@ export class RealtimeBridge implements VoicePlugin {
     ev: { toolId: string; toolName: string; args: Record<string, unknown> },
   ): Promise<void> {
     if (ev.toolName === this.delegateToolName) {
-      if (this.reasoner) await this.runDelegate(bus, ev);
+      if (this.reasoner) this.dispatchDelegate(bus, ev);
       return;
     }
     if (this.opts.onFrontToolCall) {
@@ -207,15 +255,38 @@ export class RealtimeBridge implements VoicePlugin {
     this.adapter.injectToolResult(ev.toolId, result);
   }
 
+  /**
+   * Start the reasoner delegate OFF the serial event pump. The pump must keep draining adapter
+   * events during the multi-second reasoner "thinking gap" — above all `speech_started`, so a
+   * barge-in mid-delegate still fires `interrupt.detected` and (via `interrupt.tts`) aborts the
+   * now-unwanted delegate before its answer is voiced over the user. Awaiting the delegate inside
+   * the pump loop (the old shape) froze barge-in for the entire gap. `runDelegate` sets
+   * `this.inflight` synchronously before its first await, so a subsequently-pumped barge-in sees
+   * a live controller to abort.
+   */
+  private dispatchDelegate(
+    bus: PipelineBus,
+    ev: { toolId: string; toolName: string; args: Record<string, unknown> },
+  ): void {
+    this.delegateTask = this.runDelegate(bus, ev).catch((err) => {
+      if (!this.bus || isAbortError(err)) return;
+      this.onError(bus, err instanceof Error ? err : new Error(String(err)), false);
+    });
+  }
+
   private async runDelegate(
     bus: PipelineBus,
     ev: { toolId: string; toolName: string; args: Record<string, unknown> },
   ): Promise<void> {
-    if (!this.contextId) return;
+    // Pin the turn's contextId now: the pump keeps advancing while the delegate streams, so
+    // this.contextId may move to a later turn before we finish. The tool_call/tool_result pair
+    // must stay bound to the turn that issued the call (R1: never merge parts across turns).
+    const contextId = this.contextId;
+    if (!contextId) return;
 
     const toolCall: LlmToolCallPacket = {
       kind: "llm.tool_call",
-      contextId: this.contextId,
+      contextId,
       timestampMs: Date.now(),
       toolId: ev.toolId,
       toolName: ev.toolName,
@@ -235,8 +306,22 @@ export class RealtimeBridge implements VoicePlugin {
       return;
     }
 
-    this.inflight = new AbortController();
+    const controller = new AbortController();
+    this.inflight = controller;
     let answer = "";
+    let grounded = false;
+
+    // G2 observability: the query is on its way to the reasoner (Background route, R4).
+    const queryStartedMs = Date.now();
+    const delegateQuery: DelegateQueryPacket = {
+      kind: "delegate.query",
+      contextId,
+      timestampMs: queryStartedMs,
+      query: userText,
+      toolId: ev.toolId,
+      toolName: ev.toolName,
+    };
+    bus.push(Route.Background, delegateQuery);
 
     try {
       const messages = this.opts.contextProvider?.() ?? [];
@@ -244,13 +329,14 @@ export class RealtimeBridge implements VoicePlugin {
         userText,
         toolArgs: ev.args,
         messages,
-        signal: this.inflight.signal,
+        signal: controller.signal,
       })) {
         switch (part.type) {
           case "text-delta":
             answer += part.text;
             break;
           case "tool-result":
+            grounded = true;
             break;
           case "finish":
             if (!answer && part.text) answer = part.text;
@@ -274,7 +360,8 @@ export class RealtimeBridge implements VoicePlugin {
       this.onError(bus, err instanceof Error ? err : new Error(String(err)), false);
       return;
     } finally {
-      this.inflight = undefined;
+      // Only clear if still ours — a newer delegate may have replaced this.inflight.
+      if (this.inflight === controller) this.inflight = undefined;
     }
 
     if (answer.length === 0) {
@@ -282,16 +369,41 @@ export class RealtimeBridge implements VoicePlugin {
       return;
     }
 
+    const answeredMs = Date.now();
     const toolResult: LlmToolResultPacket = {
       kind: "llm.tool_result",
-      contextId: this.contextId,
-      timestampMs: Date.now(),
+      contextId,
+      timestampMs: answeredMs,
       toolId: ev.toolId,
       toolName: ev.toolName,
       result: answer,
     };
     bus.push(Route.Main, toolResult);
-    this.adapter.injectToolResult(ev.toolId, answer);
+    // G2 observability: the reasoner produced the final answer (Background route, R4).
+    const delegateResult: DelegateResultPacket = {
+      kind: "delegate.result",
+      contextId,
+      timestampMs: answeredMs,
+      query: userText,
+      answer,
+      durationMs: answeredMs - queryStartedMs,
+      grounded,
+      toolId: ev.toolId,
+      toolName: ev.toolName,
+    };
+    bus.push(Route.Background, delegateResult);
+    this.adapter.injectToolResult(ev.toolId, this.formatToolResult(answer));
+  }
+
+  /** G1: wrap the buffered delegate answer for the front model (synchronous — R2). */
+  private formatToolResult(answer: string): string {
+    if (this.opts.toolResultFormat === "string") return answer;
+    const envelope: DelegateResultEnvelope = {
+      response_text: answer,
+      require_repeat_verbatim: true,
+      ...(this.opts.renderDirective ? { render: this.opts.renderDirective } : {}),
+    };
+    return JSON.stringify(envelope);
   }
 
   private onSpeechStarted(bus: PipelineBus): void {

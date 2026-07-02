@@ -22,7 +22,7 @@ import {
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
-import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
+import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
   nonNegativeInteger,
@@ -90,6 +90,8 @@ interface TwilioMediaMessage {
 interface TwilioConnectionState {
   streamSid: string;
   contextId: string;
+  contextBase: string;
+  turnCounter: number;
   started: boolean;
   stopped: boolean;
   lastInboundSequenceNumber: number | null;
@@ -148,6 +150,8 @@ export async function createTwilioMediaStreamServer(
     createState: () => ({
       streamSid: "",
       contextId: "",
+      contextBase: "",
+      turnCounter: 0,
       started: false,
       stopped: false,
       lastInboundSequenceNumber: null,
@@ -277,6 +281,7 @@ export async function createTwilioMediaStreamServer(
         },
       });
       state.clearPlayout = outbound.clearPlayout;
+      installTelephonyTurnRotation(session, disposers, state);
       gracefulCloseRegistry.set(socket, (deadlineMs) => outbound.drainAndClose(socket, deadlineMs));
       disposers.push(() => gracefulCloseRegistry.delete(socket));
       return (reason) => state.clearPlayout(reason);
@@ -296,6 +301,7 @@ export async function createTwilioMediaStreamServer(
         state.streamSid = start.streamSid ?? message.streamSid ?? "";
         if (!state.streamSid) throw new Error("Twilio start event is missing streamSid");
         state.contextId = contextIdFn(start);
+        state.contextBase = state.contextId;
         state.started = true;
         return;
       }

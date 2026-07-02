@@ -168,7 +168,7 @@ describe("WT-03 Browser outbound pacing", () => {
       expect(c.type).toBe("tts_chunk");
       expect(c.turnId).toBe("test-turn");
       expect(c.sequence).toBeGreaterThan(0);
-      expect(c.sampleRateHz).toBe(16000);
+      expect(c.sampleRateHz).toBe(48000); // opus frames carry the 48 kHz codec rate
       expect(c.encoding).toBe("opus");
       expect(c.channels).toBe(1);
       expect(c.byteLength).toBeGreaterThan(0);

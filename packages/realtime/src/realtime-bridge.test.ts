@@ -6,8 +6,11 @@ import {
   PipelineBusImpl,
   Route,
   VoiceAgentSession,
+  type DelegateQueryPacket,
+  type DelegateResultPacket,
   type EndOfSpeechPacket,
   type InterruptTtsPacket,
+  type InterruptionDetectedPacket,
   type LlmDeltaPacket,
   type LlmResponseDonePacket,
   type LlmErrorPacket,
@@ -288,9 +291,14 @@ describe("RealtimeBridge", () => {
 
     await waitForCondition(() => adapter.injectedToolResults.length === 1);
 
+    // The bus packet keeps the raw answer; the front model receives the G1 envelope (default).
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]!.result).toBe(answerText);
-    expect(adapter.injectedToolResults[0]).toEqual({ toolId: "call_delegate_1", text: answerText });
+    expect(adapter.injectedToolResults[0]!.toolId).toBe("call_delegate_1");
+    expect(JSON.parse(adapter.injectedToolResults[0]!.text)).toEqual({
+      response_text: answerText,
+      require_repeat_verbatim: true,
+    });
 
     await bridge.close();
     bus.stop();
@@ -321,7 +329,203 @@ describe("RealtimeBridge", () => {
     });
 
     await waitForCondition(() => adapter.injectedToolResults.length === 1);
-    expect(adapter.injectedToolResults[0]!.text).toBe("Partial ");
+    expect(JSON.parse(adapter.injectedToolResults[0]!.text)).toMatchObject({ response_text: "Partial " });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("G1/WBS-2: envelope carries the render directive when configured", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "The fee is 5000 rupees." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      renderDirective: "translate_faithfully",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_env_1",
+      toolName: "consult_knowledge",
+      args: { query: "fees" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(JSON.parse(adapter.injectedToolResults[0]!.text)).toEqual({
+      response_text: "The fee is 5000 rupees.",
+      require_repeat_verbatim: true,
+      render: "translate_faithfully",
+    });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it('G1/WBS-2: toolResultFormat "string" opts out to the raw answer (pre-RFC behavior)', async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "raw answer" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      toolResultFormat: "string",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_env_2",
+      toolName: "consult_knowledge",
+      args: { query: "q" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(adapter.injectedToolResults[0]!.text).toBe("raw answer");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("G2/WBS-1: delegate turn emits delegate.query then delegate.result on the Background route", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "tool-call", toolId: "rag-1", toolName: "retrieve", args: { q: "deadline" } };
+        yield { type: "tool-result", toolId: "rag-1", toolName: "retrieve", result: "chunk" };
+        yield { type: "text-delta", text: "The deadline is March 31." };
+        yield { type: "finish", reason: "stop", text: "The deadline is March 31." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const background: Array<{ route: Route; packet: VoicePacket }> = [];
+    const bus = new PipelineBusImpl({
+      onPacket: (route, packet) => {
+        if (packet.kind.startsWith("delegate.")) background.push({ route, packet });
+      },
+    });
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_obs_1",
+      toolName: "consult_knowledge",
+      args: { query: "When is the exam registration deadline?" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    await waitForCondition(() => background.length === 2);
+
+    expect(background.map((entry) => entry.route)).toEqual([Route.Background, Route.Background]);
+    const [query, result] = background.map((entry) => entry.packet);
+    expect(query).toMatchObject({
+      kind: "delegate.query",
+      query: "When is the exam registration deadline?",
+      toolId: "call_obs_1",
+      toolName: "consult_knowledge",
+    });
+    expect(query!.contextId).toBeTruthy();
+    expect(result).toMatchObject({
+      kind: "delegate.result",
+      query: "When is the exam registration deadline?",
+      answer: "The deadline is March 31.",
+      grounded: true,
+      toolId: "call_obs_1",
+      toolName: "consult_knowledge",
+      contextId: query!.contextId,
+    });
+    expect((result as DelegateResultPacket).durationMs).toBeGreaterThanOrEqual(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("G2/WBS-1: delegate.result grounded=false when the reasoner used no tool", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "text-delta", text: "From memory." };
+        yield { type: "finish", reason: "stop", text: "From memory." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_obs_2",
+      toolName: "consult_knowledge",
+      args: { query: "ungrounded" },
+    });
+
+    await waitForCondition(() => results.length === 1);
+    expect(results[0]!.grounded).toBe(false);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("G2/WBS-1: failed delegate emits delegate.query but no delegate.result", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "error", cause: new Error("brain down"), recoverable: false };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const queries: DelegateQueryPacket[] = [];
+    const results: DelegateResultPacket[] = [];
+    const errors: LlmErrorPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.query", (pkt) => { queries.push(pkt as DelegateQueryPacket); });
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+    bus.on("llm.error", (pkt) => { errors.push(pkt as LlmErrorPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_obs_3",
+      toolName: "consult_knowledge",
+      args: { query: "will fail" },
+    });
+
+    await waitForCondition(() => errors.length === 1);
+    expect(queries).toHaveLength(1);
+    expect(results).toHaveLength(0);
 
     await bridge.close();
     bus.stop();
@@ -876,6 +1080,67 @@ describe("RealtimeBridge", () => {
       timestampMs: Date.now(),
     });
     await waitForCondition(() => delegateSignal!.aborted);
+
+    await session.close();
+  });
+
+  it("BUG1: a barge-in DURING the reasoner gap drains speech_started, fires interrupt.detected, and aborts the delegate before it completes", async () => {
+    // The barge-in is delivered on the adapter EVENT STREAM (not a direct interrupt.tts bus
+    // push). With the old serial pump, awaiting the delegate froze the pump for the whole
+    // reasoner gap, so this speech_started stayed queued and never became interrupt.detected —
+    // the unwanted answer was then voiced over the user. The delegate must run off the pump.
+    const adapter = new FakeRealtimeAdapter();
+    let delegateSignal: AbortSignal | undefined;
+    let reasonerCompleted = false;
+    const reasoner: Reasoner = {
+      stream: ({ signal }) => {
+        delegateSignal = signal;
+        return (async function* () {
+          // The ~1.5–3s reasoner "thinking gap", exaggerated: the barge-in must abort it, not
+          // wait it out.
+          await new Promise((resolve) => setTimeout(resolve, 60_000));
+          reasonerCompleted = true;
+          yield { type: "finish", reason: "stop", text: "unwanted late answer" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const session = new VoiceAgentSession({
+      plugins: { realtime: {} },
+      endpointingOwner: "timer",
+      minInterruptionMs: 0,
+    });
+    session.registerPlugin("realtime", bridge);
+
+    const interruptDetected: InterruptionDetectedPacket[] = [];
+    const turnChanges: TurnChangePacket[] = [];
+    session.bus.on("interrupt.detected", (pkt) => { interruptDetected.push(pkt as InterruptionDetectedPacket); });
+    session.bus.on("turn.change", (pkt) => { turnChanges.push(pkt as TurnChangePacket); });
+
+    await session.start();
+
+    // Turn A: front model responds, emits audio, then calls the delegate tool.
+    adapter.emit({ type: "response_started" });
+    await waitForCondition(() => turnChanges.length >= 1);
+    adapter.emit({ type: "audio", pcm16: frameSizedPcm24k(), sampleRateHz: 24_000 });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_gap_delegate",
+      toolName: "consult_knowledge",
+      args: { query: "late add policy" },
+    });
+
+    // Delegate is now in flight (reasoner sleeping) — signal wired, not yet aborted.
+    await waitForCondition(() => delegateSignal !== undefined);
+    expect(delegateSignal!.aborted).toBe(false);
+
+    // User barges in mid-gap, on the adapter event stream.
+    adapter.emit({ type: "speech_started" });
+
+    // The pump kept draining: speech_started → interrupt.detected → session → interrupt.tts → abort.
+    await waitForCondition(() => interruptDetected.length >= 1);
+    await waitForCondition(() => delegateSignal!.aborted);
+    expect(reasonerCompleted).toBe(false);
 
     await session.close();
   });

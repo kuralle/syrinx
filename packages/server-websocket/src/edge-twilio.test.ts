@@ -159,6 +159,32 @@ describe("Twilio edge ingress", () => {
     expect(socket.disposed).toBe(true);
   });
 
+  it("actually closes the session on hangup (no provider-socket leak)", async () => {
+    // Regression for the R1 leak: cleanup released without decrementing
+    // connectionCount, so release early-returned and session.close() never ran —
+    // Deepgram/TTS sockets leaked until DO eviction on every phone call.
+    const socket = new FakeSocket();
+    let closed = false;
+    const bus = new PipelineBusImpl();
+    const session = {
+      bus,
+      async start() { void bus.start(); },
+      async close() { closed = true; bus.stop(); },
+      on() {}, off() {}, requestClientInterrupt() {},
+    } as unknown as VoiceAgentSession;
+
+    await runTwilioEdgeWebSocketConnection(
+      socket,
+      new Request("https://edge.test/twilio?sessionId=tw-close"),
+      { sessionStore: new InMemorySessionStore(), createSession: () => session, keepAliveIntervalMs: 0 },
+    );
+    socket.emit(JSON.stringify({ event: "start", streamSid: "MZ9", start: { streamSid: "MZ9", callSid: "CA9" } }));
+    socket.emit(JSON.stringify({ event: "stop", streamSid: "MZ9" }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(closed).toBe(true);
+  });
+
   it("rotates the uplink contextId after each completed turn", async () => {
     const received: UserAudioReceivedPacket[] = [];
     const { socket, session } = await startConnection(received);

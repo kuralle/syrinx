@@ -49,7 +49,11 @@ export function createConversationEventStream(): [
   });
 
   const push = (event: ConversationEvent): void => {
-    if (controller) {
+    // Only retain events when a reader is attached. A ReadableStream buffers
+    // enqueue() without bound; with no debug consumer (nothing in-tree reads this
+    // by default) every packet's event would be retained for the whole call and
+    // grow memory unbounded. `locked` is true once getReader() is called.
+    if (controller && stream.locked) {
       try {
         controller.enqueue(event);
       } catch {

@@ -79,6 +79,29 @@ describe("WT-08 admission control and upgrade routing", () => {
     await server.close();
   });
 
+  it("rejects an unauthorized upgrade with 4401 and admits an authorized one", async () => {
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      authorize: (request) => new URL(request.url ?? "/", "http://x").searchParams.get("token") === "secret",
+      createSession: () => new VoiceAgentSession({ plugins: {} }),
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const rejected = registerSocket(new WebSocket(`${websocketUrl(address.port)}?token=wrong`));
+    await new Promise<void>((resolve, reject) => {
+      rejected.once("open", resolve);
+      rejected.once("error", reject);
+    });
+    expect(await waitForClose(rejected)).toBe(4401);
+
+    const authorized = await openBrowserSocketReady(`${websocketUrl(address.port)}?token=secret`);
+    expect(authorized.readyState).toBe(WebSocket.OPEN);
+
+    authorized.close();
+    await server.close();
+  });
+
   it("destroys sockets on unmatched upgrade paths when this router is the sole upgrade handler", async () => {
     const httpServer = registerHttpServer(createServer());
     const server = registerServer(await createVoiceWebSocketServer({

@@ -672,6 +672,39 @@ describe("SyrinxBrowserClient — metrics", () => {
   });
 });
 
+describe("SyrinxBrowserClient — tool-call cues (G3/WBS-3)", () => {
+  beforeEach(() => {
+    sockets = [];
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  });
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+  });
+
+  it("surfaces the four typed tool_call_* lifecycle messages", () => {
+    const client = makeClient();
+    const events = collectEvents(client);
+    client.connect();
+    const socket = sockets[0]!;
+    socket.dispatch("open", {});
+
+    const frames = [
+      { type: "tool_call_started", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge" },
+      { type: "tool_call_delayed", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge", afterMs: 2000 },
+      { type: "tool_call_complete", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge" },
+      { type: "tool_call_failed", turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge" },
+    ];
+    for (const frame of frames) socket.dispatch("message", { data: JSON.stringify(frame) });
+
+    const cueMessages = events
+      .filter((event): event is Extract<SyrinxBrowserClientEvent, { type: "message" }> => event.type === "message")
+      .map((event) => event.message)
+      .filter((message) => message.type.startsWith("tool_call_"));
+    expect(cueMessages).toMatchObject(frames);
+  });
+});
+
 describe("local barge-in (client_interrupt)", () => {
   beforeEach(() => {
     sockets = [];

@@ -15,6 +15,14 @@ export interface GeminiLiveOptions {
   readonly model?: string;
   readonly systemInstruction?: string;
   readonly tools?: readonly RealtimeToolDef[];
+  /**
+   * G4 native resume: a `sessionResumption` handle from a prior session's
+   * `resumption_handle` events. Gemini restores the conversation server-side —
+   * do NOT also replay the transcript (that would double-apply history, R6).
+   * Session resumption is always enabled so handles are issued; this passes a
+   * prior handle back on reconnect.
+   */
+  readonly sessionResumptionHandle?: string;
 }
 
 class GeminiLiveAdapter implements RealtimeAdapter {
@@ -24,6 +32,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     supportsConcurrentToolAudio: false,
     supportsTruncate: false,
     emitsServerSpeechStarted: true,
+    supportsNativeResume: true,
   } as const;
 
   readonly events: AsyncIterable<RealtimeEvent>;
@@ -56,6 +65,11 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       responseModalities: [Modality.AUDIO],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      // G4: always on so the server issues resumption handles; a prior handle
+      // resumes the conversation server-side (native resume — no replay).
+      sessionResumption: this.opts.sessionResumptionHandle
+        ? { handle: this.opts.sessionResumptionHandle }
+        : {},
     };
     if (this.opts.systemInstruction) {
       config["systemInstruction"] = this.opts.systemInstruction;
@@ -161,6 +175,12 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   }
 
   private handleMessage(msg: LiveServerMessage): void {
+    // G4: surface fresh resumption handles so a durable host can persist the latest.
+    const resumption = msg.sessionResumptionUpdate;
+    if (resumption?.resumable && resumption.newHandle) {
+      this.stream.push({ type: "resumption_handle", handle: resumption.newHandle });
+    }
+
     if (msg.setupComplete) {
       if (!this.activeResponse) {
         this.activeResponse = true;

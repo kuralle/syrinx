@@ -44,6 +44,80 @@ function createMockSocketHarness(): MockSocketHarness {
   };
 }
 
+interface ReconnectableHarness {
+  readonly factory: SocketFactory;
+  readonly sent: string[];
+  readonly connectCount: () => number;
+  /** Fire the current socket's onClose with a reconnectable code → triggers auto-reconnect. */
+  drop(): void;
+  inject(msg: Record<string, unknown>): void;
+}
+
+/**
+ * Mock harness that models the connection lifecycle so a reconnect can be simulated: each
+ * factory call mints a fresh socket that auto-fires onOpen, and `drop()` closes the current
+ * socket which drives WebSocketConnection to reconnect (calling the factory again).
+ */
+function createReconnectableHarness(): ReconnectableHarness {
+  const sent: string[] = [];
+  let connectCount = 0;
+  let current: {
+    open: boolean;
+    closeHandler?: (code: number, reason: string) => void;
+    messageHandler?: (data: SocketData, isBinary: boolean) => void;
+  } | null = null;
+
+  const factory: SocketFactory = () => {
+    connectCount += 1;
+    const state: {
+      open: boolean;
+      closeHandler?: (code: number, reason: string) => void;
+      messageHandler?: (data: SocketData, isBinary: boolean) => void;
+    } = { open: false };
+    current = state;
+    const socket: ManagedSocket = {
+      get isOpen() {
+        return state.open;
+      },
+      send: (data: SocketData) => {
+        sent.push(typeof data === "string" ? data : "");
+      },
+      keepAlivePing: () => {},
+      verify: async () => true,
+      dispose: () => {
+        state.open = false;
+      },
+      onOpen: (handler) => {
+        queueMicrotask(() => {
+          state.open = true;
+          handler();
+        });
+      },
+      onMessage: (handler) => {
+        state.messageHandler = handler;
+      },
+      onClose: (handler) => {
+        state.closeHandler = handler;
+      },
+      onError: () => {},
+    };
+    return socket;
+  };
+
+  return {
+    factory,
+    sent,
+    connectCount: () => connectCount,
+    drop: () => {
+      const state = current;
+      if (!state) return;
+      state.open = false;
+      state.closeHandler?.(1006, "dropped");
+    },
+    inject: (msg) => current?.messageHandler?.(JSON.stringify(msg), false),
+  };
+}
+
 async function collectEvents(
   events: AsyncIterable<RealtimeEvent>,
   max = 8,
@@ -153,6 +227,82 @@ describe("fromOpenAIRealtime", () => {
 
     mock.inject({ type: "response.done", response: {} });
     expect(JSON.parse(mock.sent[5]!)).toEqual({ type: "response.create" });
+  });
+
+  it("G4/WBS-4: replays resumeHistory as conversation items after session.update, without response.create", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      resumeHistory: () => [
+        { role: "user", content: "First question" },
+        { role: "assistant", content: "First answer" },
+      ],
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length >= 3);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    expect(JSON.parse(mock.sent[0]!)).toMatchObject({ type: "session.update" });
+    expect(JSON.parse(mock.sent[1]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "First question" }],
+      },
+    });
+    expect(JSON.parse(mock.sent[2]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "First answer" }],
+      },
+    });
+    // Replay must never make the model speak (R6: no double-answer).
+    expect(mock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)).not.toContain(
+      "response.create",
+    );
+    expect(adapter.caps.supportsNativeResume).toBeUndefined();
+  });
+
+  it("G4/WBS-4: replays the CURRENT resumeHistory again on reconnect (no amnesia error)", async () => {
+    const harness = createReconnectableHarness();
+    const history: Array<{ role: "user" | "assistant"; content: string }> = [
+      { role: "user", content: "Q1" },
+    ];
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: harness.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      resumeHistory: () => history,
+    });
+    const events: RealtimeEvent[] = [];
+    void (async () => {
+      for await (const event of adapter.events) events.push(event);
+    })();
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => harness.sent.length >= 2);
+    harness.inject({ type: "session.updated" });
+    await openTask;
+
+    history.push({ role: "assistant", content: "A1" });
+    harness.sent.length = 0;
+    harness.drop();
+    await waitFor(() => harness.connectCount() === 2 && harness.sent.length >= 3);
+
+    const types = harness.sent.map((frame) => (JSON.parse(frame) as { type: string }).type);
+    expect(types[0]).toBe("session.update");
+    expect(types.filter((type) => type === "conversation.item.create")).toHaveLength(2);
+    // With replay wired, the reconnect no longer surfaces the history-lost error.
+    expect(events.some((event) => event.type === "error" && event.cause.message.includes("history was lost"))).toBe(false);
+
+    await adapter.close();
   });
 
   it("sends a typed user turn as conversation.item.create(input_text) + response.create", async () => {
@@ -468,5 +618,58 @@ describe("fromOpenAIRealtime", () => {
       .map((raw) => JSON.parse(raw) as Record<string, unknown>)
       .filter((msg) => msg["type"] === "conversation.item.truncate");
     expect(truncateMessages).toHaveLength(0);
+  });
+
+  it("BUG2: re-sends session.update (config + tools) on reconnect and surfaces history loss", async () => {
+    const harness = createReconnectableHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: harness.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      tools: [
+        {
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        },
+      ],
+    });
+
+    const errors: RealtimeEvent[] = [];
+    const drainTask = (async () => {
+      for await (const ev of adapter.events) {
+        if (ev.type === "error") errors.push(ev);
+      }
+    })();
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => harness.sent.some((s) => (JSON.parse(s) as { type?: string }).type === "session.update"));
+    harness.inject({ type: "session.updated" });
+    await openTask;
+
+    const countSessionUpdate = (): string[] =>
+      harness.sent.filter((s) => (JSON.parse(s) as { type?: string }).type === "session.update");
+    expect(countSessionUpdate()).toHaveLength(1);
+    expect(harness.connectCount()).toBe(1);
+
+    // Mid-call socket drop → WebSocketConnection auto-reconnects.
+    harness.drop();
+    await waitFor(() => countSessionUpdate().length >= 2);
+    expect(harness.connectCount()).toBeGreaterThanOrEqual(2);
+
+    // The reconnected session got a fresh session.update carrying the tools + config.
+    const secondUpdate = JSON.parse(countSessionUpdate()[1]!) as {
+      session: { tools: Array<{ name: string }> };
+    };
+    expect(secondUpdate.session.tools).toHaveLength(1);
+    expect(secondUpdate.session.tools[0]!.name).toBe("consult_knowledge");
+
+    // History loss is surfaced as a recoverable error, not silence.
+    await waitFor(() =>
+      errors.some((e) => e.type === "error" && e.recoverable && /history/i.test(e.cause.message)),
+    );
+
+    await adapter.close();
+    await drainTask;
   });
 });

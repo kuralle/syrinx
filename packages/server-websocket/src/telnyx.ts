@@ -25,7 +25,7 @@ import {
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
-import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
+import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
   nonNegativeInteger,
@@ -104,6 +104,8 @@ type TelnyxCodec = "PCMU" | "L16";
 interface TelnyxConnectionState {
   streamId: string;
   contextId: string;
+  contextBase: string;
+  turnCounter: number;
   inboundCodec: TelnyxCodec;
   inboundSampleRateHz: number;
   readonly outboundCodec: TelnyxCodec;
@@ -168,6 +170,8 @@ export async function createTelnyxMediaStreamServer(
     createState: () => ({
       streamId: "",
       contextId: "",
+      contextBase: "",
+      turnCounter: 0,
       inboundCodec: "PCMU",
       inboundSampleRateHz: 8000,
       outboundCodec: bidirectionalCodec,
@@ -290,6 +294,7 @@ export async function createTelnyxMediaStreamServer(
         },
       });
       state.clearPlayout = outbound.clearPlayout;
+      installTelephonyTurnRotation(session, disposers, state);
       gracefulCloseRegistry.set(socket, (deadlineMs) => outbound.drainAndClose(socket, deadlineMs));
       disposers.push(() => gracefulCloseRegistry.delete(socket));
       return (reason) => state.clearPlayout(reason);
@@ -315,6 +320,7 @@ export async function createTelnyxMediaStreamServer(
         state.streamId = message.stream_id ?? start.stream_id ?? "";
         if (!state.streamId) throw new Error("Telnyx start event is missing stream_id");
         state.contextId = contextIdFn(start);
+        state.contextBase = state.contextId;
         state.inboundCodec = format.codec;
         state.inboundSampleRateHz = format.sampleRateHz;
         state.started = true;

@@ -175,6 +175,47 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
+  it("completes a wedged turn via UtteranceEnd when speech_final never fires (noisy-line backstop)", async () => {
+    // A noisy/continuous line: Deepgram sends an is_final segment but never
+    // speech_final. UtteranceEnd (gap-based) must complete the turn so it can't wedge.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false, // never speech_final on this noisy line
+            channel: { alternatives: [{ transcript: "book a room", confidence: 0.9 }] },
+          }));
+          setTimeout(() => socket.send(JSON.stringify({ type: "UtteranceEnd", last_word_end: 1.2 })), 5);
+          return;
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const turnCompletes: Array<{ text: string; contextId: string }> = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      const p = pkt as unknown as { text: string; contextId: string };
+      turnCompletes.push({ text: p.text, contextId: p.contextId });
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      utterance_end_ms: 1000,
+    });
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(turnCompletes).toEqual([{ text: "book a room", contextId: "turn-1" }]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits trailing provider-final segments after Pipecat requests finalize", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data, isBinary) => {

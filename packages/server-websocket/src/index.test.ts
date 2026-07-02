@@ -601,7 +601,7 @@ describe("createVoiceWebSocketServer", () => {
       type: "tts_chunk",
       turnId: "turn-2",
       sequence: 1,
-      sampleRateHz: 16000,
+      sampleRateHz: 48000, // opus frames are labeled at the 48 kHz codec rate
       encoding: "opus",
       channels: 1,
     });
@@ -610,7 +610,7 @@ describe("createVoiceWebSocketServer", () => {
       type: "audio",
       contextId: "turn-2",
       sequence: 1,
-      sampleRateHz: 16000,
+      sampleRateHz: 48000,
       encoding: "opus",
     });
     expect(envelope.audio.byteLength).toBeGreaterThan(0);
@@ -1697,11 +1697,14 @@ describe("createVoiceWebSocketServer", () => {
     });
 
     const envelope = decodeTestBinaryAudioEnvelope(await binaryMessage);
+    // Opus frames are encoded at the codec rate (48 kHz) and MUST be labeled as such,
+    // so the client decodes then downsamples 48→16 kHz. Labeling them 16 kHz made the
+    // client skip the downsample and play assistant audio ~3× slow.
     expect(envelope.header).toMatchObject({
       type: "audio",
       contextId: "turn-tts",
       sequence: 1,
-      sampleRateHz: 16000,
+      sampleRateHz: 48000,
       encoding: "opus",
       channels: 1,
     });

@@ -61,15 +61,42 @@ export class SupportVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<E
 }) {}
 ```
 
+## The Responder-Thinker primitive
+
+`withVoice` packages Syrinx's bi-model **Responder-Thinker** shape turnkey (RFC
+`docs/rfc-bimodel-delegate-seam.md`): wire a realtime front + a `Reasoner` and the delegate seam
+comes with —
+
+- **Structured result envelope (G1, default).** The reasoner's answer reaches the front model as
+  `{ response_text, require_repeat_verbatim: true, render? }` so it repeats facts faithfully
+  instead of paraphrasing. Configure per pipeline: `toolResultFormat: "envelope" | "string"`,
+  `renderDirective: "translate_faithfully"`.
+- **Delegate observability (G2).** `onDelegateQuery` / `onDelegateResult` hooks fire around every
+  reasoner run with the query, answer, `durationMs`, and `grounded` — log or persist the Q&A pair
+  without wrapping the `Reasoner`.
+- **Typed "thinking" cues (G3).** Clients automatically receive `tool_call_started` /
+  `tool_call_delayed` (after `delayCueAfterMs`) / `tool_call_complete` / `tool_call_failed` wire
+  messages around the reasoner-latency window — key earcons/indicators on these instead of
+  inventing an app message (`@kuralle-syrinx/browser-client` parses them).
+- **Durable session + resume (G4, default on).** The conversation persists to the Agent's
+  DO-SQLite and survives eviction/hibernation: cascaded pipelines re-seed the `ReasoningBridge`;
+  realtime pipelines feed the durable transcript to delegate turns and expose `ctx.resume` to the
+  `front()` factory — `resumeHistory: ctx.resume.history` on replay providers (OpenAI),
+  `sessionResumptionHandle: ctx.resume.providerHandle` on native-resume providers (Gemini; never
+  replay on top of a handle).
+
 ## Options
 
 | Option | Description |
 | --- | --- |
 | `transport` | `"edge"` (default — Syrinx browser/edge protocol over `/ws`) or `"twilio"` (Twilio Media Streams, μ-law 8 kHz, for a PSTN leg). One transport per Agent class. |
-| `pipeline` | `{ kind: "realtime", front, delegateToolName? }` or `{ kind: "cascaded", stt, tts, vad?, eos?, endpointingOwner?, sttForceFinalizeTimeoutMs? }`. |
-| `reasoner` | `(env, { sessionId }) => Reasoner`. Defaults to `fromKuralleRuntime(this.runtime)` when the Agent exposes a kuralle `runtime`. Required for cascaded agents without one. |
+| `pipeline` | `{ kind: "realtime", front, delegateToolName?, toolResultFormat?, renderDirective? }` or `{ kind: "cascaded", stt, tts, vad?, eos?, endpointingOwner?, sttForceFinalizeTimeoutMs? }`. |
+| `reasoner` | `(env, ctx) => Reasoner` (ctx: `{ sessionId, resume? }`). Defaults to `fromKuralleRuntime(this.runtime)` when the Agent exposes a kuralle `runtime`. Required for cascaded agents without one. |
 | `recorder` | `(env, { sessionId }) => EdgeRecorder \| undefined` — optional per-call recorder (e.g. the R2 recorder at `@kuralle-syrinx/cf-agents/r2-recorder`). Edge transport. |
-| `onToolCallStart` | `(ctx: { toolName, args, sessionId, connection }) => void \| Promise<void>` — fired the instant the front model invokes the delegate tool, **before** the reasoner runs. The seam for a deterministic latency-masking preamble / "thinking" earcon: `ctx.connection.send(...)` to trigger a cached client-side cue. A throwing callback never affects the call. |
+| `onToolCallStart` | `(ctx: { toolName, args, sessionId, connection }) => void \| Promise<void>` — fired the instant the front model invokes the delegate tool, **before** the reasoner runs — for app-specific cues beyond the standard `tool_call_*` wire messages. A throwing callback never affects the call. |
+| `onDelegateQuery` / `onDelegateResult` | G2 observability hooks around the reasoner run. `onDelegateResult` is self-contained (`{ query, answer, durationMs, grounded, toolId?, toolName?, turnId, sessionId, connection }`) — the one hook for logging/persisting grounded Q&A pairs. Throwing never affects the call. |
+| `durableHistory` | G4 durable session state over the Agent's SQLite (default `true`). Set `false` for ephemeral pre-G4 behavior. |
+| `delayCueAfterMs` | G3: ms before a pending tool call fires the `tool_call_delayed` ("still working") cue. 0 disables. Default 2000. |
 | `inputSampleRateHz` / `outputSampleRateHz` | Edge audio rates (default 16000). |
 | `resumeWindowMs` | How long a dropped connection can resume its session. |
 | `sessionId` | `(request, agentName) => string`. Defaults to the `?sessionId=` query param (so a reconnecting client can resume), else a per-connection random id. (Not the Agent name — concurrent connections to one instance must not share a session.) |

@@ -30,7 +30,7 @@ import {
   createWorkersInboundSocket,
   type WorkersDurableObjectWebSocketContext,
 } from "@kuralle-syrinx/ws/workers";
-import type { SessionStore } from "./session-store.js";
+import type { SessionStore, ManagedSession } from "./session-store.js";
 
 const TWILIO_SAMPLE_RATE_HZ = 8_000;
 const DEFAULT_RESUME_WINDOW_MS = 15_000;
@@ -82,6 +82,8 @@ export async function runTwilioEdgeWebSocketConnection(
   const downlinkResamplers = new Map<string, StreamingPcm16Resampler>();
   const disposers: Array<() => void> = [];
   let session: VoiceAgentSession | null = null;
+  let managed: ManagedSession | null = null;
+  let pendingLease: Promise<{ managed: ManagedSession }> | null = null;
   let sessionId = "";
   let streamSid = "";
   let contextId = "";
@@ -100,9 +102,26 @@ export async function runTwilioEdgeWebSocketConnection(
     if (closed) return;
     closed = true;
     scheduler.cancel(KEEP_ALIVE_KEY);
+    scheduler.cancel("voice.edge.twilio.startup");
     for (const dispose of disposers.splice(0)) dispose();
-    if (session && sessionId) {
+    if (managed && sessionId) {
+      // Decrement the connection count BEFORE releasing (R1) — otherwise release
+      // early-returns while connectionCount > 0 and session.close() never runs, so
+      // Deepgram/TTS provider sockets + the reasoner leak until DO eviction. A
+      // caller-hangup (`stopped`) releases immediately (retain 0); a transient drop
+      // keeps the session warm for the resume window.
+      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
       void options.sessionStore.release(sessionId, stopped ? 0 : resumeWindowMs);
+    } else if (pendingLease && sessionId) {
+      // Closed before the lease was adopted (e.g. startup-timeout race): tear the
+      // in-flight session down when it resolves so it is never orphaned in the store.
+      const id = sessionId;
+      void pendingLease
+        .then((leased) => {
+          leased.managed.connectionCount = Math.max(0, leased.managed.connectionCount - 1);
+          return options.sessionStore.release(id, 0);
+        })
+        .catch(() => undefined);
     }
   };
 
@@ -141,26 +160,29 @@ export async function runTwilioEdgeWebSocketConnection(
         reject(new Error("twilio session startup timeout"));
       });
     });
-    const leased = await Promise.race([
-      options.sessionStore.lease(sessionId, async () => {
-        const sess = await options.createSession(request);
-        await sess.start();
-        return {
-          id: sessionId,
-          session: sess,
-          currentContextId: "",
-          contextSampleRates: new Map(),
-          inputSequence: { lastSequence: null },
-          turnMetricsTurns: new Map(),
-          closeTimer: null,
-          connectionCount: 1,
-        };
-      }),
-      startupTimer,
-    ]);
+    pendingLease = options.sessionStore.lease(sessionId, async () => {
+      const sess = await options.createSession(request);
+      await sess.start();
+      return {
+        id: sessionId,
+        session: sess,
+        currentContextId: "",
+        contextSampleRates: new Map(),
+        inputSequence: { lastSequence: null },
+        turnMetricsTurns: new Map(),
+        closeTimer: null,
+        connectionCount: 1,
+      };
+    });
+    const leased = await Promise.race([pendingLease, startupTimer]);
+    pendingLease = null;
     scheduler.cancel("voice.edge.twilio.startup");
-    session = leased.managed.session;
+    managed = leased.managed;
+    session = managed.session;
     if (closed) {
+      // The socket closed while the session was starting up — tear the just-started
+      // session down instead of orphaning it (decrement so release actually closes it).
+      managed.connectionCount = Math.max(0, managed.connectionCount - 1);
       await options.sessionStore.release(sessionId, 0);
       return;
     }

@@ -49,7 +49,7 @@ const BACKCHANNELS = new Set([
   "oh",
 ]);
 
-function isBackchannel(text: string): boolean {
+export function isBackchannel(text: string): boolean {
   const norm = text
     .toLowerCase()
     .replace(/[^a-z\s'-]/g, "")

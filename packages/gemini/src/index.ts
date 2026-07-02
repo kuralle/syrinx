@@ -61,7 +61,10 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private voiceName: string = DEFAULT_VOICE;
   private instruction = "";
   private timeoutMs = 45_000;
-  private abortController: AbortController | null = null;
+  // One controller per in-flight turn. A single shared field let a second turn's
+  // synthesize() overwrite the first's controller, so a barge-in on turn N aborted
+  // only turn N+1 and turn N's stale audio could still stream after the interrupt.
+  private readonly abortControllers = new Map<string, AbortController>();
   private textByContextId = new Map<string, string>();
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
@@ -98,10 +101,14 @@ export class GeminiTTSPlugin implements VoicePlugin {
         await this.synthesize(text, donePkt.contextId);
       }),
 
-      // Listen for TTS interrupts
-      bus.on("interrupt.tts", () => {
-        this.abortController?.abort();
-        this.abortController = null;
+      // Listen for TTS interrupts — abort only the interrupted turn's synthesis.
+      bus.on("interrupt.tts", (pkt) => {
+        const ctxId = (pkt as { contextId: string }).contextId;
+        const controller = this.abortControllers.get(ctxId);
+        if (controller) {
+          controller.abort();
+          this.abortControllers.delete(ctxId);
+        }
       }),
     );
   }
@@ -109,9 +116,21 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private async synthesize(text: string, contextId: string): Promise<void> {
     if (!this.bus) return;
 
-    this.abortController = new AbortController();
-    const signal = this.abortController.signal;
+    const controller = new AbortController();
+    this.abortControllers.set(contextId, controller);
+    const signal = controller.signal;
 
+    try {
+      await this.synthesizeWithRetry(text, contextId, signal);
+    } finally {
+      // Only clear if still ours — an interrupt may have already removed it.
+      if (this.abortControllers.get(contextId) === controller) {
+        this.abortControllers.delete(contextId);
+      }
+    }
+  }
+
+  private async synthesizeWithRetry(text: string, contextId: string, signal: AbortSignal): Promise<void> {
     for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
       try {
         const audioChunks = await this.synthesizeOnce(text, contextId, signal);
@@ -216,14 +235,14 @@ export class GeminiTTSPlugin implements VoicePlugin {
     return audioChunks;
   }
 
-  /** Flush/cancel current synthesis (called on interrupt). */
+  /** Flush/cancel all in-flight synthesis (called on interrupt/shutdown). */
   flush(): void {
-    this.abortController?.abort();
-    this.abortController = null;
+    for (const controller of this.abortControllers.values()) controller.abort();
+    this.abortControllers.clear();
   }
 
   async close(): Promise<void> {
-    this.abortController?.abort();
+    this.flush();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.textByContextId.clear();
     this.bus = null;

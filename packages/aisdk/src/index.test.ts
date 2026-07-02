@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
+import { InMemoryReasonerSessionStore, PipelineBusImpl, Route } from "@kuralle-syrinx/core";
 import type {
   EndOfSpeechPacket,
   InterruptLlmPacket,
@@ -72,11 +72,107 @@ describe("ReasoningBridge", () => {
     });
   });
 
-  it("emits llm.error instead of llm.done when provider reaches token limit", async () => {
+  it("G2/WBS-1: cascade turn emits delegate.query then delegate.result on the Background route", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield toolCall("rag-1", "retrieve", { q: "deadline" });
+      yield toolResult("rag-1", "retrieve", "chunk");
+      yield textDelta("The deadline is March 31.");
+      yield finish("stop");
+    }));
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-1", "When is the deadline?"));
+
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "delegate.result"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    const delegatePackets = packets.filter(({ packet }) =>
+      String((packet as { kind?: string }).kind).startsWith("delegate."),
+    );
+    expect(delegatePackets.map(({ route }) => route)).toEqual([Route.Background, Route.Background]);
+    expect(delegatePackets[0]!.packet).toMatchObject({
+      kind: "delegate.query",
+      contextId: "turn-1",
+      query: "When is the deadline?",
+    });
+    expect((delegatePackets[0]!.packet as { toolName?: string }).toolName).toBeUndefined();
+    expect(delegatePackets[1]!.packet).toMatchObject({
+      kind: "delegate.result",
+      contextId: "turn-1",
+      query: "When is the deadline?",
+      answer: "The deadline is March 31.",
+      grounded: true,
+    });
+    expect((delegatePackets[1]!.packet as { durationMs: number }).durationMs).toBeGreaterThanOrEqual(0);
+    // delegate.query precedes the reasoner's first output.
+    const queryIndex = packets.findIndex(({ packet }) => (packet as { kind?: string }).kind === "delegate.query");
+    const firstDeltaIndex = packets.findIndex(({ packet }) => (packet as { kind?: string }).kind === "llm.delta");
+    expect(queryIndex).toBeGreaterThanOrEqual(0);
+    expect(queryIndex).toBeLessThan(firstDeltaIndex);
+  });
+
+  it("G2/WBS-1: cascade delegate.result grounded=false without tool use; none on error", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield textDelta("From memory.");
+      yield finish("stop");
+    }));
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-1", "Hi"));
+
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "delegate.result"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    const result = packets.find(({ packet }) => (packet as { kind?: string }).kind === "delegate.result")!;
+    expect(result.packet).toMatchObject({ grounded: false, answer: "From memory." });
+  });
+
+  it("accepts the truncated reply on token-limit finish (fails the turn, never the call)", async () => {
+    // A `length` finish means the model hit the token cap: the streamed reply is
+    // truncated but usable. It must be spoken and the call kept up (L2) — never
+    // escalated to a session-killing llm.error.
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
       yield textDelta("This answer is incomplete");
       yield finish("length", "MAX_TOKENS");
+    }));
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-1", "Hi"));
+
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    // The partial reply is committed as a normal turn completion.
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({ kind: "llm.done", contextId: "turn-1", text: "This answer is incomplete" }),
+    });
+    // No session-killing error was emitted.
+    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.error")).toBe(false);
+    // The truncation is observable for telemetry.
+    expect(packets.some(({ packet }) => (packet as { kind?: string; name?: string }).name === "llm.finish_length_truncated")).toBe(true);
+  });
+
+  it("fails the turn recoverably (not the call) on an unfinished tool-loop finish", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield textDelta("partial");
+      yield finish("tool-calls");
     }));
     const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
     const drain = bus.start();
@@ -89,15 +185,15 @@ describe("ReasoningBridge", () => {
     await drain;
     await plugin.close();
 
-    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done")).toBe(false);
     expect(packets).toContainEqual({
       route: Route.Critical,
       packet: expect.objectContaining({
         kind: "llm.error",
         contextId: "turn-1",
-        isRecoverable: false,
+        isRecoverable: true, // recoverable → fallback spoken, session stays open
       } satisfies Partial<LlmErrorPacket>),
     });
+    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done")).toBe(false);
   });
 
   it("emits llm.error when the stream ends without finish metadata", async () => {
@@ -394,6 +490,110 @@ describe("ReasoningBridge", () => {
   });
 });
 
+describe("ReasoningBridge durable session (G4/WBS-4)", () => {
+  it("re-seeds context from the session store after a simulated eviction; no double-answer", async () => {
+    const store = new InMemoryReasonerSessionStore();
+
+    // First lifetime: one committed turn, then the host is evicted (bridge closed).
+    const first = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        yield textDelta("Answer one.");
+        yield finish("stop");
+      }),
+      { sessionStore: store, sessionId: "s1" },
+    );
+    const firstPackets: Array<{ packet: unknown }> = [];
+    const firstBus = new PipelineBusImpl({ onPacket: (_route, packet) => firstPackets.push({ packet }) });
+    const firstDrain = firstBus.start();
+    await first.initialize(firstBus, baseConfig());
+    firstBus.push(Route.Main, turnComplete("turn-1", "First question"));
+    await waitFor(() => firstPackets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    firstBus.stop();
+    await firstDrain;
+    await first.close();
+
+    // Second lifetime: a fresh bridge over the same store must hand the reasoner
+    // the prior turn as context — and must not re-answer it.
+    const seenMessages: Array<ReasonerTurn["messages"]> = [];
+    const secondReasoner: Reasoner = {
+      stream: (turn) => {
+        seenMessages.push([...turn.messages]);
+        return (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "text-delta", text: "Answer two." };
+          yield { type: "finish", reason: "stop", text: "Answer two." };
+        })();
+      },
+    };
+    const second = new ReasoningBridge(secondReasoner, { sessionStore: store, sessionId: "s1" });
+    const packets: Array<{ packet: unknown }> = [];
+    const bus = new PipelineBusImpl({ onPacket: (_route, packet) => packets.push({ packet }) });
+    const drain = bus.start();
+    await second.initialize(bus, baseConfig());
+    // Nothing speaks spontaneously on resume (no double-answer).
+    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done")).toBe(false);
+
+    bus.push(Route.Main, turnComplete("turn-2", "Second question"));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    bus.stop();
+    await drain;
+    await second.close();
+
+    expect(seenMessages[0]).toEqual([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "Answer one." },
+    ]);
+    // The store now carries both turns for the next resume.
+    expect(store.load("s1")).toEqual([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "Answer one." },
+      { role: "user", content: "Second question" },
+      { role: "assistant", content: "Answer two." },
+    ]);
+  });
+
+  it("persists the interrupted turn's history as the heard prefix", async () => {
+    const store = new InMemoryReasonerSessionStore();
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        yield textDelta("Full generated reply that was cut off.");
+        yield finish("stop");
+      }),
+      { sessionStore: store, sessionId: "s1" },
+    );
+    const packets: Array<{ packet: unknown }> = [];
+    const bus = new PipelineBusImpl({ onPacket: (_route, packet) => packets.push({ packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, turnComplete("turn-1", "Hi"));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    // What actually reached TTS before the barge-in.
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Full generated",
+    } satisfies TextToSpeechTextPacket);
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "tts.text"));
+    bus.push(Route.Critical, {
+      kind: "interrupt.llm",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+    } satisfies InterruptLlmPacket);
+    await waitFor(() =>
+      packets.some(({ packet }) => (packet as { name?: string }).name === "llm.history_truncated_to_spoken"),
+    );
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(store.load("s1")).toEqual([
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Full generated" },
+    ]);
+  });
+});
+
 describe("ReasoningBridge suspend/resume", () => {
   it("clean suspend → resume: saves pointer, resumes with userText, discards on finish", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
@@ -615,6 +815,14 @@ function turnComplete(contextId: string, text: string): EndOfSpeechPacket {
 
 function textDelta(text: string): TextStreamPart<ToolSet> {
   return { type: "text-delta", id: "0", text, providerMetadata: undefined } as TextStreamPart<ToolSet>;
+}
+
+function toolCall(toolCallId: string, toolName: string, input: Record<string, unknown>): TextStreamPart<ToolSet> {
+  return { type: "tool-call", toolCallId, toolName, input } as TextStreamPart<ToolSet>;
+}
+
+function toolResult(toolCallId: string, toolName: string, output: unknown): TextStreamPart<ToolSet> {
+  return { type: "tool-result", toolCallId, toolName, input: {}, output } as TextStreamPart<ToolSet>;
 }
 
 function finish(finishReason: FinishReason, rawFinishReason?: string): TextStreamPart<ToolSet> {

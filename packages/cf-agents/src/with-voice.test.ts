@@ -9,8 +9,59 @@ import { describe, it, expect, vi } from "vitest";
 import type { PipelineBus, Reasoner, UserAudioReceivedPacket, VoicePlugin } from "@kuralle-syrinx/core";
 import { encodePcm16ToMuLaw } from "@kuralle-syrinx/core/audio";
 import type { RealtimeAdapter, RealtimeEvent } from "@kuralle-syrinx/realtime";
-import { withVoice, type ToolCallStartContext } from "./with-voice.js";
-import type { VoicePipeline } from "./build-session.js";
+import {
+  withVoice,
+  type DelegateQueryContext,
+  type DelegateResultContext,
+  type ToolCallStartContext,
+} from "./with-voice.js";
+import type { VoicePipeline, VoicePipelineContext } from "./build-session.js";
+
+/**
+ * In-memory emulation of the DO-SQLite statements SqliteReasonerSessionStore issues,
+ * shared across agent instances to simulate one Durable Object across evictions.
+ */
+function sqliteFake() {
+  const history = new Map<string, Array<{ seq: number; role: string; content: string; tool_call_id: string | null }>>();
+  const handles = new Map<string, string>();
+  const sql = (strings: TemplateStringsArray, ...values: unknown[]): unknown[] => {
+    const query = strings.join("?").replace(/\s+/g, " ").trim();
+    if (query.startsWith("CREATE TABLE")) return [];
+    if (query.includes("SELECT role, content, tool_call_id FROM syrinx_reasoner_history")) {
+      return [...(history.get(String(values[0])) ?? [])].sort((a, b) => a.seq - b.seq);
+    }
+    if (query.includes("DELETE FROM syrinx_reasoner_history")) {
+      history.delete(String(values[0]));
+      return [];
+    }
+    if (query.includes("INSERT INTO syrinx_reasoner_history")) {
+      const [sid, seq, role, content, toolCallId] = values;
+      const rows = history.get(String(sid)) ?? [];
+      rows.push({
+        seq: Number(seq),
+        role: String(role),
+        content: String(content),
+        tool_call_id: toolCallId === null ? null : String(toolCallId),
+      });
+      history.set(String(sid), rows);
+      return [];
+    }
+    if (query.includes("SELECT handle FROM syrinx_resume_handle")) {
+      const handle = handles.get(String(values[0]));
+      return handle ? [{ handle }] : [];
+    }
+    if (query.includes("DELETE FROM syrinx_resume_handle")) {
+      handles.delete(String(values[0]));
+      return [];
+    }
+    if (query.includes("INSERT INTO syrinx_resume_handle")) {
+      handles.set(String(values[0]), String(values[1]));
+      return [];
+    }
+    return [];
+  };
+  return { sql, history, handles };
+}
 
 /** Controllable fake realtime front — `emit()` pushes provider events into the bridge. */
 class FakeFront implements RealtimeAdapter {
@@ -37,7 +88,10 @@ class FakeFront implements RealtimeAdapter {
   async open(): Promise<void> {}
   sendAudio(): void {}
   cancelResponse(): void {}
-  injectToolResult(): void {}
+  readonly injected: Array<{ toolId: string; text: string }> = [];
+  injectToolResult(toolId: string, text: string): void {
+    this.injected.push({ toolId, text });
+  }
   async close(): Promise<void> {
     this.#closed = true;
     for (const w of this.#waiters.splice(0)) w(null);
@@ -75,8 +129,9 @@ class FakeAgentBase {
     return [];
   }
 
-  // Tagged-template stand-in; unused by the voice path.
-  sql(): unknown[] {
+  // Tagged-template stand-in; the durable-history path issues real statements
+  // against it (subclasses can back it with an in-memory emulation).
+  sql(_strings?: TemplateStringsArray, ..._values: unknown[]): unknown[] {
     return [];
   }
 
@@ -335,6 +390,119 @@ describe("withVoice(Agent)", () => {
     expect(calls[0]!.connection).toBe(conn);
   });
 
+  it("G2/WBS-1: fires onDelegateQuery/onDelegateResult around the reasoner run (SLIIT log-wrapper replacement)", async () => {
+    const front = new FakeFront();
+    const answeringReasoner = (): Reasoner => ({
+      stream: async function* () {
+        yield { type: "text-delta", text: "March 31." } as const;
+        yield { type: "finish", reason: "stop", text: "March 31." } as const;
+      },
+    });
+    const queries: DelegateQueryContext[] = [];
+    const results: DelegateResultContext[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => answeringReasoner(),
+        onDelegateQuery: (c) => { queries.push(c); },
+        onDelegateResult: (c) => { results.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "exam deadline" } });
+
+    await vi.waitFor(() => expect(results.length).toBeGreaterThan(0));
+    expect(queries[0]).toMatchObject({
+      query: "exam deadline",
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      sessionId: "test-session",
+    });
+    expect(queries[0]!.connection).toBe(conn);
+    expect(results[0]).toMatchObject({
+      query: "exam deadline",
+      answer: "March 31.",
+      grounded: false,
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      sessionId: "test-session",
+    });
+    expect(results[0]!.durationMs).toBeGreaterThanOrEqual(0);
+    expect(results[0]!.connection).toBe(conn);
+  });
+
+  it("G2/WBS-1: throwing onDelegateQuery/onDelegateResult never break the call", async () => {
+    const front = new FakeFront();
+    const answered: string[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => ({
+          stream: async function* () {
+            yield { type: "finish", reason: "stop", text: "ok" } as const;
+          },
+        }),
+        onDelegateQuery: () => { throw new Error("query hook blew up"); },
+        onDelegateResult: (c) => { answered.push(c.answer); throw new Error("result hook blew up"); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "x" } });
+
+    await vi.waitFor(() => expect(answered.length).toBeGreaterThan(0));
+    // The connection stays usable after both hooks threw.
+    expect(() => agent.onMessage(conn, JSON.stringify({ type: "ping" }))).not.toThrow();
+  });
+
+  it("G1/WBS-2: realtime pipeline wraps the delegate answer in the envelope (default) with the configured render directive", async () => {
+    const front = new FakeFront();
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: {
+          kind: "realtime",
+          front: () => front,
+          delegateToolName: "consult_knowledge",
+          renderDirective: "translate_faithfully",
+        },
+        reasoner: () => ({
+          stream: async function* () {
+            yield { type: "finish", reason: "stop", text: "The fee is 5000 rupees." } as const;
+          },
+        }),
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "fees" } });
+
+    await vi.waitFor(() => expect(front.injected.length).toBeGreaterThan(0));
+    expect(JSON.parse(front.injected[0]!.text)).toEqual({
+      response_text: "The fee is 5000 rupees.",
+      require_repeat_verbatim: true,
+      render: "translate_faithfully",
+    });
+  });
+
   it("a throwing onToolCallStart never breaks the call", async () => {
     const front = new FakeFront();
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
@@ -358,6 +526,159 @@ describe("withVoice(Agent)", () => {
     // The connection stays usable (a ping after the throwing hook is still handled).
     await new Promise((r) => setTimeout(r, 10));
     expect(() => agent.onMessage(conn, JSON.stringify({ type: "ping" }))).not.toThrow();
+  });
+
+  it("G4/WBS-4: realtime transcript survives a simulated eviction — the next instance resumes with prior context", async () => {
+    const db = sqliteFake();
+    class DurableBase extends FakeAgentBase {
+      override sql(strings?: TemplateStringsArray, ...values: unknown[]): unknown[] {
+        return db.sql(strings!, ...values);
+      }
+    }
+    const fronts: FakeFront[] = [];
+    const seenResume: Array<VoicePipelineContext["resume"]> = [];
+    const capturedMessages: Array<readonly unknown[]> = [];
+    const makeAgentClass = () =>
+      withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
+        pipeline: {
+          kind: "realtime",
+          front: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
+            seenResume.push(pipelineCtx.resume);
+            const front = new FakeFront();
+            fronts.push(front);
+            return front;
+          },
+        },
+        reasoner: () => ({
+          stream: (turn) => {
+            capturedMessages.push([...turn.messages]);
+            return (async function* () {
+              yield { type: "finish", reason: "stop", text: "ok" } as const;
+            })();
+          },
+        }),
+      });
+
+    // First lifetime: one spoken exchange lands in the durable transcript.
+    const FirstAgent = makeAgentClass();
+    const first = new FirstAgent({});
+    const firstConn = fakeConnection("c1");
+    first.onConnect(firstConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(firstConn).some((f) => f["type"] === "ready")).toBe(true));
+    fronts[0]!.emit({ type: "response_started" });
+    fronts[0]!.emit({ type: "transcript", role: "user", text: "What are the fees?", final: true });
+    fronts[0]!.emit({ type: "transcript", role: "assistant", text: "Fees are 5000 rupees.", final: true });
+    fronts[0]!.emit({ type: "response_done" });
+    await vi.waitFor(() => expect(db.history.get("test-session")?.length).toBe(2));
+    first.onClose(firstConn, 1000, "evicted", true);
+
+    // Second lifetime (fresh class + instance = evicted DO, same SQLite).
+    const SecondAgent = makeAgentClass();
+    const second = new SecondAgent({});
+    const secondConn = fakeConnection("c2");
+    second.onConnect(secondConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(secondConn).some((f) => f["type"] === "ready")).toBe(true));
+
+    // The front factory sees the prior transcript via ctx.resume.
+    expect(seenResume[1]?.history()).toEqual([
+      { role: "user", content: "What are the fees?" },
+      { role: "assistant", content: "Fees are 5000 rupees." },
+    ]);
+
+    // A delegate turn hands the reasoner the same prior context (re-seeded, R6).
+    fronts[1]!.emit({ type: "response_started" });
+    fronts[1]!.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "deadlines?" } });
+    await vi.waitFor(() => expect(capturedMessages.length).toBeGreaterThan(0));
+    expect(capturedMessages[0]).toEqual([
+      { role: "user", content: "What are the fees?" },
+      { role: "assistant", content: "Fees are 5000 rupees." },
+    ]);
+  });
+
+  it("G4/WBS-4: persists the latest native resume handle and exposes it on the next instance (Gemini passthrough, no replay)", async () => {
+    const db = sqliteFake();
+    class DurableBase extends FakeAgentBase {
+      override sql(strings?: TemplateStringsArray, ...values: unknown[]): unknown[] {
+        return db.sql(strings!, ...values);
+      }
+    }
+    const fronts: FakeFront[] = [];
+    const seenResume: Array<VoicePipelineContext["resume"]> = [];
+    const makeAgentClass = () =>
+      withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
+        pipeline: {
+          kind: "realtime",
+          front: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
+            seenResume.push(pipelineCtx.resume);
+            const front = new FakeFront();
+            fronts.push(front);
+            return front;
+          },
+        },
+        reasoner: () => stubReasoner(),
+      });
+
+    const FirstAgent = makeAgentClass();
+    const first = new FirstAgent({});
+    const firstConn = fakeConnection("c1");
+    first.onConnect(firstConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(firstConn).some((f) => f["type"] === "ready")).toBe(true));
+    expect(seenResume[0]?.providerHandle).toBeUndefined();
+    fronts[0]!.emit({ type: "resumption_handle", handle: "handle-1" });
+    fronts[0]!.emit({ type: "resumption_handle", handle: "handle-2" });
+    await vi.waitFor(() => expect(db.handles.get("test-session")).toBe("handle-2"));
+    first.onClose(firstConn, 1000, "evicted", true);
+
+    const SecondAgent = makeAgentClass();
+    const second = new SecondAgent({});
+    const secondConn = fakeConnection("c2");
+    second.onConnect(secondConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(secondConn).some((f) => f["type"] === "ready")).toBe(true));
+    expect(seenResume[1]?.providerHandle).toBe("handle-2");
+  });
+
+  it("G4/WBS-4: cascaded pipeline re-seeds the ReasoningBridge from durable history after eviction", async () => {
+    const db = sqliteFake();
+    class DurableBase extends FakeAgentBase {
+      override sql(strings?: TemplateStringsArray, ...values: unknown[]): unknown[] {
+        return db.sql(strings!, ...values);
+      }
+    }
+    const capturedMessages: Array<readonly unknown[]> = [];
+    const makeAgentClass = (reply: string) =>
+      withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
+        pipeline: cascadedPipeline(),
+        reasoner: () => ({
+          stream: (turn) => {
+            capturedMessages.push([...turn.messages]);
+            return (async function* () {
+              yield { type: "text-delta", text: reply } as const;
+              yield { type: "finish", reason: "stop", text: reply } as const;
+            })();
+          },
+        }),
+      });
+
+    const FirstAgent = makeAgentClass("Answer one.");
+    const first = new FirstAgent({});
+    const firstConn = fakeConnection("c1");
+    first.onConnect(firstConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(firstConn).some((f) => f["type"] === "ready")).toBe(true));
+    first.onMessage(firstConn, JSON.stringify({ type: "text", text: "First question", contextId: "turn-1" }));
+    await vi.waitFor(() => expect(db.history.get("test-session")?.length).toBe(2));
+    first.onClose(firstConn, 1000, "evicted", true);
+
+    const SecondAgent = makeAgentClass("Answer two.");
+    const second = new SecondAgent({});
+    const secondConn = fakeConnection("c2");
+    second.onConnect(secondConn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(secondConn).some((f) => f["type"] === "ready")).toBe(true));
+    second.onMessage(secondConn, JSON.stringify({ type: "text", text: "Second question", contextId: "turn-2" }));
+    await vi.waitFor(() => expect(capturedMessages.length).toBe(2));
+    expect(capturedMessages[1]).toEqual([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "Answer one." },
+    ]);
   });
 
   it("forceEndVoice closes the connection", () => {

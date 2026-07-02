@@ -23,7 +23,7 @@ import {
 } from "./json-message.js";
 import { createRoutedWebSocketServer } from "./websocket-upgrade.js";
 import { runWebSocketConnection, type GracefulCloseOptions, type TransportAdapter, type TransportHostConfig, TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
-import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
+import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation } from "./outbound-playout-pipeline.js";
 import {
   decodeStrictBase64,
   nonNegativeInteger,
@@ -86,6 +86,8 @@ interface SmartPbxConnectionState {
   callId: string;
   accountId: string;
   contextId: string;
+  contextBase: string;
+  turnCounter: number;
   codec: SmartPbxCodec;
   wireSampleRateHz: number;
   opusDecoder: OpusDecoder | null;
@@ -140,6 +142,8 @@ export async function createSmartPbxMediaStreamServer(
       callId: "",
       accountId: "",
       contextId: "",
+      contextBase: "",
+      turnCounter: 0,
       codec: "g711_ulaw",
       wireSampleRateHz: 8000,
       opusDecoder: null,
@@ -239,6 +243,7 @@ export async function createSmartPbxMediaStreamServer(
         },
       });
       state.clearPlayout = outbound.clearPlayout;
+      installTelephonyTurnRotation(session, disposers, state);
       gracefulCloseRegistry.set(socket, (deadlineMs) => outbound.drainAndClose(socket, deadlineMs));
       disposers.push(() => gracefulCloseRegistry.delete(socket));
       return (reason) => {
@@ -261,6 +266,7 @@ export async function createSmartPbxMediaStreamServer(
         if (!state.callId) throw new Error("SmartPBX start event is missing callId");
         if (!state.accountId) throw new Error("SmartPBX start event is missing accountId");
         state.contextId = contextIdFn(start);
+        state.contextBase = state.contextId;
         state.codec = format.codec;
         state.wireSampleRateHz = format.sampleRateHz;
         state.opusDecoder = format.codec === "opus" ? new OpusDecoder({ channels: 1, sample_rate: 48000 }) : null;

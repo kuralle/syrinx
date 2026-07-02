@@ -33,12 +33,41 @@ export function takeCompleteVoiceText(text: string): { text: string; remaining: 
   return { text: emitted.trimEnd(), remaining };
 }
 
+// Common abbreviations whose trailing "." is not a sentence end. Lowercased,
+// dots stripped, so "e.g." matches "eg". Kept small and English-centric — the
+// turn-end flush handles anything that legitimately ends here.
+const ABBREVIATIONS = new Set([
+  "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "eg", "ie",
+  "am", "pm", "no", "vol", "inc", "ltd", "co", "gen", "gov", "sen", "rep",
+  "apt", "dept", "approx", "est", "min", "max",
+]);
+
+/**
+ * A segment ending in "." is not necessarily a finished sentence: it may be a
+ * decimal point ("$12." before "50") or an abbreviation dot ("Dr." before a
+ * name, "e.g."). Voicing those as sentence ends produces "twelve." (falling
+ * intonation) … "fifty", or splits "Dr." from the name. Defer them — if nothing
+ * follows, the turn-end flush still speaks the tail.
+ */
+function isFalseTerminalDot(endsWithDot: string): boolean {
+  const beforeDot = endsWithDot.slice(0, -1);
+  if (/\d$/.test(beforeDot)) return true; // decimal / ordinal: "12." , "$3."
+  const word = beforeDot.match(/([A-Za-z][A-Za-z.]*)$/);
+  if (!word) return false;
+  const normalized = word[1]!.replace(/\./g, "").toLowerCase();
+  if (ABBREVIATIONS.has(normalized)) return true;
+  if (normalized.length === 1) return true; // single initial: "J."
+  return false;
+}
+
 export function isCompleteVoiceText(text: string): boolean {
   const trimmed = text.trim();
   for (let index = trimmed.length - 1; index >= 0; index -= 1) {
     const char = trimmed[index]!;
     if (isClosingPunctuation(char)) continue;
-    return isTerminalPunctuation(char);
+    if (!isTerminalPunctuation(char)) return false;
+    if (char === "." && isFalseTerminalDot(trimmed.slice(0, index + 1))) return false;
+    return true;
   }
   return false;
 }
@@ -68,8 +97,19 @@ function isTerminalPunctuation(char: string): boolean {
     char === "॥";
 }
 
+// The ICU sentence segmenter is one of the more expensive Intl allocations;
+// building one per LLM delta (50–200/turn) is avoidable CPU/GC churn on the
+// token→TTS latency path. It is stateless, so cache one per process. `undefined`
+// = not yet computed; `null` = unavailable (fall back to the regex splitter).
+let cachedSegmenter: { segment(text: string): Iterable<SentenceSegment> } | null | undefined;
+
+function getSentenceSegmenter(): { segment(text: string): Iterable<SentenceSegment> } | null {
+  if (cachedSegmenter === undefined) cachedSegmenter = createSentenceSegmenter();
+  return cachedSegmenter;
+}
+
 function segmentSentences(text: string): string[] {
-  const segmenter = createSentenceSegmenter();
+  const segmenter = getSentenceSegmenter();
   if (segmenter) {
     return Array.from(segmenter.segment(text), (part) => part.segment);
   }

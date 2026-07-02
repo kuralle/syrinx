@@ -7,6 +7,13 @@ export interface RealtimeAdapter {
     readonly supportsConcurrentToolAudio: boolean;
     readonly supportsTruncate: boolean;
     readonly emitsServerSpeechStarted: boolean;
+    /**
+     * G4: the provider resumes a prior session server-side from a handle (Gemini Live
+     * `sessionResumption`). Absent/false → resuming requires the host to replay the
+     * transcript (e.g. OpenAI `resumeHistory`). A native-resume provider must NOT also
+     * be replayed — that would double-apply history (RFC bimodel-delegate-seam R6).
+     */
+    readonly supportsNativeResume?: boolean;
   };
 
   open(signal: AbortSignal): Promise<void>;
@@ -34,6 +41,12 @@ export interface RealtimeToolDef {
   readonly parameters: Record<string, unknown>;
 }
 
+/** A prior-conversation message replayed into a front model on resume (G4). */
+export interface RealtimeResumeMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
 export type RealtimeEvent =
   | { type: "audio"; pcm16: Uint8Array; sampleRateHz: number }
   | { type: "speech_started" }
@@ -41,4 +54,7 @@ export type RealtimeEvent =
   | { type: "tool_call"; toolId: string; toolName: string; args: Record<string, unknown> }
   | { type: "response_started" }
   | { type: "response_done" }
+  // G4: a native-resume provider issued a fresh resumption handle — persist the
+  // latest one and pass it back on reconnect (Gemini `sessionResumption`).
+  | { type: "resumption_handle"; handle: string }
   | { type: "error"; cause: Error; recoverable: boolean };

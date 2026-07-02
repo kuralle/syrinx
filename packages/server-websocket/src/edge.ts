@@ -367,6 +367,19 @@ function wireEdgeSessionEvents(
   onSession("agent_text_delta", (event) => {
     sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta });
   });
+  // G3 (RFC bimodel-delegate-seam): typed preamble/filler lifecycle. The standard
+  // "thinking" wire cue — clients key earcons/indicators on these instead of an
+  // app-invented message. started fires before the reasoner runs; delayed is the
+  // time-triggered "still working"; complete/failed end the wait (incl. barge-in).
+  onSession("tool_call_cue", (event) => {
+    sendJson(socket, {
+      type: `tool_call_${event.phase}`,
+      turnId: event.turnId,
+      toolId: event.toolId,
+      toolName: event.toolName,
+      ...(event.afterMs !== undefined ? { afterMs: event.afterMs } : {}),
+    });
+  });
   onSession("agent_finished", (event) => {
     sendJson(socket, { type: "agent_end", turnId: event.turnId });
   });

@@ -17,12 +17,14 @@ import {
   type VoicePlugin,
   type PluginConfig,
   type Reasoner,
+  type ReasonerSessionStore,
   type ReasonerTurn,
   type TtsWordTimestamp,
   categorizeLlmError,
   isRecoverable,
   readRetryConfig,
   waitForRetryDelay,
+  ErrorCategory,
   type RetryConfig,
 } from "@kuralle-syrinx/core";
 
@@ -82,7 +84,18 @@ export class ReasoningBridge implements VoicePlugin {
 
   constructor(
     private readonly reasoner: Reasoner,
-    private readonly opts: { runStore?: RunStore; onResumeConflict?: "restart" | "replay" } = {},
+    private readonly opts: {
+      runStore?: RunStore;
+      onResumeConflict?: "restart" | "replay";
+      /**
+       * G4 durable session (RFC bimodel-delegate-seam): when set with `sessionId`, the
+       * bridge loads its conversation history from the store on initialize and persists
+       * the bounded snapshot after every committed (or interrupted-truncated) turn — a
+       * bridge re-created after host eviction resumes with the same context.
+       */
+      sessionStore?: ReasonerSessionStore;
+      sessionId?: string;
+    } = {},
   ) {
     if (this.opts.onResumeConflict === "replay") {
       throw new Error("onResumeConflict 'replay' not yet supported — use 'restart'");
@@ -94,6 +107,13 @@ export class ReasoningBridge implements VoicePlugin {
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
     this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
+
+    // G4: resume from durable history — the reasoner's next turn sees the same
+    // context as before the eviction/reconnect (R6). Load-only: nothing is spoken.
+    if (this.opts.sessionStore && this.opts.sessionId) {
+      const stored = await this.opts.sessionStore.load(this.opts.sessionId);
+      this.history = stored.map((message) => ({ ...message }));
+    }
 
     // Listen for EOS turn completions
     this.disposers.push(
@@ -166,9 +186,22 @@ export class ReasoningBridge implements VoicePlugin {
     let reply = "";
     let emittedDelta = false;
     let committed = false;
+    let grounded = false;
+
+    // G2 observability: the turn's query is on its way to the reasoner (Background
+    // route, droppable — RFC bimodel-delegate-seam R4). Cascade turns have no
+    // front-model tool call, so toolId/toolName are absent.
+    const queryStartedMs = Date.now();
+    this.bus.push(Route.Background, {
+      kind: "delegate.query",
+      contextId,
+      timestampMs: queryStartedMs,
+      query: userText,
+    });
 
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
+        grounded = false;
         try {
           const pending = this.opts.runStore
             ? await Promise.resolve(this.opts.runStore.takePending(contextId))
@@ -204,6 +237,7 @@ export class ReasoningBridge implements VoicePlugin {
                 });
                 break;
               case "tool-result":
+                grounded = true;
                 this.bus.push(Route.Main, {
                   kind: "llm.tool_result",
                   contextId,
@@ -254,17 +288,55 @@ export class ReasoningBridge implements VoicePlugin {
             }
           }
 
-          validateFinalFinishReason(finishReason);
+          // A non-"stop" finish must fail the TURN, never the call (L2). Killing the
+          // session on a token-cap or unfinished-tool-loop hangs up the caller
+          // mid-conversation. `length` = token cap: the streamed reply is truncated
+          // but usable, so accept it and continue (fall through to llm.done). Any
+          // other non-"stop" reason (tool loop ended, null) = fail the turn
+          // recoverably — the caller hears the graceful fallback, the call stays up.
+          if (finishReason !== "stop" && finishReason !== "length") {
+            if (signal.aborted) return;
+            this.bus.push(Route.Critical, {
+              kind: "llm.error",
+              contextId,
+              timestampMs: Date.now(),
+              component: "bridge" as const,
+              category: ErrorCategory.InternalFault,
+              cause: new Error(`AI SDK turn ended on finishReason "${finishReason ?? "null"}"`),
+              isRecoverable: true,
+            });
+            return;
+          }
+          if (finishReason === "length") {
+            this.bus.push(Route.Background, {
+              kind: "metric.conversation",
+              contextId,
+              timestampMs: Date.now(),
+              name: "llm.finish_length_truncated",
+              value: "1",
+            });
+          }
 
           // Interrupted as generation finished — the interrupt handler owns the history
           // for this turn (spoken prefix); don't commit the full reply or emit llm.done.
           if (signal.aborted) return;
 
+          const answeredMs = Date.now();
           this.bus.push(Route.Main, {
             kind: "llm.done",
             contextId,
-            timestampMs: Date.now(),
+            timestampMs: answeredMs,
             text: reply,
+          });
+          // G2 observability: the reasoner produced the turn's final answer.
+          this.bus.push(Route.Background, {
+            kind: "delegate.result",
+            contextId,
+            timestampMs: answeredMs,
+            query: userText,
+            answer: reply,
+            durationMs: answeredMs - queryStartedMs,
+            grounded,
           });
           this.rememberTurn(userText, reply, contextId);
           if (this.opts.runStore && resuming) {
@@ -338,6 +410,21 @@ export class ReasoningBridge implements VoicePlugin {
     this.history.push({ role: "user", content: userText }, assistantMsg);
     this.assistantMsgByContext.set(contextId, assistantMsg);
     this.trimHistory();
+    this.persistHistory();
+  }
+
+  /** G4: persist the bounded history snapshot, best-effort off the hot path. */
+  private persistHistory(): void {
+    const store = this.opts.sessionStore;
+    const sessionId = this.opts.sessionId;
+    if (!store || !sessionId) return;
+    try {
+      void Promise.resolve(store.save(sessionId, this.history.map((message) => ({ ...message })))).catch(
+        () => undefined,
+      );
+    } catch {
+      /* persistence must never fail the turn */
+    }
   }
 
   /**
@@ -390,6 +477,7 @@ export class ReasoningBridge implements VoicePlugin {
       name: "llm.history_truncated_to_spoken",
       value: String(spoken.length),
     });
+    this.persistHistory(); // G4: the durable snapshot reflects the heard prefix
     this.clearTurnState(contextId);
   }
 
@@ -413,17 +501,6 @@ export class ReasoningBridge implements VoicePlugin {
   }
 }
 
-function validateFinalFinishReason(finishReason: "stop" | "tool" | "length" | null): void {
-  if (finishReason === null) {
-    throw new Error("AI SDK stream ended without a provider finish reason");
-  }
-  if (finishReason === "length") {
-    throw new Error("AI SDK provider reached token limit before completing");
-  }
-  if (finishReason !== "stop") {
-    throw new Error("AI SDK provider did not complete normally");
-  }
-}
 
 function readPositiveIntegerConfig(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;

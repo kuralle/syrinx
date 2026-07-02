@@ -172,10 +172,35 @@ export class AudioJitterBuffer {
   private readonly sampleRateHz: number;
   private readonly contextIds = new Set<string>();
   private lastEnqueuedContextId: string | null = null;
+  // Per-context playout window on the AudioContext clock: the scheduledTime of the
+  // first frame (start) and the running end (start + all scheduled durations). Lets
+  // us report how many ms of a turn's audio the user has ACTUALLY heard — the
+  // authoritative signal for barge-in context truncation (B2).
+  private readonly playoutWindow = new Map<string, { startTime: number; endTime: number }>();
 
   /** True while assistant audio is scheduled or playing on the playout clock (not the generation clock). */
   get isPlayingOut(): boolean {
     return this.scheduledFrames.size > 0;
+  }
+
+  /**
+   * Milliseconds of `contextId`'s audio that have actually played out of the
+   * speaker so far, clamped to what has been scheduled. This is the played-out
+   * clock the server needs to truncate assistant history to what was heard.
+   */
+  playedOutMs(contextId: string): number {
+    const window = this.playoutWindow.get(contextId);
+    if (!window) return 0;
+    const elapsedMs = (this.context.currentTime - window.startTime) * 1000;
+    const scheduledMs = (window.endTime - window.startTime) * 1000;
+    return Math.max(0, Math.min(elapsedMs, scheduledMs));
+  }
+
+  /** True once all of `contextId`'s scheduled audio has finished playing. */
+  isPlayoutComplete(contextId: string): boolean {
+    const window = this.playoutWindow.get(contextId);
+    if (!window) return false;
+    return this.context.currentTime >= window.endTime;
   }
 
   /** ContextId of the most recently scheduled assistant audio while any audio is still playing out. */
@@ -226,6 +251,15 @@ export class AudioJitterBuffer {
       if (contextId) {
         this.contextIds.add(contextId);
         this.lastEnqueuedContextId = contextId;
+        const window = this.playoutWindow.get(contextId);
+        if (window) {
+          window.endTime = this.nextScheduledTime + audioBuffer.duration;
+        } else {
+          this.playoutWindow.set(contextId, {
+            startTime: this.nextScheduledTime,
+            endTime: this.nextScheduledTime + audioBuffer.duration,
+          });
+        }
       }
 
       // Schedule the audio
@@ -263,6 +297,7 @@ export class AudioJitterBuffer {
         }
       }
       this.contextIds.delete(contextId);
+      this.playoutWindow.delete(contextId);
       if (this.lastEnqueuedContextId === contextId) this.lastEnqueuedContextId = null;
       this.recomputeNextScheduledTime();
     } else {

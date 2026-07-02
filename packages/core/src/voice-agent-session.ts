@@ -29,6 +29,8 @@ import type {
   UserAudioReceivedPacket,
   UserTextReceivedPacket,
   InterruptionDetectedPacket,
+  DelegateQueryPacket,
+  DelegateResultPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   LlmToolCallPacket,
@@ -61,7 +63,7 @@ import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
-import { TurnArbiter } from "./turn-arbiter.js";
+import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import * as make from "./packet-factories.js";
 import { pluginStage, stageOrder, isAudioStage } from "./init-stage-order.js";
 import {
@@ -148,6 +150,14 @@ export interface VoiceAgentSessionConfig {
    */
   errorFallbackText?: string;
   /**
+   * G3 (RFC bimodel-delegate-seam): ms a tool call may stay pending before the
+   * `tool_call_cue` session event fires its time-triggered `"delayed"` phase — the
+   * "still working" cue clients render during a long reasoner wait (cf. Vapi's
+   * `request-response-delayed` + `timingMilliseconds`). 0 disables the delayed
+   * phase; started/complete/failed always fire. Default: 2000.
+   */
+  delayCueAfterMs?: number;
+  /**
    * Which component owns turn boundary (EOS) for this session. Defaults to
    * provider STT ownership; Smart Turn sessions must opt in explicitly.
    */
@@ -170,6 +180,16 @@ export interface VoiceAgentSessionEvents {
   agent_text_delta: (event: { tsMs: number; turnId: string; delta: string }) => void;
   agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
   agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
+  delegate_query: (event: { tsMs: number; turnId: string; query: string; toolId?: string; toolName?: string }) => void;
+  delegate_result: (event: { tsMs: number; turnId: string; query: string; answer: string; durationMs: number; grounded: boolean; toolId?: string; toolName?: string }) => void;
+  /**
+   * G3: typed preamble/filler lifecycle for a pending tool call (Vapi-shaped:
+   * started / delayed / complete / failed). `delayed` is time-triggered by
+   * `delayCueAfterMs` while the call is still pending; `failed` fires on an LLM/bridge
+   * error, a barge-in, or a superseding turn while pending (R5). Transports surface
+   * these as `tool_call_*` wire messages — the standard "thinking" cue.
+   */
+  tool_call_cue: (event: { tsMs: number; turnId: string; phase: "started" | "delayed" | "complete" | "failed"; toolId: string; toolName: string; afterMs?: number }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
   agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
   error: (event: { tsMs: number; stage: string; category: string; message: string }) => void;
@@ -186,6 +206,11 @@ interface TtsTextBuffer {
 
 /** Suffix marking a context created to speak an error fallback, so it never recurses. */
 const FALLBACK_CONTEXT_SUFFIX = ":error-fallback";
+
+/** Scheduler key for a pending tool call's G3 delayed-cue timer. */
+function toolCueTimerKey(contextId: string, toolId: string): string {
+  return `tool_cue:${contextId}:${toolId}`;
+}
 
 // =============================================================================
 // Session Implementation
@@ -211,6 +236,10 @@ export class VoiceAgentSession {
   private readonly scheduler: Scheduler;
   private readonly ttsPlayout: TtsPlayoutClock;
   private interruptedGenerationContextIds = new Set<string>();
+  // Turns whose generation is in-flight (eos.turn_complete emitted, not yet
+  // finished/interrupted). Lets a client "stop" during the reasoner TTFT gap —
+  // before any audio plays — still abort the turn (thinking-phase barge-in, B3).
+  private generatingContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
@@ -227,6 +256,9 @@ export class VoiceAgentSession {
   private firstTtsAudioFired = new Set<string>();
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
+  // G3: pending tool calls per context (toolId → toolName) driving the tool_call_cue lifecycle.
+  private readonly delayCueAfterMs: number;
+  private pendingToolCues = new Map<string, Map<string, string>>();
   private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
   private lastFinalizedContextId = "";
 
@@ -241,6 +273,7 @@ export class VoiceAgentSession {
     this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
     this.minInterruptionMs = config.minInterruptionMs ?? 280;
+    this.delayCueAfterMs = config.delayCueAfterMs ?? 2000;
     this.primarySpeakerGate = new PrimarySpeakerGate({
       enabled: config.primarySpeakerBargeInEnabled !== false,
     });
@@ -394,6 +427,10 @@ export class VoiceAgentSession {
     this.ttsTextBuffers.clear();
     this.interruptedGenerationContextIds.clear();
     this.firstLlmDeltaReceived.clear();
+    for (const [contextId, pending] of this.pendingToolCues) {
+      for (const toolId of pending.keys()) this.scheduler.cancel(toolCueTimerKey(contextId, toolId));
+    }
+    this.pendingToolCues.clear();
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
@@ -414,7 +451,16 @@ export class VoiceAgentSession {
   }
 
   requestClientInterrupt(contextId: string): void {
-    this.turnArbiter.commitClientInterrupt(contextId);
+    // Playing out → the arbiter owns the barge-in (primary-speaker reset + metrics).
+    if (this.ttsPlayout.isActive(contextId)) {
+      this.turnArbiter.commitClientInterrupt(contextId);
+      return;
+    }
+    // Thinking-phase barge-in (B3): no audio yet, but a generation is in-flight —
+    // abort it so "stop" during the reasoner TTFT gap is honored, not dropped.
+    if (this.generatingContextIds.has(contextId)) {
+      this.bus.push(Route.Critical, make.interruptDetected(contextId, Date.now(), "client"));
+    }
   }
 
   // =========================================================================
@@ -485,6 +531,10 @@ export class VoiceAgentSession {
     this.bus.on("llm.done", this.handleLlmDone.bind(this));
     this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
     this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
+
+    // Delegate (Responder-Thinker) observability — G2, RFC bimodel-delegate-seam
+    this.bus.on("delegate.query", this.handleDelegateQuery.bind(this));
+    this.bus.on("delegate.result", this.handleDelegateResult.bind(this));
 
     // TTS
     this.bus.on("tts.audio", this.handleTtsAudio.bind(this));
@@ -699,6 +749,20 @@ export class VoiceAgentSession {
       this.bus.push(Route.Background, make.metric(pkt.contextId, "eos.duplicate_dropped", "1"));
       return;
     }
+
+    // A backchannel ("uh-huh", "okay") uttered WHILE the assistant is still speaking
+    // is not a turn (B4). Dropping it here does two things: it does NOT cancel the
+    // assistant's in-flight answer (the supersede path below would otherwise kill it),
+    // and it does NOT spawn a second LLM response to the backchannel (the double-reply
+    // bug). A backchannel with no assistant currently speaking IS a real turn — only
+    // suppress when another context's TTS is actively playing. (English-only classifier
+    // today — locale-aware backchannels are a separate improvement.)
+    const otherTtsActive = this.ttsPlayout.activeContexts().some((c) => c !== pkt.contextId);
+    if (otherTtsActive && isBackchannel(pkt.text)) {
+      this.bus.push(Route.Background, make.metric(pkt.contextId, "turn.backchannel_dropped", pkt.text));
+      return;
+    }
+
     this.lastFinalizedContextId = pkt.contextId;
 
     // Re-arm per-turn guard state for the next turn. Transports with a stable
@@ -711,6 +775,16 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.delete(pkt.contextId);
     this.fallbackInjectedContexts.delete(pkt.contextId);
 
+    // Supersede (L1): a new turn must cancel any still-active prior-turn TTS or
+    // generation. Without this, a false-EOS (early endpoint on a mid-sentence
+    // pause) starts turn N, the user resumes, turn N's already-emitted audio
+    // keeps synthesizing, and it plays over the user while turn N+1 is answered.
+    // The bridge supersedes the *LLM*; only the session can stop the *TTS*.
+    for (const activeCtx of this.ttsPlayout.activeContexts()) {
+      if (activeCtx !== pkt.contextId) this.cancelStaleGeneration(activeCtx, pkt.timestampMs);
+    }
+
+    this.generatingContextIds.add(pkt.contextId);
     this.currentTurnId = pkt.contextId;
     this.idleTimeout.setContextId(pkt.contextId);
 
@@ -727,8 +801,11 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    // Stop idle timeout while LLM is processing
-    this.bus.push(Route.Main, make.stopIdleTimeout(pkt.contextId, Date.now(), false));
+    // Stop idle timeout while the LLM processes. The user just spoke — that is
+    // genuine engagement, so reset the idle *escalation* count (P2): a user who
+    // answers the first "are you there?" must not be escalated straight to the
+    // disconnect prompt later in the call.
+    this.bus.push(Route.Main, make.stopIdleTimeout(pkt.contextId, Date.now(), true));
 
     const fillerText = this.latencyFiller.start(pkt.contextId, pkt.text, pkt.timestampMs);
     if (fillerText) {
@@ -785,6 +862,7 @@ export class VoiceAgentSession {
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
+    this.generatingContextIds.delete(pkt.contextId);
     if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
       this.ttsTextBuffers.delete(pkt.contextId);
       this.bus.push(Route.Background, make.metric(pkt.contextId, "llm.done_ignored_after_interrupt", "1"));
@@ -865,9 +943,101 @@ export class VoiceAgentSession {
       },
       timestampMs: pkt.timestampMs,
     });
+
+    // G3: arm the typed preamble/filler lifecycle for this pending tool call.
+    const pending = this.pendingToolCues.get(pkt.contextId) ?? new Map<string, string>();
+    pending.set(pkt.toolId, pkt.toolName);
+    this.pendingToolCues.set(pkt.contextId, pending);
+    this.emitToolCallCue(pkt.contextId, "started", pkt.toolId, pkt.toolName);
+    if (this.delayCueAfterMs > 0) {
+      const afterMs = this.delayCueAfterMs;
+      this.scheduler.schedule(toolCueTimerKey(pkt.contextId, pkt.toolId), afterMs, () => {
+        if (!this.pendingToolCues.get(pkt.contextId)?.has(pkt.toolId)) return;
+        this.emitToolCallCue(pkt.contextId, "delayed", pkt.toolId, pkt.toolName, afterMs);
+      });
+    }
+  }
+
+  private emitToolCallCue(
+    contextId: string,
+    phase: "started" | "delayed" | "complete" | "failed",
+    toolId: string,
+    toolName: string,
+    afterMs?: number,
+  ): void {
+    this.emit("tool_call_cue", {
+      tsMs: Date.now(),
+      turnId: contextId,
+      phase,
+      toolId,
+      toolName,
+      ...(afterMs !== undefined ? { afterMs } : {}),
+    });
+  }
+
+  /** G3: resolve one pending tool call with a terminal cue phase. */
+  private resolveToolCue(contextId: string, toolId: string, phase: "complete" | "failed"): void {
+    const pending = this.pendingToolCues.get(contextId);
+    const toolName = pending?.get(toolId);
+    if (toolName === undefined) return;
+    pending!.delete(toolId);
+    if (pending!.size === 0) this.pendingToolCues.delete(contextId);
+    this.scheduler.cancel(toolCueTimerKey(contextId, toolId));
+    this.emitToolCallCue(contextId, phase, toolId, toolName);
+  }
+
+  /** G3: fail every pending tool call for a context (error / barge-in / supersede). */
+  private failPendingToolCues(contextId: string): void {
+    const pending = this.pendingToolCues.get(contextId);
+    if (!pending) return;
+    for (const toolId of [...pending.keys()]) this.resolveToolCue(contextId, toolId, "failed");
+  }
+
+  private handleDelegateQuery(pkt: DelegateQueryPacket): void {
+    this.emit("delegate_query", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      query: pkt.query,
+      toolId: pkt.toolId,
+      toolName: pkt.toolName,
+    });
+    this.debugPush({
+      component: "delegate",
+      type: "query",
+      data: {
+        context_id: pkt.contextId,
+        query: pkt.query,
+        ...(pkt.toolName ? { tool_name: pkt.toolName } : {}),
+      },
+      timestampMs: pkt.timestampMs,
+    });
+  }
+
+  private handleDelegateResult(pkt: DelegateResultPacket): void {
+    this.emit("delegate_result", {
+      tsMs: pkt.timestampMs,
+      turnId: pkt.contextId,
+      query: pkt.query,
+      answer: pkt.answer,
+      durationMs: pkt.durationMs,
+      grounded: pkt.grounded,
+      toolId: pkt.toolId,
+      toolName: pkt.toolName,
+    });
+    this.debugPush({
+      component: "delegate",
+      type: "result",
+      data: {
+        context_id: pkt.contextId,
+        duration_ms: String(pkt.durationMs),
+        grounded: String(pkt.grounded),
+      },
+      timestampMs: pkt.timestampMs,
+    });
   }
 
   private handleLlmToolResult(pkt: LlmToolResultPacket): void {
+    this.resolveToolCue(pkt.contextId, pkt.toolId, "complete");
     this.emit("agent_tool_result", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -913,14 +1083,20 @@ export class VoiceAgentSession {
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.watchdogs.armTtsStallTimer(pkt.contextId);
 
-    // Extend idle timeout by audio duration to prevent timeout during playback.
-    const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
-    const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
-    this.idleTimeout.extend(audioDurationMs);
-
     // Mark active and advance this context's playout cursor by the chunk's
     // realtime duration.
-    this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, Date.now());
+    const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
+    const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
+    const now = Date.now();
+    this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, now);
+
+    // Anchor the idle timer to when playout actually *ends* (P2), not to chunk
+    // arrival. TTS streams faster than realtime, so extending by each chunk's
+    // duration from arrival lets the timer fire mid-speech on a long answer.
+    // playoutEnd() is cumulative across chunks, so this re-arms to durationMs
+    // after the audio delivered so far finishes playing.
+    const playoutEndMs = this.ttsPlayout.playoutEnd(pkt.contextId);
+    this.idleTimeout.extend(playoutEndMs !== undefined ? Math.max(0, playoutEndMs - now) : audioDurationMs);
 
     this.debugPush({
       component: "tts",
@@ -938,6 +1114,7 @@ export class VoiceAgentSession {
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
+    this.generatingContextIds.delete(pkt.contextId);
     this.ttsPlayout.scheduleRelease(pkt.contextId, Date.now());
     this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
@@ -954,6 +1131,7 @@ export class VoiceAgentSession {
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.interruptedGenerationContextIds.add(pkt.contextId);
+    this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
@@ -990,6 +1168,28 @@ export class VoiceAgentSession {
     // segments into the next turn when a client reuses the same contextId
     // (the provider STT plugins listen for interrupt.stt; previously unfired).
     this.bus.push(Route.Critical, make.interruptStt(pkt.contextId, pkt.timestampMs));
+    this.generatingContextIds.delete(pkt.contextId);
+  }
+
+  /**
+   * Cancel a stale prior-turn generation/playout when a new turn supersedes it
+   * (L1). Mirrors the interrupt teardown but without the barge-in metrics — this
+   * is a turn boundary, not a user interruption. Stops leftover TTS audio, aborts
+   * the LLM, and drops late deltas/audio for the stale context.
+   */
+  private cancelStaleGeneration(contextId: string, timestampMs: number): void {
+    this.interruptedGenerationContextIds.add(contextId);
+    this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
+    this.generatingContextIds.delete(contextId);
+    this.latencyFiller.cancel(contextId);
+    this.firstLlmDeltaReceived.delete(contextId);
+    this.ttsTextBuffers.delete(contextId);
+    this.ttsPlayout.release(contextId);
+    this.watchdogs.clearTtsStallTimerFor(contextId);
+    this.bus.push(Route.Critical, make.recordAssistantTruncate(contextId, Date.now()));
+    this.bus.push(Route.Critical, make.interruptTts(contextId, timestampMs));
+    this.bus.push(Route.Critical, make.interruptLlm(contextId, timestampMs));
+    this.bus.push(Route.Background, make.metric(contextId, "supersede.cancelled_stale_generation", "1"));
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {
@@ -1011,7 +1211,12 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
+    // G3: an LLM/bridge error while a tool call is pending means no result is coming.
+    if (pkt.component === "llm" || pkt.component === "bridge") {
+      this.failPendingToolCues(pkt.contextId);
+    }
     this.latencyFiller.clear(pkt.contextId);
+    this.generatingContextIds.delete(pkt.contextId);
     // The packet's own recoverability verdict is authoritative when present: the
     // bus marks handler exceptions (pipeline.error) recoverable by design — one
     // misbehaving handler must degrade the turn, not kill the whole call.

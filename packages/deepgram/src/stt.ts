@@ -42,6 +42,24 @@ interface ProviderTranscriptState {
   finalConfidence: number;
 }
 
+/**
+ * A retired-contextId set (finalized turns) must stay bounded: contextIds are
+ * per-turn on every transport (telephony rotates `<callSid>-t<n>`), so an
+ * unbounded set would grow one entry per turn for the life of a call. Keeping a
+ * recent-turns window is enough to reject the late/duplicate provider finals the
+ * set exists to guard against, without leaking memory over a long conversation.
+ */
+const MAX_RETIRED_CONTEXTS = 256;
+
+function boundedAdd(set: Set<string>, value: string, cap: number): void {
+  set.add(value);
+  while (set.size > cap) {
+    const oldest = set.values().next().value;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
+}
+
 export class DeepgramSTTPlugin implements VoicePlugin {
   readonly endpointingCapability = {
     owner: "provider_stt" as const,
@@ -61,6 +79,10 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private smartFormat: boolean = true;
   private interimResults: boolean = true;
   private vadEvents: boolean = true;
+  // Deepgram gap-based utterance boundary (ms). When > 0 (requires interim_results),
+  // Deepgram emits UtteranceEnd even when `speech_final` never fires — the documented
+  // backstop for noisy/continuous lines (telephony) where a turn would otherwise wedge.
+  private utteranceEndMs: number = 0;
   private confidenceThreshold: number = 0;
   private finalizeOnSpeechFinal: boolean = true;
   private emitEosOnFinal: boolean = true;
@@ -117,6 +139,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     // laggier speech-start signal corrupts VAD/EOS-owned turn-taking (the turn
     // never completes) — proven by the Fly telephony spike.
     this.vadEvents = (config["vad_events"] as boolean) ?? false;
+    // Deepgram requires utterance_end_ms >= 1000 and interim_results; clamp to that.
+    {
+      const raw = (config["utterance_end_ms"] as number) ?? 0;
+      this.utteranceEndMs = raw > 0 ? Math.max(1000, raw) : 0;
+    }
     this.confidenceThreshold =
       (config["confidence_threshold"] as number) ?? 0;
     this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
@@ -142,6 +169,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
           channels: "1",
           no_delay: "true",
           vad_events: String(this.vadEvents),
+          ...(this.utteranceEndMs > 0 ? { utterance_end_ms: String(this.utteranceEndMs) } : {}),
         });
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
@@ -228,6 +256,30 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         timestampMs: Date.now(),
         confidence: 1,
       } satisfies VadSpeechStartedPacket);
+      return;
+    }
+
+    // Deepgram's gap-based utterance boundary (utterance_end_ms). This fires even
+    // when `speech_final` is missed on a noisy/continuous line, so it's the backstop
+    // that stops a turn from wedging forever. If we hold un-finalized transcript for
+    // the current turn, complete it.
+    if (msg["type"] === "UtteranceEnd") {
+      const ctxId = this.currentContextId;
+      if (
+        this.emitEosOnFinal &&
+        ctxId &&
+        !this.finalizedContextIds.has(ctxId) &&
+        this.combinedFinalTranscript(ctxId)
+      ) {
+        this.bus?.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId: ctxId,
+          timestampMs: Date.now(),
+          name: "deepgram.utterance_end_backstop",
+          value: "1",
+        });
+        this.pushTurnComplete(ctxId);
+      }
       return;
     }
 
@@ -395,7 +447,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
     const ctxId = contextId;
     this.resolveProviderFinalize(ctxId);
-    this.finalizedContextIds.add(ctxId);
+    boundedAdd(this.finalizedContextIds, ctxId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
     this.pushResult(transcript, confidence, ctxId);
@@ -416,7 +468,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     const transcript = this.combinedFinalTranscript(contextId);
     if (!transcript || !this.bus) return;
     this.resolveProviderFinalize(contextId);
-    this.finalizedContextIds.add(contextId);
+    boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
     this.bus.push(Route.Main, {

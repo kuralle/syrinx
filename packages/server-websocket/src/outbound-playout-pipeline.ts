@@ -24,6 +24,45 @@ export interface TelephonyOutboundHandle {
   drainAndClose(socket: WebSocket, deadlineMs: number): Promise<void>;
 }
 
+/**
+ * Per-turn contextId identity for carrier transports.
+ *
+ * A phone carrier gives one continuous stream per call, but the engine finishes a
+ * turn per contextId and its STT/TTS plugins permanently retire a contextId once it
+ * completes (finalized/cancelled sets). Reusing one id for the whole call therefore
+ * makes the agent go deaf/mute after turn 1. Every carrier adapter mints a fresh
+ * per-turn id (`<base>-t<n>`) and rotates it at each turn boundary, emitting a
+ * `turn.change` so STT/metrics/dedup see a consistent boundary — matching the browser
+ * transport. Turn 1 uses `contextBase`; rotation begins at `-t1`.
+ */
+export interface RotatableTurnContext {
+  contextId: string;
+  contextBase: string;
+  turnCounter: number;
+}
+
+export function installTelephonyTurnRotation(
+  session: VoiceAgentSession,
+  disposers: Array<() => void>,
+  state: RotatableTurnContext,
+): void {
+  disposers.push(
+    session.bus.on("eos.turn_complete", () => {
+      if (!state.contextBase) return;
+      state.turnCounter += 1;
+      const previousContextId = state.contextId;
+      state.contextId = `${state.contextBase}-t${String(state.turnCounter)}`;
+      session.bus.push(Route.Main, {
+        kind: "turn.change",
+        contextId: state.contextId,
+        previousContextId,
+        timestampMs: Date.now(),
+        reason: "telephony_turn_complete",
+      });
+    }),
+  );
+}
+
 export function wireTelephonyOutboundPipeline(args: {
   readonly session: VoiceAgentSession;
   readonly socket: WebSocket;

@@ -300,10 +300,56 @@ export interface ReasoningSuspendedPacket extends VoicePacket {
   readonly payload: unknown;
 }
 
+// =============================================================================
+// Delegate (Responder-Thinker) observability packets (Background route)
+// =============================================================================
+
+/**
+ * The bridge handed a query to the Reasoner. Emitted the moment the delegate
+ * turn starts (RealtimeBridge `runDelegate`) or the cascade turn reaches the
+ * reasoner (ReasoningBridge), BEFORE the stream runs. Background route:
+ * droppable, never blocks the hot path (RFC bimodel-delegate-seam R4).
+ * `toolId`/`toolName` are present on realtime delegate turns (the front-model
+ * tool call that triggered the delegate); absent on cascade turns.
+ */
+export interface DelegateQueryPacket extends VoicePacket {
+  readonly kind: "delegate.query";
+  readonly query: string;
+  readonly toolId?: string;
+  readonly toolName?: string;
+}
+
+/**
+ * The Reasoner produced the turn's final answer. Self-contained: carries the
+ * `query` again so a consumer can log/persist the Q&A pair from this one packet
+ * without correlating against the earlier `delegate.query`. `durationMs` spans
+ * query → answer; `grounded` is true when the reasoner stream surfaced at least
+ * one `tool-result` part (e.g. a retrieval hit) while producing the answer.
+ */
+export interface DelegateResultPacket extends VoicePacket {
+  readonly kind: "delegate.result";
+  readonly query: string;
+  readonly answer: string;
+  readonly durationMs: number;
+  readonly grounded: boolean;
+  readonly toolId?: string;
+  readonly toolName?: string;
+}
+
 export interface ReasoningResumePacket extends VoicePacket {
   readonly kind: "reasoning.resume";
   readonly runId: string;
   readonly data: unknown;
+}
+
+/**
+ * G4: a realtime provider with native session resume (Gemini Live) issued a new
+ * resumption handle. Background route; a durable host (e.g. cf-agents) persists
+ * the latest handle and passes it back on reconnect instead of replaying history.
+ */
+export interface RealtimeResumptionHandlePacket extends VoicePacket {
+  readonly kind: "realtime.resumption_handle";
+  readonly handle: string;
 }
 
 // =============================================================================
@@ -551,3 +597,6 @@ export type AnyErrorPacket =
 
 /** Observability packets (Background route). */
 export type ObservabilityPacket = ConversationMetricPacket | TurnBoundaryEventPacket;
+
+/** Delegate (Responder-Thinker) lifecycle packets (Background route). */
+export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;

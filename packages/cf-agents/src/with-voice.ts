@@ -23,7 +23,7 @@ import {
 } from "@kuralle-syrinx/server-websocket/edge";
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
-import type { Reasoner } from "@kuralle-syrinx/core";
+import type { Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
 import {
   connectionManagedSocket,
@@ -34,10 +34,15 @@ import {
   buildVoiceSession,
   type VoicePipeline,
   type VoicePipelineContext,
+  type VoiceSessionWiring,
 } from "./build-session.js";
+import { SqliteReasonerSessionStore, type SqlTag } from "./durable-history.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mixin constructors require `any[]` rest params (TS2545)
 type Constructor<T = object> = new (...args: any[]) => T;
+
+/** Bound on the durable realtime transcript (12 turns), mirroring ReasoningBridge's default window. */
+const MAX_DURABLE_HISTORY_MESSAGES = 24;
 
 /** The Agent surface the voice mixin relies on. (`env`/`name`/`runtime` are read via VoiceHostSurface.) */
 type AgentLike = Constructor<
@@ -57,6 +62,41 @@ export interface ToolCallStartContext {
   readonly sessionId: string;
   /** The live agents-SDK connection — `connection.send(json)` to message the client. */
   readonly connection: VoiceConnection;
+}
+
+/**
+ * Delegate (Responder-Thinker) observability — fired when the bridge hands a query to
+ * the Reasoner (G2, RFC bimodel-delegate-seam). Replaces the consumer-side pattern of
+ * wrapping the Reasoner just to log the query. `toolId`/`toolName` are present on
+ * realtime delegate turns, absent on cascade turns.
+ */
+export interface DelegateQueryContext<Env = unknown> {
+  readonly query: string;
+  readonly toolId?: string;
+  readonly toolName?: string;
+  readonly turnId: string;
+  readonly sessionId: string;
+  readonly connection: VoiceConnection;
+  /** The Worker env — bindings for logging/persistence (e.g. an R2 bucket). */
+  readonly env: Env;
+}
+
+/**
+ * Fired when the Reasoner produced the turn's final answer. Self-contained (carries the
+ * query again) so a consumer can log/persist the grounded Q&A pair from this one hook.
+ */
+export interface DelegateResultContext<Env = unknown> {
+  readonly query: string;
+  readonly answer: string;
+  readonly durationMs: number;
+  readonly grounded: boolean;
+  readonly toolId?: string;
+  readonly toolName?: string;
+  readonly turnId: string;
+  readonly sessionId: string;
+  readonly connection: VoiceConnection;
+  /** The Worker env — bindings for logging/persistence (e.g. an R2 bucket). */
+  readonly env: Env;
 }
 
 export interface WithVoiceOptions<Env> {
@@ -84,6 +124,31 @@ export interface WithVoiceOptions<Env> {
    * the call. See {@link ToolCallStartContext}.
    */
   readonly onToolCallStart?: (ctx: ToolCallStartContext) => void | Promise<void>;
+  /**
+   * Delegate observability (G2): fired when the bridge hands a query to the Reasoner.
+   * Subscribe instead of wrapping the Reasoner to log. Throwing here never affects the call.
+   */
+  readonly onDelegateQuery?: (ctx: DelegateQueryContext<Env>) => void | Promise<void>;
+  /**
+   * Delegate observability (G2): fired when the Reasoner produced the turn's final answer —
+   * the hook for logging/persisting the grounded Q&A pair (query + answer + durationMs +
+   * grounded). Throwing here never affects the call.
+   */
+  readonly onDelegateResult?: (ctx: DelegateResultContext<Env>) => void | Promise<void>;
+  /**
+   * G4 durable session state (default on). Persists the reasoner conversation to the
+   * Agent's DO-SQLite so a session resumes with the same context after eviction/
+   * hibernation: cascaded pipelines re-seed the ReasoningBridge; realtime pipelines
+   * record the transcript, feed it to delegate turns as prior context, and expose it
+   * (plus any provider-native resume handle) to the `front()` factory via
+   * `ctx.resume`. Set false for the pre-G4 ephemeral behavior.
+   */
+  readonly durableHistory?: boolean;
+  /**
+   * G3: ms a pending tool call may run before the time-triggered `tool_call_delayed`
+   * ("still working") wire cue fires. 0 disables the delayed phase. Default: 2000.
+   */
+  readonly delayCueAfterMs?: number;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   readonly resumeWindowMs?: number;
@@ -206,8 +271,76 @@ export function withVoice<Env, TBase extends AgentLike>(
 
       // Both runners assemble the session the same way — pipeline + (resolved) reasoner.
       const createSession = async () => {
-        const reasoner = await this.#resolveReasoner(env, sessionId);
-        const session = buildVoiceSession(options.pipeline, env, reasoner, { sessionId });
+        // G4 durable session state: load prior context from DO-SQLite, expose it to the
+        // factories via ctx.resume, and wire persistence per pipeline kind.
+        const durable = options.durableHistory !== false ? this.#durableStore() : undefined;
+        const liveHistory: ReasonerMessage[] = durable ? [...durable.load(sessionId)] : [];
+        const providerHandle = durable?.loadResumeHandle(sessionId);
+        const ctx: VoicePipelineContext = {
+          sessionId,
+          ...(durable
+            ? {
+                resume: {
+                  history: () =>
+                    liveHistory
+                      .filter((m): m is ReasonerMessage & { role: "user" | "assistant" } =>
+                        m.role === "user" || m.role === "assistant")
+                      .map((m) => ({ role: m.role, content: m.content })),
+                  ...(providerHandle ? { providerHandle } : {}),
+                },
+              }
+            : {}),
+        };
+        const wiring: VoiceSessionWiring = {
+          ...(options.delayCueAfterMs !== undefined ? { delayCueAfterMs: options.delayCueAfterMs } : {}),
+          ...(durable
+            ? options.pipeline.kind === "realtime"
+              ? { contextProvider: () => liveHistory }
+              : { reasonerSessionStore: durable }
+            : {}),
+        };
+        const reasoner = await this.#resolveReasoner(env, ctx);
+        const session = buildVoiceSession(options.pipeline, env, reasoner, ctx, wiring);
+        // Realtime pipelines have no ReasoningBridge to own history — record the
+        // transcript from the bus and persist the bounded snapshot per turn. The
+        // cascaded path persists inside ReasoningBridge instead (heard-prefix aware).
+        if (durable && options.pipeline.kind === "realtime") {
+          const persist = (): void => {
+            if (liveHistory.length > MAX_DURABLE_HISTORY_MESSAGES) {
+              liveHistory.splice(0, liveHistory.length - MAX_DURABLE_HISTORY_MESSAGES);
+            }
+            try {
+              durable.save(sessionId, liveHistory);
+            } catch {
+              /* persistence must never fail the call */
+            }
+          };
+          // The realtime bridge pushes llm.done (assistant transcript) BEFORE
+          // eos.turn_complete (user transcript) for the same turn — buffer the
+          // assistant text and commit the pair in conversation order at turn end.
+          const pendingAssistant = new Map<string, string>();
+          session.bus.on("llm.done", (pkt) => {
+            const done = pkt as { contextId: string; text?: string };
+            if (done.text?.trim()) pendingAssistant.set(done.contextId, done.text);
+          });
+          session.bus.on("eos.turn_complete", (pkt) => {
+            const turn = pkt as { contextId: string; text?: string };
+            const assistantText = pendingAssistant.get(turn.contextId);
+            pendingAssistant.delete(turn.contextId);
+            if (turn.text?.trim()) liveHistory.push({ role: "user", content: turn.text });
+            if (assistantText) liveHistory.push({ role: "assistant", content: assistantText });
+            if (turn.text?.trim() || assistantText) persist();
+          });
+          session.bus.on("realtime.resumption_handle", (pkt) => {
+            const handle = (pkt as { handle?: string }).handle;
+            if (!handle) return;
+            try {
+              durable.saveResumeHandle(sessionId, handle);
+            } catch {
+              /* persistence must never fail the call */
+            }
+          });
+        }
         // Surface the tool-call-start seam: VoiceAgentSession emits `agent_tool_call` the instant
         // the front model invokes the delegate tool, before the reasoner runs. A throwing app
         // callback must never break the call, so it is fully isolated.
@@ -216,6 +349,50 @@ export function withVoice<Env, TBase extends AgentLike>(
             try {
               void Promise.resolve(
                 options.onToolCallStart!({ toolName: e.name, args: e.args, sessionId, connection: voiceConnection }),
+              ).catch(() => undefined);
+            } catch {
+              /* app hook threw synchronously — ignore */
+            }
+          });
+        }
+        // Delegate observability (G2): surface the bridge's delegate.query/delegate.result
+        // packets as app hooks. Same isolation contract as onToolCallStart — a throwing app
+        // callback must never break the call.
+        if (options.onDelegateQuery) {
+          session.on("delegate_query", (e) => {
+            try {
+              void Promise.resolve(
+                options.onDelegateQuery!({
+                  query: e.query,
+                  toolId: e.toolId,
+                  toolName: e.toolName,
+                  turnId: e.turnId,
+                  sessionId,
+                  connection: voiceConnection,
+                  env,
+                }),
+              ).catch(() => undefined);
+            } catch {
+              /* app hook threw synchronously — ignore */
+            }
+          });
+        }
+        if (options.onDelegateResult) {
+          session.on("delegate_result", (e) => {
+            try {
+              void Promise.resolve(
+                options.onDelegateResult!({
+                  query: e.query,
+                  answer: e.answer,
+                  durationMs: e.durationMs,
+                  grounded: e.grounded,
+                  toolId: e.toolId,
+                  toolName: e.toolName,
+                  turnId: e.turnId,
+                  sessionId,
+                  connection: voiceConnection,
+                  env,
+                }),
               ).catch(() => undefined);
             } catch {
               /* app hook threw synchronously — ignore */
@@ -286,11 +463,23 @@ export function withVoice<Env, TBase extends AgentLike>(
       }
     }
 
-    async #resolveReasoner(env: Env, sessionId: string): Promise<Reasoner | undefined> {
-      if (options.reasoner) return options.reasoner(env, { sessionId });
+    async #resolveReasoner(env: Env, ctx: VoicePipelineContext): Promise<Reasoner | undefined> {
+      if (options.reasoner) return options.reasoner(env, ctx);
       const runtime = (this as unknown as VoiceHostSurface).runtime;
-      if (isKuralleRuntime(runtime)) return fromKuralleRuntime(runtime, { sessionId });
+      if (isKuralleRuntime(runtime)) return fromKuralleRuntime(runtime, { sessionId: ctx.sessionId });
       return undefined;
+    }
+
+    // One durable store per DO instance; tables are created idempotently on first use.
+    #durable: SqliteReasonerSessionStore | null = null;
+    #durableStore(): SqliteReasonerSessionStore {
+      if (!this.#durable) {
+        const host = this as unknown as { sql: SqlTag };
+        this.#durable = new SqliteReasonerSessionStore(
+          (strings, ...values) => host.sql(strings, ...values),
+        );
+      }
+      return this.#durable;
     }
 
     // Default: the client-supplied `?sessionId=` (so a reconnecting client can

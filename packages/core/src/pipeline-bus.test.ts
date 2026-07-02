@@ -171,6 +171,20 @@ describe("PipelineBusImpl", () => {
         packet: { kind: "critical.event", contextId: "critical-1" },
       });
     });
+
+    it("does not retain packets when no reader is attached (drop-on-unread)", async () => {
+      const bus = createBus();
+      // No getReader() → stream unlocked → nothing retained (else a call with no
+      // recorder would buffer every audio packet and OOM).
+      for (let i = 0; i < 1000; i++) bus.push(Route.Main, pkt("main.event", `n-${i}`));
+
+      // A reader that attaches later sees only packets pushed AFTER it attaches.
+      const reader = bus.allPackets.getReader();
+      bus.push(Route.Main, pkt("main.event", "after-reader"));
+      const next = await reader.read();
+      reader.releaseLock();
+      expect(next.value).toMatchObject({ packet: { contextId: "after-reader" } });
+    });
   });
 
   describe("error handling", () => {

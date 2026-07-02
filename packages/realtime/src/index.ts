@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-export type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "./realtime-adapter.js";
+export type {
+  RealtimeAdapter,
+  RealtimeEvent,
+  RealtimeResumeMessage,
+  RealtimeToolDef,
+} from "./realtime-adapter.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
 export {
   createOpenAiCompatibleRealtimeAdapter,
@@ -14,4 +19,8 @@ export {
   type GeminiTranslateSession,
   type GeminiTranslateSessionOptions,
 } from "./gemini-translate.js";
-export { RealtimeBridge, type RealtimeBridgeOptions } from "./realtime-bridge.js";
+export {
+  RealtimeBridge,
+  type DelegateResultEnvelope,
+  type RealtimeBridgeOptions,
+} from "./realtime-bridge.js";

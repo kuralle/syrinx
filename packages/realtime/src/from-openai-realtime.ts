@@ -4,7 +4,7 @@ import type { SocketFactory } from "@kuralle-syrinx/ws";
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { createOpenAiCompatibleRealtimeAdapter } from "./openai-compatible-realtime.js";
-import type { RealtimeAdapter, RealtimeToolDef } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeResumeMessage, RealtimeToolDef } from "./realtime-adapter.js";
 
 const DEFAULT_MODEL = "gpt-realtime-2";
 const DEFAULT_VOICE = "marin";
@@ -33,6 +33,12 @@ export interface OpenAIRealtimeOptions {
   readonly toolChoice?: string | Record<string, unknown>;
   readonly inputRateHz?: number;
   readonly outputRateHz?: number;
+  /**
+   * G4 resume-by-replay: returns the prior conversation to replay as
+   * `conversation.item.create` items on every (re)connect — OpenAI Realtime has no
+   * native session resume. Replay never triggers a response (no double-answer).
+   */
+  readonly resumeHistory?: () => readonly RealtimeResumeMessage[];
 }
 
 export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter {
@@ -98,6 +104,7 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
     supportsTruncate: true,
     requiresResponseCreateAfterToolOutput: opts.requiresResponseCreateAfterToolOutput,
     defaultErrorMessage: "OpenAI Realtime error",
+    ...(opts.resumeHistory ? { buildResumeItems: opts.resumeHistory } : {}),
   });
 }
 

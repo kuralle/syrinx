@@ -115,6 +115,29 @@ describe("AudioJitterBuffer", () => {
     expect(jitterBuffer.activeContextIds).toHaveLength(2);
   });
 
+  it("reports played-out ms clamped to the scheduled window (heard clock)", () => {
+    const frameData = new Int16Array(320); // 20ms at 16kHz
+    frameData.fill(1000);
+    mockContext.currentTime = 1.0;
+    jitterBuffer.enqueue(frameData.buffer, "ctx"); // scheduled at 1.1, ends 1.12
+
+    // Before the frame starts playing → nothing heard yet.
+    expect(jitterBuffer.playedOutMs("ctx")).toBe(0);
+    expect(jitterBuffer.isPlayoutComplete("ctx")).toBe(false);
+
+    // Halfway through the 20ms frame → ~10ms heard.
+    mockContext.currentTime = 1.11;
+    expect(jitterBuffer.playedOutMs("ctx")).toBeCloseTo(10, 0);
+
+    // Past the end → clamped to the full 20ms, and complete.
+    mockContext.currentTime = 1.2;
+    expect(jitterBuffer.playedOutMs("ctx")).toBeCloseTo(20, 0);
+    expect(jitterBuffer.isPlayoutComplete("ctx")).toBe(true);
+
+    // Unknown context reports 0.
+    expect(jitterBuffer.playedOutMs("nope")).toBe(0);
+  });
+
   it("clears specific context frames on context-specific clear", () => {
     const frameData = new Int16Array(320);
     frameData.fill(1000);

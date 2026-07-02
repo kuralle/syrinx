@@ -63,6 +63,20 @@ export {
   type ReasoningResumePacket,
 } from "./packets.js";
 
+// Pipeline packets — delegate (Responder-Thinker) observability
+export {
+  type DelegateQueryPacket,
+  type DelegateResultPacket,
+  type DelegatePacket,
+  type RealtimeResumptionHandlePacket,
+} from "./packets.js";
+
+// Durable reasoner session state (G4)
+export {
+  InMemoryReasonerSessionStore,
+  type ReasonerSessionStore,
+} from "./reasoner-session-store.js";
+
 // Pipeline packets — TTS
 export {
   type TextToSpeechTextPacket,

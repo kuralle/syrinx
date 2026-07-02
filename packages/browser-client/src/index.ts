@@ -79,6 +79,13 @@ export type SyrinxStudioMessage =
   | { readonly type: "agent_chunk"; readonly turnId?: string; readonly text: string }
   | { readonly type: "agent_tool_call"; readonly turnId?: string; readonly id?: string; readonly name: string; readonly args?: unknown }
   | { readonly type: "agent_tool_result"; readonly turnId?: string; readonly id?: string; readonly result?: unknown }
+  // G3 typed preamble/filler lifecycle (RFC bimodel-delegate-seam): the standard
+  // "thinking" cue. started = the front invoked a tool (arm an earcon/indicator);
+  // delayed = still working after afterMs; complete/failed = stop the cue.
+  | { readonly type: "tool_call_started"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string }
+  | { readonly type: "tool_call_delayed"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string; readonly afterMs?: number }
+  | { readonly type: "tool_call_complete"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string }
+  | { readonly type: "tool_call_failed"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string }
   | { readonly type: "agent_end"; readonly turnId?: string }
   | { readonly type: "agent_interrupted"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "audio_clear"; readonly turnId?: string; readonly reason?: string }
@@ -191,6 +198,8 @@ export class SyrinxBrowserClient {
   private openedAt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private playoutProgressTimer: ReturnType<typeof setInterval> | null = null;
+  private lastProgressContextId: string | null = null;
   private jitterBuffer: AudioJitterBuffer | null = null;
   private outputSampleRateHz = 16000;
   private wireCodec: BrowserWireCodec = "pcm_s16le";
@@ -372,10 +381,12 @@ export class SyrinxBrowserClient {
       this.emit({ type: "open" });
     }
     this.startKeepalive();
+    this.startPlayoutProgressReporting();
   }
 
   private handleTransportClose(code: number, reason: string): void {
     this.stopKeepalive();
+    this.stopPlayoutProgressReporting();
     if (!this.cleanClose) {
       this.jitterBuffer?.clear();
     }
@@ -482,6 +493,43 @@ export class SyrinxBrowserClient {
       clearInterval(this.keepaliveTimer);
       this.keepaliveTimer = null;
     }
+  }
+
+  // The browser is the playout clock on the WebSocket media path: report how many
+  // ms of the current assistant turn have actually reached the speaker, so the
+  // server can truncate conversation history to what the user HEARD on barge-in
+  // (B2) instead of falling back to a stale 0. ~200ms cadence matches the server
+  // emitter's throttle; a final complete:true is sent when a turn finishes playing.
+  private startPlayoutProgressReporting(): void {
+    this.stopPlayoutProgressReporting();
+    if (!this.jitterBuffer) return;
+    this.playoutProgressTimer = setInterval(() => {
+      const jitter = this.jitterBuffer;
+      if (!jitter || !this.transport.connected) return;
+      const contextId = jitter.activeContextId ?? this.lastProgressContextId;
+      if (!contextId) return;
+      const complete = jitter.isPlayoutComplete(contextId);
+      try {
+        this.sendJson({
+          type: "playout_progress",
+          contextId,
+          playedOutMs: Math.round(jitter.playedOutMs(contextId)),
+          complete,
+        });
+      } catch {
+        this.stopPlayoutProgressReporting();
+        return;
+      }
+      this.lastProgressContextId = complete ? null : contextId;
+    }, 200);
+  }
+
+  private stopPlayoutProgressReporting(): void {
+    if (this.playoutProgressTimer !== null) {
+      clearInterval(this.playoutProgressTimer);
+      this.playoutProgressTimer = null;
+    }
+    this.lastProgressContextId = null;
   }
 
   private handleJsonMessage(data: unknown): void {
@@ -717,6 +765,20 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
       turnId: optionalString(value.turnId, "agent_tool_result.turnId"),
       id: optionalString(value.id, "agent_tool_result.id"),
       result: value.result,
+    };
+  }
+  if (
+    type === "tool_call_started" ||
+    type === "tool_call_delayed" ||
+    type === "tool_call_complete" ||
+    type === "tool_call_failed"
+  ) {
+    return {
+      type,
+      turnId: optionalString(value.turnId, `${type}.turnId`),
+      toolId: optionalString(value.toolId, `${type}.toolId`),
+      toolName: optionalString(value.toolName, `${type}.toolName`),
+      ...(type === "tool_call_delayed" ? { afterMs: optionalNumber(value.afterMs, "tool_call_delayed.afterMs") } : {}),
     };
   }
   if (type === "agent_interrupted" || type === "audio_clear") {

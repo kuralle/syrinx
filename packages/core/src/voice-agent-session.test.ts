@@ -321,6 +321,198 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("G2/WBS-1: surfaces delegate.query/delegate.result packets as delegate_query/delegate_result session events", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const queries: Array<{ turnId: string; query: string; toolName?: string }> = [];
+    const results: Array<{ turnId: string; query: string; answer: string; durationMs: number; grounded: boolean }> = [];
+    session.on("delegate_query", (event) => queries.push(event));
+    session.on("delegate_result", (event) => results.push(event));
+    await session.start();
+
+    session.bus.push(Route.Background, {
+      kind: "delegate.query",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      query: "When is the deadline?",
+      toolId: "call_1",
+      toolName: "consult_knowledge",
+    });
+    session.bus.push(Route.Background, {
+      kind: "delegate.result",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      query: "When is the deadline?",
+      answer: "March 31.",
+      durationMs: 42,
+      grounded: true,
+      toolId: "call_1",
+      toolName: "consult_knowledge",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(queries).toEqual([
+      { tsMs: expect.any(Number), turnId: "turn-1", query: "When is the deadline?", toolId: "call_1", toolName: "consult_knowledge" },
+    ]);
+    expect(results).toEqual([
+      {
+        tsMs: expect.any(Number),
+        turnId: "turn-1",
+        query: "When is the deadline?",
+        answer: "March 31.",
+        durationMs: 42,
+        grounded: true,
+        toolId: "call_1",
+        toolName: "consult_knowledge",
+      },
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("G3/WBS-3: tool-call lifecycle cues fire started → delayed → complete", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 30 });
+    const cues: Array<{ phase: string; turnId: string; toolId: string; toolName: string; afterMs?: number }> = [];
+    session.on("tool_call_cue", (event) => cues.push(event));
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: { query: "fees" },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 70));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_result",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      result: "answer",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(cues.map((cue) => cue.phase)).toEqual(["started", "delayed", "complete"]);
+    expect(cues[0]).toMatchObject({ turnId: "turn-1", toolId: "t1", toolName: "consult_knowledge" });
+    expect(cues[1]!.afterMs).toBe(30);
+
+    await closeSession(session);
+  });
+
+  it("G3/WBS-3: no delayed cue when the result beats the timer; timer 0 disables it", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 5000 });
+    const cues: Array<{ phase: string }> = [];
+    session.on("tool_call_cue", (event) => cues.push(event));
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: {},
+    });
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_result",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      result: "fast answer",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(cues.map((cue) => cue.phase)).toEqual(["started", "complete"]);
+
+    await closeSession(session);
+
+    const disabled = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 0 });
+    const disabledCues: Array<{ phase: string }> = [];
+    disabled.on("tool_call_cue", (event) => disabledCues.push(event));
+    await disabled.start();
+    disabled.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+      toolId: "t2",
+      toolName: "consult_knowledge",
+      toolArgs: {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(disabledCues.map((cue) => cue.phase)).toEqual(["started"]);
+    await closeSession(disabled);
+  });
+
+  it("G3/WBS-3: llm.error while a tool call is pending fires the failed cue", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 0 });
+    const cues: Array<{ phase: string; toolId: string }> = [];
+    session.on("tool_call_cue", (event) => cues.push(event));
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10)); // let Main drain before the Critical error
+    session.bus.push(Route.Critical, {
+      kind: "llm.error",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      component: "bridge",
+      category: ErrorCategory.NetworkTimeout,
+      cause: new Error("delegate failed"),
+      isRecoverable: true,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(cues.map((cue) => cue.phase)).toEqual(["started", "failed"]);
+    expect(cues[1]!.toolId).toBe("t1");
+
+    await closeSession(session);
+  });
+
+  it("G3/WBS-3 (R5): barge-in fails the pending cue and the interrupt path is unaffected", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 5000, minInterruptionMs: 0 });
+    const cues: Array<{ phase: string }> = [];
+    const interrupts: string[] = [];
+    session.on("tool_call_cue", (event) => cues.push(event));
+    session.bus.on("interrupt.tts", (pkt) => { interrupts.push((pkt as { contextId: string }).contextId); });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10)); // let Main drain before the Critical interrupt
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      source: "client",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(cues.map((cue) => cue.phase)).toEqual(["started", "failed"]);
+    expect(interrupts).toContain("turn-1"); // barge-in cancel still flowed
+
+    await closeSession(session);
+  });
+
   it("emits normalized debug events for bus packets", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const reader = session.debugEvents.getReader();
@@ -2481,6 +2673,88 @@ describe("VoiceAgentSession — handler errors must not kill the call", () => {
     expect(partials).toEqual([
       expect.objectContaining({ text: "still alive" }),
     ]);
+
+    await closeSession(session);
+  });
+});
+
+describe("VoiceAgentSession supersede + thinking-phase barge-in", () => {
+  it("cancels a still-playing prior turn's TTS when a new turn completes (L1)", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const interruptTts: InterruptTtsPacket[] = [];
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => { interruptTts.push(pkt as InterruptTtsPacket); });
+
+    // Turn 1 is generating + has streamed audio (still playing out).
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete", contextId: "turn-1", timestampMs: Date.now(), text: "one", transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((r) => setTimeout(r, 5));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio", contextId: "turn-1", timestampMs: Date.now(),
+      audio: new Uint8Array(16000), sampleRateHz: 16000, // ~0.5s of audio still playing
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Turn 2 completes while turn 1 is still playing → turn 1 must be cancelled.
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete", contextId: "turn-2", timestampMs: Date.now(), text: "two", transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(interruptTts.some((p) => p.contextId === "turn-1")).toBe(true);
+    expect(interruptTts.some((p) => p.contextId === "turn-2")).toBe(false);
+
+    await closeSession(session);
+  });
+
+  it("honors a client interrupt during the reasoner TTFT gap, before any audio (B3)", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const interruptLlm: InterruptLlmPacket[] = [];
+    await session.start();
+    session.bus.on("interrupt.llm", (pkt) => { interruptLlm.push(pkt as InterruptLlmPacket); });
+
+    // Turn completes; generation is in-flight but NO tts.audio has played yet.
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete", contextId: "turn-think", timestampMs: Date.now(), text: "q", transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((r) => setTimeout(r, 5));
+
+    session.requestClientInterrupt("turn-think");
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(interruptLlm.some((p) => p.contextId === "turn-think")).toBe(true);
+
+    await closeSession(session);
+  });
+
+  it("drops a backchannel during the assistant's turn: no cancel, no second response (B4)", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const interruptTts: InterruptTtsPacket[] = [];
+    const userInputs: UserInputPacket[] = [];
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => { interruptTts.push(pkt as InterruptTtsPacket); });
+    session.bus.on("user.input", (pkt) => { userInputs.push(pkt as UserInputPacket); });
+
+    // Assistant is speaking turn-1 (audio actively playing out).
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete", contextId: "turn-1", timestampMs: Date.now(), text: "here is the answer", transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((r) => setTimeout(r, 5));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(16000), sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((r) => setTimeout(r, 5));
+
+    // User says "uh-huh" (a rotated context) mid-answer — a backchannel, not a turn.
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete", contextId: "turn-2", timestampMs: Date.now(), text: "uh-huh", transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The assistant's turn is NOT cancelled and the backchannel does NOT drive the LLM.
+    expect(interruptTts.some((p) => p.contextId === "turn-1")).toBe(false);
+    expect(userInputs.some((p) => p.contextId === "turn-2")).toBe(false);
 
     await closeSession(session);
   });

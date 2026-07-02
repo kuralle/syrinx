@@ -39,7 +39,7 @@ duplicate it here — start there.
 
 ## The package map
 
-16 packages, all scoped `@kuralle-syrinx/*` under `packages/`:
+22 packages, all scoped `@kuralle-syrinx/*` under `packages/`:
 
 | Area | Packages |
 |---|---|

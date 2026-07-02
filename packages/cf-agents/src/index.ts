@@ -8,6 +8,8 @@ export {
   type WithVoiceOptions,
   type WithVoiceMembers,
   type ToolCallStartContext,
+  type DelegateQueryContext,
+  type DelegateResultContext,
 } from "./with-voice.js";
 export type {
   VoicePipeline,
@@ -15,6 +17,8 @@ export type {
   CascadedPipeline,
   CascadedStage,
   VoicePipelineContext,
+  VoiceSessionWiring,
 } from "./build-session.js";
+export { SqliteReasonerSessionStore, type SqlTag } from "./durable-history.js";
 export { connectionManagedSocket } from "./connection-socket.js";
 export type { VoiceConnection, ConnectionSocketController } from "./connection-socket.js";

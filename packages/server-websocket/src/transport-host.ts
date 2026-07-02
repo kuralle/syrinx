@@ -30,6 +30,15 @@ export interface TransportAdmissionOptions {
   readonly maxConcurrentSessions?: number;
   readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onAdmissionRejected?: () => void;
+  /**
+   * Authorize an inbound connection before the WebSocket upgrade completes. Return
+   * false (or throw) to reject with 4401. Voice endpoints are unauthenticated by
+   * default and each connection incurs provider cost and can attach to a live
+   * session — set this (shared secret / bearer / Twilio signature) before exposing
+   * the endpoint. Receives the raw upgrade request (headers + URL) so it can read
+   * an `Authorization` header or a `?token=` query param.
+   */
+  readonly authorize?: (request: IncomingMessage) => boolean | Promise<boolean>;
 }
 
 export const TRANSPORT_ADMISSION_REJECTED_METRIC = "transport.admission_rejected";
@@ -39,9 +48,11 @@ export function rejectWebSocketAdmission(
   request: IncomingMessage,
   socket: Socket,
   head: Buffer,
+  code = 1013,
+  reason = "try again later",
 ): void {
   wsServer.handleUpgrade(request, socket, head, (websocket) => {
-    websocket.close(1013, "try again later");
+    websocket.close(code, reason);
   });
 }
 

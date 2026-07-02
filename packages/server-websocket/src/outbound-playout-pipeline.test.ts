@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
-import { wireTelephonyOutboundPipeline } from "./outbound-playout-pipeline.js";
+import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation, type RotatableTurnContext } from "./outbound-playout-pipeline.js";
 
 function createMockSocket(): WebSocket {
   const emitter = new EventEmitter();
@@ -204,5 +204,62 @@ describe("wireTelephonyOutboundPipeline.drainAndClose", () => {
     expect(Date.now() - startedAt).toBeLessThan(500);
 
     for (const dispose of disposers) dispose();
+  });
+});
+
+describe("installTelephonyTurnRotation", () => {
+  // Regression for the telephony "deaf after turn 1" P0: a carrier gives one
+  // stream per call, but STT/TTS retire a contextId once its turn completes, so
+  // reusing a single callSid id muted the agent after turn 1. Every turn must get
+  // a fresh per-turn id with a turn.change boundary.
+  it("rotates a per-turn contextId and emits turn.change on each completed turn", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    void session.start();
+    const disposers: Array<() => void> = [];
+    const state: RotatableTurnContext = {
+      contextId: "twilio-CA123",
+      contextBase: "twilio-CA123",
+      turnCounter: 0,
+    };
+    const turnChanges: Array<{ contextId: string; previousContextId: string; reason: string }> = [];
+    session.bus.on("turn.change", (pkt) => {
+      const change = pkt as unknown as { contextId: string; previousContextId: string; reason: string };
+      turnChanges.push({ contextId: change.contextId, previousContextId: change.previousContextId, reason: change.reason });
+    });
+
+    installTelephonyTurnRotation(session, disposers, state);
+
+    // Turn 1 runs on the base id.
+    expect(state.contextId).toBe("twilio-CA123");
+
+    session.bus.push(Route.Main, { kind: "eos.turn_complete", contextId: "twilio-CA123", timestampMs: Date.now(), text: "one", transcripts: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.contextId).toBe("twilio-CA123-t1");
+
+    session.bus.push(Route.Main, { kind: "eos.turn_complete", contextId: "twilio-CA123-t1", timestampMs: Date.now(), text: "two", transcripts: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.contextId).toBe("twilio-CA123-t2");
+
+    expect(turnChanges).toEqual([
+      { contextId: "twilio-CA123-t1", previousContextId: "twilio-CA123", reason: "telephony_turn_complete" },
+      { contextId: "twilio-CA123-t2", previousContextId: "twilio-CA123-t1", reason: "telephony_turn_complete" },
+    ]);
+
+    for (const dispose of disposers) dispose();
+    await session.close();
+  });
+
+  it("no-ops until a base is set", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    void session.start();
+    const disposers: Array<() => void> = [];
+    const state: RotatableTurnContext = { contextId: "", contextBase: "", turnCounter: 0 };
+    installTelephonyTurnRotation(session, disposers, state);
+    session.bus.push(Route.Main, { kind: "eos.turn_complete", contextId: "", timestampMs: Date.now(), text: "", transcripts: [] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(state.contextId).toBe("");
+    expect(state.turnCounter).toBe(0);
+    for (const dispose of disposers) dispose();
+    await session.close();
   });
 });

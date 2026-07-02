@@ -23,6 +23,18 @@ import type { SocketData } from "@kuralle-syrinx/ws";
 import type { AttributionKey, PacketSink, TimerHandle, TimerPort, Transport, WireEvent, WireProtocol } from "./types.js";
 
 const EMPTY = new Uint8Array(0);
+// Cancelled-context guard is per-turn (telephony rotates contextIds), so it must
+// stay bounded to a recent-turns window instead of growing for the whole call.
+const MAX_CANCELLED_CONTEXTS = 256;
+
+function boundedAdd(set: Set<string>, value: string, cap: number): void {
+  set.add(value);
+  while (set.size > cap) {
+    const oldest = set.values().next().value;
+    if (oldest === undefined) break;
+    set.delete(oldest);
+  }
+}
 
 const defaultTimer: TimerPort = {
   set: (ms, fn) => setTimeout(fn, ms),
@@ -295,7 +307,7 @@ class TtsEngineImpl implements TtsEngine {
   }
 
   private async cancelContext(contextId: string): Promise<void> {
-    this.cancelledContexts.add(contextId);
+    boundedAdd(this.cancelledContexts, contextId, MAX_CANCELLED_CONTEXTS);
     this.pendingEnd.delete(contextId);
     this.clearFinishTimeout(contextId);
     for (const key of [...(this.contextKeys.get(contextId) ?? [])]) {
