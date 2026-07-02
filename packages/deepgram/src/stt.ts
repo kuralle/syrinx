@@ -99,6 +99,9 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   // "never promote unconfirmed" behavior for callers that need it).
   private finalizeTimeoutFallback: boolean = false;
   private keepAliveIntervalMs: number = 3000;
+  // nova-3 keyterm prompting: bias recognition toward domain terms (names, products,
+  // codes) — the #1 production voice failure is mishearing exactly these.
+  private keyterms: readonly string[] = [];
 
   // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
   private conn: WebSocketConnection | null = null;
@@ -152,6 +155,14 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
     this.finalizeTimeoutFallback = (config["finalize_timeout_fallback"] as boolean) ?? false;
     this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
+    {
+      const raw = config["keyterm"];
+      this.keyterms = Array.isArray(raw)
+        ? raw.filter((t): t is string => typeof t === "string" && t.length > 0)
+        : typeof raw === "string" && raw.length > 0
+          ? [raw]
+          : [];
+    }
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
@@ -171,6 +182,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
           vad_events: String(this.vadEvents),
           ...(this.utteranceEndMs > 0 ? { utterance_end_ms: String(this.utteranceEndMs) } : {}),
         });
+        for (const term of this.keyterms) params.append("keyterm", term);
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },

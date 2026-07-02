@@ -370,6 +370,124 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("emits a decomposed turn_latency session event on first TTS audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 100_000;
+    session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "turn-1", timestampMs: t0 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: t0 + 200,
+      text: "what are the lab fees",
+      transcripts: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, { kind: "llm.delta", contextId: "turn-1", timestampMs: t0 + 900, text: "The fee is ten dollars." });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-1",
+      timestampMs: t0 + 1150,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      tsMs: expect.any(Number),
+      turnId: "turn-1",
+      ttfaMs: 1150,
+      eouDelayMs: 200,
+      llmTtftMs: 700,
+      ttsTtfbMs: 250,
+      fillerUsed: false,
+    });
+
+    await closeSession(session);
+  });
+
+  it("turn_latency anchors TTFA to eos when no VAD speech-end was seen, and marks filler turns", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, latencyFillerEnabled: true });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 200_000;
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-2",
+      timestampMs: t0,
+      text: "tell me about registration holds",
+      transcripts: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-2",
+      timestampMs: t0 + 400,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      turnId: "turn-2",
+      ttfaMs: 400,
+      fillerUsed: true,
+    });
+    expect(events[0]!["eouDelayMs"]).toBeUndefined();
+
+    await closeSession(session);
+  });
+
+  it("turn_latency is not emitted for an interrupted turn", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: unknown[] = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 300_000;
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-3",
+      timestampMs: t0,
+      text: "hello there",
+      transcripts: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "turn-3",
+      timestampMs: t0 + 100,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-3",
+      timestampMs: t0 + 300,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(0);
+
+    await closeSession(session);
+  });
+
   it("G3/WBS-3: tool-call lifecycle cues fire started → delayed → complete", async () => {
     const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 30 });
     const cues: Array<{ phase: string; turnId: string; toolId: string; toolName: string; afterMs?: number }> = [];

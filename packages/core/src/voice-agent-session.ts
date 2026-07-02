@@ -190,6 +190,23 @@ export interface VoiceAgentSessionEvents {
    * these as `tool_call_*` wire messages — the standard "thinking" cue.
    */
   tool_call_cue: (event: { tsMs: number; turnId: string; phase: "started" | "delayed" | "complete" | "failed"; toolId: string; toolName: string; afterMs?: number }) => void;
+  /**
+   * Per-turn latency decomposition, emitted once at the turn's first TTS audio.
+   * `ttfaMs` is anchored to the real end of user speech (VAD speech-end, falling
+   * back to the endpoint decision) — and `fillerUsed` flags turns where a latency
+   * filler spoke first, so TTFA on those turns is not mistaken for reasoning speed.
+   * Decomposition: eouDelayMs (speech end → endpoint) + llmTtftMs (endpoint →
+   * first LLM delta) + ttsTtfbMs (first TTS text dispatched → first audio).
+   */
+  turn_latency: (event: {
+    tsMs: number;
+    turnId: string;
+    ttfaMs: number;
+    eouDelayMs?: number;
+    llmTtftMs?: number;
+    ttsTtfbMs?: number;
+    fillerUsed: boolean;
+  }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
   agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
   error: (event: { tsMs: number; stage: string; category: string; message: string }) => void;
@@ -202,6 +219,14 @@ type EventHandler<T> = (event: T) => void;
 interface TtsTextBuffer {
   pending: string;
   emitted: string;
+}
+
+interface TurnTiming {
+  speechEndedMs?: number;
+  eosMs?: number;
+  firstLlmDeltaMs?: number;
+  firstTtsTextMs?: number;
+  fillerUsed?: boolean;
 }
 
 /** Suffix marking a context created to speak an error fallback, so it never recurses. */
@@ -252,6 +277,7 @@ export class VoiceAgentSession {
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private readonly observabilityObserver: ObservabilityObserver;
   private turnUserStoppedAtMs = new Map<string, number>();
+  private turnTimings = new Map<string, TurnTiming>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
   private readonly errorFallbackText: string;
@@ -422,6 +448,7 @@ export class VoiceAgentSession {
     this.ttsPlayout.clear();
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
+    this.turnTimings.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
     this.ttsTextBuffers.clear();
@@ -741,7 +768,40 @@ export class VoiceAgentSession {
     this.turnArbiter.onSpeechEnded(pkt, Boolean(this.latestActiveTtsContextId()));
 
     this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
+    this.timingFor(pkt.contextId).speechEndedMs = pkt.timestampMs;
     this.watchdogs.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
+  }
+
+  private timingFor(contextId: string): TurnTiming {
+    let timing = this.turnTimings.get(contextId);
+    if (!timing) {
+      timing = {};
+      this.turnTimings.set(contextId, timing);
+    }
+    return timing;
+  }
+
+  private emitTurnLatency(contextId: string, firstAudioMs: number): void {
+    const timing = this.turnTimings.get(contextId);
+    this.turnTimings.delete(contextId);
+    if (!timing) return;
+    const anchorMs = timing.speechEndedMs ?? timing.eosMs;
+    if (anchorMs === undefined) return; // text-injected or fallback turn — not a voice TTFA
+    this.emit("turn_latency", {
+      tsMs: firstAudioMs,
+      turnId: contextId,
+      ttfaMs: firstAudioMs - anchorMs,
+      ...(timing.speechEndedMs !== undefined && timing.eosMs !== undefined
+        ? { eouDelayMs: timing.eosMs - timing.speechEndedMs }
+        : {}),
+      ...(timing.eosMs !== undefined && timing.firstLlmDeltaMs !== undefined
+        ? { llmTtftMs: timing.firstLlmDeltaMs - timing.eosMs }
+        : {}),
+      ...(timing.firstTtsTextMs !== undefined
+        ? { ttsTtfbMs: firstAudioMs - timing.firstTtsTextMs }
+        : {}),
+      fillerUsed: timing.fillerUsed === true,
+    });
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
@@ -807,8 +867,13 @@ export class VoiceAgentSession {
     // disconnect prompt later in the call.
     this.bus.push(Route.Main, make.stopIdleTimeout(pkt.contextId, Date.now(), true));
 
+    const timing = this.timingFor(pkt.contextId);
+    timing.eosMs = pkt.timestampMs;
+
     const fillerText = this.latencyFiller.start(pkt.contextId, pkt.text, pkt.timestampMs);
     if (fillerText) {
+      timing.fillerUsed = true;
+      timing.firstTtsTextMs ??= pkt.timestampMs;
       this.bus.push(Route.Main, make.ttsText(pkt.contextId, Date.now(), fillerText));
       this.bus.push(Route.Background, make.metric(pkt.contextId, "filler.started", fillerText));
     }
@@ -840,6 +905,8 @@ export class VoiceAgentSession {
     let deltaText = pkt.text;
     if (!this.firstLlmDeltaReceived.has(pkt.contextId)) {
       this.firstLlmDeltaReceived.add(pkt.contextId);
+      const timing = this.turnTimings.get(pkt.contextId);
+      if (timing) timing.firstLlmDeltaMs ??= pkt.timestampMs;
       if (this.latencyFiller.isActive(pkt.contextId)) {
         deltaText = this.latencyFiller.spliceLlmDelta(pkt.contextId, deltaText);
         this.bus.push(Route.Background, make.metric(pkt.contextId, "filler.spliced", "1"));
@@ -858,7 +925,7 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    this.bufferTtsText(pkt.contextId, deltaText);
+    this.bufferTtsText(pkt.contextId, deltaText, pkt.timestampMs);
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {
@@ -869,7 +936,7 @@ export class VoiceAgentSession {
       return;
     }
 
-    const spokenText = this.flushTtsText(pkt.contextId);
+    const spokenText = this.flushTtsText(pkt.contextId, pkt.timestampMs);
     this.emit("agent_finished", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -887,11 +954,13 @@ export class VoiceAgentSession {
     this.bus.push(Route.Main, make.ttsDone(pkt.contextId, Date.now(), spokenText));
   }
 
-  private bufferTtsText(contextId: string, text: string): void {
+  private bufferTtsText(contextId: string, text: string, tsMs?: number): void {
     const buffer = this.ttsTextBuffers.get(contextId) ?? { pending: "", emitted: "" };
     buffer.pending += text;
     const complete = takeCompleteVoiceText(buffer.pending);
     if (complete.text) {
+      const timing = this.turnTimings.get(contextId);
+      if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
       this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), complete.text));
       buffer.emitted = appendVoiceText(buffer.emitted, complete.text);
     }
@@ -899,11 +968,13 @@ export class VoiceAgentSession {
     this.ttsTextBuffers.set(contextId, buffer);
   }
 
-  private flushTtsText(contextId: string): string {
+  private flushTtsText(contextId: string, tsMs?: number): string {
     const buffer = this.ttsTextBuffers.get(contextId);
     if (!buffer) return "";
     const tail = buffer.pending.trim();
     if (tail) {
+      const timing = this.turnTimings.get(contextId);
+      if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
       this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), tail));
       buffer.emitted = appendVoiceText(buffer.emitted, tail);
       buffer.pending = "";
@@ -1077,6 +1148,7 @@ export class VoiceAgentSession {
         );
         this.turnUserStoppedAtMs.delete(pkt.contextId);
       }
+      this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
     }
 
     this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
@@ -1133,6 +1205,7 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
+    this.turnTimings.delete(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
     this.ttsPlayout.release(pkt.contextId);
@@ -1182,6 +1255,7 @@ export class VoiceAgentSession {
     this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
     this.generatingContextIds.delete(contextId);
     this.latencyFiller.cancel(contextId);
+    this.turnTimings.delete(contextId);
     this.firstLlmDeltaReceived.delete(contextId);
     this.ttsTextBuffers.delete(contextId);
     this.ttsPlayout.release(contextId);

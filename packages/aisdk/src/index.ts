@@ -53,12 +53,31 @@ export interface RunStore {
   discard(contextId: string): void | Promise<void>;
 }
 
+/**
+ * Gate for a speculative draft's side effects. While unpromoted, every bus push
+ * and history/store mutation is buffered; promotion replays them in order and
+ * lets the still-running stream continue live. A discarded draft's buffer is
+ * simply dropped — the generation was never observable.
+ */
+interface SpeculativeHold {
+  promoted: boolean;
+  failed: boolean;
+  buffered: Array<() => void>;
+}
+
 export class ReasoningBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
   private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
   private activeGeneration: { contextId: string; controller: AbortController } | null = null;
+  // At most one speculative draft at a time; `hold` gates its side effects.
+  private speculativeDraft: {
+    contextId: string;
+    userText: string;
+    controller: AbortController;
+    hold: SpeculativeHold;
+  } | null = null;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
   // G2/G25: per-turn state so a barged-in turn is remembered as what the user HEARD,
@@ -95,6 +114,17 @@ export class ReasoningBridge implements VoicePlugin {
        */
       sessionStore?: ReasonerSessionStore;
       sessionId?: string;
+      /**
+       * Speculative generation (LiveKit preemptive-generation / Deepgram Flux
+       * eager-EOT semantics): start the LLM on `eos.interim` with every side effect
+       * held back; commit as-is when `eos.turn_complete` confirms the same
+       * transcript, regenerate when it differs, discard on `eos.retracted`.
+       * Parallelizes LLM TTFT with the endpoint-confirmation window. Opt-in:
+       * unconfirmed endpoints cost extra LLM calls (Deepgram measures +50–70% at
+       * eager thresholds 0.3–0.5). Drafts never consume a suspended-run pointer —
+       * `runStore` resume stays confirmed-turn-only.
+       */
+      speculative?: boolean;
     } = {},
   ) {
     if (this.opts.onResumeConflict === "replay") {
@@ -125,6 +155,26 @@ export class ReasoningBridge implements VoicePlugin {
       // still-in-flight generation (see below).
       bus.on("eos.turn_complete", async (pkt: unknown) => {
         const eos = pkt as { text: string; contextId: string };
+        // R2: a draft for this exact transcript is already generating (or done) —
+        // promote it instead of paying a second LLM call. Flux guarantees the
+        // EndOfTurn transcript matches the preceding EagerEndOfTurn when no
+        // TurnResumed intervened, so commit-as-is is safe.
+        const draft = this.speculativeDraft;
+        if (
+          draft &&
+          draft.contextId === eos.contextId &&
+          draft.userText === eos.text &&
+          !draft.controller.signal.aborted &&
+          !draft.hold.failed
+        ) {
+          this.speculativeDraft = null;
+          draft.hold.promoted = true;
+          for (const flush of draft.hold.buffered.splice(0)) flush();
+          return;
+        }
+        // Stale, mismatched, or failed draft: its speculation was wrong — drop it
+        // and answer the confirmed transcript fresh.
+        this.discardDraft();
         await this.processTurn(eos.text, eos.contextId);
       }, { concurrent: true }),
 
@@ -159,6 +209,7 @@ export class ReasoningBridge implements VoicePlugin {
       // said words the user never heard (nor amnesiac about the exchange).
       bus.on("interrupt.llm", (pkt: unknown) => {
         const contextId = (pkt as { contextId: string }).contextId;
+        if (this.speculativeDraft?.contextId === contextId) this.discardDraft();
         if (this.activeGeneration?.contextId === contextId) {
           this.activeGeneration.controller.abort();
           this.activeGeneration = null;
@@ -169,9 +220,45 @@ export class ReasoningBridge implements VoicePlugin {
         }
       }),
     );
+
+    if (this.opts.speculative) {
+      this.disposers.push(
+        bus.on("eos.interim", async (pkt: unknown) => {
+          const interim = pkt as { text?: string; contextId: string };
+          const text = (interim.text ?? "").trim();
+          if (!text) return;
+          await this.runDraft(text, interim.contextId);
+        }, { concurrent: true }),
+        bus.on("eos.retracted", (pkt: unknown) => {
+          const contextId = (pkt as { contextId: string }).contextId;
+          if (this.speculativeDraft?.contextId === contextId) this.discardDraft();
+        }),
+      );
+    }
   }
 
-  private async processTurn(userText: string, contextId: string): Promise<void> {
+  /** Start (or restart, if a newer eager endpoint supersedes) the speculative draft. */
+  private async runDraft(userText: string, contextId: string): Promise<void> {
+    this.discardDraft();
+    const controller = new AbortController();
+    const hold: SpeculativeHold = { promoted: false, failed: false, buffered: [] };
+    this.speculativeDraft = { contextId, userText, controller, hold };
+    await this.processTurn(userText, contextId, hold, controller);
+  }
+
+  private discardDraft(): void {
+    const draft = this.speculativeDraft;
+    if (!draft) return;
+    this.speculativeDraft = null;
+    if (!draft.hold.promoted) draft.controller.abort();
+  }
+
+  private async processTurn(
+    userText: string,
+    contextId: string,
+    hold?: SpeculativeHold,
+    presetController?: AbortController,
+  ): Promise<void> {
     if (!this.bus) return;
 
     this.turnUserText.set(contextId, userText);
@@ -179,9 +266,25 @@ export class ReasoningBridge implements VoicePlugin {
     // Handlers are concurrent, so a new turn can begin while a prior generation is
     // still in flight. Supersede it: abort the previous controller before starting.
     this.activeGeneration?.controller.abort();
-    const controller = new AbortController();
+    const controller = presetController ?? new AbortController();
     this.activeGeneration = { contextId, controller };
     const signal = controller.signal;
+
+    // R2: while a speculative hold is unpromoted, every push/mutation buffers.
+    // Packets are constructed eagerly (their timestamps are event time); only
+    // delivery is deferred. Promotion replays in order, then later effects run live.
+    const push = <T extends Parameters<PipelineBus["push"]>[1]>(route: Route, packet: T): void => {
+      if (hold && !hold.promoted) {
+        if ((packet as { kind?: string }).kind === "llm.error") hold.failed = true;
+        hold.buffered.push(() => this.bus?.push(route, packet));
+        return;
+      }
+      this.bus?.push(route, packet);
+    };
+    const defer = (fn: () => void): void => {
+      if (hold && !hold.promoted) hold.buffered.push(fn);
+      else fn();
+    };
 
     let reply = "";
     let emittedDelta = false;
@@ -192,7 +295,7 @@ export class ReasoningBridge implements VoicePlugin {
     // route, droppable — RFC bimodel-delegate-seam R4). Cascade turns have no
     // front-model tool call, so toolId/toolName are absent.
     const queryStartedMs = Date.now();
-    this.bus.push(Route.Background, {
+    push(Route.Background, {
       kind: "delegate.query",
       contextId,
       timestampMs: queryStartedMs,
@@ -203,7 +306,9 @@ export class ReasoningBridge implements VoicePlugin {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         grounded = false;
         try {
-          const pending = this.opts.runStore
+          // Drafts never consume a suspended-run pointer: takePending mutates the
+          // store, and a retracted draft would silently lose the resume.
+          const pending = this.opts.runStore && !hold
             ? await Promise.resolve(this.opts.runStore.takePending(contextId))
             : null;
           const resuming = pending !== null;
@@ -219,7 +324,7 @@ export class ReasoningBridge implements VoicePlugin {
               case "text-delta":
                 reply += part.text;
                 emittedDelta = true;
-                this.bus.push(Route.Main, {
+                push(Route.Main, {
                   kind: "llm.delta",
                   contextId,
                   timestampMs: Date.now(),
@@ -227,7 +332,7 @@ export class ReasoningBridge implements VoicePlugin {
                 });
                 break;
               case "tool-call":
-                this.bus.push(Route.Main, {
+                push(Route.Main, {
                   kind: "llm.tool_call",
                   contextId,
                   timestampMs: Date.now(),
@@ -238,7 +343,7 @@ export class ReasoningBridge implements VoicePlugin {
                 break;
               case "tool-result":
                 grounded = true;
-                this.bus.push(Route.Main, {
+                push(Route.Main, {
                   kind: "llm.tool_result",
                   contextId,
                   timestampMs: Date.now(),
@@ -250,12 +355,18 @@ export class ReasoningBridge implements VoicePlugin {
               case "error":
                 throw part.cause;
               case "finish":
-                this.recordFinishReason(contextId, "llm.finish_reason", part.reason);
+                push(Route.Background, {
+                  kind: "metric.conversation",
+                  contextId,
+                  timestampMs: Date.now(),
+                  name: "llm.finish_reason",
+                  value: part.reason,
+                });
                 finishReason = part.reason;
                 break;
               case "suspended": {
                 if (part.prompt && !emittedDelta) {
-                  this.bus.push(Route.Main, {
+                  push(Route.Main, {
                     kind: "llm.delta",
                     contextId,
                     timestampMs: Date.now(),
@@ -264,14 +375,14 @@ export class ReasoningBridge implements VoicePlugin {
                   reply += part.prompt;
                 }
                 if (signal.aborted) return;
-                this.bus.push(Route.Main, {
+                push(Route.Main, {
                   kind: "llm.done",
                   contextId,
                   timestampMs: Date.now(),
                   text: reply,
                 });
-                this.rememberTurn(userText, reply, contextId);
-                this.bus.push(Route.Background, {
+                defer(() => this.rememberTurn(userText, reply, contextId));
+                push(Route.Background, {
                   kind: "reasoning.suspended",
                   contextId,
                   timestampMs: Date.now(),
@@ -280,7 +391,13 @@ export class ReasoningBridge implements VoicePlugin {
                   payload: part.payload,
                 });
                 if (this.opts.runStore) {
-                  await Promise.resolve(this.opts.runStore.save(contextId, part.runId));
+                  const store = this.opts.runStore;
+                  const runId = part.runId;
+                  if (hold && !hold.promoted) {
+                    hold.buffered.push(() => void Promise.resolve(store.save(contextId, runId)).catch(() => undefined));
+                  } else {
+                    await Promise.resolve(store.save(contextId, runId));
+                  }
                 }
                 committed = true;
                 return;
@@ -296,7 +413,7 @@ export class ReasoningBridge implements VoicePlugin {
           // recoverably — the caller hears the graceful fallback, the call stays up.
           if (finishReason !== "stop" && finishReason !== "length") {
             if (signal.aborted) return;
-            this.bus.push(Route.Critical, {
+            push(Route.Critical, {
               kind: "llm.error",
               contextId,
               timestampMs: Date.now(),
@@ -308,7 +425,7 @@ export class ReasoningBridge implements VoicePlugin {
             return;
           }
           if (finishReason === "length") {
-            this.bus.push(Route.Background, {
+            push(Route.Background, {
               kind: "metric.conversation",
               contextId,
               timestampMs: Date.now(),
@@ -322,14 +439,14 @@ export class ReasoningBridge implements VoicePlugin {
           if (signal.aborted) return;
 
           const answeredMs = Date.now();
-          this.bus.push(Route.Main, {
+          push(Route.Main, {
             kind: "llm.done",
             contextId,
             timestampMs: answeredMs,
             text: reply,
           });
           // G2 observability: the reasoner produced the turn's final answer.
-          this.bus.push(Route.Background, {
+          push(Route.Background, {
             kind: "delegate.result",
             contextId,
             timestampMs: answeredMs,
@@ -338,7 +455,7 @@ export class ReasoningBridge implements VoicePlugin {
             durationMs: answeredMs - queryStartedMs,
             grounded,
           });
-          this.rememberTurn(userText, reply, contextId);
+          defer(() => this.rememberTurn(userText, reply, contextId));
           if (this.opts.runStore && resuming) {
             await Promise.resolve(this.opts.runStore.discard(contextId));
           }
@@ -349,7 +466,7 @@ export class ReasoningBridge implements VoicePlugin {
           const category = categorizeLlmError(err);
           const recoverable = isRecoverable(category);
           if (!recoverable || emittedDelta || attempt >= this.retryConfig.maxAttempts) {
-            this.bus.push(Route.Critical, {
+            push(Route.Critical, {
               kind: "llm.error",
               contextId,
               timestampMs: Date.now(),
@@ -361,7 +478,7 @@ export class ReasoningBridge implements VoicePlugin {
             return;
           }
 
-          this.bus.push(Route.Background, {
+          push(Route.Background, {
             kind: "metric.conversation",
             contextId,
             timestampMs: Date.now(),
@@ -379,21 +496,8 @@ export class ReasoningBridge implements VoicePlugin {
     }
   }
 
-  private recordFinishReason(
-    contextId: string,
-    name: string,
-    finishReason: "stop" | "tool" | "length",
-  ): void {
-    this.bus?.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId,
-      timestampMs: Date.now(),
-      name,
-      value: finishReason,
-    });
-  }
-
   async close(): Promise<void> {
+    this.discardDraft();
     this.activeGeneration?.controller.abort();
     this.activeGeneration = null;
     for (const dispose of this.disposers.splice(0)) dispose();

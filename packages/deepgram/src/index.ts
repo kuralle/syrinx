@@ -4,4 +4,5 @@
 // Import from the barrel for both, or the `./stt` / `./tts` subpaths for one.
 
 export * from "./stt.js";
+export * from "./flux.js";
 export * from "./tts.js";

@@ -211,6 +211,16 @@ export interface InterimEndOfSpeechPacket extends VoicePacket {
   readonly text: string;
 }
 
+/**
+ * Retraction of a prior `eos.interim` for the same context: the endpoint model
+ * signalled a likely turn end, then the user kept speaking (Deepgram Flux
+ * `TurnResumed` semantics). Consumers doing speculative work off `eos.interim`
+ * must cancel it.
+ */
+export interface EndOfSpeechRetractedPacket extends VoicePacket {
+  readonly kind: "eos.retracted";
+}
+
 // =============================================================================
 // User Input (processed — feeds LLM)
 // =============================================================================
@@ -556,6 +566,7 @@ export type InputPacket =
   | EndOfSpeechAudioPacket
   | EndOfSpeechPacket
   | InterimEndOfSpeechPacket
+  | EndOfSpeechRetractedPacket
   | UserInputPacket;
 
 /** All interruption packets (Critical route). */

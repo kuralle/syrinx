@@ -435,6 +435,34 @@ Pipeline: **mic → Deepgram STT → smart-turn EOS → `ReasoningBridge(fromKur
 
 On barge-in, Syrinx truncates **its** bridge history to the spoken prefix; kuralle may have persisted the full assistant turn — reconcile before production (`packages/kuralle/src/from-kuralle.ts` exports `reconcileSpokenPrefix` for abort paths).
 
+### Sharpen the cascade (turn-taking + latency)
+
+Four production levers, adopted from what the field converged on (LiveKit preemptive
+generation, Deepgram Flux, Sierra's latency playbook):
+
+- **Semantic end-of-turn on the edge — `DeepgramFluxSTTPlugin`** (`@kuralle-syrinx/deepgram`).
+  Flux is turn-aware STT: one model produces transcripts *and* decides when the turn is over,
+  replacing silence endpointing. It is a plain WebSocket, so it runs on Workers, where
+  smart-turn's ONNX cannot. Swap it in for `DeepgramSTTPlugin` (no `vad`/`eos` plugins needed):
+  config `eot_threshold` (0.7), `eot_timeout_ms` (5000), and `eager_eot_threshold` (unset; see
+  below).
+- **Speculative generation — `new ReasoningBridge(reasoner, { speculative: true })`** (or
+  `speculative: true` on a cf-agents cascaded pipeline). With Flux's `eager_eot_threshold` set
+  (0.3–0.5), the bridge starts the LLM on the eager end-of-turn signal and holds every effect
+  back; when the endpoint confirms the same transcript the draft commits as-is — the LLM's
+  time-to-first-token ran *during* the endpoint confirmation window instead of after it
+  (Deepgram measures the eager signal 150–250ms early). Wrong guesses are discarded and
+  regenerated. Opt-in: unconfirmed endpoints cost extra LLM calls (+50–70%).
+- **Keyterm biasing — `keyterm: ["YourProduct", "Kuralle"]`** on either Deepgram STT plugin.
+  Mishearing names/codes is the #1 production voice-agent failure (Sierra's data); bias the
+  recognizer toward your domain terms.
+- **Honest per-turn latency — the `turn_latency` session event**:
+  `{ ttfaMs, eouDelayMs?, llmTtftMs?, ttsTtfbMs?, fillerUsed }` once per assistant turn,
+  anchored to the real end of user speech. `fillerUsed` flags turns where a latency filler
+  spoke first, so a masked turn is never mistaken for a fast one. This is the LiveKit-style
+  decomposition (`e2e = EOU delay + LLM TTFT + TTS TTFB`) — wire it to your metrics sink and
+  optimize the term that dominates.
+
 ---
 
 ## Make it feel instant (bi-model)

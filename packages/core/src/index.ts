@@ -36,6 +36,7 @@ export {
   type EndOfSpeechAudioPacket,
   type EndOfSpeechPacket,
   type InterimEndOfSpeechPacket,
+  type EndOfSpeechRetractedPacket,
   type UserInputPacket,
 } from "./packets.js";
 

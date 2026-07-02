@@ -89,6 +89,13 @@ export interface CascadedPipeline<Env> {
    * (engine default 7000). Set it when a provider-endpointed cascade tunes this (e.g. Deepgram at 3500).
    */
   readonly sttForceFinalizeTimeoutMs?: number;
+  /**
+   * Speculative generation: start the reasoner on an eager end-of-turn signal
+   * (`eos.interim` — Deepgram Flux `eager_eot_threshold`, smart-turn interim) and
+   * commit/discard when the endpoint confirms. Trades extra LLM calls for
+   * parallelizing LLM TTFT with endpoint confirmation. @default false
+   */
+  readonly speculative?: boolean;
 }
 
 export type VoicePipeline<Env> = RealtimePipeline<Env> | CascadedPipeline<Env>;
@@ -163,6 +170,7 @@ export function buildVoiceSession<Env>(
       ...(wiring.reasonerSessionStore
         ? { sessionStore: wiring.reasonerSessionStore, sessionId: ctx.sessionId }
         : {}),
+      ...(pipeline.speculative ? { speculative: true } : {}),
     }),
   );
   session.registerPlugin("tts", tts.plugin);

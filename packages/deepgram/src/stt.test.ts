@@ -1191,4 +1191,67 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
 
     expect(speechStarts).toHaveLength(0);
   });
+
+  it("passes keyterm config as repeatable query params (nova-3 keyterm prompting)", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      keyterm: ["Syrinx", "Kuralle Suite"],
+    });
+    await waitFor(connectionUrls);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = connectionUrls[0]!;
+    expect(url).toContain("keyterm=Syrinx");
+    expect(url).toContain("keyterm=Kuralle+Suite");
+  });
+
+  it("omits keyterm from the URL when not configured", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    await waitFor(connectionUrls);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(connectionUrls[0]!).not.toContain("keyterm=");
+  });
 });

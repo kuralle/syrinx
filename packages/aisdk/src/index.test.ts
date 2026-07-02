@@ -793,6 +793,147 @@ function interruptLlm(contextId: string): InterruptLlmPacket {
   return { kind: "interrupt.llm", contextId, timestampMs: Date.now() };
 }
 
+function eosInterim(contextId: string, text: string): { kind: "eos.interim"; contextId: string; timestampMs: number; text: string } {
+  return { kind: "eos.interim", contextId, timestampMs: Date.now(), text };
+}
+
+function eosRetracted(contextId: string): { kind: "eos.retracted"; contextId: string; timestampMs: number } {
+  return { kind: "eos.retracted", contextId, timestampMs: Date.now() };
+}
+
+describe("ReasoningBridge speculative generation", () => {
+  function kinds(packets: Array<{ packet: unknown }>): string[] {
+    return packets.map(({ packet }) => (packet as { kind: string }).kind);
+  }
+
+  it("buffers a draft on eos.interim and flushes it on a matching eos.turn_complete (one generation)", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    let streams = 0;
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        streams += 1;
+        yield textDelta("The fee is ten dollars.");
+        yield finish("stop");
+      }),
+      { speculative: true },
+    );
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, eosInterim("turn-1", "what are the lab fees"));
+    // Give the draft time to stream fully — nothing may reach the bus yet.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(kinds(packets)).not.toContain("llm.delta");
+    expect(kinds(packets)).not.toContain("llm.done");
+    expect(kinds(packets)).not.toContain("delegate.query");
+
+    bus.push(Route.Main, turnComplete("turn-1", "what are the lab fees"));
+    await waitFor(() => kinds(packets).includes("llm.done"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(streams).toBe(1); // the draft WAS the generation — no second LLM call
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({ kind: "llm.delta", contextId: "turn-1", text: "The fee is ten dollars." }),
+    });
+    expect(packets).toContainEqual({
+      route: Route.Background,
+      packet: expect.objectContaining({ kind: "delegate.result", contextId: "turn-1", answer: "The fee is ten dollars." }),
+    });
+  });
+
+  it("discards the draft on eos.retracted — nothing is ever pushed for it", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    let streams = 0;
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        streams += 1;
+        yield textDelta("Draft answer.");
+        yield finish("stop");
+      }),
+      { speculative: true },
+    );
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, eosInterim("turn-1", "book a"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    bus.push(Route.Main, eosRetracted("turn-1"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // The user finishes the real utterance later; a fresh generation answers it.
+    bus.push(Route.Main, turnComplete("turn-1", "book a room for tomorrow"));
+    await waitFor(() => kinds(packets).includes("llm.done"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(streams).toBe(2); // draft + fresh confirmed run
+    const deltas = packets.filter(({ packet }) => (packet as { kind: string }).kind === "llm.delta");
+    expect(deltas).toHaveLength(1); // the discarded draft's delta never surfaced
+  });
+
+  it("regenerates when the confirmed transcript differs from the draft's", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const seenTexts: string[] = [];
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* (request: { userText: string }) {
+        seenTexts.push(request.userText);
+        yield textDelta(`Answer to: ${request.userText}`);
+        yield finish("stop");
+      }),
+      { speculative: true },
+    );
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, eosInterim("turn-1", "what are the"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    bus.push(Route.Main, turnComplete("turn-1", "what are the lab fees"));
+    await waitFor(() => kinds(packets).includes("llm.done"));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(seenTexts).toEqual(["what are the", "what are the lab fees"]);
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({ kind: "llm.done", text: "Answer to: what are the lab fees" }),
+    });
+    const deltas = packets.filter(({ packet }) => (packet as { kind: string }).kind === "llm.delta");
+    expect(deltas).toHaveLength(1);
+  });
+
+  it("ignores eos.interim when speculative mode is off (default)", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    let streams = 0;
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        streams += 1;
+        yield textDelta("Hello.");
+        yield finish("stop");
+      }),
+    );
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, eosInterim("turn-1", "hi"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    bus.stop();
+    await drain;
+    await plugin.close();
+
+    expect(streams).toBe(0);
+    expect(kinds(packets).filter((k) => k.startsWith("llm."))).toHaveLength(0);
+  });
+});
+
 function baseConfig(): Record<string, unknown> {
   return {
     api_key: "test-key",
