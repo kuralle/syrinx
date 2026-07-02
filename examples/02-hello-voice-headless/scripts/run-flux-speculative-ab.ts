@@ -21,7 +21,14 @@ import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
 import { streamText } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
+import {
+  PipelineBusImpl,
+  Route,
+  type EndOfSpeechPacket,
+  type LlmResponseDonePacket,
+  type SttErrorPacket,
+  type SttInterimPacket,
+} from "@kuralle-syrinx/core";
 import { DeepgramFluxSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { ReasoningBridge, fromStreamFactory } from "@kuralle-syrinx/aisdk";
 
@@ -93,7 +100,7 @@ async function runArm(speculative: boolean): Promise<ArmResult> {
     result.retractCount += 1;
   });
   bus.on("eos.turn_complete", (pkt) => {
-    result.finalText = (pkt as { text: string }).text;
+    result.finalText = (pkt as EndOfSpeechPacket).text;
     // Track the MOST RECENT endpoint: if Flux splits the utterance, the answer
     // correlates with the last endpoint before the first token, not the first.
     if (result.firstDeltaAtMs < 0) result.eosAtMs = now();
@@ -102,7 +109,7 @@ async function runArm(speculative: boolean): Promise<ArmResult> {
     if (result.firstDeltaAtMs < 0) result.firstDeltaAtMs = now();
   });
   bus.on("llm.done", (pkt) => {
-    result.answer = (pkt as { text: string }).text;
+    result.answer = (pkt as LlmResponseDonePacket).text;
     if (result.doneAtMs < 0) result.doneAtMs = now();
   });
 

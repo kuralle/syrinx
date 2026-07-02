@@ -21,7 +21,14 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { config as loadEnv } from "dotenv";
-import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
+import {
+  PipelineBusImpl,
+  Route,
+  type EndOfSpeechPacket,
+  type LlmResponseDonePacket,
+  type SttErrorPacket,
+  type SttInterimPacket,
+} from "@kuralle-syrinx/core";
 import { DeepgramFluxSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { ReasoningBridge, fromStreamFactory } from "@kuralle-syrinx/aisdk";
 
@@ -71,10 +78,10 @@ async function main(): Promise<void> {
   await bridge.initialize(bus, { api_key: "fake", retry_max_attempts: 1, timeout_ms: 10_000 });
 
   bus.on("stt.interim", (pkt) => {
-    note("stt.interim", JSON.stringify((pkt as { text: string }).text));
+    note("stt.interim", JSON.stringify((pkt as SttInterimPacket).text));
   });
   bus.on("eos.interim", (pkt) => {
-    note("eos.interim", `EAGER ${JSON.stringify((pkt as { text: string }).text)}`);
+    note("eos.interim", `EAGER ${JSON.stringify((pkt as SttInterimPacket).text)}`);
   });
   bus.on("eos.retracted", () => {
     note("eos.retracted", "TurnResumed — draft discarded");
@@ -82,17 +89,17 @@ async function main(): Promise<void> {
   let finalText = "";
   let eosAtMs = -1;
   bus.on("eos.turn_complete", (pkt) => {
-    finalText = (pkt as { text: string }).text;
+    finalText = (pkt as EndOfSpeechPacket).text;
     eosAtMs = Date.now() - startedAt;
     note("eos.turn_complete", JSON.stringify(finalText));
   });
   let llmDoneText = "";
   bus.on("llm.done", (pkt) => {
-    llmDoneText = (pkt as { text: string }).text;
+    llmDoneText = (pkt as LlmResponseDonePacket).text;
     note("llm.done", JSON.stringify(llmDoneText));
   });
   bus.on("stt.error", (pkt) => {
-    note("stt.error", String((pkt as { cause: Error }).cause.message));
+    note("stt.error", String((pkt as SttErrorPacket).cause.message));
   });
 
   const flux = new DeepgramFluxSTTPlugin();
