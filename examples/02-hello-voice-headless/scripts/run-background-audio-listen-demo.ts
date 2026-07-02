@@ -56,8 +56,8 @@ function ambiencePcm(): Int16Array {
   let level = 0;
   let smooth = 0;
   for (let i = 0; i < out.length; i += 1) {
-    level = level * 0.985 + (rand() * 2 - 1) * 650;
-    smooth = smooth * 0.92 + level * 0.08; // second pole: rounds off the top end
+    level = level * 0.96 + (rand() * 2 - 1) * 900; // keep some mid-band: laptop speakers can't reproduce pure rumble
+    smooth = smooth * 0.75 + level * 0.25; // gentler second pole
     const breathe = 1 + 0.22 * Math.sin((2 * Math.PI * i) / (RATE * 7)); // ~7s swell
     out[i] = Math.max(-7000, Math.min(7000, Math.round(smooth * breathe)));
   }
@@ -194,7 +194,7 @@ function main(mixer: BackgroundAudioMixer, sentence1: Uint8Array[], sentence2: U
 }
 
 const mixer = new BackgroundAudioMixer({
-  ambient: { pcm: ambiencePcm(), sampleRateHz: RATE, gain: 0.28 },
+  ambient: { pcm: ambiencePcm(), sampleRateHz: RATE, gain: 0.45 }, // demo runs hot so the bed is unmistakable; production would sit lower
   thinking: { pcm: thinkingPcm(), sampleRateHz: RATE, gain: 0.4 },
   duckWhileSpeaking: 0.45,
   // fadeMs default (250ms equal-power) shapes the bed's start and each
