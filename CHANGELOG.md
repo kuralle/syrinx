@@ -2,6 +2,105 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.0.0 — 2026-07-03
+
+Breaking, multi-package. Two bodies of work land together. The **voice-engine correctness sweep**
+fixes every P0–P3 from the critical review against the new `docs/voice-engine-behavior-spec.md`:
+turn 2 of a phone call works, barge-in truncates memory to what was actually heard, opus plays at
+the right speed, and a turn failure never kills the call. The **bi-model delegate seam**
+(`docs/rfc-bimodel-delegate-seam.md`) makes the **Responder-Thinker** pattern — a fast realtime
+front model delegating to an async reasoner — a first-class primitive: observable (delegate
+packets/events/hooks), faithful (structured result envelope), felt (typed thinking cues on the
+wire), and durable (reasoner history survives Durable Object eviction).
+
+### Breaking
+- `realtime`: the delegate tool result injected into the front model is now a structured JSON
+  envelope by default — `{ response_text, require_repeat_verbatim: true, render? }` (OpenAI's
+  Tool Output Formatting field names) — so realtime fronts voice the reasoner's answer faithfully
+  instead of paraphrasing it. `RealtimeBridgeOptions.toolResultFormat: "string"` restores the raw
+  string; `renderDirective` populates `render`. Bus packets (`llm.tool_result`,
+  `delegate.result`) keep the **raw** answer. Exported `DelegateResultEnvelope`.
+- `cf-agents`: `withVoice` gains `durableHistory`, default **on** — conversation history (and the
+  Gemini Live resume handle) persists in the Agent's DO-SQLite and is re-seeded into the reasoner
+  after isolate eviction. Set `durableHistory: false` to opt out of the new tables/behavior.
+- `server-websocket`: the Node telephony adapters (`twilio`, `telnyx`, `smartpbx`) now rotate a
+  per-turn `contextId` (`<base>-t<n>`) on `eos.turn_complete` and emit `turn.change` (shared
+  `installTelephonyTurnRotation`) — THE fix for the agent going deaf/mute after turn 1 of a phone
+  call (STT/TTS retire a contextId once its turn completes). Stable-per-call contextId reuse is
+  unsupported by design.
+- `server-websocket`: opus wire-format labels corrected. Uplink opus is labelled at the engine
+  rate post-decode (the second resample was 3×-speeding STT input); downlink opus frames are
+  labelled at the 48 kHz codec rate (was 16 kHz → clients played 3× slow). Consumers pinned to the
+  buggy shapes must update.
+- `aisdk`: a turn failure never kills the call. A `length` finish accepts the truncated reply; any
+  other non-`stop` finish emits a **recoverable** `llm.error` (fallback line spoken, session stays
+  up). The throw-based `validateFinalFinishReason` is removed.
+- Session and turn ids are now `crypto.randomUUID()` (were `Math.random`-derived); anything
+  parsing the old id shape must relax.
+
+### Added
+- **Delegate observability (G2)**: `delegate.query` / `delegate.result` Background packets
+  (`delegate.result` is a self-contained Q&A pair: `query`, `answer`, `durationMs`, `grounded`,
+  `toolId?`, `toolName?`; `grounded` = the reasoner stream surfaced ≥1 tool-result part), emitted
+  on both the realtime (`RealtimeBridge`) and cascade (`ReasoningBridge`) paths; surfaced as
+  `delegate_query` / `delegate_result` session events; `withVoice` gains `onDelegateQuery` /
+  `onDelegateResult` hooks (`DelegateQueryContext<Env>` / `DelegateResultContext<Env>` include
+  `connection` **and `env`**; a throwing hook never affects the call).
+- **Typed thinking cues (G3)**: `VoiceAgentSession` emits `tool_call_cue` with `phase:
+  "started" | "delayed" | "complete" | "failed"` (config `delayCueAfterMs`, default 2000 ms;
+  `failed` fires on error, barge-in, and superseding turns). Both transports send
+  `tool_call_started` / `tool_call_delayed` / `tool_call_complete` / `tool_call_failed` wire
+  messages — the Workers edge previously sent **nothing** for tool calls — and
+  `browser-client` parses all four. `withVoice` threads `delayCueAfterMs`.
+- **Durable reasoner sessions (G4)**: `core` gains `ReasonerSessionStore` +
+  `InMemoryReasonerSessionStore` (snapshot semantics — barge-in truncation rewrites persist);
+  `ReasoningBridge` accepts `{ sessionStore, sessionId }` (load-only on init — no double-answer);
+  `cf-agents` ships `SqliteReasonerSessionStore` over DO-SQLite and `withVoice` exposes
+  `ctx.resume = { history, providerHandle? }` to pipeline factories.
+- **Realtime resume**: `RealtimeAdapter.caps.supportsNativeResume`; OpenAI-compatible adapters take
+  `resumeHistory` and replay it as `conversation.item.create` after every (re)connect — never
+  `response.create`; Gemini Live always enables `sessionResumption`, accepts a prior
+  `sessionResumptionHandle`, and surfaces new handles as `realtime.resumption_handle` Background
+  packets. `kuralle`: `fromKuralleRuntime` seeds prior turns via `historyDelta` into an **empty**
+  kuralle session only (fresh isolate), never a populated one.
+- `server-websocket`: `authorize` hook on the WS host (reject → 4401) and a runtime-neutral
+  `validateTwilioSignature` (Web Crypto HMAC-SHA1).
+- Barge-in heard-context truncation wired end-to-end: `browser-client` reports `playout_progress`
+  from the jitter buffer's real played-out position, and the Node server now accepts it (edge
+  already did) — history truncates to what the user actually heard.
+- Thinking-phase barge-in: a client interrupt during the reasoner TTFT gap (before any audio)
+  aborts the in-flight turn.
+- Deepgram STT: `utterance_end_ms` gap-based backstop (completes a wedged turn on noisy lines
+  where `speech_final` never fires); enabled on the edge cascade.
+- Docs: the Responder-Thinker primitive is named and documented (`realtime` README, `cf-agents`
+  README, building-a-voice-agent guide); `docs/voice-engine-behavior-spec.md` and
+  `docs/rfc-bimodel-delegate-seam.md` are committed.
+
+### Changed
+- `server-websocket` (edge): default `endpointing` 300 → 500 ms (stops mid-utterance cutoffs;
+  negligible vs the LLM-dominated voice-to-voice budget).
+- `core`: a backchannel ("yeah", "mhm", …) while the assistant speaks neither cancels the answer
+  nor spawns a second response (exported `isBackchannel`; English-only for now).
+- `core`: sentence segmenter is abbreviation/decimal-aware ("Dr.", "$12.", "e.g." no longer
+  split) and caches `Intl.Segmenter`.
+
+### Fixed
+- `core`: a superseding turn cancels any still-active prior-turn TTS (false-EOS overlap) — stale
+  audio never plays over the user.
+- `core`: `allPackets` / `debugEvents` drop-on-unread, so a default deployment (no recorder or
+  debug reader) no longer retains the whole call in memory.
+- `core`: the idle timer is anchored to real playout end (can't fire mid-speech) and idle
+  escalation resets on user engagement.
+- `server-websocket` (edge-twilio): session-lease leak on hangup/startup-race fixed; multi-turn
+  telephony covered by tests.
+- `cf-agents`: the R2 recorder streams via multipart upload — DO memory is bounded regardless of
+  call length.
+- `realtime`: the delegate runs off the event pump, and the provider session is re-configured on
+  reconnect.
+- `gemini`: TTS uses per-context abort controllers (barge-in no longer aborts the wrong turn).
+- `deepgram`/`tts-core`: retired-context sets are bounded (no longer leak one entry per turn on
+  long calls).
+
 ## 3.1.0 — 2026-06-14
 
 ### Added
