@@ -2,6 +2,50 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.1.0 — 2026-07-03
+
+Additive. Two efforts: **cascade refinements** adopted from the production field's published
+playbook (LiveKit preemptive generation, Deepgram Flux, Sierra's latency/ASR posts), and
+**background audio** (ambient bed / thinking sound / comfort noise / ducking) modeled on LiveKit
+`BackgroundAudioPlayer` + Pipecat `SoundfileMixer`.
+
+### Added
+- `deepgram`: **`DeepgramFluxSTTPlugin`** — turn-aware STT over the Flux v2 API (one model does
+  transcription AND end-of-turn). TurnInfo state machine → bus: `StartOfTurn`→barge-in signal,
+  `Update`→interim, `EagerEndOfTurn`→`eos.interim`, `TurnResumed`→`eos.retracted`,
+  `EndOfTurn`→final + `eos.turn_complete`. Plain WebSocket, so **semantic end-of-turn now works
+  on the Workers edge cascade** (where local ONNX endpointers can't run). Config:
+  `eot_threshold` (0.7), `eager_eot_threshold` (unset = eager mode off), `eot_timeout_ms`
+  (5000), `keyterm`, `language_hint`. Live-verified (`smoke:flux-live`).
+- `core`: **`eos.retracted` packet** — retraction of a prior `eos.interim` for the same context
+  (Flux `TurnResumed` semantics); consumers doing speculative work off `eos.interim` must cancel.
+- `aisdk`: **opt-in speculative generation** — `new ReasoningBridge(reasoner, { speculative:
+  true })` (or `speculative: true` on a cf-agents cascaded pipeline). Starts the LLM on
+  `eos.interim` with every side effect buffered; a matching `eos.turn_complete` promotes the
+  draft as-is (one LLM call — TTFT paid during the endpoint-confirmation window), a mismatch
+  regenerates, retraction/barge-in discards. Drafts never consume suspended-run pointers.
+  Live A/B (`smoke:flux-speculative-ab`): saving = min(LLM TTFT, eager lead) — seconds on
+  hesitant speakers, ~100ms on quick utterances at zero extra LLM calls. Default OFF
+  (unconfirmed endpoints cost extra LLM calls; Deepgram measures +50–70%).
+- `core`: **`turn_latency` session event** — honest per-turn latency decomposition
+  `{ ttfaMs, eouDelayMs?, llmTtftMs?, ttsTtfbMs?, fillerUsed }`, anchored to the real end of user
+  speech, emitted once at first TTS audio; interrupted turns emit nothing; filler-masked turns
+  are flagged so a masked turn is never mistaken for a fast one.
+- `deepgram`: **`keyterm`** passthrough on the nova-3 STT plugin (repeatable query param) —
+  biases recognition toward domain terms (misheard names/codes are the #1 production failure).
+- `server-websocket`: **background audio** — `BackgroundAudioMixer` (runtime-neutral; exported
+  from the root and `/edge` subpath): looped ambient bed mixed under assistant speech (ducked,
+  `duckWhileSpeaking` default 0.5) on all four outbound paths (Node telephony + Node browser +
+  edge browser + edge-twilio); **idle comfort-noise frames between turns on edge-twilio** (pure
+  digital silence on a phone line reads as "the call died"); a **thinking loop** driven by the
+  G3 `tool_call_cue`s; **equal-power `fadeMs`** (default 250ms) on bed start and thinking
+  episode entry/exit. Sources are raw mono PCM16, looped and resampled to the wire rate. The
+  recorder always keeps the clean assistant track. `withVoice({ backgroundAudio })` passthrough
+  on both transports. Ear-verified via a live listen demo (`smoke:background-audio-listen`).
+
+### Fixed
+- Example flux smoke scripts: proper packet types (typecheck).
+
 ## 4.0.0 — 2026-07-03
 
 Breaking, multi-package. Two bodies of work land together. The **voice-engine correctness sweep**
