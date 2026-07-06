@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { RetryConfig } from "@kuralle-syrinx/core";
 
-import { WebSocketConnection, type SocketData } from "./index.js";
+import { WebSocketConnection, type ManagedSocket, type SocketData } from "./index.js";
 import { wrapWebSocket, type WebSocketEventLike, type WebSocketLike } from "./web-socket.js";
 
 const FAST_RETRY: RetryConfig = { maxAttempts: 5, baseDelayMs: 5, maxDelayMs: 20 };
@@ -79,6 +79,69 @@ describe("WebSocketConnection reconnect replay (VE-06.2)", () => {
     expect(reconnected.sent).toEqual(["gap-1", "gap-2"]);
     expect(replayEvents.filter((e) => e.event === "replayed")).toHaveLength(1);
     expect(replayEvents.find((e) => e.event === "replayed")?.count).toBe(2);
+
+    await conn.close();
+  });
+
+  it("buffers frames sent during the reconnect verify window until after onReadyBeforeReplay", async () => {
+    // The provider-facing contract: on a fresh connection, the config frame
+    // (sent by onReadyBeforeReplay) reaches the wire before any caller frame.
+    // A send() landing between socket-open and verify completion must buffer,
+    // not pass through — otherwise config-first providers see audio first.
+    class HeldVerifySocket implements ManagedSocket {
+      isOpen = false;
+      readonly sent: SocketData[] = [];
+      readonly supportsFramePing = true;
+      resolveVerify: ((ok: boolean) => void) | null = null;
+      private openHandler: (() => void) | null = null;
+      private closeHandler: ((code: number, reason: string) => void) | null = null;
+      send(data: SocketData): void { this.sent.push(data); }
+      keepAlivePing(): void {}
+      verify(): Promise<boolean> {
+        return new Promise((resolve) => { this.resolveVerify = resolve; });
+      }
+      dispose(): void {}
+      onOpen(h: () => void): void { this.openHandler = h; }
+      onMessage(): void {}
+      onClose(h: (code: number, reason: string) => void): void { this.closeHandler = h; }
+      onError(): void {}
+      fireOpen(): void { this.isOpen = true; this.openHandler?.(); }
+      fireClose(): void { this.isOpen = false; this.closeHandler?.(1006, "drop"); }
+    }
+
+    const sockets: HeldVerifySocket[] = [];
+    const conn = new WebSocketConnection({
+      url: () => "wss://x",
+      socketFactory: () => {
+        const s = new HeldVerifySocket();
+        sockets.push(s);
+        setTimeout(() => s.fireOpen(), 0);
+        return s;
+      },
+      retry: FAST_RETRY,
+      replayBufferSize: 10,
+      onReadyBeforeReplay: () => conn.send("config"),
+      onMessage: () => undefined,
+    });
+
+    await conn.connect();
+    expect(sockets[0]!.sent).toEqual(["config"]);
+
+    // Drop the link → reconnect opens socket 2, then awaits verify (held open).
+    sockets[0]!.fireClose();
+    await wait(40);
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    const second = sockets[sockets.length - 1]!;
+    expect(second.isOpen).toBe(true);
+    expect(second.resolveVerify).not.toBeNull();
+
+    // Caller sends while the link is open but NOT yet verified/configured.
+    conn.send("audio-during-verify");
+    expect(second.sent).toEqual([]); // must buffer, not hit the wire
+
+    second.resolveVerify!(true);
+    await wait(10);
+    expect(second.sent).toEqual(["config", "audio-during-verify"]);
 
     await conn.close();
   });

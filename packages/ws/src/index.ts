@@ -106,6 +106,10 @@ let connectionSequence = 0;
 export class WebSocketConnection {
   private socket: ManagedSocket | null = null;
   private ready = false;
+  /** True only once the connection is verified and onReadyBeforeReplay has been
+   * given the chance to run — send() must not reach an open-but-unconfigured
+   * socket, or caller frames beat the provider config frame on reconnect. */
+  private established = false;
   private closed = false;
   private reconnecting = false;
   private connResolver: (() => void) | null = null;
@@ -135,6 +139,7 @@ export class WebSocketConnection {
   async connect(): Promise<void> {
     this.closed = false;
     await this.openSocket();
+    this.established = true;
     this.opts.onReadyBeforeReplay?.();
     this.flushReplay();
   }
@@ -149,7 +154,7 @@ export class WebSocketConnection {
    * throws and the caller decides how to retry/report.
    */
   send(payload: SocketData): void {
-    if (!this.socket || !this.socket.isOpen) {
+    if (!this.socket || !this.socket.isOpen || !this.established) {
       if (this.replayBufferSize > 0 && !this.closed) {
         this.bufferForReplay(payload);
         return;
@@ -208,6 +213,7 @@ export class WebSocketConnection {
     this.connResolver = null;
     this.connRejecter = null;
     this.ready = false;
+    this.established = false;
     this.socket?.dispose();
     this.socket = null;
   }
@@ -223,6 +229,7 @@ export class WebSocketConnection {
     this.socket?.dispose();
     this.socket = null;
     this.ready = false;
+    this.established = false;
     this.stopKeepAlive();
     void this.tryReconnect();
   }
@@ -235,6 +242,7 @@ export class WebSocketConnection {
     this.abortPendingOpen(new Error("WebSocket connection replaced"));
     this.socket?.dispose();
     this.ready = false;
+    this.established = false;
 
     let socket: ManagedSocket | null = null;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -312,6 +320,7 @@ export class WebSocketConnection {
               settle(() => reject(err));
               if (!bindSocket(created)) return;
               this.ready = false;
+              this.established = false;
               this.connRejecter?.(err);
               this.connResolver = null;
               this.connRejecter = null;
@@ -322,6 +331,7 @@ export class WebSocketConnection {
               settle(() => reject(closeErr));
               if (!bindSocket(created)) return;
               this.ready = false;
+              this.established = false;
               this.stopKeepAlive();
               this.connRejecter?.(closeErr);
               this.connResolver = null;
@@ -416,6 +426,7 @@ export class WebSocketConnection {
           await this.openSocket();
           if (this.socket && (await this.verifyConnection(VERIFY_TIMEOUT_MS))) {
             this.scheduleReconnectBurstReset();
+            this.established = true;
             this.opts.onReadyBeforeReplay?.();
             this.flushReplay();
             this.opts.onReconnected?.();
