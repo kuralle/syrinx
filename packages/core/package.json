@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/core",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Voice pipeline kernel for Syrinx — pipeline bus, turn arbitration, playout clock, packets, and the framework-agnostic Reasoner seam",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "voice-pipeline",
+    "barge-in",
+    "turn-taking"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

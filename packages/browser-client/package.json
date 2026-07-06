@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/browser-client",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Browser client for the Syrinx WebSocket audio protocol — mic capture, opus, jitter buffer, playout progress reporting, reconnect",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "browser",
+    "microphone",
+    "opus"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/browser-client"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {

@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/deepgram",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Deepgram adapters for Syrinx — nova-3 STT, Flux turn-aware STT (semantic end-of-turn), and Aura TTS",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "deepgram",
+    "speech-to-text",
+    "text-to-speech"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/deepgram"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

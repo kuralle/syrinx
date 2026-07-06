@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/grok",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "xAI Grok adapters for Syrinx — STT, TTS, and realtime",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "grok",
+    "xai",
+    "realtime"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/grok"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

@@ -2,9 +2,30 @@
   "name": "@kuralle-syrinx/cf-agents",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
-  "license": "MIT",
   "description": "withVoice(Agent) — add a Syrinx realtime or cascaded voice pipeline to a Cloudflare agents SDK Agent",
+  "keywords": [
+    "kuralle",
+    "syrinx",
+    "voice",
+    "cloudflare",
+    "agents",
+    "durable-objects",
+    "realtime",
+    "cascaded",
+    "stt",
+    "tts"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/cf-agents"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -32,17 +53,5 @@
     "agents": "0.14.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
-  },
-  "keywords": [
-    "kuralle",
-    "syrinx",
-    "voice",
-    "cloudflare",
-    "agents",
-    "durable-objects",
-    "realtime",
-    "cascaded",
-    "stt",
-    "tts"
-  ]
+  }
 }

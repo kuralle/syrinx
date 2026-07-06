@@ -2,8 +2,25 @@
   "name": "@kuralle-syrinx/mastra",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Mastra agent bridge for Syrinx — run a Mastra Agent as the voice pipeline's reasoner",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "mastra"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/mastra"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {

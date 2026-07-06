@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/silero-vad",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Silero VAD plugin for Syrinx — ONNX voice activity detection for Node and Workers",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "vad",
+    "silero",
+    "onnx"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/silero-vad"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

@@ -2,8 +2,27 @@
   "name": "@kuralle-syrinx/server-workers",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Cloudflare Workers voice host for Syrinx — the full STT→LLM→TTS engine in one hibernatable Durable Object per session, with R2 call recording",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "cloudflare-workers",
+    "durable-objects",
+    "edge"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/server-workers"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/worker.ts",
   "types": "./src/worker.ts",
   "scripts": {

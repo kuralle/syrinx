@@ -2,8 +2,26 @@
   "name": "@kuralle-syrinx/recorder",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Stereo call recorder plugin for Syrinx — time-aligned user/assistant conversation WAV plus per-speaker stems",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "recording",
+    "wav"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/recorder"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

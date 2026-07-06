@@ -2,8 +2,28 @@
   "name": "@kuralle-syrinx/realtime",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Realtime speech-to-speech bridge for Syrinx — OpenAI Realtime, Gemini Live, and openai-compatible adapters; the Responder-Thinker delegate seam",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "realtime",
+    "speech-to-speech",
+    "openai-realtime",
+    "gemini-live"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/realtime"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {

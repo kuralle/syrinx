@@ -2,8 +2,26 @@
   "name": "@kuralle-syrinx/test",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Scripted fake STT/TTS/LLM plugins for testing Syrinx voice pipelines",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "testing",
+    "fixtures"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/test"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {

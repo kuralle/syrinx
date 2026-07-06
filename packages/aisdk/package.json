@@ -2,8 +2,26 @@
   "name": "@kuralle-syrinx/aisdk",
   "version": "4.1.0",
   "private": false,
-  "type": "module",
+  "description": "Vercel AI SDK bridge for Syrinx — drive any ai@6 model or agent as the voice pipeline's reasoner, with opt-in speculative generation",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "ai-sdk",
+    "vercel-ai"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/aisdk"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
