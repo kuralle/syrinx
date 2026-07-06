@@ -114,6 +114,8 @@ green, and — for anything on the audio path — you've observed it end to end
 ## Where deeper material lives
 
 - **Design records**: `docs/rfc-*.md`. Program summaries: `docs/reasoner-bridge.md`.
+- **Product/ops handbook**: `handbook/` — positioning, launch playbook, release SOP,
+  failure-modes runbook, and the 2026-07 product teardown.
 - **Research & internal reviews** (prior-art notes, bug-hunt reports, the
   production checklist) live in the **private** repo
   `octalpixel/kuralle-syrinx-research` — ask a maintainer for access. They are
