@@ -32,3 +32,5 @@ bi-model-research/
 
 # wrangler local state
 .wrangler/
+.plandesk/token
+.plandesk/server.json
