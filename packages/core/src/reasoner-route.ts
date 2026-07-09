@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: MIT
+
+import { Route, type PipelineBus } from "./pipeline-bus.js";
+import * as make from "./packet-factories.js";
+import type { Reasoner, ReasonerTurn, ReasoningPart } from "./reasoner.js";
+
+export interface ReasonerRoute {
+  readonly id: string;
+  readonly reasoner: Reasoner;
+}
+
+export interface RoutingReasonerOptions {
+  readonly routes: readonly ReasonerRoute[];
+  readonly classify: (turn: ReasonerTurn) => string | Promise<string>;
+  readonly speculateRouteId?: string;
+  readonly bus?: PipelineBus;
+  readonly contextId?: string;
+}
+
+export class RoutingReasoner implements Reasoner {
+  constructor(private readonly opts: RoutingReasonerOptions) {}
+
+  stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
+    return this.doStream(turn);
+  }
+
+  private async *doStream(turn: ReasonerTurn): AsyncGenerator<ReasoningPart> {
+    if (turn.signal.aborted) return;
+
+    if (this.opts.speculateRouteId !== undefined) {
+      yield* this.streamWithSpeculation(turn);
+      return;
+    }
+
+    const routeId = await this.opts.classify(turn);
+    const route = this.resolveRoute(routeId);
+    this.metric("route.selected", routeId);
+    yield* route.reasoner.stream({ ...turn, signal: turn.signal });
+  }
+
+  private async *streamWithSpeculation(turn: ReasonerTurn): AsyncGenerator<ReasoningPart> {
+    const specId = this.opts.speculateRouteId!;
+    const specRoute = this.resolveRoute(specId);
+
+    const child = new AbortController();
+    if (turn.signal.aborted) {
+      child.abort();
+      return;
+    }
+    turn.signal.addEventListener("abort", () => child.abort(), { once: true });
+
+    const specIter = specRoute.reasoner.stream({ ...turn, signal: child.signal })[Symbol.asyncIterator]();
+    const specNext = specIter.next();
+
+    const classifiedId = await this.opts.classify(turn);
+
+    if (classifiedId === specId) {
+      this.metric("route.selected", classifiedId);
+      yield* this.forwardFromIter(specIter, specNext, turn.signal);
+      return;
+    }
+
+    child.abort();
+    releaseIterator(specIter);
+    this.metric("route.mispredict", "1");
+
+    const route = this.resolveRoute(classifiedId);
+    this.metric("route.selected", classifiedId);
+    yield* route.reasoner.stream({ ...turn, signal: turn.signal });
+  }
+
+  private async *forwardFromIter(
+    iter: AsyncIterator<ReasoningPart>,
+    first: Promise<IteratorResult<ReasoningPart>>,
+    signal: AbortSignal,
+  ): AsyncGenerator<ReasoningPart> {
+    let next = await first;
+    while (!next.done) {
+      if (signal.aborted) return;
+      yield next.value;
+      next = await iter.next();
+    }
+  }
+
+  private resolveRoute(id: string): ReasonerRoute {
+    const route = this.opts.routes.find((r) => r.id === id);
+    if (!route) {
+      throw new Error(`RoutingReasoner: unknown route id "${id}"`);
+    }
+    return route;
+  }
+
+  private metric(name: string, value: string): void {
+    this.opts.bus?.push(Route.Background, make.metric(this.opts.contextId ?? "", name, value));
+  }
+}
+
+function releaseIterator(iter: AsyncIterator<ReasoningPart> | null): void {
+  if (!iter) return;
+  const release = iter.return;
+  if (release) void release.call(iter, undefined);
+}

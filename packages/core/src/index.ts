@@ -243,3 +243,10 @@ export {
 
 // Hedged reasoner (Lever C — reasoner-latency RFC)
 export { HedgedReasoner, type HedgedReasonerOptions } from "./reasoner-hedge.js";
+
+// Routing reasoner (Lever B — reasoner-latency RFC)
+export {
+  RoutingReasoner,
+  type RoutingReasonerOptions,
+  type ReasonerRoute,
+} from "./reasoner-route.js";
