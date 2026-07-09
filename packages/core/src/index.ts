@@ -240,3 +240,6 @@ export {
   type ReasonerMessage,
   type ReasoningPart,
 } from "./reasoner.js";
+
+// Hedged reasoner (Lever C — reasoner-latency RFC)
+export { HedgedReasoner, type HedgedReasonerOptions } from "./reasoner-hedge.js";
