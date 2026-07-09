@@ -3,6 +3,27 @@
 > Orientation for a fresh session. Read this, then the per-effort notes it points to.
 > The 2026-07-09 planning section directly below is the NEWEST state; the "Where the repo stands"
 > section (v4.0/v4.1) below it is still accurate for what is SHIPPED.
+
+## 2026-07-09 EVENING — vNext EXECUTION session (READ THIS FIRST)
+
+Two of the four vNext RFCs are now BUILT + integrated on the **`beta`** branch (the vNext integration branch — not `main`):
+
+- **Phase 0 — IU substrate** ✅ MERGED to beta (PR #23). C1 ledger + C2 speculative-on-ledger + C3 assistant-IU/heard-prefix + a ledger leak fix. C5 (epoch reshape) → backlog B-05, C4 (poison-set migration) → B-07 — both premises were already fixed in v4.1.x; see `docs/rfc-incremental-unit-substrate-amendment-C5.md`.
+- **Reasoner-latency** ✅ MERGED to beta (PR #24). RoutingReasoner (B) + HedgedReasoner (C) built/verified/robust/live-gated. Lever D already shipped; Lever A no-go. **Live gate: hedging cuts LLM-TTFT tail −59%; but v2v<1s NOT met by B+C alone — needs Lever D's overlap.** See `sprints/reasoner-latency/OUTCOMES.md` + `docs/latency-budget.md` (RL-WBS-5).
+
+**NEXT (this is what a new session should pick up): Build InteractionPolicy seam + VAP** (`docs/rfc-interaction-policy-seam.md`) — the critical-path Phase 1 track, now unblocked (IU substrate is in beta). It blocks half-cascade.
+
+**How this project runs (learned this session — HONOR THESE):**
+1. **Branch off `beta`** for each new RFC (e.g. `plan/interaction-policy`); PR back into `beta`. Not `main`.
+2. **Premise-check EVERY RFC chunk against current code BEFORE building** — all 4 RFCs were drafted from a 2026-07-02 snapshot and are systematically stale (telephony P0, heard-prefix, dual-bookkeeping, Lever D were all already shipped). Dispatch an Explore to map reality first; rescope, don't build the wrong thing.
+3. **IC = grok** (`/delegate --mode impl --worker grok`); **manager verifies by re-running commands + reading the diff + building a repro for the untested path** (green tests ≠ done — this caught real bugs in C2, RL-WBS-1, RL-WBS-2, all missed by passing tests).
+4. **Plan Desk is the board of record**: project "Syrinx vNext" (`.plandesk/config.json`), goal `652ac5c4` (Ship Syrinx vNext); mirror each RFC's sprint plan + outcomes to a Plan Desk **folder + HTML docs** (marked() crashes on markdown — use HTML bodies). **Always COMMIT `.plandesk/workspace.db`, never stash it** (stashing wedges the running server).
+5. Factory loop: get_next_task (edges sequence it) → red gate → /rfc-to-sprints → delegate chunk → prove → review → close. Sprint OS lives in `sprints/<rfc>/`.
+6. Memories to load: `plandesk-sprints-on-board`, `always-commit-plandesk-state`, `latency-is-top-priority`, `manager-runs-smokes`, `delegation-worker-preference` (grok this cycle), `gpt-live-validates-orchestration-thesis`.
+
+Filed 5 Plan Desk product bugs upstream at `asyncdotengineering/plandesk#14–18` (markdown crash, goal/task rigidity, get_next_task multi-goal). `main` is untouched; all vNext work is on `beta`.
+
+---
 > Everything in the v4.0/v4.1 sections is COMMITTED AND PUSHED to kuralle/main unless marked otherwise.
 
 ## 2026-07-09 planning session — vNext RFCs drafted + build order (NOT committed)
