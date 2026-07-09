@@ -1279,6 +1279,48 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("stt.partial carries wordTimings but does NOT itself drive barge-in (IP-C4 no-double-drive guard)", async () => {
+    // IP-C4: stt.partial is the rich-seam carrier; the session caches its wordTimings for the
+    // observation but barge-in stays driven ONLY by stt.interim/stt.result. Pushing sustained
+    // stt.partial (no interim) during active TTS must NOT interrupt — proving no second barge-in driver.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: t0,
+      text: "wait actually I need",
+      wordTimings: [{ word: "wait", startMs: 0, endMs: 200, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: t0 + 400,
+      text: "wait actually I need something else",
+      wordTimings: [{ word: "wait", startMs: 0, endMs: 200, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
   it("commits a barge-in from provider STT interim transcripts when no VAD plugin is registered", async () => {
     // Cascade deployments with endpointingOwner "provider_stt" (the default) have
     // no vad.speech_started producer — interim transcripts during TTS playout are
