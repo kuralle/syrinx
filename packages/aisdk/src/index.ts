@@ -276,6 +276,15 @@ export class ReasoningBridge implements VoicePlugin {
     return { contextId, iuId: contextId, epoch };
   }
 
+  private assistantIuIdFor(contextId: string): IncrementalUnitId {
+    let epoch = this.epochByContext.get(contextId);
+    if (epoch === undefined) {
+      epoch = ++this.turnEpochCounter;
+      this.epochByContext.set(contextId, epoch);
+    }
+    return { contextId, iuId: `${contextId}#assistant`, epoch };
+  }
+
   private discardDraft(): void {
     const draft = this.speculativeDraft;
     if (!draft) return;
@@ -303,6 +312,8 @@ export class ReasoningBridge implements VoicePlugin {
     this.activeGeneration?.controller.abort();
     const controller = presetController ?? new AbortController();
     this.activeGeneration = { contextId, controller };
+    const aid = this.assistantIuIdFor(contextId);
+    this.iuLedger.add({ id: aid, kind: "assistant_response", state: "hypothesized" });
     const signal = controller.signal;
 
     // R2: while a speculative hold is unpromoted, every push/mutation buffers.
@@ -552,6 +563,7 @@ export class ReasoningBridge implements VoicePlugin {
     const assistantMsg = { role: "assistant" as const, content: assistantText };
     this.history.push({ role: "user", content: userText }, assistantMsg);
     this.assistantMsgByContext.set(contextId, assistantMsg);
+    this.iuLedger.commit(this.assistantIuIdFor(contextId));
     this.trimHistory();
     this.persistHistory();
   }
@@ -597,6 +609,15 @@ export class ReasoningBridge implements VoicePlugin {
    */
   private commitInterruptedHistory(contextId: string): void {
     const spoken = this.computeSpokenPrefix(contextId);
+    const aid = this.assistantIuIdFor(contextId);
+    const ms = this.playedOutMsByContext.get(contextId);
+    const prefix = { chars: spoken.length, ms };
+    const assistantIu = this.iuLedger.get(aid);
+    if (assistantIu?.state === "hypothesized") {
+      this.iuLedger.commit(aid, prefix);
+    } else if (assistantIu?.state === "committed") {
+      assistantIu.committedPrefix = prefix;
+    }
     const existing = this.assistantMsgByContext.get(contextId);
     if (existing) {
       if (spoken) {
@@ -636,6 +657,10 @@ export class ReasoningBridge implements VoicePlugin {
   }
 
   private clearTurnState(contextId: string): void {
+    const aid = this.assistantIuIdFor(contextId);
+    if (this.iuLedger.get(aid)?.state === "hypothesized") {
+      this.iuLedger.revoke(aid);
+    }
     this.spokenByContext.delete(contextId);
     this.turnUserText.delete(contextId);
     this.assistantMsgByContext.delete(contextId);
