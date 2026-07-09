@@ -1,0 +1,86 @@
+(node:12456) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12469) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[2m$ vitest run[22m
+(node:12501) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+ RUN  v2.1.9 /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/packages/core
+
+(node:12514) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12518) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12515) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12519) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12520) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12517) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12516) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/iu-ledger.test.ts (18 tests) 7ms
+ ✓ src/audio/audio.test.ts (22 tests) 15ms
+ ✓ src/turn-arbiter.test.ts (16 tests) 35ms
+(node:12531) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12532) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/audio-envelope.test.ts (9 tests) 4ms
+(node:12538) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/observability-observer.test.ts (4 tests) 198ms
+ ✓ src/primary-speaker-gate.test.ts (8 tests) 12ms
+ ✓ src/pipeline-bus.test.ts (14 tests) 288ms
+(node:12542) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12545) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/tts-playout-clock.test.ts (11 tests) 6ms
+(node:12547) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/voice-text.test.ts (14 tests) 13ms
+(node:12549) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/retry.test.ts (7 tests) 4ms
+ ✓ src/turn-arbiter.characterization.test.ts (8 tests) 341ms
+ ✓ src/observability.test.ts (6 tests) 4ms
+(node:12552) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12553) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/latency-filler.test.ts (7 tests) 3ms
+(node:12555) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12556) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12558) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/error-handler.test.ts (6 tests) 2ms
+ ✓ src/reasoner.test.ts (1 test) 2ms
+ ✓ src/packet-factories.test.ts (2 tests) 2ms
+ ✓ src/provider-fallback.test.ts (2 tests) 55ms
+(node:12566) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12567) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12568) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12571) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12570) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/pipeline-bus.g10.test.ts (2 tests) 830ms
+   ✓ G10 — production simulation: streaming LLM -> TTS not deferred by the bus > delivers the first sentence to TTS while generation is still in flight 705ms
+(node:12578) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ ✓ src/voice-agent-session.test.ts (68 tests) 2733ms
+
+ Test Files  19 passed (19)
+      Tests  225 passed (225)
+   Start at  10:04:58
+   Duration  3.20s (transform 583ms, setup 0ms, collect 1.17s, tests 4.55s, environment 2ms, prepare 1.08s)
+

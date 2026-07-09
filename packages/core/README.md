@@ -4,6 +4,10 @@ The Syrinx Kernel v2 — the framework-agnostic core of the voice engine: the `P
 
 This README documents the **`Reasoner` seam** added for the Reasoner-bridge generalization; the rest of the kernel surface is in `src/index.ts`.
 
+## Incremental-Unit ledger (dormant)
+
+The IU substrate (`IncrementalUnit`, `InMemoryIuLedger`) models speculative voice work as **hypothesize → ground → discard**: `add` registers a hypothesis, `commit` grounds it (optionally with a heard prefix in chars/ms), and `revoke` discards it. State is monotonic (`hypothesized` → `committed` or `revoked`; terminal ops are idempotent). The ledger is **dormant** in Sprint 0 — no pipeline consumer is wired yet; C2+ will re-express speculative generation, barge-in truncation, and poison-set bookkeeping on this primitive.
+
 ## The Reasoner seam
 
 A normalized pull-stream that lets one bridge ([`ReasoningBridge`](../aisdk/README.md)) drive **any** reasoning backend (Vercel AI SDK `ToolLoopAgent`/`streamText`, Mastra `Agent`, …) without changing the pipeline primitive. Defined in `src/reasoner.ts`:
