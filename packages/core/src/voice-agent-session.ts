@@ -64,6 +64,8 @@ import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
+import { InteractionCoordinator } from "./interaction-coordinator.js";
+import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
 import { pluginStage, stageOrder, isAudioStage } from "./init-stage-order.js";
 import {
@@ -268,7 +270,8 @@ export class VoiceAgentSession {
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
-  private readonly turnArbiter!: TurnArbiter;
+  private readonly interactionPolicy!: RuleBasedInteractionPolicy;
+  private readonly interaction!: InteractionCoordinator;
   private readonly latencyFiller: LatencyFillerController;
   private firstLlmDeltaReceived = new Set<string>();
   private readonly vaqiMissedResponseMs: number;
@@ -344,11 +347,16 @@ export class VoiceAgentSession {
       },
     });
 
-    this.turnArbiter = new TurnArbiter({
+    this.interactionPolicy = new RuleBasedInteractionPolicy({
       bus: this.bus,
       primarySpeakerGate: this.primarySpeakerGate,
       ttsPlayout: this.ttsPlayout,
       minInterruptionMs: this.minInterruptionMs,
+    });
+    this.interaction = new InteractionCoordinator({
+      bus: this.bus,
+      policy: this.interactionPolicy,
+      executor: this.interactionPolicy.arbiter,
     });
     this.watchdogs = new VoiceSessionWatchdogs({
       bus: this.bus,
@@ -384,6 +392,10 @@ export class VoiceAgentSession {
 
     // Mode switcher
     this.modeSwitcher = new ModeSwitcher(this.bus);
+  }
+
+  private get turnArbiter(): TurnArbiter {
+    return this.interactionPolicy.arbiter;
   }
 
   // =========================================================================
@@ -648,8 +660,7 @@ export class VoiceAgentSession {
   }
 
   private handleSttInterim(pkt: SttInterimPacket): void {
-    this.turnArbiter.noteInterimEvidence(pkt.text);
-    this.maybeBargeInFromProviderStt(pkt.contextId, pkt.text, pkt.timestampMs);
+    this.observeSttForBargeIn(pkt.contextId, pkt.timestampMs, pkt.text, "stt_partial");
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_partial", {
       tsMs: pkt.timestampMs,
@@ -666,8 +677,7 @@ export class VoiceAgentSession {
 
   private handleSttResult(pkt: SttResultPacket): void {
     this.watchdogs.clearSttForceFinalizeIfContext(pkt.contextId);
-    this.turnArbiter.noteInterimEvidence(pkt.text, pkt.confidence);
-    this.maybeBargeInFromProviderStt(pkt.contextId, pkt.text, pkt.timestampMs);
+    this.observeSttForBargeIn(pkt.contextId, pkt.timestampMs, pkt.text, "stt_final", pkt.confidence);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -688,7 +698,7 @@ export class VoiceAgentSession {
   }
 
   private handleVadAudioForSpeakerGate(pkt: VadAudioPacket): void {
-    if (this.turnArbiter.observeBargeInAudio(pkt)) return;
+    if (this.interaction.observeBargeInAudio(pkt)) return;
 
     if (this.shouldEnrollPrimarySpeaker(pkt.contextId)) {
       this.primarySpeakerGate.enrollUserTurnChunk(pkt.audio);
@@ -707,12 +717,35 @@ export class VoiceAgentSession {
   // Provider transcripts arriving while TTS playout is active are the speech
   // evidence instead (echo of our own playout is mitigated by client AEC plus
   // the arbiter's backchannel / low-confidence suppression).
-  private maybeBargeInFromProviderStt(contextId: string, text: string, timestampMs: number): void {
-    if (this.endpointingOwner !== "provider_stt") return;
-    if (!text.trim()) return;
-    const interruptedContextId = this.latestActiveTtsContextId();
-    if (!interruptedContextId) return;
-    this.turnArbiter.onProviderSttEvidence(contextId, timestampMs, interruptedContextId);
+  private observeSttForBargeIn(
+    contextId: string,
+    timestampMs: number,
+    text: string,
+    kind: "stt_partial" | "stt_final",
+    confidence?: number,
+  ): void {
+    const interruptedContextId =
+      this.endpointingOwner === "provider_stt" && text.trim()
+        ? this.latestActiveTtsContextId() ?? undefined
+        : undefined;
+    if (kind === "stt_partial") {
+      this.interaction.observe({
+        kind: "stt_partial",
+        contextId,
+        timestampMs,
+        text,
+        interruptedContextId,
+      });
+      return;
+    }
+    this.interaction.observe({
+      kind: "stt_final",
+      contextId,
+      timestampMs,
+      text,
+      confidence,
+      interruptedContextId,
+    });
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
@@ -742,11 +775,21 @@ export class VoiceAgentSession {
       return;
     }
 
-    this.turnArbiter.onSpeechStarted(pkt, interruptedContextId);
+    this.interaction.observe({
+      kind: "vad_speech_started",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      confidence: pkt.confidence,
+      interruptedContextId,
+    });
   }
 
   private handleVadSpeechActivity(pkt: VadSpeechActivityPacket): void {
-    this.turnArbiter.onSpeechActivity(pkt);
+    this.interaction.observe({
+      kind: "vad_speech_activity",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+    });
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
@@ -765,7 +808,12 @@ export class VoiceAgentSession {
       this.speakerEnrollmentContextId = null;
     }
 
-    this.turnArbiter.onSpeechEnded(pkt, Boolean(this.latestActiveTtsContextId()));
+    this.interaction.observe({
+      kind: "vad_speech_ended",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      hasActiveTts: Boolean(this.latestActiveTtsContextId()),
+    });
 
     this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
     this.timingFor(pkt.contextId).speechEndedMs = pkt.timestampMs;
