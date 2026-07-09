@@ -78,6 +78,18 @@ export {
   type ReasonerSessionStore,
 } from "./reasoner-session-store.js";
 
+// Incremental-Unit ledger (IU substrate — dormant until C2)
+export {
+  type IuState,
+  type IncrementalUnitId,
+  type IncrementalUnit,
+} from "./incremental-unit.js";
+export {
+  type IuLedger,
+  type IuLedgerAnomaly,
+  InMemoryIuLedger,
+} from "./iu-ledger.js";
+
 // Pipeline packets — TTS
 export {
   type TextToSpeechTextPacket,

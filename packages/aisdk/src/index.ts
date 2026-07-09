@@ -20,12 +20,14 @@ import {
   type ReasonerSessionStore,
   type ReasonerTurn,
   type TtsWordTimestamp,
+  type IncrementalUnitId,
   categorizeLlmError,
   isRecoverable,
   readRetryConfig,
   waitForRetryDelay,
   ErrorCategory,
   type RetryConfig,
+  InMemoryIuLedger,
 } from "@kuralle-syrinx/core";
 
 export {
@@ -60,8 +62,6 @@ export interface RunStore {
  * simply dropped — the generation was never observable.
  */
 interface SpeculativeHold {
-  promoted: boolean;
-  failed: boolean;
   buffered: Array<() => void>;
 }
 
@@ -77,7 +77,11 @@ export class ReasoningBridge implements VoicePlugin {
     userText: string;
     controller: AbortController;
     hold: SpeculativeHold;
+    id: IncrementalUnitId;
   } | null = null;
+  private iuLedger!: InMemoryIuLedger;
+  private readonly epochByContext = new Map<string, number>();
+  private turnEpochCounter = 0;
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
   // G2/G25: per-turn state so a barged-in turn is remembered as what the user HEARD,
@@ -134,6 +138,21 @@ export class ReasoningBridge implements VoicePlugin {
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
+    this.iuLedger = new InMemoryIuLedger((a) => {
+      const detail =
+        a.kind === "terminal_op"
+          ? `${a.op} on ${a.state} IU`
+          : `${a.op} on unknown IU`;
+      this.bus?.push(Route.Background, {
+        kind: "llm.error",
+        contextId: a.id.contextId,
+        timestampMs: Date.now(),
+        component: "iu_ledger",
+        category: ErrorCategory.InternalFault,
+        cause: new Error(`iu_ledger anomaly: ${a.kind} ${detail}`),
+        isRecoverable: true,
+      });
+    });
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
     this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
@@ -165,10 +184,10 @@ export class ReasoningBridge implements VoicePlugin {
           draft.contextId === eos.contextId &&
           draft.userText === eos.text &&
           !draft.controller.signal.aborted &&
-          !draft.hold.failed
+          this.iuLedger.get(draft.id)?.state === "hypothesized"
         ) {
+          this.iuLedger.commit(draft.id);
           this.speculativeDraft = null;
-          draft.hold.promoted = true;
           for (const flush of draft.hold.buffered.splice(0)) flush();
           return;
         }
@@ -240,17 +259,41 @@ export class ReasoningBridge implements VoicePlugin {
   /** Start (or restart, if a newer eager endpoint supersedes) the speculative draft. */
   private async runDraft(userText: string, contextId: string): Promise<void> {
     this.discardDraft();
+    const id = this.iuIdFor(contextId);
+    this.iuLedger.add({ id, kind: "user_turn", state: "hypothesized" });
     const controller = new AbortController();
-    const hold: SpeculativeHold = { promoted: false, failed: false, buffered: [] };
-    this.speculativeDraft = { contextId, userText, controller, hold };
-    await this.processTurn(userText, contextId, hold, controller);
+    const hold: SpeculativeHold = { buffered: [] };
+    this.speculativeDraft = { contextId, userText, controller, hold, id };
+    await this.processTurn(userText, contextId, hold, controller, id);
+  }
+
+  private iuIdFor(contextId: string): IncrementalUnitId {
+    let epoch = this.epochByContext.get(contextId);
+    if (epoch === undefined) {
+      epoch = ++this.turnEpochCounter;
+      this.epochByContext.set(contextId, epoch);
+    }
+    return { contextId, iuId: contextId, epoch };
+  }
+
+  private assistantIuIdFor(contextId: string): IncrementalUnitId {
+    let epoch = this.epochByContext.get(contextId);
+    if (epoch === undefined) {
+      epoch = ++this.turnEpochCounter;
+      this.epochByContext.set(contextId, epoch);
+    }
+    return { contextId, iuId: `${contextId}#assistant`, epoch };
   }
 
   private discardDraft(): void {
     const draft = this.speculativeDraft;
     if (!draft) return;
     this.speculativeDraft = null;
-    if (!draft.hold.promoted) draft.controller.abort();
+    const committed = this.iuLedger.get(draft.id)?.state === "committed";
+    if (!committed) {
+      this.iuLedger.revoke(draft.id);
+      draft.controller.abort();
+    }
   }
 
   private async processTurn(
@@ -258,6 +301,7 @@ export class ReasoningBridge implements VoicePlugin {
     contextId: string,
     hold?: SpeculativeHold,
     presetController?: AbortController,
+    iuId?: IncrementalUnitId,
   ): Promise<void> {
     if (!this.bus) return;
 
@@ -268,21 +312,27 @@ export class ReasoningBridge implements VoicePlugin {
     this.activeGeneration?.controller.abort();
     const controller = presetController ?? new AbortController();
     this.activeGeneration = { contextId, controller };
+    const aid = this.assistantIuIdFor(contextId);
+    this.iuLedger.add({ id: aid, kind: "assistant_response", state: "hypothesized" });
     const signal = controller.signal;
 
     // R2: while a speculative hold is unpromoted, every push/mutation buffers.
     // Packets are constructed eagerly (their timestamps are event time); only
     // delivery is deferred. Promotion replays in order, then later effects run live.
+    const isBuffering = (): boolean =>
+      hold !== undefined &&
+      iuId !== undefined &&
+      this.iuLedger.get(iuId)?.state !== "committed";
     const push = <T extends Parameters<PipelineBus["push"]>[1]>(route: Route, packet: T): void => {
-      if (hold && !hold.promoted) {
-        if ((packet as { kind?: string }).kind === "llm.error") hold.failed = true;
-        hold.buffered.push(() => this.bus?.push(route, packet));
+      if (isBuffering()) {
+        if ((packet as { kind?: string }).kind === "llm.error" && iuId) this.iuLedger.revoke(iuId);
+        hold!.buffered.push(() => this.bus?.push(route, packet));
         return;
       }
       this.bus?.push(route, packet);
     };
     const defer = (fn: () => void): void => {
-      if (hold && !hold.promoted) hold.buffered.push(fn);
+      if (isBuffering()) hold!.buffered.push(fn);
       else fn();
     };
 
@@ -393,8 +443,8 @@ export class ReasoningBridge implements VoicePlugin {
                 if (this.opts.runStore) {
                   const store = this.opts.runStore;
                   const runId = part.runId;
-                  if (hold && !hold.promoted) {
-                    hold.buffered.push(() => void Promise.resolve(store.save(contextId, runId)).catch(() => undefined));
+                  if (isBuffering()) {
+                    hold!.buffered.push(() => void Promise.resolve(store.save(contextId, runId)).catch(() => undefined));
                   } else {
                     await Promise.resolve(store.save(contextId, runId));
                   }
@@ -513,6 +563,7 @@ export class ReasoningBridge implements VoicePlugin {
     const assistantMsg = { role: "assistant" as const, content: assistantText };
     this.history.push({ role: "user", content: userText }, assistantMsg);
     this.assistantMsgByContext.set(contextId, assistantMsg);
+    this.iuLedger.commit(this.assistantIuIdFor(contextId));
     this.trimHistory();
     this.persistHistory();
   }
@@ -558,6 +609,15 @@ export class ReasoningBridge implements VoicePlugin {
    */
   private commitInterruptedHistory(contextId: string): void {
     const spoken = this.computeSpokenPrefix(contextId);
+    const aid = this.assistantIuIdFor(contextId);
+    const ms = this.playedOutMsByContext.get(contextId);
+    const prefix = { chars: spoken.length, ms };
+    const assistantIu = this.iuLedger.get(aid);
+    if (assistantIu?.state === "hypothesized") {
+      this.iuLedger.commit(aid, prefix);
+    } else if (assistantIu?.state === "committed") {
+      assistantIu.committedPrefix = prefix;
+    }
     const existing = this.assistantMsgByContext.get(contextId);
     if (existing) {
       if (spoken) {
@@ -597,6 +657,10 @@ export class ReasoningBridge implements VoicePlugin {
   }
 
   private clearTurnState(contextId: string): void {
+    const aid = this.assistantIuIdFor(contextId);
+    if (this.iuLedger.get(aid)?.state === "hypothesized") {
+      this.iuLedger.revoke(aid);
+    }
     this.spokenByContext.delete(contextId);
     this.turnUserText.delete(contextId);
     this.assistantMsgByContext.delete(contextId);
