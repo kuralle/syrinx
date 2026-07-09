@@ -1240,6 +1240,37 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("fullDuplex:true still honors a direct client interrupt (executor survives defer mode) (IP-C2 regression)", async () => {
+    // Defer mode swaps only the coordinator's DRIVE policy to observe-only; the executor stays the
+    // rule policy's arbiter, so a client-initiated "stop" (requestClientInterrupt) must still fire —
+    // the front owning turn-taking does not disable the user's explicit interrupt.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280, fullDuplex: true });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    session.requestClientInterrupt("assistant-turn");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+
+    await closeSession(session);
+  });
+
   it("commits a barge-in from provider STT interim transcripts when no VAD plugin is registered", async () => {
     // Cascade deployments with endpointingOwner "provider_stt" (the default) have
     // no vad.speech_started producer — interim transcripts during TTS playout are
