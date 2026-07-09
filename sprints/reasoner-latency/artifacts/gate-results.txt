@@ -1,0 +1,18 @@
+
+=== Reasoner-latency gate ===
+deep=gpt-4.1-mini  fast=gpt-4.1-nano  hedgeAfterMs=300  runs=10 (1 warmup discarded)
+
+plain(gpt-4.1-mini) TTFT  P50=1005ms  P95=6580ms  max=6580ms  (n=9)
+plain(gpt-4.1-nano) TTFT  P50=1111ms  P95=3298ms  max=3298ms  (n=9)
+hedged(gpt-4.1-minix2) TTFT  P50=961ms  P95=2725ms  max=2725ms  (n=9)
+routed(fast/deep) TTFT  P50=991ms  P95=4274ms  max=4274ms  (n=9)
+composed(route→hedge) TTFT  P50=869ms  P95=3329ms  max=3329ms  (n=9)
+
+--- cost / effect ---
+hedge.fired: 20/9 measured runs  (backup started; may or may not have won)
+route.mispredict: 0
+tail effect (deep P95 6580ms -> hedged P95 2725ms)
+
+Note: v2v ≈ STT-final (~314-520ms) + LLM-TTFT (above) + TTS-TTFB (~270-320ms). The composites move the LLM leg;
+the <1s v2v gate additionally requires the fast route AND speculative-start overlap (Lever D, already shipped).
+GATE_EXIT: 0
