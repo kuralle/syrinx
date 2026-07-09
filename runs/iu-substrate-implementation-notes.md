@@ -40,6 +40,15 @@ fold C5's real value (ledger producer + first-class turn identity) into C2, deli
 state, reevaluate." Full write-up: `docs/rfc-incremental-unit-substrate-amendment-C5.md`. Board comment on the
 IU design doc. Resequenced: S1=C2+identity, S2=C3, S3=C4, S4=closeout.
 
+### D-4 (Sprint 1) — what "remove SpeculativeHold in favor of the ledger" actually means
+`SpeculativeHold` (aisdk/src/index.ts:62-66) fuses commit *state* (`promoted`, `failed`) with a
+side-effect *buffer* (`buffered: Array<()=>void>`). Only the state is the ledger's job. **Decision:**
+move `promoted`→`ledger.state==="committed"` and `failed`→`ledger.revoke`, KEEP `buffered[]` as the
+delivery-gating mechanism. Collapsing the buffer into the ledger would break the side-effect gating
+(test index.test.ts:848 "nothing ever pushed"). The 4 speculative characterization tests (809/848/880/912)
+must pass unchanged (RFC §11 abort otherwise). epoch = per-bridge monotonic counter per turn contextId
+(epochByContext); no consumer reads ordering yet. onEvent → reuse llm.error packet with component:"iu_ledger".
+
 ## Deviations
 - Sprint sequence deviates from RFC §8 chunk order (C1→C5→C2→C3→C4) → now C1→C2→C3→C4, C5 deferred (D-3).
   Reason: RFC §8's front-loading of C5 assumed the P0 bug was open; it is not.

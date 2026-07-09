@@ -6,12 +6,12 @@
 
 ## Active sprint
 
-**Sprint number:** `1`
-**Sprint name:** Speculative on the ledger (C2) + first-class turn-identity producer
+**Sprint number:** `2`
+**Sprint name:** Heard-prefix commit boundary (C3)
 **Status:** `not-started`
-**Goal:** speculative generation re-expressed as an `IuLedger` consumer (behavior-preserving; `SpeculativeHold` private state gone), and the ledger gains its first producer — a `user_turn` IU keyed by `IncrementalUnitId {contextId, iuId, epoch}` with `epoch` promoted from the existing per-turn counter.
-**WBS section:** [`sprints/WBS.md` § Sprint 1](./WBS.md)
-**Amendment:** [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md) — C5 rescoped (its premise was already fixed in v4.1.0; value folds into C2). Old standalone C5 → backlog B-05.
+**Goal:** on barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix = heard)` — the specified-but-unwired guarantee, now wired for all transports and tested (assistant-side IU).
+**WBS section:** [`sprints/WBS.md` § Sprint 2](./WBS.md)
+**Amendment context:** the sequence is rescoped per [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md) — S1=C2 (done), S2=C3, S3=C4, S4=closeout; old standalone C5 → backlog B-05.
 
 ## Build branch
 
@@ -21,20 +21,20 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout plan/iu-substrate` (or `git checkout -b plan/iu-substrate` the first time, branched off `main`).
 
-## Load-bearing reading for sprint 1
+## Load-bearing reading for sprint 2
 
-The session running sprint 1 must read these in this order before delegating any story:
+The session running sprint 2 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` § Sprint 1 (rescoped C2 + identity producer) — the plan for this sprint.
-2. `docs/rfc-incremental-unit-substrate-amendment-C5.md` — **why Sprint 1 is C2, not the standalone epoch reshape.** Read first.
-3. `docs/rfc-incremental-unit-substrate.md` §8 C2, §2.2 (the speculative path already emits IU-shaped signals), §6, §7; REQ-5.
-4. `packages/aisdk/src/index.ts` — the speculative path (`SpeculativeHold`, `speculativeDraft`, `activeGeneration`; staleness by `contextId` equality at `:165,212,234`). The re-expression target.
-5. `packages/core/src/iu-ledger.ts` + `incremental-unit.ts` — the S0 ledger this consumes (its first producer).
-6. Turn-boundary context (already mapped this session): telephony `-t<n>` per-turn rotation (`outbound-playout-pipeline.ts:46-66`); the epoch source = the existing per-turn counter.
+1. `sprints/WBS.md` § Sprint 2 (heard-prefix commit, C3) — the plan.
+2. `sprints/sprint-1/HANDOFF.md` — read-me-first from Sprint 1.
+3. `docs/rfc-incremental-unit-substrate.md` §8 C3, §4.3 (`interrupt.tts` → commit-heard-then-revoke), §6, REQ-4.
+4. `packages/aisdk/src/index.ts` — the barge-in path: `interrupt.llm` → `commitInterruptedHistory` (`:210-221`); the heard-prefix precision ladder (`spokenByContext`/`wordTimestampsByContext`/`playedOutMsByContext`, `:83-102`). C3 wires `ledger.commit(assistantIu, prefix=heard)` here.
+5. `packages/core/src/voice-agent-session.ts` (`interrupt.tts`, `handleTurnComplete`) + `tts-playout-clock.ts` (heard-ms).
+6. The S0 ledger + S1 producer pattern (`iuIdFor`) in `packages/aisdk/src/index.ts` — C3 adds the `assistant_response` IU.
 
 ## Last completed sprint
 
-`0 — Ledger core (C1)`
+`1 — Speculative on the ledger (C2) + identity producer`
 
 ## Last completed at
 
@@ -45,7 +45,8 @@ The session running sprint 1 must read these in this order before delegating any
 | Sprint | Status | Completed at | Warmdown |
 |--------|--------|--------------|----------|
 | 0 | done | 2026-07-09 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
-| 1 | not-started | — | — |
+| 1 | done | 2026-07-09 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
+| 2 | not-started | — | — |
 | 2 | not-started | — | — |
 | 3 | not-started | — | — |
 | 4 | not-started | — | — |
