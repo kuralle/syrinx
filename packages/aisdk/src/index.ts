@@ -308,22 +308,20 @@ export class ReasoningBridge implements VoicePlugin {
     // R2: while a speculative hold is unpromoted, every push/mutation buffers.
     // Packets are constructed eagerly (their timestamps are event time); only
     // delivery is deferred. Promotion replays in order, then later effects run live.
-    const speculativeHold =
+    const isBuffering = (): boolean =>
       hold !== undefined &&
       iuId !== undefined &&
-      this.iuLedger.get(iuId)?.state !== "committed"
-        ? hold
-        : undefined;
+      this.iuLedger.get(iuId)?.state !== "committed";
     const push = <T extends Parameters<PipelineBus["push"]>[1]>(route: Route, packet: T): void => {
-      if (speculativeHold) {
+      if (isBuffering()) {
         if ((packet as { kind?: string }).kind === "llm.error" && iuId) this.iuLedger.revoke(iuId);
-        speculativeHold.buffered.push(() => this.bus?.push(route, packet));
+        hold!.buffered.push(() => this.bus?.push(route, packet));
         return;
       }
       this.bus?.push(route, packet);
     };
     const defer = (fn: () => void): void => {
-      if (speculativeHold) speculativeHold.buffered.push(fn);
+      if (isBuffering()) hold!.buffered.push(fn);
       else fn();
     };
 
@@ -434,8 +432,8 @@ export class ReasoningBridge implements VoicePlugin {
                 if (this.opts.runStore) {
                   const store = this.opts.runStore;
                   const runId = part.runId;
-                  if (speculativeHold) {
-                    speculativeHold.buffered.push(() => void Promise.resolve(store.save(contextId, runId)).catch(() => undefined));
+                  if (isBuffering()) {
+                    hold!.buffered.push(() => void Promise.resolve(store.save(contextId, runId)).catch(() => undefined));
                   } else {
                     await Promise.resolve(store.save(contextId, runId));
                   }
