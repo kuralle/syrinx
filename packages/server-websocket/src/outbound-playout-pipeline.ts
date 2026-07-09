@@ -3,7 +3,7 @@
 import { Route, type InterruptTtsPacket, type TextToSpeechAudioPacket, type TextToSpeechEndPacket, type VoiceAgentSession } from "@kuralle-syrinx/core";
 import { WebSocket } from "ws";
 import type { BackgroundAudioMixer } from "./background-audio.js";
-import { wireBackgroundThinking } from "./background-audio.js";
+import { wireBackgroundAudio } from "./background-audio.js";
 import type { PacedPlayoutFrame } from "./paced-playout.js";
 import { PacedPlayoutQueue } from "./paced-playout.js";
 import { PlayoutProgressEmitter } from "./playout-progress.js";
@@ -81,7 +81,7 @@ export function wireTelephonyOutboundPipeline(args: {
   readonly backgroundAudio?: BackgroundAudioMixer;
 }): TelephonyOutboundHandle {
   const { session, socket, disposers, outboundFrameDurationMs, maxQueuedOutputAudioMs, callbacks, backgroundAudio } = args;
-  if (backgroundAudio) wireBackgroundThinking(session, backgroundAudio);
+  if (backgroundAudio) wireBackgroundAudio(session, backgroundAudio);
 
   const recordDiscardedPlayout = (discardedMs: number, reason: string): void => {
     if (discardedMs <= 0) return;

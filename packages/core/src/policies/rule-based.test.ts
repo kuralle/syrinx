@@ -115,6 +115,136 @@ describe("RuleBasedInteractionPolicy", () => {
     expect(metrics).toContain("interrupt.suppressed_backchannel");
   });
 
+  it("IP-C3: emits no backchannel on VAD/user-pause observations", async () => {
+    const { policy } = await createPolicy();
+
+    expect(
+      policy.observe({
+        kind: "vad_speech_ended",
+        contextId: "user",
+        timestampMs: 5000,
+        hasActiveTts: false,
+      }),
+    ).toEqual([]);
+    expect(
+      policy.observe({
+        kind: "vad_speech_activity",
+        contextId: "user",
+        timestampMs: 5100,
+      }),
+    ).toEqual([]);
+  });
+
+  it("IP-C3: emits exactly one cue on started → delayed and clears on complete", async () => {
+    const { policy } = await createPolicy();
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([{ kind: "backchannel", cue: "mm_hmm" }]);
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3200,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([]);
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 4000,
+      toolCallPhase: "complete",
+    });
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 5000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 7000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([{ kind: "backchannel", cue: "mm_hmm" }]);
+  });
+
+  it("IP-C3: suppresses backchannel when TTS is active or the user is speaking", async () => {
+    const { ttsPlayout, policy } = await createPolicy();
+    ttsPlayout.noteAudio("assistant-turn", 500, 1000);
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([]);
+
+    ttsPlayout.release("assistant-turn");
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-2",
+      timestampMs: 4000,
+      toolCallPhase: "started",
+    });
+    policy.observe({
+      kind: "vad_speech_started",
+      contextId: "user",
+      timestampMs: 4100,
+      confidence: 0.9,
+      interruptedContextId: "",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-2",
+        timestampMs: 6000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([]);
+  });
+
+  it("IP-C3: reset clears delegate-gap backchannel state", async () => {
+    const { policy } = await createPolicy();
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    policy.reset("turn-1");
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([]);
+  });
+
   it("reset clears pending state", async () => {
     const { ttsPlayout, policy } = await createPolicy(280);
     ttsPlayout.noteAudio("assistant-turn", 100, 1000);

@@ -10,7 +10,7 @@ import {
   type VoicePlugin,
 } from "./index.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
-import { ErrorCategory } from "./packets.js";
+import { ErrorCategory, type InteractionBackchannelPacket } from "./packets.js";
 import type {
   EndOfSpeechAudioPacket,
   RecordAssistantAudioPacket,
@@ -417,6 +417,7 @@ describe("VoiceAgentSession", () => {
       llmTtftMs: 700,
       ttsTtfbMs: 250,
       fillerUsed: false,
+      backchannelUsed: false,
     });
 
     await closeSession(session);
@@ -453,6 +454,7 @@ describe("VoiceAgentSession", () => {
       turnId: "turn-2",
       ttfaMs: 400,
       fillerUsed: true,
+      backchannelUsed: false,
     });
     expect(events[0]!["eouDelayMs"]).toBeUndefined();
 
@@ -492,6 +494,31 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(events).toHaveLength(0);
+
+    await closeSession(session);
+  });
+
+  it("IP-C3: tool_call_cue.delayed emits interaction.backchannel end-to-end", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 30 });
+    const backchannels: InteractionBackchannelPacket[] = [];
+    session.bus.on("interaction.backchannel", (pkt) => {
+      backchannels.push(pkt as InteractionBackchannelPacket);
+    });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: { query: "fees" },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 70));
+
+    expect(backchannels).toHaveLength(1);
+    expect(backchannels[0]).toMatchObject({ contextId: "turn-1", cue: "mm_hmm" });
 
     await closeSession(session);
   });

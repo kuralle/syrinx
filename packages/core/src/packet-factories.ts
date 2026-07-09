@@ -41,6 +41,7 @@ import type {
   StartIdleTimeoutPacket,
   StopIdleTimeoutPacket,
   ModeSwitchRequestedPacket,
+  InteractionBackchannelPacket,
 } from "./packets.js";
 
 const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
@@ -253,4 +254,12 @@ export function modeSwitchRequested(
   mode: "text" | "audio",
 ): ModeSwitchRequestedPacket {
   return { kind: "mode.switch_requested", contextId, timestampMs, mode };
+}
+
+export function interactionBackchannel(
+  contextId: string,
+  timestampMs: number,
+  cue: string,
+): InteractionBackchannelPacket {
+  return { kind: "interaction.backchannel", contextId, timestampMs, cue };
 }

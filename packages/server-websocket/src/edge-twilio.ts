@@ -28,7 +28,7 @@ import {
 import type { ManagedSocket, SocketData } from "@kuralle-syrinx/ws";
 import {
   BackgroundAudioMixer,
-  wireBackgroundThinking,
+  wireBackgroundAudio,
   type BackgroundAudioConfig,
 } from "./background-audio.js";
 import {
@@ -208,7 +208,7 @@ export async function runTwilioEdgeWebSocketConnection(
       ? new BackgroundAudioMixer(options.backgroundAudio)
       : null;
     if (backgroundAudio) {
-      wireBackgroundThinking(session, backgroundAudio);
+      wireBackgroundAudio(session, backgroundAudio);
       const idleFrameMs = options.backgroundIdleFrameMs ?? 200;
       const idleTimer = setInterval(() => {
         if (!streamSid || stopped || closed || !socket.isOpen) return;

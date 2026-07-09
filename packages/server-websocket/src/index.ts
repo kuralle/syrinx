@@ -63,9 +63,12 @@ export { validateTwilioSignature } from "./twilio-auth.js";
 export {
   BackgroundAudioMixer,
   wireBackgroundThinking,
+  wireBackgroundBackchannel,
+  wireBackgroundAudio,
   type BackgroundAudioConfig,
   type BackgroundAudioSource,
 } from "./background-audio.js";
+export { buildPlaceholderBackchannelCues } from "./backchannel-cue-fixtures.js";
 export { installGracefulShutdown, type GracefulClosable } from "./websocket-lifecycle.js";
 
 export interface VoiceWebSocketServerOptions {

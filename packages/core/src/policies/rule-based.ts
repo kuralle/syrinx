@@ -15,10 +15,15 @@ export interface RuleBasedInteractionPolicyDeps {
 
 export class RuleBasedInteractionPolicy implements InteractionPolicy {
   readonly arbiter: TurnArbiter;
+  private readonly ttsPlayout: TtsPlayoutClock;
   private pending: InteractionDecision[] = [];
   private bargeInAudioConsumed = false;
+  private delegateGapOpen = false;
+  private delegateCuePlayed = false;
+  private userSpeaking = false;
 
   constructor(deps: RuleBasedInteractionPolicyDeps) {
+    this.ttsPlayout = deps.ttsPlayout;
     this.arbiter = new TurnArbiter({
       ...deps,
       onInterrupt: (id) => this.pending.push({ kind: "interrupt", interruptedContextId: id }),
@@ -28,6 +33,7 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
   observe(obs: InteractionObservation): readonly InteractionDecision[] {
     switch (obs.kind) {
       case "vad_speech_started":
+        this.userSpeaking = true;
         this.arbiter.onSpeechStarted(
           {
             kind: "vad.speech_started",
@@ -47,6 +53,7 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
         });
         break;
       case "vad_speech_ended":
+        this.userSpeaking = false;
         this.arbiter.onSpeechEnded(
           {
             kind: "vad.speech_ended",
@@ -76,6 +83,9 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
           this.arbiter.onProviderSttEvidence(obs.contextId, obs.timestampMs, obs.interruptedContextId);
         }
         break;
+      case "delegate_state":
+        this.pending.push(...this.handleDelegateState(obs));
+        break;
       default:
         break;
     }
@@ -85,7 +95,40 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
     return out;
   }
 
+  private handleDelegateState(obs: InteractionObservation & { kind: "delegate_state" }): InteractionDecision[] {
+    const phase = obs.toolCallPhase;
+    if (!phase) return [];
+
+    switch (phase) {
+      case "started":
+        this.delegateGapOpen = true;
+        this.delegateCuePlayed = false;
+        return [];
+      case "delayed": {
+        if (!this.delegateGapOpen || this.delegateCuePlayed) return [];
+        if (this.depsTtsActive()) return [];
+        if (this.userSpeaking) return [];
+        this.delegateCuePlayed = true;
+        return [{ kind: "backchannel", cue: "mm_hmm" }];
+      }
+      case "complete":
+      case "failed":
+        this.delegateGapOpen = false;
+        this.delegateCuePlayed = false;
+        return [];
+      default:
+        return [];
+    }
+  }
+
+  private depsTtsActive(): boolean {
+    return this.ttsPlayout.activeContexts().length > 0;
+  }
+
   reset(_contextId: string): void {
+    this.delegateGapOpen = false;
+    this.delegateCuePlayed = false;
+    this.userSpeaking = false;
     this.arbiter.clear();
   }
 

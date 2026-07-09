@@ -7,7 +7,7 @@ import type { InteractionDecision, InteractionObservation, InteractionPolicy } f
 import { TurnArbiter } from "./turn-arbiter.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
-import type { InterruptionDetectedPacket } from "./packets.js";
+import type { InteractionBackchannelPacket, InterruptionDetectedPacket } from "./packets.js";
 
 class StubPolicy implements InteractionPolicy {
   constructor(private readonly decisions: InteractionDecision[]) {}
@@ -19,7 +19,15 @@ class StubPolicy implements InteractionPolicy {
   reset(): void {}
 }
 
-async function createCoordinator(decisions: InteractionDecision[]) {
+async function createCoordinator(
+  decisions: InteractionDecision[],
+  options: {
+    emitsBackchannel?: boolean;
+    isUserSpeaking?: () => boolean;
+    isTtsActive?: () => boolean;
+    hasCueAsset?: (cueId: string) => boolean;
+  } = {},
+) {
   const bus = new PipelineBusImpl();
   void bus.start();
   const ttsPlayout = new TtsPlayoutClock();
@@ -33,12 +41,24 @@ async function createCoordinator(decisions: InteractionDecision[]) {
     bus,
     policy: new StubPolicy(decisions),
     executor,
+    caps: { emitsBackchannel: options.emitsBackchannel },
+    isUserSpeaking: options.isUserSpeaking,
+    isTtsActive: options.isTtsActive,
+    hasCueAsset: options.hasCueAsset,
   });
   return { bus, coordinator, executor };
 }
 
 async function drainBus(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function metricNames(bus: PipelineBusImpl): string[] {
+  const names: string[] = [];
+  bus.on("metric.conversation", (pkt) => {
+    names.push((pkt as unknown as { name: string }).name);
+  });
+  return names;
 }
 
 describe("InteractionCoordinator", () => {
@@ -65,10 +85,108 @@ describe("InteractionCoordinator", () => {
     expect(interrupts[0]!.contextId).toBe("assistant-turn");
   });
 
-  it("no-ops take_turn, backchannel, hold, and keep_listening in C1", async () => {
+  it("emits interaction.backchannel for a backchannel decision", async () => {
+    const { bus, coordinator } = await createCoordinator([{ kind: "backchannel", cue: "mm_hmm" }]);
+    const packets: InteractionBackchannelPacket[] = [];
+    const metrics = metricNames(bus);
+    bus.on("interaction.backchannel", (pkt) => {
+      packets.push(pkt as InteractionBackchannelPacket);
+    });
+
+    coordinator.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 2000,
+      toolCallPhase: "delayed",
+    });
+    await drainBus();
+
+    expect(packets).toHaveLength(1);
+    expect(packets[0]).toMatchObject({ contextId: "turn-1", cue: "mm_hmm" });
+    expect(metrics).toContain("backchannel.candidate");
+    expect(metrics).toContain("backchannel.emitted");
+  });
+
+  it("suppresses backchannel when caps.emitsBackchannel is true", async () => {
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "backchannel", cue: "mm_hmm" }],
+      { emitsBackchannel: true },
+    );
+    const packets: InteractionBackchannelPacket[] = [];
+    const metrics = metricNames(bus);
+    bus.on("interaction.backchannel", (pkt) => {
+      packets.push(pkt as InteractionBackchannelPacket);
+    });
+
+    coordinator.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 2000,
+      toolCallPhase: "delayed",
+    });
+    await drainBus();
+
+    expect(packets).toEqual([]);
+    expect(metrics).toContain("backchannel.suppressed_caps");
+  });
+
+  it("suppresses backchannel when TTS is active", async () => {
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "backchannel", cue: "mm_hmm" }],
+      { isTtsActive: () => true },
+    );
+    const metrics = metricNames(bus);
+
+    coordinator.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 2000,
+      toolCallPhase: "delayed",
+    });
+    await drainBus();
+
+    expect(metrics).toContain("backchannel.suppressed_tts_active");
+  });
+
+  it("suppresses backchannel when the user is speaking", async () => {
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "backchannel", cue: "mm_hmm" }],
+      { isUserSpeaking: () => true },
+    );
+    const metrics = metricNames(bus);
+
+    coordinator.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 2000,
+      toolCallPhase: "delayed",
+    });
+    await drainBus();
+
+    expect(metrics).toContain("backchannel.suppressed_user_speaking");
+  });
+
+  it("suppresses backchannel when the cue asset is missing", async () => {
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "backchannel", cue: "mm_hmm" }],
+      { hasCueAsset: () => false },
+    );
+    const metrics = metricNames(bus);
+
+    coordinator.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 2000,
+      toolCallPhase: "delayed",
+    });
+    await drainBus();
+
+    expect(metrics).toContain("backchannel.suppressed_missing_asset");
+  });
+
+  it("no-ops take_turn, hold, and keep_listening in C1", async () => {
     const { bus, coordinator, executor } = await createCoordinator([
       { kind: "take_turn", confidence: 0.9 },
-      { kind: "backchannel", cue: "yeah" },
       { kind: "hold" },
       { kind: "keep_listening" },
     ]);
@@ -78,6 +196,9 @@ describe("InteractionCoordinator", () => {
       packets.push(pkt);
     });
     bus.on("metric.conversation", (pkt) => {
+      packets.push(pkt);
+    });
+    bus.on("interaction.backchannel", (pkt) => {
       packets.push(pkt);
     });
 

@@ -173,6 +173,8 @@ export interface VoiceAgentSessionConfig {
    *  turn/interrupt decisions; the front's native decisions stand. Default: false (Syrinx drives).
    *  A realtime factory sets this from RealtimeAdapter.caps.supportsFullDuplex. */
   fullDuplex?: boolean;
+  /** When true, Syrinx suppresses policy-timed backchannel cue packets (front/provider owns them). */
+  emitsBackchannel?: boolean;
   readonly metricsExporter?: MetricsExporter;
   readonly scheduler?: Scheduler;
   readonly observability?: {
@@ -204,8 +206,8 @@ export interface VoiceAgentSessionEvents {
   /**
    * Per-turn latency decomposition, emitted once at the turn's first TTS audio.
    * `ttfaMs` is anchored to the real end of user speech (VAD speech-end, falling
-   * back to the endpoint decision) — and `fillerUsed` flags turns where a latency
-   * filler spoke first, so TTFA on those turns is not mistaken for reasoning speed.
+   * back to the endpoint decision) — `fillerUsed` flags turns where a latency filler spoke
+   * first, and `backchannelUsed` flags turns where a wait-gap cue played before the answer.
    * Decomposition: eouDelayMs (speech end → endpoint) + llmTtftMs (endpoint →
    * first LLM delta) + ttsTtfbMs (first TTS text dispatched → first audio).
    */
@@ -217,6 +219,7 @@ export interface VoiceAgentSessionEvents {
     llmTtftMs?: number;
     ttsTtfbMs?: number;
     fillerUsed: boolean;
+    backchannelUsed: boolean;
   }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
   agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
@@ -238,6 +241,7 @@ interface TurnTiming {
   firstLlmDeltaMs?: number;
   firstTtsTextMs?: number;
   fillerUsed?: boolean;
+  backchannelUsed?: boolean;
 }
 
 /** Suffix marking a context created to speak an error fallback, so it never recurses. */
@@ -299,6 +303,8 @@ export class VoiceAgentSession {
   private pendingToolCues = new Map<string, Map<string, string>>();
   private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
   private readonly fullDuplex: boolean;
+  private readonly emitsBackchannel: boolean;
+  private userSpeaking = false;
   private lastFinalizedContextId = "";
   private readonly sttPartialWordTimings = new Map<string, readonly WordTiming[]>();
 
@@ -309,6 +315,7 @@ export class VoiceAgentSession {
     }
     this.endpointingOwner = owner ?? "provider_stt";
     this.fullDuplex = config.fullDuplex === true;
+    this.emitsBackchannel = config.emitsBackchannel === true;
     this.config = config;
     this.scheduler = config.scheduler ?? new TimerScheduler();
     this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
@@ -372,6 +379,12 @@ export class VoiceAgentSession {
       bus: this.bus,
       policy: coordinatorPolicy,
       executor: this.interactionPolicy.arbiter,
+      caps: { emitsBackchannel: this.emitsBackchannel },
+      isUserSpeaking: () => this.userSpeaking,
+      isTtsActive: () => this.ttsPlayout.activeContexts().length > 0,
+      onBackchannelEmitted: (contextId) => {
+        this.timingFor(contextId).backchannelUsed = true;
+      },
     });
     this.watchdogs = new VoiceSessionWatchdogs({
       bus: this.bus,
@@ -779,6 +792,7 @@ export class VoiceAgentSession {
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
     this.lastFinalizedContextId = "";
+    this.userSpeaking = true;
 
     if (this.latencyFiller.isFillerOnly(this.currentTurnId)) {
       this.cancelLatencyFillerTurn(this.currentTurnId, pkt.timestampMs);
@@ -822,6 +836,7 @@ export class VoiceAgentSession {
   }
 
   private handleVadSpeechEnded(pkt: VadSpeechEndedPacket): void {
+    this.userSpeaking = false;
     this.emit("user_stopped_speaking", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -878,6 +893,7 @@ export class VoiceAgentSession {
         ? { ttsTtfbMs: firstAudioMs - timing.firstTtsTextMs }
         : {}),
       fillerUsed: timing.fillerUsed === true,
+      backchannelUsed: timing.backchannelUsed === true,
     });
   }
 
@@ -1113,13 +1129,21 @@ export class VoiceAgentSession {
     toolName: string,
     afterMs?: number,
   ): void {
+    const tsMs = Date.now();
     this.emit("tool_call_cue", {
-      tsMs: Date.now(),
+      tsMs,
       turnId: contextId,
       phase,
       toolId,
       toolName,
       ...(afterMs !== undefined ? { afterMs } : {}),
+    });
+    this.interaction.observe({
+      kind: "delegate_state",
+      contextId,
+      timestampMs: tsMs,
+      delegateInFlight: phase === "started" || phase === "delayed",
+      toolCallPhase: phase,
     });
   }
 

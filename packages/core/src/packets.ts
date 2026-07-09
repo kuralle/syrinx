@@ -469,6 +469,16 @@ export interface RecordAssistantAudioTruncatePacket extends VoicePacket {
 export type RecordAssistantAudioPacket = RecordAssistantAudioDataPacket | RecordAssistantAudioTruncatePacket;
 
 // =============================================================================
+// Interaction Policy Packets
+// =============================================================================
+
+/** Pre-cached backchannel cue id rendered by the outbound mixer (IP-C3). */
+export interface InteractionBackchannelPacket extends VoicePacket {
+  readonly kind: "interaction.backchannel";
+  readonly cue: string;
+}
+
+// =============================================================================
 // Behavior Packets
 // =============================================================================
 
