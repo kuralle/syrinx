@@ -44,7 +44,7 @@ export enum ErrorCategory {
 
 export interface VoiceErrorPacket extends VoicePacket {
   /** Which component emitted the error. */
-  readonly component: "stt" | "tts" | "vad" | "eos" | "denoiser" | "llm" | "bridge" | "pipeline";
+  readonly component: "stt" | "tts" | "vad" | "eos" | "denoiser" | "llm" | "bridge" | "pipeline" | "iu_ledger";
   /** Machine-readable error category. */
   readonly category: ErrorCategory;
   /** Original error. May contain provider-specific details. */
@@ -286,7 +286,7 @@ export interface LlmResponseDonePacket extends VoicePacket {
 
 export interface LlmErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly kind: "llm.error";
-  readonly component: "llm" | "bridge";
+  readonly component: "llm" | "bridge" | "iu_ledger";
 }
 
 export interface LlmToolCallPacket extends VoicePacket {
