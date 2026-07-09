@@ -65,13 +65,13 @@ the `turn.change` handler ~551). Left as direct executor calls: `commitClientInt
 
 | # | Chunk | Files | Status |
 |---|-------|-------|--------|
-| C1 | Seam + coordinator + RuleBasedInteractionPolicy (barge-in) | `packages/core/src/interaction-policy.ts`, `interaction-coordinator.ts`, `policies/rule-based.ts`, `turn-arbiter.ts` (add sink), `voice-agent-session.ts` (relocate wiring), `index.ts` (exports) | todo |
-| C1b | Endpointing owners behind the seam (`take_turn`) | `voice-agent-session.ts`, `rule-based.ts`, `interaction-coordinator.ts` | todo |
-| C2 | caps.supportsFullDuplex/emitsBackchannel + DeferInteractionPolicy | `packages/realtime/src/realtime-adapter.ts`, `realtime-bridge.ts`, `packages/core/src/policies/defer.ts` | todo |
-| C3 | Backchannels via BackgroundAudioMixer | `packets.ts`, `packages/server-websocket/src/*`, `packages/cf-agents/src/with-voice.ts` | todo |
-| C4 | Rich-typed SttPartialPacket (wordTimings) | `packets.ts`, `packages/deepgram/src/stt.ts`, coordinator | todo |
-| C5 | @kuralle-syrinx/vap VapInteractionPolicy (turn-scoped; full-duplex → B-05) | `packages/vap/*` (new) | scope |
-| C6 | Eval harness (proof gate) | `packages/test/*` or `scripts/eval/*` | scope |
+| C1 | Seam + coordinator + RuleBasedInteractionPolicy (barge-in) | `packages/core/src/interaction-policy.ts`, `interaction-coordinator.ts`, `policies/rule-based.ts`, `turn-arbiter.ts` (add sink), `voice-agent-session.ts` (relocate wiring), `index.ts` (exports) | **DONE** (a53f2d2 + guard 55d098a) |
+| C2 | caps.supportsFullDuplex/emitsBackchannel + DeferInteractionPolicy | `packages/realtime/src/realtime-adapter.ts`, `packages/core/src/policies/defer.ts`, `voice-agent-session.ts` | **DONE** (37fa3f2 + guard f139481) |
+| C1b | Endpointing owners behind the seam (`take_turn`) | `voice-agent-session.ts`, `rule-based.ts`, `interaction-coordinator.ts` | deferred → do with half-cascade (its `take_turn` consumer) |
+| C3 | Backchannels via BackgroundAudioMixer | `packets.ts`, `packages/server-websocket/src/*`, `packages/cf-agents/src/with-voice.ts` | **gated** — product fork (rule-based trigger + thinking-bed composition) + missing cue assets (RFC Q2). See OUTCOMES.md |
+| C4 | Rich-typed SttPartialPacket (wordTimings) | `packets.ts`, `packages/deepgram/src/stt.ts`, coordinator | deferred → build with C5 (its only consumer; YAGNI) |
+| C5 | @kuralle-syrinx/vap VapInteractionPolicy (turn-scoped; full-duplex → B-05) | `packages/vap/*` (new) | scope — seam ready; own-session |
+| C6 | Eval harness (proof gate) | `packages/test/*` or `scripts/eval/*` | scope — own-session |
 
 ## Universal Definition of Done (every chunk)
 - Atomic commit on `plan/interaction-policy` behind green `pnpm --filter @kuralle-syrinx/core typecheck && test`
