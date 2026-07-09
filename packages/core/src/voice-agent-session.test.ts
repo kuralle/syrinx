@@ -2,7 +2,14 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { VoiceAgentSession } from "./voice-agent-session.js";
-import { Route, type PipelineBus, type PluginConfig, type VoicePlugin } from "./index.js";
+import {
+  Route,
+  type InteractionObservation,
+  type PipelineBus,
+  type PluginConfig,
+  type VoicePlugin,
+} from "./index.js";
+import { InteractionCoordinator } from "./interaction-coordinator.js";
 import { ErrorCategory } from "./packets.js";
 import type {
   EndOfSpeechAudioPacket,
@@ -10,6 +17,7 @@ import type {
   RecordUserAudioPacket,
   SpeechToTextAudioPacket,
   SttInterimPacket,
+  SttPartialPacket,
   SttResultPacket,
   EndOfSpeechPacket,
   LlmDeltaPacket,
@@ -1319,6 +1327,47 @@ describe("VoiceAgentSession", () => {
       expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
     ]);
     expect(metrics).toContain("interrupt.committed_after_ms");
+
+    await closeSession(session);
+  });
+
+  it("attaches cached stt.partial wordTimings to the next barge-in observation (IP-C4)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const observations: InteractionObservation[] = [];
+    await session.start();
+
+    const interaction = (session as unknown as { interaction: InteractionCoordinator }).interaction;
+    const originalObserve = interaction.observe.bind(interaction);
+    interaction.observe = (obs) => {
+      observations.push(obs);
+      originalObserve(obs);
+    };
+
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: Date.now(),
+      text: "wait actually",
+      wordTimings: [{ word: "wait", startMs: 100, endMs: 300, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: Date.now(),
+      text: "wait actually",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "stt_partial",
+          text: "wait actually",
+          wordTimings: [{ word: "wait", startMs: 100, endMs: 300, confidence: 0.9 }],
+        }),
+      ]),
+    );
 
     await closeSession(session);
   });

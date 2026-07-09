@@ -41,6 +41,8 @@ import type {
   SpeechToTextAudioPacket,
   SttResultPacket,
   SttInterimPacket,
+  SttPartialPacket,
+  TurnChangePacket,
   VadAudioPacket,
   VadSpeechStartedPacket,
   VadSpeechActivityPacket,
@@ -65,7 +67,7 @@ import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./v
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
-import type { InteractionPolicy } from "./interaction-policy.js";
+import type { InteractionPolicy, WordTiming } from "./interaction-policy.js";
 import { DeferInteractionPolicy } from "./policies/defer.js";
 import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
@@ -298,6 +300,7 @@ export class VoiceAgentSession {
   private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
   private readonly fullDuplex: boolean;
   private lastFinalizedContextId = "";
+  private readonly sttPartialWordTimings = new Map<string, readonly WordTiming[]>();
 
   constructor(config: VoiceAgentSessionConfig) {
     const owner = config.endpointingOwner;
@@ -478,6 +481,7 @@ export class VoiceAgentSession {
     this.ttsTextBuffers.clear();
     this.interruptedGenerationContextIds.clear();
     this.firstLlmDeltaReceived.clear();
+    this.sttPartialWordTimings.clear();
     for (const [contextId, pending] of this.pendingToolCues) {
       for (const toolId of pending.keys()) this.scheduler.cancel(toolCueTimerKey(contextId, toolId));
     }
@@ -562,6 +566,7 @@ export class VoiceAgentSession {
     // STT results
     this.bus.on("stt.audio", this.handleSttAudio.bind(this));
     this.bus.on("stt.interim", this.handleSttInterim.bind(this));
+    this.bus.on("stt.partial", this.handleSttPartial.bind(this));
     this.bus.on("stt.result", this.handleSttResult.bind(this));
 
     // VAD
@@ -571,8 +576,11 @@ export class VoiceAgentSession {
     this.bus.on("vad.audio", this.handleVadAudioForSpeakerGate.bind(this));
 
     // EOS
-    this.bus.on("turn.change", () => {
+    this.bus.on("turn.change", (pkt: TurnChangePacket) => {
       this.lastFinalizedContextId = "";
+      if (pkt.previousContextId) {
+        this.sttPartialWordTimings.delete(pkt.previousContextId);
+      }
     });
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
     this.bus.on("eos.interim", this.handleEosInterim.bind(this));
@@ -671,6 +679,12 @@ export class VoiceAgentSession {
     this.bus.push(Route.Main, make.eosTurnComplete(pkt.contextId, pkt.timestampMs, pkt.text, []));
   }
 
+  private handleSttPartial(pkt: SttPartialPacket): void {
+    if (pkt.wordTimings) {
+      this.sttPartialWordTimings.set(pkt.contextId, pkt.wordTimings);
+    }
+  }
+
   private handleSttInterim(pkt: SttInterimPacket): void {
     this.observeSttForBargeIn(pkt.contextId, pkt.timestampMs, pkt.text, "stt_partial");
     this.currentTurnId = pkt.contextId;
@@ -740,6 +754,7 @@ export class VoiceAgentSession {
       this.endpointingOwner === "provider_stt" && text.trim()
         ? this.latestActiveTtsContextId() ?? undefined
         : undefined;
+    const wordTimings = this.sttPartialWordTimings.get(contextId);
     if (kind === "stt_partial") {
       this.interaction.observe({
         kind: "stt_partial",
@@ -747,6 +762,7 @@ export class VoiceAgentSession {
         timestampMs,
         text,
         interruptedContextId,
+        ...(wordTimings ? { wordTimings } : {}),
       });
       return;
     }
@@ -757,6 +773,7 @@ export class VoiceAgentSession {
       text,
       confidence,
       interruptedContextId,
+      ...(wordTimings ? { wordTimings } : {}),
     });
   }
 

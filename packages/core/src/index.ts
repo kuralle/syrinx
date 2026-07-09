@@ -30,6 +30,7 @@ export {
   type VadSpeechActivityPacket,
   type SpeechToTextAudioPacket,
   type SttInterimPacket,
+  type SttPartialPacket,
   type SttResultPacket,
   type FinalizeSttPacket,
   type SttErrorPacket,

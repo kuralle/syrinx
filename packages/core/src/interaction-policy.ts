@@ -48,6 +48,7 @@ export type InteractionObservation =
       readonly text: string;
       readonly confidence?: number;
       readonly interruptedContextId?: string;
+      readonly wordTimings?: readonly WordTiming[];
     }
   | {
       readonly kind: "audio_frame";

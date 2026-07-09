@@ -9,6 +9,8 @@
 //   Errors:                 SttError, TtsError, LlmError
 //   Lifecycle:              InitStepCompleted, InitFailed, InitCompleted
 
+import type { WordTiming } from "./interaction-policy.js";
+
 // =============================================================================
 // Base Types
 // =============================================================================
@@ -174,6 +176,12 @@ export interface SpeechToTextAudioPacket extends VoicePacket {
 export interface SttInterimPacket extends VoicePacket {
   readonly kind: "stt.interim";
   readonly text: string;
+}
+
+export interface SttPartialPacket extends VoicePacket {
+  readonly kind: "stt.partial";
+  readonly text: string;
+  readonly wordTimings?: readonly WordTiming[];
 }
 
 export interface SttResultPacket extends VoicePacket {
@@ -560,6 +568,7 @@ export type InputPacket =
   | VadSpeechActivityPacket
   | SpeechToTextAudioPacket
   | SttInterimPacket
+  | SttPartialPacket
   | SttResultPacket
   | FinalizeSttPacket
   | SttErrorPacket
