@@ -1245,6 +1245,59 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("suppresses a backchannel provider-STT interim through the interaction seam (IP-C1 regression)", async () => {
+    // IP-C1 routed provider-STT barge-in through InteractionCoordinator ->
+    // RuleBasedInteractionPolicy -> TurnArbiter. This pins that the reshaped
+    // chain still SUPPRESSES a sustained backchannel ("okay") rather than cutting
+    // the assistant — the session-level suppression case the policy-unit test
+    // (rule-based.test.ts, vad-driven) and the commit test above do not cover.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    // Assistant is speaking.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Sustained-past-minInterruptionMs backchannel evidence: opens the pending
+    // window, then the second interim (past 280ms) reaches tryCommit -> the
+    // arbiter's backchannel suppression fires instead of an interrupt decision.
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: t0,
+      text: "okay",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      text: "okay",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_backchannel");
+
+    await closeSession(session);
+  });
+
   it("emits interrupt.onset_to_logic_cancel_ms and stamps interrupt.tts/llm with detected onset", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const onsetMetrics: Array<{ name: string; value: string }> = [];

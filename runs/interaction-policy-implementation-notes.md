@@ -71,3 +71,9 @@ for the IU substrate and correctly gated C5 on the un-landed reshape.
 
 ## 3 — Progress log
 - 2026-07-09: premise-check complete (verdict above); baseline green-gate run; sprint OS next.
+- 2026-07-09: C1 delegated to grok (commit a53f2d2). Manager verify = PROCEED: re-run 247 green,
+  typecheck 0; guard tests byte-unchanged; diff surgical; sink wired right; no double-drive; gating +
+  push-ordering preserved; deferred-audio commit handled via bargeInAudioConsumed flag. Added a
+  session-level backchannel-suppression-through-the-seam regression guard (248 green). proceed-C1.md.
+  Minor follow-up: coordinator uses `instanceof RuleBasedInteractionPolicy` for the barge-in-audio
+  boolean — revisit when Vap lands. Next: C1b (endpointing owners behind the seam).
