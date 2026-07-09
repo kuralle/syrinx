@@ -154,26 +154,28 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 ---
 
-### Sprint 3 — Migrate + delete dual bookkeeping (C4)
+### Sprint 3 — Bound the ledger + skip the migration (C4, rescoped)
 
-**Goal:** the deepgram/tts poison/cancelled/finalized sets are replaced by the ledger and deleted (zero-tech-debt), with the telephony multi-turn smoke still green (it already passes pre-reshape — this is consolidation, not a bug fix).
+> **Rescoped (D-6, user-approved).** C4-as-specified (migrate deepgram/tts poison-sets → ledger, delete them) is **net-harmful** and does not ship. Mapping showed: (1) no dual bookkeeping exists — the deepgram `finalizedContextIds` and tts `cancelledContexts` are separate, correct, bounded (256), LOCAL guards, not duplicates of the ledger (the genuinely-dual speculative buffer already moved in C2); (2) migration would increase cross-package coupling and add turn-boundary races (plugins set their flag synchronously at emit; a ledger the bridge writes a beat later opens a leak window, and in non-speculative mode the user-turn IU never exists; tts commits-with-prefix rather than revokes, and `interrupt.tts` precedes `interrupt.llm`); (3) a **real bug** surfaced — `InMemoryIuLedger.clear()` has no production caller, so IUs accumulate per contextId forever (telephony mints a new `-t<n>` ctx per turn). The private sets are bounded to 256 precisely for this. The migration → backlog **B-07**.
+
+**Goal:** the `InMemoryIuLedger` no longer leaks — it is bounded (LRU cap on contexts, mirroring the sets' `MAX_*=256`) and `clear(contextId)` is wired at turn-end/close — and the non-migration decision is documented. Behavior-preserving (the plugin guards stay local).
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S3-01 | Migrate `packages/deepgram/src/stt.ts` finalized-context drop and `packages/tts-core/src/engine.ts` cancel bookkeeping to `IuLedger` commit/revoke; **delete** the old poison/cancelled/finalized sets (`boundedAdd`/`MAX_RETIRED_CONTEXTS`/`MAX_CANCELLED_CONTEXTS`/`clearCancelledIfDrained`) — no dual bookkeeping kept. | Deepgram/tts unit tests green against the ledger; old private sets removed in the diff; `pnpm -r typecheck && pnpm -r test` green (pre-existing playwright-core failure excepted). |
-| S3-02 | Regression: manager runs `smoke:telnyx-emulator` (short fixture) and confirms Node telephony still reaches turn 2+ after the migration; browser transports unchanged. | Live smoke log shows turn 2+ (parity with pre-reshape); no browser regression. |
+| S3-01 | Bound `InMemoryIuLedger`: cap the number of tracked `contextId`s (LRU/FIFO evict oldest when exceeded, default 256, constructor-configurable) mirroring `boundedAdd`. Wire `clear(contextId)` from the aisdk `ReasoningBridge` at turn cleanup (`clearTurnState`) and clear-all on `close()`. | New `iu-ledger` bound tests: adding > cap contexts evicts oldest; `clear` drops one ctx; existing S1/S2 aisdk tests green unchanged; `pnpm -r typecheck && pnpm -r test` green. |
+| S3-02 | Document the non-migration: extend `docs/rfc-incremental-unit-substrate-amendment-C5.md` (or a short C4 note) with the D-6 rationale; the deepgram/tts guards stay local. | The amendment names why C4's migration is not done + points to B-07. |
 
-**Demo:** a diff summary showing the deleted private sets and the single `IuLedger` they were replaced by, plus the `smoke:telnyx-emulator` log at turn 2+ (parity).
+**Demo:** `iu-ledger` bound test output (evict-oldest + `clear`) + the aisdk suite still green.
 
-**Dependencies:** Sprints 0–2 (ledger + speculative-on-ledger + heard-prefix all landed).
+**Dependencies:** Sprints 0–2.
 
-**Source RFC §:** §8 C4; §5.1 (deleted-after-parity), §9.3 (smoke); REQ-3, REQ-5. Note: §9.3's "P0 cluster resolved" is already true pre-reshape (amendment §1) — this smoke is a **regression guard**, not the fix.
+**Source RFC §:** §8 C4 (rescoped), §10, §11; REQ-6 (the ledger must not leak). D-6.
 
 **Sprint-specific risks:**
-- Deleting a private set that still had a live reader → detection: workspace typecheck + package tests → mitigation: migrate-then-delete within the same story; independently revertible.
-- The bounded sets have subtle eviction semantics (`clearCancelledIfDrained`) the ledger must preserve → detection: deepgram/tts characterization tests → mitigation: port the eviction behavior onto `clear`/`revoke`; keep the private set if a test flips (RFC §11).
+- Bounding evicts a context whose IU is still needed mid-turn → detection: aisdk speculative/heard-prefix tests → mitigation: cap ≥ 256 (a session never has 256 live turns at once; eviction only hits long-closed contexts), same reasoning the private sets use.
+- Wiring `clear` too eagerly drops an IU a late barge-in needs → detection: the heard-prefix tests → mitigation: clear at `clearTurnState` (already the turn-cleanup point) + on close; keep the bound as the backstop.
 
-**Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
+**Exit criteria:** ledger bounded + no leak; non-migration documented; WARMDOWN + HANDOFF written.
 
 ---
 
@@ -209,6 +211,7 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 | B-04 | Fold ledger ownership into `VoiceAgentSession` vs standalone | Not planned — RFC §12 Q2 chose standalone | §12 Q2 |
 | B-05 | Standalone `contextId` → stable-session-id + per-turn `epoch` split (the full old-C5 15-file reshape) | Consumer-gated: when something needs epoch **ordering** or a stable-session `contextId` (none does today) | amendment §3; RFC §8 C5 |
 | B-06 | Structural turn-boundary re-arm (replace the comment-driven per-turn Set clearing at `voice-agent-session.ts:828-836`) | When the next per-turn Set is added and the manual re-arm becomes a hazard | amendment §3 |
+| B-07 | Migrate deepgram `finalizedContextIds` + tts `cancelledContexts` onto the ledger (old C4) | Only if the coupling/race hazards (D-6) are solved by having the plugins WRITE the ledger at emit-time + the predicates reconciled; likely never | RFC §8 C4; D-6 |
 
 ---
 

@@ -63,6 +63,31 @@ consolidation** (collapse 5 private sets into the one ledger), NOT the functiona
 Real value already banked: S0 (ledger) + S1 (speculative-on-ledger). Surfaced to user as an allocation
 decision (continue consolidation vs bank real value + pivot to InteractionPolicy/reasoner-latency).
 
+### D-6 (Sprint 3) — C4 as specified is net-harmful; two real findings instead
+Mapped the deepgram/tts sets + the ledger injection. Three problems with C4-as-RFC-specified
+("plugins read/write the ledger, delete the private sets"):
+1. **No dual bookkeeping to delete.** Only deepgram `finalizedContextIds` and tts `cancelledContexts`
+   are "ctx terminal" sets; the other deepgram sets (finalizeRequested/speechFinal/ignoreNextFinal)
+   are request/dedupe/diagnostic state that does NOT map to an IU. The sets are NOT duplicates of the
+   ledger — they're separate, correct, bounded, local guards. The genuinely-dual one (aisdk speculative)
+   already moved to the ledger in S1.
+2. **Migration increases coupling + adds races (Hazards A & B).**
+   - deepgram: the user_turn IU exists ONLY in speculative mode and is committed by the bridge AFTER
+     deepgram emits eos.turn_complete and needs the flag. Non-speculative = no IU at all. So deepgram
+     would have to WRITE the ledger itself (co-own IU state cross-package), not query it.
+   - tts: on barge-in the bridge COMMITS the assistant IU with a prefix (not revokes), and interrupt.tts
+     (tts acts) is pushed BEFORE interrupt.llm (bridge writes ledger). So "is it revoked?" is the wrong
+     predicate AND the ledger changes after tts already dropped audio. Migration would create the exact
+     turn-boundary race class that's dangerous in a voice engine.
+3. **The ledger is UNBOUNDED and never cleared (real leak).** `InMemoryIuLedger.clear` has no production
+   caller (grep: only its own test). S1/S2 add user_turn + assistant IUs per contextId; nothing evicts.
+   Telephony mints a new `-t<n>` contextId per turn → the ledger's byCtx Map grows forever. The private
+   sets C4 would replace are bounded to 256 precisely for this. Migrating onto an unbounded ledger
+   regresses memory.
+**Decision (pending user):** do NOT migrate the deepgram/tts sets (net-harmful). Rescope C4 to the real
+work: (a) fix the unbounded-ledger leak — bound it + wire `clear(contextId)` on turn-end/close; (b) document
+why the RFC's "dual bookkeeping" doesn't exist. Surfaced to user (third premise-reality gap; the strongest).
+
 ## Deviations
 - Sprint sequence deviates from RFC §8 chunk order (C1→C5→C2→C3→C4) → now C1→C2→C3→C4, C5 deferred (D-3).
   Reason: RFC §8's front-loading of C5 assumed the P0 bug was open; it is not.

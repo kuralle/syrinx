@@ -7,12 +7,11 @@
 ## Active sprint
 
 **Sprint number:** `3`
-**Sprint name:** Migrate + delete dual bookkeeping (C4)
+**Sprint name:** Bound the ledger + skip the migration (C4, rescoped)
 **Status:** `not-started`
-**Goal:** the deepgram/tts poison/cancelled/finalized sets are replaced by the (session-owned) ledger and deleted (zero-tech-debt), with the telephony multi-turn smoke still green.
+**Goal:** the `InMemoryIuLedger` no longer leaks — bounded (LRU cap ~256 contexts) + `clear(contextId)` wired at turn-end/close; the net-harmful deepgram/tts migration is NOT done (→ backlog B-07) and the decision is documented.
 **WBS section:** [`sprints/WBS.md` § Sprint 3](./WBS.md)
-**KEY design question (resolve before delegating):** the ledger is currently private to `ReasoningBridge`; C4 needs deepgram + tts (other packages) to share it. Recommendation: move to a session-owned `InMemoryIuLedger` injected into every plugin (RFC §12 Q2). See `sprints/sprint-2/HANDOFF.md`.
-**Amendment context:** rescoped per [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md); Phase 0 back half (C3 done, C4) is zero-tech-debt consolidation (D-5).
+**Why rescoped (D-6, user-approved):** the migration would increase coupling + add turn-boundary races, and there is no real dual bookkeeping to delete; the actionable finding is the unbounded-ledger leak (`clear()` has no production caller). Fix the leak instead. See design-doc comment + `runs/iu-substrate-implementation-notes.md` D-6.
 
 ## Build branch
 
@@ -22,16 +21,15 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout plan/iu-substrate` (or `git checkout -b plan/iu-substrate` the first time, branched off `main`).
 
-## Load-bearing reading for sprint 3
+## Load-bearing reading for sprint 3 (rescoped — leak fix)
 
 The session running sprint 3 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` § Sprint 3 (migrate poison-sets → ledger, C4) — the plan.
-2. `sprints/sprint-2/HANDOFF.md` — read-me-first, incl. THE key design question (session-owned ledger).
-3. `docs/rfc-incremental-unit-substrate.md` §8 C4, §5.1 (deleted-after-parity), REQ-3, REQ-5.
-4. `packages/deepgram/src/stt.ts` — `finalizedContextIds` + friends, `boundedAdd`/`MAX_RETIRED_CONTEXTS`, `resetTurnTranscriptState`.
-5. `packages/tts-core/src/engine.ts` — `cancelledContexts`, `clearCancelledIfDrained`, `MAX_CANCELLED_CONTEXTS`.
-6. `packages/core/src/voice-agent-session.ts` — where a session-owned ledger lives + plugin construction/initialize; `packages/aisdk/src/index.ts` — the private `iuLedger` to move to injection.
+1. `sprints/WBS.md` § Sprint 3 (bound the ledger + skip the migration) — the plan.
+2. `runs/iu-substrate-implementation-notes.md` D-6 — why the migration is skipped + the leak.
+3. `packages/core/src/iu-ledger.ts` — `InMemoryIuLedger` (`byCtx` Map, `clear`); add the bound here.
+4. `packages/deepgram/src/stt.ts:52-61` — `boundedAdd`/`MAX_RETIRED_CONTEXTS=256` — the eviction pattern to mirror.
+5. `packages/aisdk/src/index.ts` — `iuLedger` usage; `clearTurnState` (the turn-cleanup point to wire `clear`) + `close()` (clear-all).
 
 ## Last completed sprint
 
