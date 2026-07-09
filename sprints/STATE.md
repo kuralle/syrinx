@@ -6,12 +6,13 @@
 
 ## Active sprint
 
-**Sprint number:** `2`
-**Sprint name:** Heard-prefix commit boundary (C3)
+**Sprint number:** `3`
+**Sprint name:** Migrate + delete dual bookkeeping (C4)
 **Status:** `not-started`
-**Goal:** on barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix = heard)` — the specified-but-unwired guarantee, now wired for all transports and tested (assistant-side IU).
-**WBS section:** [`sprints/WBS.md` § Sprint 2](./WBS.md)
-**Amendment context:** the sequence is rescoped per [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md) — S1=C2 (done), S2=C3, S3=C4, S4=closeout; old standalone C5 → backlog B-05.
+**Goal:** the deepgram/tts poison/cancelled/finalized sets are replaced by the (session-owned) ledger and deleted (zero-tech-debt), with the telephony multi-turn smoke still green.
+**WBS section:** [`sprints/WBS.md` § Sprint 3](./WBS.md)
+**KEY design question (resolve before delegating):** the ledger is currently private to `ReasoningBridge`; C4 needs deepgram + tts (other packages) to share it. Recommendation: move to a session-owned `InMemoryIuLedger` injected into every plugin (RFC §12 Q2). See `sprints/sprint-2/HANDOFF.md`.
+**Amendment context:** rescoped per [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md); Phase 0 back half (C3 done, C4) is zero-tech-debt consolidation (D-5).
 
 ## Build branch
 
@@ -21,20 +22,20 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout plan/iu-substrate` (or `git checkout -b plan/iu-substrate` the first time, branched off `main`).
 
-## Load-bearing reading for sprint 2
+## Load-bearing reading for sprint 3
 
-The session running sprint 2 must read these in this order before delegating any story:
+The session running sprint 3 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` § Sprint 2 (heard-prefix commit, C3) — the plan.
-2. `sprints/sprint-1/HANDOFF.md` — read-me-first from Sprint 1.
-3. `docs/rfc-incremental-unit-substrate.md` §8 C3, §4.3 (`interrupt.tts` → commit-heard-then-revoke), §6, REQ-4.
-4. `packages/aisdk/src/index.ts` — the barge-in path: `interrupt.llm` → `commitInterruptedHistory` (`:210-221`); the heard-prefix precision ladder (`spokenByContext`/`wordTimestampsByContext`/`playedOutMsByContext`, `:83-102`). C3 wires `ledger.commit(assistantIu, prefix=heard)` here.
-5. `packages/core/src/voice-agent-session.ts` (`interrupt.tts`, `handleTurnComplete`) + `tts-playout-clock.ts` (heard-ms).
-6. The S0 ledger + S1 producer pattern (`iuIdFor`) in `packages/aisdk/src/index.ts` — C3 adds the `assistant_response` IU.
+1. `sprints/WBS.md` § Sprint 3 (migrate poison-sets → ledger, C4) — the plan.
+2. `sprints/sprint-2/HANDOFF.md` — read-me-first, incl. THE key design question (session-owned ledger).
+3. `docs/rfc-incremental-unit-substrate.md` §8 C4, §5.1 (deleted-after-parity), REQ-3, REQ-5.
+4. `packages/deepgram/src/stt.ts` — `finalizedContextIds` + friends, `boundedAdd`/`MAX_RETIRED_CONTEXTS`, `resetTurnTranscriptState`.
+5. `packages/tts-core/src/engine.ts` — `cancelledContexts`, `clearCancelledIfDrained`, `MAX_CANCELLED_CONTEXTS`.
+6. `packages/core/src/voice-agent-session.ts` — where a session-owned ledger lives + plugin construction/initialize; `packages/aisdk/src/index.ts` — the private `iuLedger` to move to injection.
 
 ## Last completed sprint
 
-`1 — Speculative on the ledger (C2) + identity producer`
+`2 — Heard-prefix commit boundary (C3)`
 
 ## Last completed at
 
@@ -46,7 +47,8 @@ The session running sprint 2 must read these in this order before delegating any
 |--------|--------|--------------|----------|
 | 0 | done | 2026-07-09 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
 | 1 | done | 2026-07-09 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
-| 2 | not-started | — | — |
+| 2 | done | 2026-07-09 | [sprint-2/WARMDOWN.md](./sprint-2/WARMDOWN.md) |
+| 3 | not-started | — | — |
 | 2 | not-started | — | — |
 | 3 | not-started | — | — |
 | 4 | not-started | — | — |

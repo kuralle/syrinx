@@ -49,6 +49,20 @@ delivery-gating mechanism. Collapsing the buffer into the ledger would break the
 must pass unchanged (RFC §11 abort otherwise). epoch = per-bridge monotonic counter per turn contextId
 (epochByContext); no consumer reads ordering yet. onEvent → reuse llm.error packet with component:"iu_ledger".
 
+### D-5 (Sprint 2) — C3's premise is also stale; back half of Phase 0 is consolidation, not bug-fix
+The heard-prefix truncation the RFC C3 calls "specified but unwired" (§2: "TtsPlayoutClock.positionMs
+has zero consumers, client never sends playout_progress") is **already wired** in aisdk:
+`computeSpokenPrefix` (index.ts:578-586) does word-boundary precision (`w.endMs <= playedOutMs`) with a
+`spokenByContext` fallback; `commitInterruptedHistory` (:598) rewrites history to the heard prefix +
+persists. Shipped in v4.x (G25). So C3, like C2, is "re-express existing wired behavior on the ledger",
+not "wire an unwired guarantee".
+**Pattern:** the RFC (2026-07-09) was written from the 2026-07-02 `.understanding/` snapshot; its functional
+premises (telephony P0 open [C5/C4], heard-prefix unwired [C3]) are all stale — those shipped in v4.1.x.
+The remaining Phase 0 chunks (C3 assistant-IU producer, C4 poison-set migration) are honest **zero-tech-debt
+consolidation** (collapse 5 private sets into the one ledger), NOT the functional wins the RFC advertised.
+Real value already banked: S0 (ledger) + S1 (speculative-on-ledger). Surfaced to user as an allocation
+decision (continue consolidation vs bank real value + pivot to InteractionPolicy/reasoner-latency).
+
 ## Deviations
 - Sprint sequence deviates from RFC §8 chunk order (C1→C5→C2→C3→C4) → now C1→C2→C3→C4, C5 deferred (D-3).
   Reason: RFC §8's front-loading of C5 assumed the P0 bug was open; it is not.

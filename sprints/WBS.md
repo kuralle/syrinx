@@ -132,20 +132,23 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 ### Sprint 2 — Heard-prefix commit boundary (C3)
 
-**Goal:** on barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix = heard)` — the guarantee the understanding artifact found specified-but-unwired, now wired for all transports and tested.
+> **Premise correction (D-5):** the RFC calls heard-prefix truncation "specified but unwired", but it is **already wired** in aisdk — `computeSpokenPrefix` (index.ts:578, word-boundary via `w.endMs <= playedOutMs` + `spokenByContext` fallback) + `commitInterruptedHistory` (:598) truncate history to the heard prefix + persist (shipped v4.x G25). So C3 is **re-express the wired heard-prefix on the ledger** (add the assistant-side IU producer), behavior-preserving — not "wire an unwired guarantee". Real consumer: C4 (needs the assistant/tts IU in the ledger).
+
+**Goal:** the ledger gains an `assistant_response` IU per turn; on barge-in it is `commit`ted with `committedPrefix = heard` (from the existing `computeSpokenPrefix`) and the remainder revoked — **behavior-preserving** (the existing `commitInterruptedHistory` history truncation is unchanged; the ledger record is added alongside).
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S2-01 | Wire `interrupt.tts` in `packages/core/src/voice-agent-session.ts` to `commit(latest assistant IU, prefix = heard)` then revoke the remainder, using `TtsPlayoutClock` + word timestamps when present, `spokenByContext` fallback otherwise (`tts-playout-clock.ts`). | `heard-prefix-commit.test.ts`: on interrupt, committed span == heard span (word-boundary when timestamps present; ms fallback otherwise); remainder revoked; existing barge-in characterization tests green. |
+| S2-01 | In `packages/aisdk/src/index.ts`: `ledger.add(assistant_response hypothesized)` when a generation's assistant message is created; on barge-in (`commitInterruptedHistory`) `ledger.commit(assistantIu, { chars: spoken.length, ms: playedOutMs })` then revoke the remainder; on clean completion `ledger.commit(assistantIu)` (fully heard). Reuse the S1 `iuIdFor` identity. Keep `commitInterruptedHistory`'s existing history rewrite untouched. | `heard-prefix-commit.test.ts`: on interrupt, the assistant IU is `committed` with `committedPrefix` == heard span (word-boundary path AND ms-fallback path); remainder revoked; **all existing barge-in/history characterization tests pass unchanged**; a mid-stream-interrupt case is covered (S1 lesson). |
 
-**Demo:** `heard-prefix-commit.test.ts` green showing committed==heard for both the word-timestamp and ms-fallback paths; a trace of an interrupted turn truncating history to the heard prefix.
+**Demo:** `heard-prefix-commit.test.ts` green showing the committed `committedPrefix` == heard span for both precision paths; existing barge-in tests unchanged.
 
-**Dependencies:** Sprint 0 (ledger), Sprint 1 (the ledger producer + revoke semantics proven on the speculative path).
+**Dependencies:** Sprint 0 (ledger), Sprint 1 (the `iuIdFor` producer + commit/revoke proven on the user-turn path).
 
 **Source RFC §:** §8 C3; §4.3, §6; REQ-4. Symptom-patch stop (§11): if it works only by special-casing one transport rather than through the ledger, stop — one commit boundary for all transports.
 
 **Sprint-specific risks:**
-- Symptom-patch (heard-prefix works for one transport only) → detection: run the test across both the timestamp and fallback paths → mitigation: RFC §11 hard-stop; re-derive at the ledger.
+- Behavior change to the existing (already-correct) history truncation → detection: the barge-in/history characterization tests flip → mitigation: C3 only ADDS the ledger record; `commitInterruptedHistory`'s rewrite is untouched. RFC §11 abort if a test flips.
+- Missing the mid-stream-interrupt timing case (S1 lesson) → mitigation: enumerate it as an explicit acceptance criterion.
 
 **Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
 
