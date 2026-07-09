@@ -6,6 +6,7 @@
 
 ## Reference
 
+- [**Testing & baseline runbook**](testing-runbook.md) — verify command, CI, the smoke catalog, latency gates, and how to establish a baseline.
 - [WebSocket audio protocol](websocket-audio-protocol.md)
 - [Reasoner bridge](reasoner-bridge.md)
 - [Latency budget](latency-budget.md)
