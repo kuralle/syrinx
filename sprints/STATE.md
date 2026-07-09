@@ -8,7 +8,7 @@
 
 **Sprint number:** `4`
 **Sprint name:** Closeout — Phase 0 PR to main
-**Status:** `not-started`
+**Status:** `PR-ready — awaiting user go to push to kuralle + open the PR (outward-facing)`
 **Goal:** Phase 0 documented and PR-ready to `main`; present the honest PR description; do NOT push/open the PR without user confirmation (outward-facing; git remote is `kuralle`).
 **WBS section:** [`sprints/WBS.md` § Sprint 4](./WBS.md)
 **Phase 0 substrate work is COMPLETE** (C1/C2/C3 shipped + leak fix). Deferred with rationale: C5→B-05, C4 migration→B-07, structural re-arm→B-06 (all in the C5 amendment).
@@ -47,7 +47,7 @@ The session running sprint 3 must read these in this order before delegating any
 | 1 | done | 2026-07-09 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
 | 2 | done | 2026-07-09 | [sprint-2/WARMDOWN.md](./sprint-2/WARMDOWN.md) |
 | 3 | done | 2026-07-09 | [sprint-3/WARMDOWN.md](./sprint-3/WARMDOWN.md) |
-| 4 | not-started | — | — |
+| 4 | PR-ready | 2026-07-09 | closeout — [PHASE-0-PR-DESCRIPTION.md](./PHASE-0-PR-DESCRIPTION.md) |
 | 2 | not-started | — | — |
 | 3 | not-started | — | — |
 | 4 | not-started | — | — |
