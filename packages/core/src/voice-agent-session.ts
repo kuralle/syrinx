@@ -65,6 +65,8 @@ import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./v
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
+import type { InteractionPolicy } from "./interaction-policy.js";
+import { DeferInteractionPolicy } from "./policies/defer.js";
 import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
 import { pluginStage, stageOrder, isAudioStage } from "./init-stage-order.js";
@@ -164,6 +166,11 @@ export interface VoiceAgentSessionConfig {
    * provider STT ownership; Smart Turn sessions must opt in explicitly.
    */
   endpointingOwner?: "provider_stt" | "smart_turn" | "timer";
+  /** The front model owns full-duplex interaction (turn-taking + barge-in). When true, the session's
+   *  InteractionPolicy runs observe-only (DeferInteractionPolicy) — Syrinx does not drive its own
+   *  turn/interrupt decisions; the front's native decisions stand. Default: false (Syrinx drives).
+   *  A realtime factory sets this from RealtimeAdapter.caps.supportsFullDuplex. */
+  fullDuplex?: boolean;
   readonly metricsExporter?: MetricsExporter;
   readonly scheduler?: Scheduler;
   readonly observability?: {
@@ -289,6 +296,7 @@ export class VoiceAgentSession {
   private readonly delayCueAfterMs: number;
   private pendingToolCues = new Map<string, Map<string, string>>();
   private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
+  private readonly fullDuplex: boolean;
   private lastFinalizedContextId = "";
 
   constructor(config: VoiceAgentSessionConfig) {
@@ -297,6 +305,7 @@ export class VoiceAgentSession {
       throw new Error(`Unsupported endpointingOwner: ${owner}`);
     }
     this.endpointingOwner = owner ?? "provider_stt";
+    this.fullDuplex = config.fullDuplex === true;
     this.config = config;
     this.scheduler = config.scheduler ?? new TimerScheduler();
     this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
@@ -353,9 +362,12 @@ export class VoiceAgentSession {
       ttsPlayout: this.ttsPlayout,
       minInterruptionMs: this.minInterruptionMs,
     });
+    const coordinatorPolicy: InteractionPolicy = this.fullDuplex
+      ? new DeferInteractionPolicy()
+      : this.interactionPolicy;
     this.interaction = new InteractionCoordinator({
       bus: this.bus,
-      policy: this.interactionPolicy,
+      policy: coordinatorPolicy,
       executor: this.interactionPolicy.arbiter,
     });
     this.watchdogs = new VoiceSessionWatchdogs({

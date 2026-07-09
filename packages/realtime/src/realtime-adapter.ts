@@ -14,6 +14,13 @@ export interface RealtimeAdapter {
      * be replayed — that would double-apply history (RFC bimodel-delegate-seam R6).
      */
     readonly supportsNativeResume?: boolean;
+    /** The front model owns full-duplex interaction decisions (turn-taking, barge-in). When true,
+     *  Syrinx's InteractionPolicy runs observe-only and does not drive its own turn/interrupt decisions
+     *  (RFC InteractionPolicy REQ-4). Absent/false → Syrinx drives. No current adapter sets this. */
+    readonly supportsFullDuplex?: boolean;
+    /** The front emits its own backchannels ("mhmm"). When true, Syrinx suppresses its own backchannel
+     *  cues (RFC InteractionPolicy REQ-4). Absent/false → Syrinx may emit. */
+    readonly emitsBackchannel?: boolean;
   };
 
   open(signal: AbortSignal): Promise<void>;

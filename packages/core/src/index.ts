@@ -207,6 +207,7 @@ export {
   type WordTiming,
 } from "./interaction-policy.js";
 export { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
+export { DeferInteractionPolicy } from "./policies/defer.js";
 export { InteractionCoordinator } from "./interaction-coordinator.js";
 
 // VoiceAgentSession

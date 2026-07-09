@@ -1193,6 +1193,53 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("fullDuplex:true runs the interaction policy observe-only (no VAD-driven interrupt)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280, fullDuplex: true });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 100,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(interrupts).toEqual([]);
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
   it("commits a barge-in from provider STT interim transcripts when no VAD plugin is registered", async () => {
     // Cascade deployments with endpointingOwner "provider_stt" (the default) have
     // no vad.speech_started producer — interim transcripts during TTS playout are
