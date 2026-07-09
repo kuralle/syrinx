@@ -16,6 +16,23 @@ export interface HedgedReasonerOptions {
 
 type Backend = "primary" | "backup";
 
+type RacerResult = { who: Backend; result: IteratorResult<ReasoningPart> };
+
+const asRacer = (who: Backend, next: Promise<IteratorResult<ReasoningPart>>): Promise<RacerResult> =>
+  next
+    .then((result) => ({ who, result }))
+    .catch((err): RacerResult => ({
+      who,
+      result: {
+        done: false,
+        value: {
+          type: "error",
+          cause: err instanceof Error ? err : new Error(String(err)),
+          recoverable: true,
+        },
+      },
+    }));
+
 type CommitResult =
   | { readonly ok: true; readonly winner: Backend; readonly first: ReasoningPart; readonly iter: AsyncIterator<ReasoningPart> }
   | { readonly ok: false; readonly error: ReasoningPart };
@@ -92,13 +109,13 @@ export class HedgedReasoner implements Reasoner {
     while (!committed) {
       const raced = await new Promise<{ who: Backend; result: IteratorResult<ReasoningPart> } | "repoll">(
         (resolve) => {
-          const racers: Array<Promise<{ who: Backend; result: IteratorResult<ReasoningPart> }>> = [];
+          const racers: Array<Promise<RacerResult>> = [];
 
           if (!primaryExhausted) {
-            racers.push(primaryNext.then((result) => ({ who: "primary" as const, result })));
+            racers.push(asRacer("primary", primaryNext));
           }
           if (backupNext && !backupExhausted) {
-            racers.push(backupNext.then((result) => ({ who: "backup" as const, result })));
+            racers.push(asRacer("backup", backupNext));
           }
 
           if (racers.length === 0) {
