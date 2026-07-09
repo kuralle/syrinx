@@ -79,3 +79,19 @@ Consolidated from the program's per-sprint proceed evidence (this session) — t
 **Verdict:** the generalization (AI SDK → Mastra → suspend/resume) is **latency-neutral**. The seam adds at most one microtask + a synchronous object remap per part (Sprint 0's no-buffering unit test + the structural proof); the dominant cost is the LLM provider's TTFT, which is identical across backends at the same model. The ~350 ms literature stage budget (Daily/Modal) is the provider's target, not the seam's — the seam's contribution is below measurement noise. Speech stages (STT-final ~520 ms, TTS-TTFB ~500 ms) are unchanged throughout (they don't route through the bridge).
 
 **Live demos proven (this program):** AI-SDK deployed (`syrinx-voice-server-workers`, Version `cc9236aa`); Mastra Node turn (S2-02) + Mastra-edge deployed (`voice-server-workers-mastra`, Version `40a15353`, Paid tier); suspend→resume by `runId` on the deployed Mastra worker. The Mastra-edge worker's ~249 ms cold-start is a deploy-runtime metric, separate from LLM-TTFT.
+
+---
+
+## Reasoner-latency composite gate (RL-WBS-5, 2026-07-09)
+
+`RoutingReasoner` (Lever B) + `HedgedReasoner` (Lever C) — opt-in composite `Reasoner`s at the seam. Measured LLM-TTFT (reasoner `stream` → first delta) via `examples/02-hello-voice-headless/scripts/bench-reasoner-latency.ts`, gpt-4.1-mini (deep) / gpt-4.1-nano (fast), hedgeAfter 300 ms, 9 measured runs (1 warmup discarded), one long-turn fixture.
+
+| Config | LLM-TTFT P50 | worst-of-9 (≈P95) |
+|---|---|---|
+| plain `gpt-4.1-mini` | 1005 ms | 6580 ms |
+| plain `gpt-4.1-nano` | 1111 ms | 3298 ms |
+| **hedged** (mini×2) | 961 ms | **2725 ms** |
+| routed (fast/deep) | 991 ms | 4274 ms |
+| **composed** (route→hedge) | **869 ms** | 3329 ms |
+
+**Verdict.** **Hedging cuts the tail −59%** (worst-case 6580 → 2725 ms) — the Sierra "hedging → P99 −70%" claim, confirmed live; composed cuts P50 ~14%. **The v2v P50 < 1s headline is NOT met by B+C alone** with these models: LLM-TTFT P50 ~870–1005 ms + STT-final (~400 ms) + TTS-TTFB (~300 ms) ⇒ v2v ≈ 1.5–1.7 s. Getting under 1s requires **Lever D's speculative-start overlap** (already shipped — the `speculative` flag on `ReasoningBridge` over the IU ledger) to hide LLM-TTFT under the STT-settle window, plus model choice; B+C **reduce** latency (tail especially), **D** is what actually clears 1s. Caveats: n=9 (worst-of-9 ≈ P95, noisy); routing's fast-model win was not exercised (the fixture turn is > the classify length threshold → always `deep`, `route.mispredict: 0`) — a short/mixed fixture is needed to measure routing's mean-latency gain. `plain gpt-4.1-mini` here (P50 1005 ms) is faster than the S1-00 baseline (3290 ms) — provider-side improvement, not a seam change.
