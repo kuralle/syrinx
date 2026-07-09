@@ -1193,6 +1193,84 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("fullDuplex:true runs the interaction policy observe-only (no VAD-driven interrupt)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280, fullDuplex: true });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "user",
+      timestampMs: t0,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 100,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(interrupts).toEqual([]);
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("fullDuplex:true still honors a direct client interrupt (executor survives defer mode) (IP-C2 regression)", async () => {
+    // Defer mode swaps only the coordinator's DRIVE policy to observe-only; the executor stays the
+    // rule policy's arbiter, so a client-initiated "stop" (requestClientInterrupt) must still fire —
+    // the front owning turn-taking does not disable the user's explicit interrupt.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280, fullDuplex: true });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    session.requestClientInterrupt("assistant-turn");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([
+      expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
+    ]);
+
+    await closeSession(session);
+  });
+
   it("commits a barge-in from provider STT interim transcripts when no VAD plugin is registered", async () => {
     // Cascade deployments with endpointingOwner "provider_stt" (the default) have
     // no vad.speech_started producer — interim transcripts during TTS playout are
@@ -1241,6 +1319,59 @@ describe("VoiceAgentSession", () => {
       expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
     ]);
     expect(metrics).toContain("interrupt.committed_after_ms");
+
+    await closeSession(session);
+  });
+
+  it("suppresses a backchannel provider-STT interim through the interaction seam (IP-C1 regression)", async () => {
+    // IP-C1 routed provider-STT barge-in through InteractionCoordinator ->
+    // RuleBasedInteractionPolicy -> TurnArbiter. This pins that the reshaped
+    // chain still SUPPRESSES a sustained backchannel ("okay") rather than cutting
+    // the assistant — the session-level suppression case the policy-unit test
+    // (rule-based.test.ts, vad-driven) and the commit test above do not cover.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+    const metrics: string[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    // Assistant is speaking.
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Sustained-past-minInterruptionMs backchannel evidence: opens the pending
+    // window, then the second interim (past 280ms) reaches tryCommit -> the
+    // arbiter's backchannel suppression fires instead of an interrupt decision.
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: t0,
+      text: "okay",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: t0 + 300,
+      text: "okay",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+    expect(metrics).toContain("interrupt.suppressed_backchannel");
 
     await closeSession(session);
   });

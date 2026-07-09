@@ -199,6 +199,17 @@ export {
   type SyrinxAudioEnvelopeHeader,
 } from "./audio-envelope.js";
 
+// Interaction policy seam (IP-C1)
+export {
+  type InteractionPolicy,
+  type InteractionObservation,
+  type InteractionDecision,
+  type WordTiming,
+} from "./interaction-policy.js";
+export { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
+export { DeferInteractionPolicy } from "./policies/defer.js";
+export { InteractionCoordinator } from "./interaction-coordinator.js";
+
 // VoiceAgentSession
 export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";
 

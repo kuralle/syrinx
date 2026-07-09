@@ -64,6 +64,7 @@ export interface TurnArbiterDeps {
   readonly primarySpeakerGate: PrimarySpeakerGate;
   readonly ttsPlayout: TtsPlayoutClock;
   readonly minInterruptionMs: number;
+  readonly onInterrupt?: (interruptedContextId: string, source: "vad") => void;
 }
 
 export class TurnArbiter {
@@ -92,7 +93,7 @@ export class TurnArbiter {
         return;
       }
       bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
-      this.emitInterruptDetected(interruptedContextId);
+      this.decideInterrupt(interruptedContextId);
       return;
     }
 
@@ -256,9 +257,17 @@ export class TurnArbiter {
       Route.Background,
       make.metric(pending.interruptedContextId, "interrupt.latency_ms", String(sustainedMs)),
     );
-    this.emitInterruptDetected(pending.interruptedContextId);
+    this.decideInterrupt(pending.interruptedContextId);
     this.latestInterimText = "";
     this.latestInterimConfidence = null;
+  }
+
+  private decideInterrupt(interruptedContextId: string): void {
+    if (this.deps.onInterrupt) {
+      this.deps.onInterrupt(interruptedContextId, "vad");
+      return;
+    }
+    this.emitInterruptDetected(interruptedContextId);
   }
 
   private suppress(
