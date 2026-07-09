@@ -212,6 +212,40 @@ describe("InMemoryIuLedger", () => {
     });
   });
 
+  describe("maxContexts bound", () => {
+    it("evicts the oldest context when a new context exceeds the cap (FIFO)", () => {
+      const ledger = new InMemoryIuLedger(() => {}, 3);
+      const a = makeIu("a", "iu-1", "user_turn");
+      const b = makeIu("b", "iu-1", "user_turn");
+      const c = makeIu("c", "iu-1", "user_turn");
+      const d = makeIu("d", "iu-1", "user_turn");
+      ledger.add(a);
+      ledger.add(b);
+      ledger.add(c);
+      ledger.add(d);
+      expect(ledger.get(a.id)).toBeUndefined();
+      expect(ledger.get(b.id)?.state).toBe("hypothesized");
+      expect(ledger.get(c.id)?.state).toBe("hypothesized");
+      expect(ledger.get(d.id)?.state).toBe("hypothesized");
+    });
+
+    it("does not evict when adding another IU to an existing context", () => {
+      const ledger = new InMemoryIuLedger(() => {}, 3);
+      const a1 = makeIu("a", "iu-1", "user_turn");
+      const a2 = makeIu("a", "iu-2", "assistant_response");
+      const b = makeIu("b", "iu-1", "user_turn");
+      const c = makeIu("c", "iu-1", "user_turn");
+      ledger.add(a1);
+      ledger.add(b);
+      ledger.add(c);
+      ledger.add(a2);
+      expect(ledger.get(a1.id)?.state).toBe("hypothesized");
+      expect(ledger.get(a2.id)?.state).toBe("hypothesized");
+      expect(ledger.get(b.id)?.state).toBe("hypothesized");
+      expect(ledger.get(c.id)?.state).toBe("hypothesized");
+    });
+  });
+
   describe("O(1) per-op (structural)", () => {
     it("commit/get touch only the target ctx bucket regardless of total ctx count", () => {
       // Map.get/set/delete are O(1); each hot-path op does at most one outer + one inner lookup.

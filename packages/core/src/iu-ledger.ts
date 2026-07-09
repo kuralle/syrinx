@@ -20,10 +20,18 @@ export type IuLedgerAnomaly =
 export class InMemoryIuLedger implements IuLedger {
   private readonly byCtx = new Map<string, Map<string, IncrementalUnit>>();
 
-  constructor(private readonly onEvent: (a: IuLedgerAnomaly) => void = () => {}) {}
+  constructor(
+    private readonly onEvent: (a: IuLedgerAnomaly) => void = () => {},
+    private readonly maxContexts: number = 256,
+  ) {}
 
   add(iu: IncrementalUnit): void {
-    this.ctxMap(iu.id.contextId).set(iu.id.iuId, iu);
+    const ctx = iu.id.contextId;
+    if (!this.byCtx.has(ctx) && this.byCtx.size >= this.maxContexts) {
+      const oldest = this.byCtx.keys().next().value;
+      if (oldest !== undefined) this.byCtx.delete(oldest);
+    }
+    this.ctxMap(ctx).set(iu.id.iuId, iu);
   }
 
   commit(id: IncrementalUnitId, prefix?: { chars?: number; ms?: number }): void {
