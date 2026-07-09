@@ -6,12 +6,12 @@
 
 ## Active sprint
 
-**Sprint number:** `3`
-**Sprint name:** Bound the ledger + skip the migration (C4, rescoped)
+**Sprint number:** `4`
+**Sprint name:** Closeout — Phase 0 PR to main
 **Status:** `not-started`
-**Goal:** the `InMemoryIuLedger` no longer leaks — bounded (LRU cap ~256 contexts) + `clear(contextId)` wired at turn-end/close; the net-harmful deepgram/tts migration is NOT done (→ backlog B-07) and the decision is documented.
-**WBS section:** [`sprints/WBS.md` § Sprint 3](./WBS.md)
-**Why rescoped (D-6, user-approved):** the migration would increase coupling + add turn-boundary races, and there is no real dual bookkeeping to delete; the actionable finding is the unbounded-ledger leak (`clear()` has no production caller). Fix the leak instead. See design-doc comment + `runs/iu-substrate-implementation-notes.md` D-6.
+**Goal:** Phase 0 documented and PR-ready to `main`; present the honest PR description; do NOT push/open the PR without user confirmation (outward-facing; git remote is `kuralle`).
+**WBS section:** [`sprints/WBS.md` § Sprint 4](./WBS.md)
+**Phase 0 substrate work is COMPLETE** (C1/C2/C3 shipped + leak fix). Deferred with rationale: C5→B-05, C4 migration→B-07, structural re-arm→B-06 (all in the C5 amendment).
 
 ## Build branch
 
@@ -33,7 +33,7 @@ The session running sprint 3 must read these in this order before delegating any
 
 ## Last completed sprint
 
-`2 — Heard-prefix commit boundary (C3)`
+`3 — Bound the ledger + skip the migration (C4, rescoped)`
 
 ## Last completed at
 
@@ -46,7 +46,8 @@ The session running sprint 3 must read these in this order before delegating any
 | 0 | done | 2026-07-09 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
 | 1 | done | 2026-07-09 | [sprint-1/WARMDOWN.md](./sprint-1/WARMDOWN.md) |
 | 2 | done | 2026-07-09 | [sprint-2/WARMDOWN.md](./sprint-2/WARMDOWN.md) |
-| 3 | not-started | — | — |
+| 3 | done | 2026-07-09 | [sprint-3/WARMDOWN.md](./sprint-3/WARMDOWN.md) |
+| 4 | not-started | — | — |
 | 2 | not-started | — | — |
 | 3 | not-started | — | — |
 | 4 | not-started | — | — |

@@ -60,3 +60,17 @@ The per-turn `contextId` is a **complete turn identity** for every current consu
 ## 5. Rollback
 
 This amendment only *narrows and resequences*. The dormant ledger (S0) is untouched. If the full epoch split is later justified (B-05), it proceeds against the same ledger identity — no rework of Sprint 1's producer.
+
+## 6. C4 also rescoped — the migration is net-harmful (D-6)
+
+RFC §8 **C4** ("migrate the deepgram/tts poison/cancelled/finalized sets to the ledger; delete dual bookkeeping") does **not** ship as specified. Mapping the actual code (2026-07-09) found:
+
+1. **No dual bookkeeping to delete.** Only deepgram `finalizedContextIds` ("drop a late transcript for a finished turn", `stt.ts:116,308`) and tts `cancelledContexts` ("drop cut-off audio after barge-in", `engine.ts:77,191`) are "ctx terminal" sets. They are **separate, correct, bounded (256), LOCAL guards** — not duplicates of the ledger nor of each other. The other deepgram sets (`finalizeRequestedContextIds`, `speechFinalContextIds`, `ignoreNextProviderFinalContextIds`) are request/dedupe/diagnostic state that never mapped to an IU. The genuinely-dual mechanism (the aisdk speculative buffer) already moved to the ledger in **C2**.
+
+2. **Migration increases coupling + adds turn-boundary races.** Each plugin sets its flag **synchronously at the instant it emits the boundary packet**. Migrating means the plugin queries a ledger the *bridge* writes a beat later — a gap where a late transcript leaks; and in the default (non-speculative) config the `user_turn` IU never exists (it is added only in `runDraft` off `eos.interim`), so the guard never fires. tts is worse: on barge-in the bridge **commits-with-prefix** (not revokes) the assistant IU, and `interrupt.tts` is dispatched **before** `interrupt.llm`, so tts would check the ledger before it changes. These are the "hears you twice / talks over you" bug classes.
+
+3. **Real bug found + fixed (the actionable part).** `InMemoryIuLedger.clear()` had **no production caller**, so C1–C3's IUs accumulated per `contextId` forever (telephony mints a new `-t<n>` ctx per turn). Fixed in **Sprint 3** by bounding the ledger (FIFO cap 256 contexts, mirroring `boundedAdd`/`MAX_RETIRED_CONTEXTS`). The private sets C4 would have replaced are bounded for exactly this reason — migrating onto the (previously unbounded) ledger would have regressed memory.
+
+**Decision (user-approved):** keep the deepgram/tts guards local; do the leak fix instead. The migration → backlog **B-07** (revisit only if the plugins can be made to *write* the ledger at emit-time and the tts predicate reconciled — likely never, as the local guards are simpler and safer).
+
+**Net Phase 0 outcome:** the IU ledger (C1) + user-turn/assistant IUs on it (C2/C3) + a leak fix. The RFC's advertised functional wins (telephony P0, heard-prefix) were already shipped in v4.1.x; Phase 0 is honest substrate + cleanup, not those bug-fixes.
