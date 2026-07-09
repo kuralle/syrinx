@@ -35,7 +35,8 @@ export class RoutingReasoner implements Reasoner {
     const routeId = await this.opts.classify(turn);
     const route = this.resolveRoute(routeId);
     this.metric("route.selected", routeId);
-    yield* route.reasoner.stream({ ...turn, signal: turn.signal });
+    const iter = route.reasoner.stream({ ...turn, signal: turn.signal })[Symbol.asyncIterator]();
+    yield* this.forwardRoute(iter, undefined, turn.signal);
   }
 
   private async *streamWithSpeculation(turn: ReasonerTurn): AsyncGenerator<ReasoningPart> {
@@ -56,29 +57,39 @@ export class RoutingReasoner implements Reasoner {
 
     if (classifiedId === specId) {
       this.metric("route.selected", classifiedId);
-      yield* this.forwardFromIter(specIter, specNext, turn.signal);
+      yield* this.forwardRoute(specIter, specNext, turn.signal);
       return;
     }
 
     child.abort();
     releaseIterator(specIter);
+    void specNext.catch(() => undefined);
     this.metric("route.mispredict", "1");
 
     const route = this.resolveRoute(classifiedId);
     this.metric("route.selected", classifiedId);
-    yield* route.reasoner.stream({ ...turn, signal: turn.signal });
+    const iter = route.reasoner.stream({ ...turn, signal: turn.signal })[Symbol.asyncIterator]();
+    yield* this.forwardRoute(iter, undefined, turn.signal);
   }
 
-  private async *forwardFromIter(
+  private async *forwardRoute(
     iter: AsyncIterator<ReasoningPart>,
-    first: Promise<IteratorResult<ReasoningPart>>,
+    first: Promise<IteratorResult<ReasoningPart>> | undefined,
     signal: AbortSignal,
   ): AsyncGenerator<ReasoningPart> {
-    let next = await first;
-    while (!next.done) {
-      if (signal.aborted) return;
-      yield next.value;
-      next = await iter.next();
+    try {
+      let next = first ? await first : await iter.next();
+      while (!next.done) {
+        if (signal.aborted) return;
+        yield next.value;
+        next = await iter.next();
+      }
+    } catch (err) {
+      yield {
+        type: "error",
+        cause: err instanceof Error ? err : new Error(String(err)),
+        recoverable: true,
+      };
     }
   }
 
