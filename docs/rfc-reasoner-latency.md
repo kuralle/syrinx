@@ -1,5 +1,7 @@
 # RFC: Reasoner latency — speculative start, adaptive routing & hedging (closing the v2v gap)
 
+> **⚠️ AMENDED (2026-07-09) — read [`rfc-reasoner-latency-amendment.md`](rfc-reasoner-latency-amendment.md) first.** Built + live-gated on `beta` (PR #24). Several premises here are stale: **Lever D (speculative LLM start) is already shipped** (the `speculative` flag on `ReasoningBridge`), **Lever A (speculative TTS) premise is wrong** (TTS is sentence-buffered), and the "2.1–3.6s" figure cites a superseded row. What was actually built = **RoutingReasoner (B) + HedgedReasoner (C)**; the amendment has the honest gate verdict (hedging cuts the tail −59%; v2v<1s needs Lever D, not B+C) and the **test/baseline runbook**.
+
 > Status: Draft (2026-06-23). Author: research-led, grounded in the Sierra competitor study
 > ([`research/competitors/sierra/`](../research/competitors/sierra/README.md)) and the Syrinx product
 > direction ([`research/syrinx-product-direction.md`](../research/syrinx-product-direction.md), Gap 1 — critical path).
