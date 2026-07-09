@@ -7,10 +7,11 @@
 ## Active sprint
 
 **Sprint number:** `1`
-**Sprint name:** Turn-epoch identity (C5)
+**Sprint name:** Speculative on the ledger (C2) + first-class turn-identity producer
 **Status:** `not-started`
-**Goal:** `IncrementalUnitId {contextId, iuId, epoch}` supersedes the `contextId = turn id` overload in packets and consumers, with browser-per-turn and telephony-per-call both correct.
+**Goal:** speculative generation re-expressed as an `IuLedger` consumer (behavior-preserving; `SpeculativeHold` private state gone), and the ledger gains its first producer — a `user_turn` IU keyed by `IncrementalUnitId {contextId, iuId, epoch}` with `epoch` promoted from the existing per-turn counter.
 **WBS section:** [`sprints/WBS.md` § Sprint 1](./WBS.md)
+**Amendment:** [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md) — C5 rescoped (its premise was already fixed in v4.1.0; value folds into C2). Old standalone C5 → backlog B-05.
 
 ## Build branch
 
@@ -24,12 +25,12 @@ At session start: `git checkout plan/iu-substrate` (or `git checkout -b plan/iu-
 
 The session running sprint 1 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` § Sprint 1 — the plan for this sprint.
-2. `sprints/sprint-0/HANDOFF.md` — read-me-first from Sprint 0.
-3. `docs/rfc-incremental-unit-substrate.md` — §8 C5, §2 (the `contextId = turn id` overload), §5.1 (structural before/after), REQ-1.
-4. `.understanding/syrinx-voice-engine-understand.md` — the P0 turn-boundary cluster (browser mints `contextId` per turn; telephony reuses one per call; poison sets clear only on `close()`).
-5. `packages/core/src/packets.ts` — where turn-scoped packets carry `contextId` today.
-6. Before briefing: `/code-understand --path packages/core/src/voice-agent-session.ts` for the turn lifecycle (`eos.turn_complete`, contextId mint/consume).
+1. `sprints/WBS.md` § Sprint 1 (rescoped C2 + identity producer) — the plan for this sprint.
+2. `docs/rfc-incremental-unit-substrate-amendment-C5.md` — **why Sprint 1 is C2, not the standalone epoch reshape.** Read first.
+3. `docs/rfc-incremental-unit-substrate.md` §8 C2, §2.2 (the speculative path already emits IU-shaped signals), §6, §7; REQ-5.
+4. `packages/aisdk/src/index.ts` — the speculative path (`SpeculativeHold`, `speculativeDraft`, `activeGeneration`; staleness by `contextId` equality at `:165,212,234`). The re-expression target.
+5. `packages/core/src/iu-ledger.ts` + `incremental-unit.ts` — the S0 ledger this consumes (its first producer).
+6. Turn-boundary context (already mapped this session): telephony `-t<n>` per-turn rotation (`outbound-playout-pipeline.ts:46-66`); the epoch source = the existing per-turn counter.
 
 ## Last completed sprint
 

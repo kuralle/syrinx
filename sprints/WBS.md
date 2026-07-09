@@ -2,6 +2,8 @@
 
 > **The build plan, sprint by sprint, end-to-end.** Spans `docs/rfc-incremental-unit-substrate.md` (the capstone/substrate RFC that reframes speculative generation, eager-EOT, barge-in truncation, and the `contextId → turn-epoch` reshape as one commit/revoke primitive) with academic grounding in `research/incremental-processing-deep-dive.md`. Every sprint is an end-to-end demoable slice, not a horizontal slab. Cadence and engineering practice are the same across all sprints.
 
+> **⚠️ AMENDMENT (2026-07-09, post-Sprint-0):** RFC C5 (standalone turn-epoch reshape) was **rescoped** — see [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md). The telephony P0 bug C5 targeted is **already fixed** in the current tree (v4.1.0 `-t<n>` per-turn rotation + bounded poison sets), and no consumer needs a first-class `epoch`. C5's real value (giving the dormant `IuLedger` a producer + first-class turn identity) folds into **C2**, delivered by its first real consumer. The 15-file `contextId`→session-id split is deferred to backlog B-05 (consumer-gated). **Resequenced roadmap below reflects this.**
+
 ---
 
 ## 1. Cadence and engineering practice
@@ -61,19 +63,19 @@ The next session reads HANDOFF first, WARMDOWN if it needs depth.
 
 | Sprint | Phase | Goal (one sentence) |
 |--------|-------|---------------------|
-| 0 | Ledger core (C1) | `IncrementalUnit` + `InMemoryIuLedger` exist in `packages/core`, dormant, with a monotonic/idempotent state machine proven by unit tests and green CI. |
-| 1 | Turn-epoch identity (C5) | `IncrementalUnitId {contextId, iuId, epoch}` supersedes the `contextId = turn id` overload in packets and consumers, with browser-per-turn and telephony-per-call both correct. |
-| 2 | Speculative on the ledger (C2) | Speculative generation is re-expressed as an `IuLedger` consumer with **no behavior change** — the existing aisdk speculative tests pass unchanged and `SpeculativeHold`'s private state is gone. |
-| 3 | Heard-prefix commit boundary (C3) | On barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix=heard)` — the specified-but-unwired guarantee, now wired and tested. |
-| 4 | Migrate + delete dual bookkeeping (C4) + closeout | The deepgram/tts poison/cancelled/finalized sets are replaced by the ledger and deleted, multi-turn Node telephony reaches turn 2+ (the P0 cluster is resolved), and Phase 0 is documented for merge. |
+| 0 | Ledger core (C1) ✅ | `IncrementalUnit` + `InMemoryIuLedger` exist in `packages/core`, dormant, with a monotonic/idempotent state machine proven by unit tests and green CI. **SHIPPED.** |
+| 1 | Speculative on the ledger (C2) + first-class turn-identity producer | Speculative generation is re-expressed as an `IuLedger` consumer with **no behavior change** (aisdk speculative tests pass unchanged; `SpeculativeHold` private state gone), and the ledger gains its first producer — a `user_turn` IU keyed by `IncrementalUnitId {contextId, iuId, epoch}` with `epoch` promoted from the existing per-turn counter. |
+| 2 | Heard-prefix commit boundary (C3) | On barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix=heard)` — the specified-but-unwired guarantee, now wired and tested. |
+| 3 | Migrate + delete dual bookkeeping (C4) | The deepgram/tts poison/cancelled/finalized sets are replaced by the ledger and deleted (zero-tech-debt), with the P0-cluster smoke still green (already passing pre-reshape). |
+| 4 | Closeout (+ deferred B-05/B-06 only if consumer-forced) | Phase 0 documented for merge; the deferred `contextId`-split / structural-re-arm items land only if a consumer forces them this phase. |
 
-The phases above map to the source RFC as follows:
+The phases above map to the source RFC (as amended) as follows:
 
-- **Sprint 0 → RFC §8 C1** (`incremental-unit.ts`, `iu-ledger.ts`; REQ-1,2,3,6) and §4.1/§4.2/§7 (interface + blueprint).
-- **Sprint 1 → RFC §8 C5** (`packets.ts` + consumers; REQ-1) and §2/§5.1 (the `contextId` overload this reshapes). Front-loaded per §12 Q4 because both downstream RFCs' C1 depend on turn identity.
-- **Sprint 2 → RFC §8 C2** (`packages/aisdk/src/index.ts`; REQ-5) and §2.2/§6 (the speculative path re-expression).
-- **Sprint 3 → RFC §8 C3** (`voice-agent-session.ts`, `tts-playout-clock.ts`; REQ-4) and §4.3/§6 (the `interrupt.tts` → commit-heard-then-revoke mapping).
-- **Sprint 4 → RFC §8 C4** (`packages/deepgram/src/stt.ts`, `tts-core/src/engine.ts`; REQ-3,5) and §5.1 (deleted-after-parity), plus §9.3 the P0-cluster proof and §10/§11 closeout.
+- **Sprint 0 → RFC §8 C1** (`incremental-unit.ts`, `iu-ledger.ts`; REQ-1,2,3,6) and §4.1/§4.2/§7. **Shipped.**
+- **Sprint 1 → RFC §8 C2 + rescoped-C5** (`packages/aisdk/src/index.ts`; REQ-5) and §2.2/§6 — the speculative path re-expressed on the ledger, which is also where the ledger gets its first producer + first-class turn identity (see [amendment](../docs/rfc-incremental-unit-substrate-amendment-C5.md) §4).
+- **Sprint 2 → RFC §8 C3** (`voice-agent-session.ts`, `tts-playout-clock.ts`; REQ-4) and §4.3/§6 (the `interrupt.tts` → commit-heard-then-revoke mapping).
+- **Sprint 3 → RFC §8 C4** (`packages/deepgram/src/stt.ts`, `tts-core/src/engine.ts`; REQ-3,5) and §5.1 (deleted-after-parity). Note: the P0-cluster proof (§9.3) already passes pre-reshape; C4 is a zero-tech-debt consolidation, not a bug fix.
+- **Sprint 4 → closeout**; the standalone `contextId`→session-id epoch split (old C5) is **backlog B-05**, the structural turn-boundary re-arm is **B-06** — both consumer-gated (amendment §3).
 
 ---
 
@@ -104,60 +106,41 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 ---
 
-### Sprint 1 — Turn-epoch identity (C5)
+### Sprint 1 — Speculative on the ledger (C2) + first-class turn-identity producer
 
-**Goal:** `IncrementalUnitId {contextId, iuId, epoch}` supersedes the `contextId = turn id` overload in the packet layer and its consumers, with browser-per-turn and telephony-per-call turn boundaries both correct.
+> Rescoped per [`docs/rfc-incremental-unit-substrate-amendment-C5.md`](../docs/rfc-incremental-unit-substrate-amendment-C5.md). Folds C2 with C5's genuine value (the ledger's first producer + first-class turn identity), delivered by C2 as the first real consumer. The standalone 15-file epoch reshape (old C5) is deferred to backlog B-05.
 
-| Story | Description | DoD |
-|-------|-------------|------|
-| S1-01 | Introduce IU identity (`iuId` + monotonic `epoch`) into the turn-scoped packets in `packages/core/src/packets.ts`; `contextId` stays the transport/session id. Mint epoch at turn start. | Packet types carry IU id; `contextId` semantics unchanged for transport; typecheck green across workspace. |
-| S1-02 | Thread the id through the turn-boundary consumers so browser mints a new epoch per turn and telephony (one `contextId` per call) advances the epoch per turn instead of reusing turn id. | Turn-boundary characterization tests green; a new test proves browser-per-turn and telephony-per-call both produce distinct, monotonic epochs. |
-
-**Demo:** test-run artifact showing turn-boundary tests green with the new epoch, plus a short trace of a two-turn telephony `contextId` keeping identity while epoch increments.
-
-**Dependencies:** Sprint 0 (the `IncrementalUnitId` type).
-
-**Source RFC §:** §8 C5; §2 (current-state overload), §5.1; REQ-1. Front-loaded per §12 Q4.
-
-**Sprint-specific risks:**
-- Reshape blast radius across turn-boundary code → detection: workspace typecheck + characterization suite → mitigation: identity-only change this sprint (no ledger wiring yet); independently revertible.
-
-**Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
-
----
-
-### Sprint 2 — Speculative on the ledger (C2)
-
-**Goal:** speculative generation is re-expressed as an `IuLedger` consumer with **no behavior change** — the existing aisdk speculative tests pass unchanged and `SpeculativeHold`'s private buffered state is removed in favor of the ledger.
+**Goal:** speculative generation is re-expressed as an `IuLedger` consumer with **no behavior change** (aisdk speculative tests pass unchanged; `SpeculativeHold` private state gone), and the ledger gains its first producer — a `user_turn` IU keyed by `IncrementalUnitId {contextId, iuId, epoch}` with `epoch` promoted from the existing per-turn counter.
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S2-01 | Re-express the speculative path in `packages/aisdk/src/index.ts` on `IuLedger`: `eos.interim` → `ledger.add(user_turn hypothesized)`; `eos.turn_complete` (draft matches) → `commit` + promote; mismatch → `revoke` + regenerate; `eos.retracted` → `revoke` + discard. Remove `SpeculativeHold` private state. | `speculative-on-ledger.test.ts`: promote == commit, discard == revoke; the existing aisdk speculative characterization tests pass **unchanged**; `SpeculativeHold` private set deleted (no dual bookkeeping). |
+| S1-01 | Re-express the speculative path in `packages/aisdk/src/index.ts` on `IuLedger`: `eos.interim` → `ledger.add(user_turn hypothesized)`; `eos.turn_complete` (draft matches) → `commit` + promote; mismatch → `revoke` + regenerate; `eos.retracted` → `revoke` + discard. Construct `IncrementalUnitId` as `{contextId, iuId: contextId, epoch}` (`epoch` = the monotonic per-turn counter promoted to a field, or 0 where a transport has none). Wire the `onEvent` anomaly hook (S0 D-1) to push an `iu_ledger` debug/`llm.error` packet — its first real use. Remove `SpeculativeHold` private buffered state. | `speculative-on-ledger.test.ts`: promote == commit, discard == revoke, IU ids stamped with epoch; the existing aisdk speculative characterization tests pass **unchanged**; `SpeculativeHold` private set deleted (no dual bookkeeping). |
 
-**Demo:** the existing aisdk speculative test suite green with zero edits to its assertions, plus a diff showing `SpeculativeHold`'s private state removed.
+**Demo:** the existing aisdk speculative test suite green with zero edits to its assertions, plus a diff showing `SpeculativeHold`'s private state removed and the ledger receiving `add`/`commit`/`revoke`.
 
-**Dependencies:** Sprint 0 (ledger), Sprint 1 (turn identity).
+**Dependencies:** Sprint 0 (ledger). No dependency on a standalone epoch reshape — `contextId` stays per-turn; leaf plugins untouched.
 
-**Source RFC §:** §8 C2; §2.2, §6, §7; REQ-5. Abort criterion §11: if a characterization test flips and cannot be made equivalent, stop and keep the private set — treat the divergence as a real bug to triage.
+**Source RFC §:** §8 C2 + amendment §4; §2.2, §6, §7; REQ-5. Abort criterion §11: if a characterization test flips and cannot be made equivalent, stop and keep the private set — treat the divergence as a real bug to triage.
 
 **Sprint-specific risks:**
 - Behavior divergence on re-expression → detection: the unchanged characterization suite flips → mitigation: RFC §11 abort — revert to the private set, triage the divergence before retrying.
+- Latency regression from the ledger on the hot path → detection: aisdk speculative timing tests / `turn_latency` → mitigation: REQ-6 (ledger is O(1), synchronous, in-memory).
 
 **Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
 
 ---
 
-### Sprint 3 — Heard-prefix commit boundary (C3)
+### Sprint 2 — Heard-prefix commit boundary (C3)
 
 **Goal:** on barge-in, history truncates to the heard prefix through `IuLedger.commit(prefix = heard)` — the guarantee the understanding artifact found specified-but-unwired, now wired for all transports and tested.
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S3-01 | Wire `interrupt.tts` in `packages/core/src/voice-agent-session.ts` to `commit(latest assistant IU, prefix = heard)` then revoke the remainder, using `TtsPlayoutClock` + word timestamps when present, `spokenByContext` fallback otherwise (`tts-playout-clock.ts`). | `heard-prefix-commit.test.ts`: on interrupt, committed span == heard span (word-boundary when timestamps present; ms fallback otherwise); remainder revoked; existing barge-in characterization tests green. |
+| S2-01 | Wire `interrupt.tts` in `packages/core/src/voice-agent-session.ts` to `commit(latest assistant IU, prefix = heard)` then revoke the remainder, using `TtsPlayoutClock` + word timestamps when present, `spokenByContext` fallback otherwise (`tts-playout-clock.ts`). | `heard-prefix-commit.test.ts`: on interrupt, committed span == heard span (word-boundary when timestamps present; ms fallback otherwise); remainder revoked; existing barge-in characterization tests green. |
 
 **Demo:** `heard-prefix-commit.test.ts` green showing committed==heard for both the word-timestamp and ms-fallback paths; a trace of an interrupted turn truncating history to the heard prefix.
 
-**Dependencies:** Sprint 0 (ledger), Sprint 1 (turn identity), Sprint 2 (revoke semantics proven on the speculative path).
+**Dependencies:** Sprint 0 (ledger), Sprint 1 (the ledger producer + revoke semantics proven on the speculative path).
 
 **Source RFC §:** §8 C3; §4.3, §6; REQ-4. Symptom-patch stop (§11): if it works only by special-casing one transport rather than through the ledger, stop — one commit boundary for all transports.
 
@@ -168,27 +151,48 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 ---
 
-### Sprint 4 — Migrate + delete dual bookkeeping (C4) + closeout
+### Sprint 3 — Migrate + delete dual bookkeeping (C4)
 
-**Goal:** the deepgram/tts poison/cancelled/finalized sets are replaced by the ledger and deleted, multi-turn Node telephony reaches turn 2+ (the P0 cluster is resolved), and Phase 0 is documented and ready to merge to `main`.
+**Goal:** the deepgram/tts poison/cancelled/finalized sets are replaced by the ledger and deleted (zero-tech-debt), with the telephony multi-turn smoke still green (it already passes pre-reshape — this is consolidation, not a bug fix).
 
 | Story | Description | DoD |
 |-------|-------------|------|
-| S4-01 | Migrate `packages/deepgram/src/stt.ts` finalized-context drop and `packages/tts-core/src/engine.ts` cancel bookkeeping to `IuLedger` commit/revoke; **delete** the old poison/cancelled/finalized sets (zero-tech-debt, no dual bookkeeping kept). | Deepgram/tts unit tests green against the ledger; old private sets removed in the diff; `pnpm -r typecheck && pnpm -r test` green (pre-existing playwright-core failure excepted). |
-| S4-02 | Prove the P0 cluster is resolved: manager runs `smoke:telnyx-emulator` and confirms Node telephony reaches turn 2+. Capture the log. | Live smoke log shows turn 2+ on Node telephony; no regression on browser transports. |
-| S4-03 | Closeout: update `packages/core`/`deepgram`/`tts-core` READMEs for the ledger; record any RFC amendments; prepare the Phase 0 → `main` PR description. | READMEs reflect the ledger as the single bookkeeping primitive; RFC amendments (if any) noted in WARMDOWN; PR description drafted. |
+| S3-01 | Migrate `packages/deepgram/src/stt.ts` finalized-context drop and `packages/tts-core/src/engine.ts` cancel bookkeeping to `IuLedger` commit/revoke; **delete** the old poison/cancelled/finalized sets (`boundedAdd`/`MAX_RETIRED_CONTEXTS`/`MAX_CANCELLED_CONTEXTS`/`clearCancelledIfDrained`) — no dual bookkeeping kept. | Deepgram/tts unit tests green against the ledger; old private sets removed in the diff; `pnpm -r typecheck && pnpm -r test` green (pre-existing playwright-core failure excepted). |
+| S3-02 | Regression: manager runs `smoke:telnyx-emulator` (short fixture) and confirms Node telephony still reaches turn 2+ after the migration; browser transports unchanged. | Live smoke log shows turn 2+ (parity with pre-reshape); no browser regression. |
 
-**Demo:** the `smoke:telnyx-emulator` log reaching turn 2+, plus a diff summary showing the three deleted private sets and the single `IuLedger` they were replaced by.
+**Demo:** a diff summary showing the deleted private sets and the single `IuLedger` they were replaced by, plus the `smoke:telnyx-emulator` log at turn 2+ (parity).
 
-**Dependencies:** Sprints 0–3 (ledger + identity + speculative + heard-prefix all landed).
+**Dependencies:** Sprints 0–2 (ledger + speculative-on-ledger + heard-prefix all landed).
 
-**Source RFC §:** §8 C4; §5.1 (deleted-after-parity), §9.3 (P0 proof command), §10, §11; REQ-3, REQ-5.
+**Source RFC §:** §8 C4; §5.1 (deleted-after-parity), §9.3 (smoke); REQ-3, REQ-5. Note: §9.3's "P0 cluster resolved" is already true pre-reshape (amendment §1) — this smoke is a **regression guard**, not the fix.
 
 **Sprint-specific risks:**
-- No measurable win on LLM backends (turn-granularity IU == today's behavior with more ceremony) → detection: honest reading of the diff → mitigation: the win is collapsing five bookkeeping implementations into one tested primitive + wiring the heard-prefix guarantee; that stands regardless (RFC §Risks).
 - Deleting a private set that still had a live reader → detection: workspace typecheck + package tests → mitigation: migrate-then-delete within the same story; independently revertible.
+- The bounded sets have subtle eviction semantics (`clearCancelledIfDrained`) the ledger must preserve → detection: deepgram/tts characterization tests → mitigation: port the eviction behavior onto `clear`/`revoke`; keep the private set if a test flips (RFC §11).
 
-**Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared; Phase 0 PR description ready.
+**Exit criteria:** all stories Done; WARMDOWN written; HANDOFF prepared.
+
+---
+
+### Sprint 4 — Closeout (+ deferred B-05/B-06 only if consumer-forced)
+
+**Goal:** Phase 0 is documented and ready to merge to `main`; the deferred `contextId`-split (B-05) and structural re-arm (B-06) land only if a consumer forces them this phase.
+
+| Story | Description | DoD |
+|-------|-------------|------|
+| S4-01 | Closeout: update `packages/core`/`deepgram`/`tts-core` READMEs to reflect the ledger as the single turn-bookkeeping primitive; fold the C5 amendment's conclusions into the RFC (or link it); prepare the Phase 0 → `main` PR description. | READMEs reflect the ledger; RFC ↔ amendment reconciled; PR description drafted; `pnpm -r typecheck && pnpm -r test` green. |
+| S4-02 | (Conditional) If Sprints 1–3 surfaced a real need for epoch **ordering** or a stable-session `contextId`, scope B-05/B-06 here; otherwise confirm they stay backlog with a one-line rationale. | Either B-05/B-06 scoped as a follow-up task with a consumer citation, or an explicit "no consumer — stays backlog" note in WARMDOWN. |
+
+**Demo:** the Phase 0 PR description + a green `pnpm -r typecheck && pnpm -r test`.
+
+**Dependencies:** Sprints 0–3.
+
+**Source RFC §:** §10, §11; amendment §3 (deferred items).
+
+**Sprint-specific risks:**
+- Scope creep back into the deferred 15-file reshape → detection: any B-05 work without a named consumer → mitigation: B-05 is consumer-gated; a no-consumer note closes it.
+
+**Exit criteria:** Phase 0 PR description ready; board reconciled; STATE marks Phase 0 complete.
 
 ---
 
@@ -200,6 +204,8 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 | B-02 | Incremental / revisable TTS output (INPRO_iSS-style mid-utterance revision) | After the commit/revoke lattice exists | §1.1 Deferred |
 | B-03 | Persist committed IUs to the durable store (G4) | v1.x (durable reasoner store already persists committed history) | §12 Q3 |
 | B-04 | Fold ledger ownership into `VoiceAgentSession` vs standalone | Not planned — RFC §12 Q2 chose standalone | §12 Q2 |
+| B-05 | Standalone `contextId` → stable-session-id + per-turn `epoch` split (the full old-C5 15-file reshape) | Consumer-gated: when something needs epoch **ordering** or a stable-session `contextId` (none does today) | amendment §3; RFC §8 C5 |
+| B-06 | Structural turn-boundary re-arm (replace the comment-driven per-turn Set clearing at `voice-agent-session.ts:828-836`) | When the next per-turn Set is added and the manual re-arm becomes a hazard | amendment §3 |
 
 ---
 
@@ -207,13 +213,12 @@ The format below repeats per sprint. Stories use the id pattern `S{N}-{nn}` (e.g
 
 | Risk | Sprint(s) it materializes | Owner | Mitigation |
 |------|---------------------------|-------|------------|
-| Over-abstraction — IU machinery no consumer needs | S0 | Manager | Ship the ledger dormant; only re-express existing features (REQ-5); degenerate turn/segment granularity until measured (§12 Q1). |
-| Reshape blast radius — turn-boundary code across five packages | S1, S4 | Manager | Per-consumer migration (C2–C5 independently revertible); the P0 cluster forces this reshape anyway. |
-| Behavior divergence on re-expression (a characterization test flips) | S2, S3 | IC + Manager | RFC §11 abort: keep the private set, treat divergence as a real bug to triage first — do not force equivalence. |
-| Symptom-patch on the heard-prefix commit (works for one transport only) | S3 | Manager | RFC §11 hard-stop: one commit boundary for all transports; re-derive at the ledger. |
-| No measurable latency win on batch LLM backends | S4 | Manager | Reframe honestly: the win is collapsing five bookkeeping impls into one + wiring the heard-prefix guarantee — not latency (§Risks). |
-| Deleting a private set with a live reader | S4 | IC | Migrate-then-delete in one story; workspace typecheck + package tests gate the delete. |
-| Latency regression from ledger on the hot path | S2, S3, S4 | Manager | REQ-6: ledger is in-memory, synchronous, O(1); `turn_latency` no-regression vs the pre-reshape baseline (short-fixture smoke). |
+| Over-abstraction — IU machinery no consumer needs | S0 | Manager | Ship the ledger dormant; only re-express existing features (REQ-5); degenerate turn/segment granularity until measured (§12 Q1). **Also drove the C5 rescope** (amendment): don't build the epoch reshape no consumer reads. |
+| Behavior divergence on re-expression (a characterization test flips) | S1, S2, S3 | IC + Manager | RFC §11 abort: keep the private set, treat divergence as a real bug to triage first — do not force equivalence. |
+| Symptom-patch on the heard-prefix commit (works for one transport only) | S2 | Manager | RFC §11 hard-stop: one commit boundary for all transports; re-derive at the ledger. |
+| Deleting a private set with a live reader | S3 | IC | Migrate-then-delete in one story; workspace typecheck + package tests gate the delete. |
+| Latency regression from ledger on the hot path | S1, S2, S3 | Manager | REQ-6: ledger is in-memory, synchronous, O(1); `turn_latency` no-regression vs the pre-reshape baseline (short-fixture smoke). |
+| Scope creep back into the deferred 15-file epoch reshape | S1, S4 | Manager | B-05 is consumer-gated; `contextId` stays per-turn; leaf plugins untouched until a consumer forces the split. |
 
 ---
 

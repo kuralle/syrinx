@@ -28,8 +28,21 @@ debug / `llm.error` packet. Faithful to §4.2 (fail-open, observable) and §12 Q
 S0-01/02/03 are one cohesive file-pair (types inert without ledger; ledger untestable
 without both). Briefed as one `S0-01` story, committed `[S0-01]`. See `sprints/sprint-0/PLAN.md` §0.
 
+### D-3 (Sprint 1) — C5 rescoped: premise stale, value folded into C2, epoch reshape deferred
+Factory §3 red gate on C5: its proof (`telephony reaches turn 2+`) is already green.
+Confirmed in code that C5's premise is stale (bug fixed in v4.1.0):
+- telephony mints per-turn `<base>-t<n>` (`outbound-playout-pipeline.ts:46-66`; `edge-twilio.ts:247-251`);
+- poison sets bounded/self-evicting (`deepgram/stt.ts` MAX_RETIRED_CONTEXTS/boundedAdd; `tts-core/engine.ts` MAX_CANCELLED_CONTEXTS/clearCancelledIfDrained).
+Confirmed no consumer needs a first-class epoch (speculative staleness = contextId equality, `aisdk/src/index.ts:165,212,234`).
+**Decision:** defer the standalone 15-file `{contextId,iuId,epoch}` reshape to backlog B-05 (consumer-gated);
+fold C5's real value (ledger producer + first-class turn identity) into C2, delivered by its first consumer.
+`contextId` stays per-turn; leaf plugins untouched. User directive: "rescope, not thin, based on current
+state, reevaluate." Full write-up: `docs/rfc-incremental-unit-substrate-amendment-C5.md`. Board comment on the
+IU design doc. Resequenced: S1=C2+identity, S2=C3, S3=C4, S4=closeout.
+
 ## Deviations
-(none yet)
+- Sprint sequence deviates from RFC §8 chunk order (C1→C5→C2→C3→C4) → now C1→C2→C3→C4, C5 deferred (D-3).
+  Reason: RFC §8's front-loading of C5 assumed the P0 bug was open; it is not.
 
 ## Root causes found
 (none yet)
