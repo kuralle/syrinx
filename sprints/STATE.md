@@ -6,11 +6,11 @@
 
 ## Active sprint
 
-**Sprint number:** `0`
-**Sprint name:** Ledger core (C1)
+**Sprint number:** `1`
+**Sprint name:** Turn-epoch identity (C5)
 **Status:** `not-started`
-**Goal:** `IncrementalUnit` + `InMemoryIuLedger` exist in `packages/core`, dormant, with a monotonic/idempotent state machine proven by unit tests and green CI.
-**WBS section:** [`sprints/WBS.md` § Sprint 0](./WBS.md)
+**Goal:** `IncrementalUnitId {contextId, iuId, epoch}` supersedes the `contextId = turn id` overload in packets and consumers, with browser-per-turn and telephony-per-call both correct.
+**WBS section:** [`sprints/WBS.md` § Sprint 1](./WBS.md)
 
 ## Build branch
 
@@ -20,29 +20,30 @@ Every sprint session — manager and IC — works **on this branch only**. Befor
 
 At session start: `git checkout plan/iu-substrate` (or `git checkout -b plan/iu-substrate` the first time, branched off `main`).
 
-## Load-bearing reading for sprint 0
+## Load-bearing reading for sprint 1
 
-The session running sprint 0 must read these in this order before delegating any story:
+The session running sprint 1 must read these in this order before delegating any story:
 
-1. `sprints/WBS.md` — full read; this is the plan.
-2. `sprints/SESSION_KICKOFF_PROMPT.md` — the loop you are running.
-3. `docs/rfc-incremental-unit-substrate.md` — the source RFC. For Sprint 0, §4.1 (IU identity + state), §4.2 (`IuLedger` interface), §7 (code blueprint), and REQ-1/2/3/6 are load-bearing.
-4. `research/incremental-processing-deep-dive.md` — academic grounding (the framework→IU mapping table); read for context, not required to implement C1.
-5. Project memory `incremental-unit-substrate-insight` — why this substrate exists (speculative gen + barge-in truncation are the same commit/revoke op).
+1. `sprints/WBS.md` § Sprint 1 — the plan for this sprint.
+2. `sprints/sprint-0/HANDOFF.md` — read-me-first from Sprint 0.
+3. `docs/rfc-incremental-unit-substrate.md` — §8 C5, §2 (the `contextId = turn id` overload), §5.1 (structural before/after), REQ-1.
+4. `.understanding/syrinx-voice-engine-understand.md` — the P0 turn-boundary cluster (browser mints `contextId` per turn; telephony reuses one per call; poison sets clear only on `close()`).
+5. `packages/core/src/packets.ts` — where turn-scoped packets carry `contextId` today.
+6. Before briefing: `/code-understand --path packages/core/src/voice-agent-session.ts` for the turn lifecycle (`eos.turn_complete`, contextId mint/consume).
 
 ## Last completed sprint
 
-`(none — Phase 0 not started)`
+`0 — Ledger core (C1)`
 
 ## Last completed at
 
-`(none)`
+`2026-07-09`
 
 ## Sprint history
 
 | Sprint | Status | Completed at | Warmdown |
 |--------|--------|--------------|----------|
-| 0 | not-started | — | — |
+| 0 | done | 2026-07-09 | [sprint-0/WARMDOWN.md](./sprint-0/WARMDOWN.md) |
 | 1 | not-started | — | — |
 | 2 | not-started | — | — |
 | 3 | not-started | — | — |
