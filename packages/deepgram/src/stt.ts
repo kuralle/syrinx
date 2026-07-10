@@ -355,7 +355,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         this.pushTurnComplete(providerContextId);
       }
     } else {
-      this.pushInterim(transcript, providerContextId);
+      this.pushInterim(transcript, providerContextId, alt);
     }
   }
 
@@ -512,12 +512,25 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   /** Emit interim transcript for real-time display. */
-  private pushInterim(transcript: string, contextId = this.currentContextId): void {
+  private pushInterim(
+    transcript: string,
+    contextId = this.currentContextId,
+    alt: Record<string, unknown> | null = null,
+  ): void {
+    const timestampMs = Date.now();
     this.bus?.push(Route.Main, {
       kind: "stt.interim",
       contextId,
-      timestampMs: Date.now(),
+      timestampMs,
       text: transcript,
+    });
+    const wordTimings = mapProviderWordTimings(alt);
+    this.bus?.push(Route.Main, {
+      kind: "stt.partial",
+      contextId,
+      timestampMs,
+      text: transcript,
+      ...(wordTimings ? { wordTimings } : {}),
     });
   }
 
@@ -749,6 +762,31 @@ export class DeepgramSTTPlugin implements VoicePlugin {
 async function defaultSocketFactory(): Promise<SocketFactory> {
   const mod = await import("@kuralle-syrinx/ws/node");
   return mod.createNodeWsSocket;
+}
+
+function mapProviderWordTimings(
+  alt: Record<string, unknown> | null,
+): ReadonlyArray<{ word: string; startMs: number; endMs: number; confidence: number }> | undefined {
+  if (!alt) return undefined;
+  const words = alt["words"];
+  if (!Array.isArray(words)) return undefined;
+  const timings: Array<{ word: string; startMs: number; endMs: number; confidence: number }> = [];
+  for (const entry of words) {
+    if (!entry || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const word = row["word"];
+    const start = row["start"];
+    const end = row["end"];
+    const confidence = row["confidence"];
+    if (typeof word !== "string" || typeof start !== "number" || typeof end !== "number") continue;
+    timings.push({
+      word,
+      startMs: start * 1000,
+      endMs: end * 1000,
+      confidence: typeof confidence === "number" ? confidence : 0,
+    });
+  }
+  return timings.length > 0 ? timings : undefined;
 }
 
 function providerAlternative(msg: Record<string, unknown>): Record<string, unknown> | null {

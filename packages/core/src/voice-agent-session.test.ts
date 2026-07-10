@@ -2,14 +2,22 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { VoiceAgentSession } from "./voice-agent-session.js";
-import { Route, type PipelineBus, type PluginConfig, type VoicePlugin } from "./index.js";
-import { ErrorCategory } from "./packets.js";
+import {
+  Route,
+  type InteractionObservation,
+  type PipelineBus,
+  type PluginConfig,
+  type VoicePlugin,
+} from "./index.js";
+import { InteractionCoordinator } from "./interaction-coordinator.js";
+import { ErrorCategory, type InteractionBackchannelPacket } from "./packets.js";
 import type {
   EndOfSpeechAudioPacket,
   RecordAssistantAudioPacket,
   RecordUserAudioPacket,
   SpeechToTextAudioPacket,
   SttInterimPacket,
+  SttPartialPacket,
   SttResultPacket,
   EndOfSpeechPacket,
   LlmDeltaPacket,
@@ -409,6 +417,7 @@ describe("VoiceAgentSession", () => {
       llmTtftMs: 700,
       ttsTtfbMs: 250,
       fillerUsed: false,
+      backchannelUsed: false,
     });
 
     await closeSession(session);
@@ -445,6 +454,7 @@ describe("VoiceAgentSession", () => {
       turnId: "turn-2",
       ttfaMs: 400,
       fillerUsed: true,
+      backchannelUsed: false,
     });
     expect(events[0]!["eouDelayMs"]).toBeUndefined();
 
@@ -484,6 +494,31 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(events).toHaveLength(0);
+
+    await closeSession(session);
+  });
+
+  it("IP-C3: tool_call_cue.delayed emits interaction.backchannel end-to-end", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 30 });
+    const backchannels: InteractionBackchannelPacket[] = [];
+    session.bus.on("interaction.backchannel", (pkt) => {
+      backchannels.push(pkt as InteractionBackchannelPacket);
+    });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.tool_call",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      toolId: "t1",
+      toolName: "consult_knowledge",
+      toolArgs: { query: "fees" },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 70));
+
+    expect(backchannels).toHaveLength(1);
+    expect(backchannels[0]).toMatchObject({ contextId: "turn-1", cue: "mm_hmm" });
 
     await closeSession(session);
   });
@@ -1271,6 +1306,48 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("stt.partial carries wordTimings but does NOT itself drive barge-in (IP-C4 no-double-drive guard)", async () => {
+    // IP-C4: stt.partial is the rich-seam carrier; the session caches its wordTimings for the
+    // observation but barge-in stays driven ONLY by stt.interim/stt.result. Pushing sustained
+    // stt.partial (no interim) during active TTS must NOT interrupt — proving no second barge-in driver.
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const interrupts: InterruptTtsPacket[] = [];
+
+    await session.start();
+    session.bus.on("interrupt.tts", (pkt) => {
+      interrupts.push(pkt as InterruptTtsPacket);
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array([1, 2, 3, 4]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const t0 = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: t0,
+      text: "wait actually I need",
+      wordTimings: [{ word: "wait", startMs: 0, endMs: 200, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: t0 + 400,
+      text: "wait actually I need something else",
+      wordTimings: [{ word: "wait", startMs: 0, endMs: 200, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(interrupts).toEqual([]);
+
+    await closeSession(session);
+  });
+
   it("commits a barge-in from provider STT interim transcripts when no VAD plugin is registered", async () => {
     // Cascade deployments with endpointingOwner "provider_stt" (the default) have
     // no vad.speech_started producer — interim transcripts during TTS playout are
@@ -1319,6 +1396,47 @@ describe("VoiceAgentSession", () => {
       expect.objectContaining({ kind: "interrupt.tts", contextId: "assistant-turn" }),
     ]);
     expect(metrics).toContain("interrupt.committed_after_ms");
+
+    await closeSession(session);
+  });
+
+  it("attaches cached stt.partial wordTimings to the next barge-in observation (IP-C4)", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 280 });
+    const observations: InteractionObservation[] = [];
+    await session.start();
+
+    const interaction = (session as unknown as { interaction: InteractionCoordinator }).interaction;
+    const originalObserve = interaction.observe.bind(interaction);
+    interaction.observe = (obs) => {
+      observations.push(obs);
+      originalObserve(obs);
+    };
+
+    session.bus.push(Route.Main, {
+      kind: "stt.partial",
+      contextId: "user",
+      timestampMs: Date.now(),
+      text: "wait actually",
+      wordTimings: [{ word: "wait", startMs: 100, endMs: 300, confidence: 0.9 }],
+    } satisfies SttPartialPacket);
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "user",
+      timestampMs: Date.now(),
+      text: "wait actually",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "stt_partial",
+          text: "wait actually",
+          wordTimings: [{ word: "wait", startMs: 100, endMs: 300, confidence: 0.9 }],
+        }),
+      ]),
+    );
 
     await closeSession(session);
   });

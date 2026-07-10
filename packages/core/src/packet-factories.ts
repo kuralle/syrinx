@@ -7,6 +7,7 @@
 // definition and call sites need no `as` assertion — illegal packet shapes are
 // unrepresentable at construction instead of asserted-valid by a cast (CR-05).
 
+import type { WordTiming } from "./interaction-policy.js";
 import { ErrorCategory } from "./packets.js";
 import type {
   ConversationMetricPacket,
@@ -21,6 +22,7 @@ import type {
   SpeechToTextAudioPacket,
   EndOfSpeechAudioPacket,
   EndOfSpeechPacket,
+  SttPartialPacket,
   SttResultPacket,
   UserInputPacket,
   TextToSpeechTextPacket,
@@ -39,6 +41,7 @@ import type {
   StartIdleTimeoutPacket,
   StopIdleTimeoutPacket,
   ModeSwitchRequestedPacket,
+  InteractionBackchannelPacket,
 } from "./packets.js";
 
 const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
@@ -113,6 +116,17 @@ export function vadAudio(contextId: string, timestampMs: number, audio: Uint8Arr
 
 export function sttAudio(contextId: string, timestampMs: number, audio: Uint8Array): SpeechToTextAudioPacket {
   return { kind: "stt.audio", contextId, timestampMs, audio };
+}
+
+export function sttPartial(
+  contextId: string,
+  timestampMs: number,
+  text: string,
+  wordTimings?: readonly WordTiming[],
+): SttPartialPacket {
+  return wordTimings
+    ? { kind: "stt.partial", contextId, timestampMs, text, wordTimings }
+    : { kind: "stt.partial", contextId, timestampMs, text };
 }
 
 export function eosAudio(contextId: string, timestampMs: number, audio: Uint8Array): EndOfSpeechAudioPacket {
@@ -240,4 +254,12 @@ export function modeSwitchRequested(
   mode: "text" | "audio",
 ): ModeSwitchRequestedPacket {
   return { kind: "mode.switch_requested", contextId, timestampMs, mode };
+}
+
+export function interactionBackchannel(
+  contextId: string,
+  timestampMs: number,
+  cue: string,
+): InteractionBackchannelPacket {
+  return { kind: "interaction.backchannel", contextId, timestampMs, cue };
 }

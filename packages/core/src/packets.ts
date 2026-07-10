@@ -9,6 +9,8 @@
 //   Errors:                 SttError, TtsError, LlmError
 //   Lifecycle:              InitStepCompleted, InitFailed, InitCompleted
 
+import type { WordTiming } from "./interaction-policy.js";
+
 // =============================================================================
 // Base Types
 // =============================================================================
@@ -174,6 +176,12 @@ export interface SpeechToTextAudioPacket extends VoicePacket {
 export interface SttInterimPacket extends VoicePacket {
   readonly kind: "stt.interim";
   readonly text: string;
+}
+
+export interface SttPartialPacket extends VoicePacket {
+  readonly kind: "stt.partial";
+  readonly text: string;
+  readonly wordTimings?: readonly WordTiming[];
 }
 
 export interface SttResultPacket extends VoicePacket {
@@ -461,6 +469,16 @@ export interface RecordAssistantAudioTruncatePacket extends VoicePacket {
 export type RecordAssistantAudioPacket = RecordAssistantAudioDataPacket | RecordAssistantAudioTruncatePacket;
 
 // =============================================================================
+// Interaction Policy Packets
+// =============================================================================
+
+/** Pre-cached backchannel cue id rendered by the outbound mixer (IP-C3). */
+export interface InteractionBackchannelPacket extends VoicePacket {
+  readonly kind: "interaction.backchannel";
+  readonly cue: string;
+}
+
+// =============================================================================
 // Behavior Packets
 // =============================================================================
 
@@ -560,6 +578,7 @@ export type InputPacket =
   | VadSpeechActivityPacket
   | SpeechToTextAudioPacket
   | SttInterimPacket
+  | SttPartialPacket
   | SttResultPacket
   | FinalizeSttPacket
   | SttErrorPacket

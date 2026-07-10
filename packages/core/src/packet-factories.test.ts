@@ -2,7 +2,26 @@
 
 import { describe, expect, it } from "vitest";
 
-import { reasoningResume, reasoningSuspended } from "./packet-factories.js";
+import { reasoningResume, reasoningSuspended, sttPartial } from "./packet-factories.js";
+
+describe("sttPartial", () => {
+  it("returns a stt.partial packet with optional wordTimings", () => {
+    const timings = [{ word: "hello", startMs: 100, endMs: 250, confidence: 0.9 }];
+    expect(sttPartial("ctx-1", 1000, "hello world", timings)).toEqual({
+      kind: "stt.partial",
+      contextId: "ctx-1",
+      timestampMs: 1000,
+      text: "hello world",
+      wordTimings: timings,
+    });
+    expect(sttPartial("ctx-1", 1000, "hello")).toEqual({
+      kind: "stt.partial",
+      contextId: "ctx-1",
+      timestampMs: 1000,
+      text: "hello",
+    });
+  });
+});
 
 describe("reasoningSuspended", () => {
   it("returns a reasoning.suspended packet with the expected shape", () => {

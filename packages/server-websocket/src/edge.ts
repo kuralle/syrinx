@@ -16,7 +16,7 @@ import { TimerScheduler, type Scheduler } from "@kuralle-syrinx/core";
 import { type StreamingPcm16Resampler } from "@kuralle-syrinx/core/audio";
 import {
   BackgroundAudioMixer,
-  wireBackgroundThinking,
+  wireBackgroundAudio,
   type BackgroundAudioConfig,
 } from "./background-audio.js";
 export type { BackgroundAudioConfig, BackgroundAudioSource } from "./background-audio.js";
@@ -370,7 +370,7 @@ function wireEdgeSessionEvents(
   recorder?: EdgeRecorder,
   backgroundAudio?: BackgroundAudioMixer,
 ): void {
-  if (backgroundAudio) wireBackgroundThinking(session, backgroundAudio);
+  if (backgroundAudio) wireBackgroundAudio(session, backgroundAudio);
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
     handler: VoiceAgentSessionEvents[K],

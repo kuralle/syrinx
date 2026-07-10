@@ -160,6 +160,58 @@ describe("BackgroundAudioMixer", () => {
     expect(mixer.idleFrame(1, 16000, t0 + 300)).toBeNull(); // episode fully over
   });
 
+  it("IP-C3: plays a one-shot cue in an idle frame with thinking ducked under it", () => {
+    const ramp = Int16Array.from({ length: 2000 }, (_, i) => (i % 2 === 0 ? 800 : -800));
+    const cue = Int16Array.from({ length: 160 }, (_, i) => Math.round(6000 * Math.sin((2 * Math.PI * i) / 160)));
+    const mixer = new BackgroundAudioMixer({
+      thinking: { pcm: ramp, sampleRateHz: 16000, gain: 1 },
+      cues: { mm_hmm: { pcm: cue, sampleRateHz: 16000, gain: 1 } },
+      fadeMs: 0,
+    });
+    const t0 = 12_000_000;
+    mixer.setThinking(true);
+    expect(mixer.queueCue("mm_hmm")).toBe(true);
+
+    const frame = mixer.idleFrame(10, 16000, t0)!;
+    const samples = samplesOf(frame);
+    expect(samples.some((s) => Math.abs(s) > 1000)).toBe(true);
+    expect(samples.every((s) => s <= 32767 && s >= -32768)).toBe(true);
+
+    mixer.setThinking(true);
+    expect(mixer.queueCue("missing")).toBe(false);
+  });
+
+  it("IP-C3: thinking loop continues before and after a one-shot cue", () => {
+    const thinking = Int16Array.from({ length: 1000 }, (_, i) => i);
+    const cue = new Int16Array(32).fill(5000);
+    const mixer = new BackgroundAudioMixer({
+      thinking: { pcm: thinking, sampleRateHz: 16000, gain: 1 },
+      cues: { mm_hmm: { pcm: cue, sampleRateHz: 16000, gain: 1 } },
+      fadeMs: 0,
+    });
+    const t0 = 13_000_000;
+    mixer.setThinking(true);
+    const before = samplesOf(mixer.idleFrame(1, 16000, t0)!);
+    expect(before[0]).toBe(0);
+
+    mixer.queueCue("mm_hmm");
+    mixer.idleFrame(1, 16000, t0 + 100);
+    const after = samplesOf(mixer.idleFrame(1, 16000, t0 + 200)!);
+    expect(after[0]).toBeGreaterThan(0);
+  });
+
+  it("IP-C3: resolves cues from config bytes without filesystem access", () => {
+    const cuePcm = new Int16Array(80).fill(1200);
+    const mixer = new BackgroundAudioMixer({
+      cues: { mm_hmm: { pcm: cuePcm, sampleRateHz: 16000, gain: 0.8 } },
+      fadeMs: 0,
+    });
+    expect(mixer.hasCue("mm_hmm")).toBe(true);
+    expect(mixer.queueCue("mm_hmm")).toBe(true);
+    const frame = mixer.idleFrame(5, 16000, 14_000_000)!;
+    expect(samplesOf(frame).some((s) => s !== 0)).toBe(true);
+  });
+
   it("fades each new thinking episode in from silence", () => {
     const mixer = new BackgroundAudioMixer({
       thinking: { pcm: new Int16Array(1000).fill(1000), sampleRateHz: 16000, gain: 1 },

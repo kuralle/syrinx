@@ -30,6 +30,7 @@ export {
   type VadSpeechActivityPacket,
   type SpeechToTextAudioPacket,
   type SttInterimPacket,
+  type SttPartialPacket,
   type SttResultPacket,
   type FinalizeSttPacket,
   type SttErrorPacket,
@@ -208,7 +209,8 @@ export {
 } from "./interaction-policy.js";
 export { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 export { DeferInteractionPolicy } from "./policies/defer.js";
-export { InteractionCoordinator } from "./interaction-coordinator.js";
+export { InteractionCoordinator, type InteractionCaps } from "./interaction-coordinator.js";
+export { type InteractionBackchannelPacket } from "./packets.js";
 
 // VoiceAgentSession
 export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";

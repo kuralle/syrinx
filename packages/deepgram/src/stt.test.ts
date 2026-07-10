@@ -7,6 +7,8 @@ import {
   Route,
   type ConversationMetricPacket,
   type SttErrorPacket,
+  type SttInterimPacket,
+  type SttPartialPacket,
   type SttResultPacket,
 } from "@kuralle-syrinx/core";
 
@@ -59,6 +61,70 @@ async function waitForValue<T>(items: T[], value: T): Promise<void> {
 }
 
 describe("DeepgramSTTPlugin", () => {
+  it("emits stt.partial with word timings alongside unchanged stt.interim", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: false,
+          channel: {
+            alternatives: [{
+              transcript: "hello there",
+              confidence: 0.91,
+              words: [
+                { word: "hello", start: 0.12, end: 0.48, confidence: 0.95 },
+                { word: "there", start: 0.5, end: 0.82, confidence: 0.88 },
+              ],
+            }],
+          },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const interims: SttInterimPacket[] = [];
+    const partials: SttPartialPacket[] = [];
+    bus.on("stt.interim", (pkt) => {
+      interims.push(pkt as SttInterimPacket);
+    });
+    bus.on("stt.partial", (pkt) => {
+      partials.push(pkt as SttPartialPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await waitFor(partials);
+
+    expect(interims).toEqual([
+      expect.objectContaining({ kind: "stt.interim", contextId: "turn-1", text: "hello there" }),
+    ]);
+    expect(partials).toEqual([
+      expect.objectContaining({
+        kind: "stt.partial",
+        contextId: "turn-1",
+        text: "hello there",
+        wordTimings: [
+          { word: "hello", startMs: 120, endMs: 480, confidence: 0.95 },
+          { word: "there", startMs: 500, endMs: 820, confidence: 0.88 },
+        ],
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("uses provider KeepAlive while idle and CloseStream on shutdown", async () => {
     const controlMessages: string[] = [];
     const endpointUrl = await createLocalServer((socket) => {

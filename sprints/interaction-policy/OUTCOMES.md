@@ -1,5 +1,44 @@
 # Outcomes — InteractionPolicy seam + VAP
 
+## 2026-07-10 continuation — C1–C6 built (C1b deferred)
+
+Every RFC chunk except C1b is now built + manager-verified. **C1+C2 merged to `beta`** (PR #25, `fcead10`).
+**C3 + C4 + C5 + C6 are on `plan/ip-vap`** (off the merged lineage), awaiting a batch PR into `beta` (outward
+gate — human go).
+
+| Chunk | State | Commits |
+|-------|-------|---------|
+| C1 seam + RuleBasedInteractionPolicy (barge-in) | ✅ merged to beta | a53f2d2 + 55d098a |
+| C2 caps + DeferInteractionPolicy | ✅ merged to beta | 37fa3f2 + f139481 |
+| C4 rich STT seam (wordTimings) | ✅ on plan/ip-vap | 90b64ca |
+| C5 @kuralle-syrinx/vap VapInteractionPolicy | ✅ on plan/ip-vap | be30a75 + 3588e47 |
+| C3 backchannel wait-gap cue layer (reshaped) | ✅ on plan/ip-vap | 328db80 + 3c9c149 |
+| C6 eval harness (task-success + config matrix) | ✅ on plan/ip-vap | 4c91843 |
+| C1b endpointing behind the seam | ⏸ deferred → do with half-cascade | — |
+
+**C3** was reshaped per a codex research decision (`research/interaction-policy/c3-backchannel-decision.md`):
+a conservative asset-backed wait-gap cue layer composing with the v4.1 thinking bed (one cue on the G3
+`delayed` phase, no user-pause backchannels, byte-based CF-neutral cues, `caps.emitsBackchannel` gating);
+free-form tool-call filler fields explicitly rejected. **C5** ships turn-scoped VAP behind the seam with a
+correct sync-observe/async-inference split and a CF-correct Workers predictor, honestly `StubVapPredictor`-
+backed (no open ONNX VAP checkpoint exists upstream). **C6** builds the RFC §9.4 proof-gate infrastructure
+(task-success scorer + config matrix + verdict rule, reusing the shipped Full-Duplex-Bench scorer).
+
+**Known follow-ups (documented, not silent):**
+- **VAP not yet reachable end-to-end** — needs an `interactionPolicy` session-injection + `audio_frame`/
+  `playout_tick` observation feeds (scoped in `C6-eval-harness-design.md`). Until then the eval matrix's
+  `cascade+VAP` rows are gated.
+- **No real VAP ONNX model** (upstream PyTorch-only) — export needed; the placeholder `RollingFeatureBuffer`
+  has an O(n²) append + a feature-aliasing hazard to fix at that point (see `packages/vap/README.md`).
+- **C3 real voice-matched cues + listen-smoke** (placeholders now).
+- **`pnpm -r test` flake** — `packages/grok` STT test flakes under full-parallel load (passes isolated); a
+  pre-existing CI risk, not from this work.
+- The **live eval sweep** (examiner × configs) is a manager-run smoke, gated on the VAP wiring + real model.
+
+---
+
+## (original) Status: the seam foundation (C1 + C2)
+
 **Status:** the **seam foundation (C1 + C2) is built + manager-verified** on `plan/interaction-policy`
 (off `beta`), behavior-preserving. C3–C6 + C1b are scoped below with honest gating. Not yet PR'd into
 `beta` (outward-facing gate — awaiting human go).

@@ -48,6 +48,7 @@ export type InteractionObservation =
       readonly text: string;
       readonly confidence?: number;
       readonly interruptedContextId?: string;
+      readonly wordTimings?: readonly WordTiming[];
     }
   | {
       readonly kind: "audio_frame";
@@ -69,11 +70,13 @@ export type InteractionObservation =
       readonly contextId: string;
       readonly timestampMs: number;
       readonly delegateInFlight?: boolean;
+      readonly toolCallPhase?: "started" | "delayed" | "complete" | "failed";
     };
 
 export type InteractionDecision =
   | { readonly kind: "keep_listening" }
   | { readonly kind: "take_turn"; readonly confidence: number }
+  /** `cue` is a stable pre-cached asset id (e.g. `mm_hmm`), not free-form text. */
   | { readonly kind: "backchannel"; readonly cue: string }
   | { readonly kind: "hold" }
   | { readonly kind: "interrupt"; readonly interruptedContextId: string };
