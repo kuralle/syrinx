@@ -266,10 +266,15 @@ describe("VoiceAgentSession", () => {
     expect(policy.initializeCount).toBe(1);
     expect(policy.initializedConfig).toEqual({ model_path: "/tmp/policy.onnx" });
     const audioFrame = policy.observations.find((observation) => observation.kind === "audio_frame");
-    expect(audioFrame).toMatchObject({ contextId: "turn-policy", timestampMs: 1000 });
+    expect(audioFrame).toMatchObject({ contextId: "turn-policy", timestampMs: 1000, sampleRateHz: 16000 });
     expect(audioFrame?.kind === "audio_frame" ? [...(audioFrame.audio ?? [])] : []).toEqual([4660, -52]);
     expect(policy.observations.filter((observation) => observation.kind === "playout_tick")).toEqual([
-      expect.objectContaining({ contextId: "turn-policy", ttsActive: true }),
+      expect.objectContaining({
+        contextId: "turn-policy",
+        ttsActive: true,
+        sampleRateHz: 16000,
+        audio: expect.any(Int16Array),
+      }),
       expect.objectContaining({ contextId: "turn-policy", playedOutMs: 20, ttsActive: false }),
     ]);
 

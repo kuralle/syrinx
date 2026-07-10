@@ -55,6 +55,7 @@ export type InteractionObservation =
       readonly contextId: string;
       readonly timestampMs: number;
       readonly audio?: Int16Array;
+      readonly sampleRateHz?: number;
       readonly wordTimings?: readonly WordTiming[];
       readonly prosody?: Float32Array;
     }
@@ -64,6 +65,9 @@ export type InteractionObservation =
       readonly timestampMs: number;
       readonly playedOutMs?: number;
       readonly ttsActive?: boolean;
+      /** PCM queued for assistant playout. Present on audio-bearing ticks. */
+      readonly audio?: Int16Array;
+      readonly sampleRateHz?: number;
     }
   | {
       readonly kind: "delegate_state";

@@ -715,6 +715,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       audio: pcm16BytesToSamples(pkt.audio),
+      sampleRateHz: 16_000,
     });
   }
 
@@ -1302,6 +1303,8 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       ttsActive: true,
+      audio: pcm16BytesToSamples(pkt.audio),
+      sampleRateHz,
     });
 
     // Anchor the idle timer to when playout actually *ends* (P2), not to chunk

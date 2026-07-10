@@ -200,6 +200,8 @@ export {
   type SyrinxAudioEnvelopeHeader,
 } from "./audio-envelope.js";
 
+export { StreamingPcm16Resampler } from "./audio/index.js";
+
 // Interaction policy seam (IP-C1)
 export {
   type InteractionPolicy,

@@ -14,7 +14,7 @@
 *retrain on owned/licensed audio*. That retrain **has already been done and released by the Kyoto group
 itself**: the MaAI project (the successor that absorbed VAP-Realtime) publishes **MIT-licensed VAP weights
 trained on Kyoto's own corpus** (`*_kyoto` variants). Separately, a second family (**DualTurn**, Apache-2.0)
-ships **ready-made ONNX** with streaming inference. Both were verified firsthand on Hugging Face (2026-07-10),
+ships a reusable **ONNX backbone** with streaming inference. Both were verified firsthand on Hugging Face (2026-07-10),
 not just via search.
 
 Consequence: the "fund only if the eval proves it" gate is unchanged, but **running the gate is now days of
@@ -29,7 +29,7 @@ integration, not months of ML work.** VAP moves from *dormant* to *dormant-but-a
 | **MaAI VAP, `vap_mc_*_kyoto`** | `huggingface.co/maai-kyoto` (29 repos); code `github.com/MaAI-Kyoto/MaAI` (`pip install maai`) | PyTorch state dict, **23–27 MB** (CPC variant) | **MIT** (trained on Kyoto's own Online Conversation Dataset — this is the "retrain on owned audio," already done) | EN, ZH, JA, trilingual | CPU real-time (IWSDS 2024, arXiv:2401.04868). **Mono-channel (`_mc_`) variants take user-audio only** — matches our existing buffer, no agent-channel plumbing. Outputs `p_now` (0–600 ms) / `p_future` (600–2000 ms). Needs a **one-time torch→ONNX export** (not training). |
 | **MaAI backchannel, `vap_bc_*`** | same org | PyTorch | **MIT** | EN, ZH, JA | Continuous backchannel **timing + type** prediction (NAACL 2025, arXiv:2410.15929). The only open model of its kind. |
 | **MaAI Mimi encoder** | `maai-kyoto/continuous-mimi-onnx` | **ONNX** (fp32 + int8, 156 MB) | CC-BY-4.0 (attribute) | n/a | Streaming encoder for the `normal-ver2` variant — cleanest export path pairs this with the ver2 head. |
-| **DualTurn** | `huggingface.co/anyreach-ai/dualturn-qwen2.5-mimi-0.5B`; code `github.com/anyreachai/dualturn` | **ONNX shipped** (~4 GB fp32) + safetensors | **Apache-2.0** | EN only | Streaming KV-cache, **~41–78 ms/step on one CPU**, stereo user+agent @ 12.5 Hz. Heads map 1:1 to `VapProbs`: EOT/BOT→`pShift`, BC→`pBackchannel`, HOLD→`pHold`, + future-VAD at 4 horizons. Caveats: Interspeech 2026 submission (unrefereed), single-author, Node-only (never Workers). |
+| **DualTurn** | `huggingface.co/anyreach-ai/dualturn-qwen2.5-mimi-0.5B` | Qwen **backbone ONNX** (~2 GB external data) + safetensors | **Apache-2.0** | EN only | Streaming KV-cache, **~41–78 ms/step on one CPU**, stereo user+agent @ 12.5 Hz. The published ONNX is not an end-to-end audio model: Mimi, projection, and turn heads remain outside the graph. Its README's `step(embeds, ...)` example does not feed `embeds` to ONNX and therefore needs an `inputs_embeds` graph patch. Syrinx exports projection + all heads on Modal, patches that input, and pairs it with attributed Continuous Mimi ONNX. EOT/BOT→`pShift`, BC→`pBackchannel`, HOLD→`pHold`. Node-only (never Workers). |
 | **Smart Turn v3.2** | `huggingface.co/pipecat-ai/smart-turn-v3` | **ONNX** (8 MB int8) | BSD-2 | 23 | Already integrated (`packages/pipecat-smart-turn`). Endpointing only — confirmed *not* patchable into VAP. |
 | *(fallbacks)* Easy Turn (`ASLP-lab/Easy-Turn`, model + 1,145 h data) · SoulX-Duplug-0.6B (`Soul-AILab`) | HF | PyTorch | Apache-2.0 | EN+ZH | 4-state semantic controllers (complete/incomplete/backchannel/wait). GPU-class; alternatives if the VAP family fails the eval. |
 
@@ -132,7 +132,7 @@ owning the last mile openly is worth it.
 2. **Feel chunks (small, rule-based, demo-visible):** pause-then-resolve barge-in; backchannel tenant knobs;
    `acknowledgementPhrases` suppression.
 3. **Arm the eval:**
-   - 3a. **DualTurn smoke (days):** wire the Apache-2.0 ONNX into `LocalVapPredictor`; forces the §6 fixes.
+   - 3a. **DualTurn smoke (days):** build the explicit Apache-2.0 backbone/projection/heads + CC-BY-4.0 Mimi bundle and wire it into `LocalVapPredictor`; forces the §6 fixes. Do not treat the upstream backbone ONNX as audio-ready.
    - 3b. **MaAI export (a chunk):** one-time torch→ONNX of `vap_mc_en_kyoto`; the strategic multilingual candidate.
 4. **Run C6:** real-VAP vs cheap stack, using **eot-bench** (LiveKit, open, latency-vs-false-cutoff frontier),
    **Full-Duplex-Bench** (arXiv:2503.04721) metrics, Krisp's public test set (`Krisp-AI/turn-taking-test-v1`);

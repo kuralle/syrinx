@@ -2,7 +2,13 @@
 
 import type { PluginConfig } from "@kuralle-syrinx/core";
 import { optionalStringConfig } from "@kuralle-syrinx/core";
-import type { VapPredictor, VapProbs } from "./vap-policy.js";
+import {
+  RollingFeatureBuffer,
+  ZERO_VAP_PROBS,
+  type VapPredictor,
+  type VapPredictorFrame,
+  type VapProbs,
+} from "./vap-policy.js";
 
 type Ort = typeof import("onnxruntime-web");
 type InferenceSession = import("onnxruntime-web").InferenceSession;
@@ -18,19 +24,46 @@ export class WorkersVapPredictor implements VapPredictor {
     });
   }
 
-  async predict(features: Float32Array): Promise<VapProbs> {
+  private readonly buffers = new Map<string, RollingFeatureBuffer>();
+  private readonly cachedProbs = new Map<string, VapProbs>();
+
+  async push(frame: VapPredictorFrame): Promise<VapProbs> {
     if (!this.session || !this.ort) {
       throw new Error("WorkersVapPredictor is not initialized");
     }
+    if (frame.channel === "assistant") {
+      return this.cachedProbs.get(frame.contextId) ?? ZERO_VAP_PROBS;
+    }
+    const buffer = this.bufferFor(frame.contextId);
+    buffer.append(frame.audio);
+    const features = buffer.snapshot();
     const output = await this.session.run({
       features: new this.ort.Tensor("float32", features, [1, features.length]),
     });
-    return mapOnnxOutput(output);
+    const probs = mapOnnxOutput(output);
+    this.cachedProbs.set(frame.contextId, probs);
+    return probs;
+  }
+
+  reset(contextId: string): void {
+    this.buffers.delete(contextId);
+    this.cachedProbs.delete(contextId);
   }
 
   async close(): Promise<void> {
     this.session = null;
     this.ort = null;
+    this.buffers.clear();
+    this.cachedProbs.clear();
+  }
+
+  private bufferFor(contextId: string): RollingFeatureBuffer {
+    let buffer = this.buffers.get(contextId);
+    if (!buffer) {
+      buffer = new RollingFeatureBuffer();
+      this.buffers.set(contextId, buffer);
+    }
+    return buffer;
   }
 }
 
