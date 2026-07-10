@@ -12,6 +12,7 @@ import {
   type VoicePlugin,
 } from "./index.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
+import type { Scheduler, ScheduledCallback } from "./scheduler.js";
 import { ErrorCategory, type InteractionBackchannelPacket } from "./packets.js";
 import type {
   EndOfSpeechAudioPacket,
@@ -141,6 +142,20 @@ class CapturingInteractionPolicy implements InteractionPolicy {
 
   async close(): Promise<void> {
     this.closeCount += 1;
+  }
+}
+
+/** Records scheduled/cancelled timers without firing them, for leak assertions. */
+class RecordingScheduler implements Scheduler {
+  readonly timers = new Map<string, { delayMs: number; cb: ScheduledCallback }>();
+  schedule(key: string, delayMs: number, cb: ScheduledCallback): void {
+    this.timers.set(key, { delayMs, cb });
+  }
+  cancel(key: string): void {
+    this.timers.delete(key);
+  }
+  pendingKeys(prefix: string): string[] {
+    return [...this.timers.keys()].filter((k) => k.startsWith(prefix));
   }
 }
 
@@ -280,6 +295,63 @@ describe("VoiceAgentSession", () => {
 
     await closeSession(session);
     expect(policy.closeCount).toBe(1);
+  });
+
+  it("threads the packet's true sample rate to the injected policy audio_frame (not a hardcoded 16k)", async () => {
+    const policy = new CapturingInteractionPolicy();
+    const session = new VoiceAgentSession({ plugins: {}, interactionPolicy: policy });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "user.audio_received",
+      contextId: "turn-rate",
+      timestampMs: 2000,
+      audio: new Uint8Array([0x34, 0x12, 0xcc, 0xff]),
+      sampleRateHz: 24000,
+    } satisfies UserAudioReceivedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const audioFrame = policy.observations.find((o) => o.kind === "audio_frame");
+    expect(audioFrame).toMatchObject({ contextId: "turn-rate", sampleRateHz: 24000 });
+
+    await closeSession(session);
+  });
+
+  it("cancels a pending interaction playout timer on close even after its turn completed", async () => {
+    const scheduler = new RecordingScheduler();
+    const policy = new CapturingInteractionPolicy();
+    const session = new VoiceAgentSession({ plugins: {}, interactionPolicy: policy, scheduler });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-x",
+      timestampMs: 1000,
+      audio: new Uint8Array(640),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-x",
+      timestampMs: 1100,
+    } satisfies TextToSpeechEndPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(scheduler.pendingKeys("interaction.playout:")).toEqual(["interaction.playout:turn-x"]);
+
+    // Turn completes (telephony reuses the contextId) — this deletes turn-x from
+    // firstTtsAudioFired, orphaning the timer from the old stop() cancel loop.
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-x",
+      timestampMs: 1200,
+      text: "done",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(scheduler.pendingKeys("interaction.playout:")).toEqual(["interaction.playout:turn-x"]);
+
+    await session.close();
+    expect(scheduler.pendingKeys("interaction.playout:")).toEqual([]);
   });
 
   it("does not initialize an injected policy when full-duplex defer mode owns interaction", async () => {

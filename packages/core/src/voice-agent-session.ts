@@ -311,6 +311,7 @@ export class VoiceAgentSession {
   private turnTimings = new Map<string, TurnTiming>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
+  private readonly pendingInteractionPlayoutTimers = new Set<string>();
   private readonly errorFallbackText: string;
   private fallbackInjectedContexts = new Set<string>();
   // G3: pending tool calls per context (toolId → toolName) driving the tool_call_cue lifecycle.
@@ -506,9 +507,10 @@ export class VoiceAgentSession {
     this.watchdogs.dispose();
     this.observabilityObserver.dispose();
     this.ttsPlayout.clear();
-    for (const contextId of this.firstTtsAudioFired) {
+    for (const contextId of this.pendingInteractionPlayoutTimers) {
       this.scheduler.cancel(interactionPlayoutTimerKey(contextId));
     }
+    this.pendingInteractionPlayoutTimers.clear();
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.turnTimings.clear();
@@ -715,7 +717,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       audio: pcm16BytesToSamples(pkt.audio),
-      sampleRateHz: 16_000,
+      sampleRateHz: pkt.sampleRateHz ?? 16_000,
     });
   }
 
@@ -1336,15 +1338,7 @@ export class VoiceAgentSession {
     this.ttsPlayout.scheduleRelease(pkt.contextId, now);
     const playoutEndMs = this.ttsPlayout.playoutEnd(pkt.contextId);
     const remainingMs = playoutEndMs === undefined ? 0 : Math.max(0, playoutEndMs - now);
-    this.scheduler.schedule(interactionPlayoutTimerKey(pkt.contextId), remainingMs, () => {
-      if (this.ttsPlayout.isActive(pkt.contextId)) return;
-      this.interaction.observe({
-        kind: "playout_tick",
-        contextId: pkt.contextId,
-        timestampMs: Date.now(),
-        ttsActive: false,
-      });
-    });
+    this.scheduleInteractionPlayoutTick(pkt.contextId, remainingMs);
     this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
@@ -1354,8 +1348,27 @@ export class VoiceAgentSession {
     });
   }
 
+  private scheduleInteractionPlayoutTick(contextId: string, delayMs: number): void {
+    this.pendingInteractionPlayoutTimers.add(contextId);
+    this.scheduler.schedule(interactionPlayoutTimerKey(contextId), delayMs, () => {
+      this.pendingInteractionPlayoutTimers.delete(contextId);
+      if (this.ttsPlayout.isActive(contextId)) return;
+      this.interaction.observe({
+        kind: "playout_tick",
+        contextId,
+        timestampMs: Date.now(),
+        ttsActive: false,
+      });
+    });
+  }
+
+  private cancelInteractionPlayoutTick(contextId: string): void {
+    if (!this.pendingInteractionPlayoutTimers.delete(contextId)) return;
+    this.scheduler.cancel(interactionPlayoutTimerKey(contextId));
+  }
+
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
-    this.scheduler.cancel(interactionPlayoutTimerKey(pkt.contextId));
+    this.cancelInteractionPlayoutTick(pkt.contextId);
     this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete, pkt.playedOutMs);
     this.interaction.observe({
       kind: "playout_tick",
@@ -1367,7 +1380,7 @@ export class VoiceAgentSession {
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
-    this.scheduler.cancel(interactionPlayoutTimerKey(pkt.contextId));
+    this.cancelInteractionPlayoutTick(pkt.contextId);
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
@@ -1417,7 +1430,7 @@ export class VoiceAgentSession {
    * the LLM, and drops late deltas/audio for the stale context.
    */
   private cancelStaleGeneration(contextId: string, timestampMs: number): void {
-    this.scheduler.cancel(interactionPlayoutTimerKey(contextId));
+    this.cancelInteractionPlayoutTick(contextId);
     this.interruptedGenerationContextIds.add(contextId);
     this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
     this.generatingContextIds.delete(contextId);

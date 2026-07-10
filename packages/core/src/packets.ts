@@ -122,8 +122,10 @@ export interface AudioFormat {
 
 export interface UserAudioReceivedPacket extends VoicePacket {
   readonly kind: "user.audio_received";
-  /** Raw PCM audio (16-bit, mono, 16kHz). */
+  /** Raw PCM audio (16-bit, mono). Rate given by `sampleRateHz` (defaults to 16kHz). */
   readonly audio: Uint8Array;
+  /** Sample rate of `audio` in Hz. Omitted means 16000 (the legacy default). */
+  readonly sampleRateHz?: number;
 }
 
 export interface UserTextReceivedPacket extends VoicePacket {

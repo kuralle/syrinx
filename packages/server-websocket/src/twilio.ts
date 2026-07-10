@@ -324,6 +324,7 @@ export async function createTwilioMediaStreamServer(
           contextId: state.contextId,
           timestampMs: Date.now(),
           audio: pcm16SamplesToBytes(pcm16k),
+          sampleRateHz: inputSampleRateHz,
         });
         return;
       }

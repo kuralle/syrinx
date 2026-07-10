@@ -292,6 +292,7 @@ export async function createSmartPbxMediaStreamServer(
           contextId: state.contextId,
           timestampMs: Date.now(),
           audio: pcm16SamplesToBytes(resampled),
+          sampleRateHz: inputSampleRateHz,
         });
         return;
       }

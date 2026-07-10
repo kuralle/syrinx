@@ -159,13 +159,9 @@ export class InteractionCoordinator {
     const pending = this.pendingTakeTurns.get(contextId);
     if (!pending) return;
 
-    const segments = [
-      ...pending.transcripts.map((t) => t.text.trim()),
-      ...(pending.latestInterim ? [pending.latestInterim] : []),
-    ].filter(Boolean);
-    const text = segments.join(" ").replace(/\s+/g, " ").trim();
-    if (!text) return;
-
+    // Anchor the finalize timer at the policy's commitment even before any text
+    // exists — the callback reads live transcript/interim state at fire time and
+    // is the sole gate on whether the turn actually completes.
     const delayMs = pending.waitMs ?? confidenceToWaitMs(pending.confidence);
     const timerKey = takeTurnTimerKey(contextId);
     this.scheduler.cancel(timerKey);
@@ -173,18 +169,18 @@ export class InteractionCoordinator {
       const live = this.pendingTakeTurns.get(contextId);
       if (!live) return;
 
-      const finalSegments = [
-        ...live.transcripts.map((t) => t.text.trim()),
-        ...(live.latestInterim ? [live.latestInterim] : []),
-      ].filter(Boolean);
-      const finalText = finalSegments.join(" ").replace(/\s+/g, " ").trim();
-      if (!finalText || live.transcripts.length === 0) return;
+      const finalText = joinTranscript(live.transcripts, live.latestInterim);
+      // The policy committed to this turn. Prefer real STT finals; if none ever
+      // arrived, fall back to the latest interim so a committed turn is never
+      // silently dropped. Only bail when there is genuinely nothing to commit.
+      if (!finalText) return;
 
       this.pendingTakeTurns.delete(contextId);
-      this.deps.bus.push(
-        Route.Main,
-        make.eosTurnComplete(contextId, Date.now(), finalText, live.transcripts),
-      );
+      const transcripts: SttResultPacket[] =
+        live.transcripts.length > 0
+          ? live.transcripts
+          : [{ kind: "stt.result", contextId, timestampMs: Date.now(), text: finalText, confidence: 0 }];
+      this.deps.bus.push(Route.Main, make.eosTurnComplete(contextId, Date.now(), finalText, transcripts));
     });
   }
 
@@ -233,4 +229,12 @@ export class InteractionCoordinator {
 
 function takeTurnTimerKey(contextId: string): string {
   return `interaction.take_turn:${contextId}`;
+}
+
+function joinTranscript(transcripts: readonly SttResultPacket[], interim: string): string {
+  const segments = [
+    ...transcripts.map((t) => t.text.trim()),
+    ...(interim ? [interim.trim()] : []),
+  ].filter(Boolean);
+  return segments.join(" ").replace(/\s+/g, " ").trim();
 }

@@ -296,6 +296,7 @@ export async function runTwilioEdgeWebSocketConnection(
           contextId,
           timestampMs: Date.now(),
           audio: pcm16SamplesToBytes(pcm16k),
+          sampleRateHz: engineRate,
         });
         return;
       }

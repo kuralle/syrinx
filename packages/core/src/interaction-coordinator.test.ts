@@ -281,6 +281,62 @@ describe("InteractionCoordinator", () => {
     vi.useRealTimers();
   });
 
+  it("completes a committed take_turn from the latest interim when no final STT ever arrives", async () => {
+    vi.useFakeTimers();
+    const { bus, coordinator } = await createCoordinator([{ kind: "take_turn", confidence: 1 }]);
+    const finalizeRequests: string[] = [];
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("stt.finalize", (pkt) => {
+      finalizeRequests.push(pkt.contextId);
+    });
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    coordinator.observe({
+      kind: "vad_speech_ended",
+      contextId: "turn-interim",
+      timestampMs: 1000,
+      hasActiveTts: false,
+    });
+    // Only an interim arrives — the provider never emits a final stt.result.
+    bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "turn-interim",
+      timestampMs: 1100,
+      text: "i wanted to ask",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finalizeRequests).toEqual(["turn-interim"]);
+    expect(completions).toEqual([]);
+
+    // High confidence → 150ms wait; the committed turn must NOT be dropped.
+    await vi.advanceTimersByTimeAsync(150);
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ contextId: "turn-interim", text: "i wanted to ask" });
+    expect(completions[0]!.transcripts).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it("does not complete a take_turn when neither a final nor an interim ever arrives", async () => {
+    vi.useFakeTimers();
+    const { bus, coordinator } = await createCoordinator([{ kind: "take_turn", confidence: 1 }]);
+    const completions: string[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt.contextId);
+    });
+
+    coordinator.observe({
+      kind: "vad_speech_ended",
+      contextId: "turn-empty",
+      timestampMs: 1000,
+      hasActiveTts: false,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(completions).toEqual([]);
+    vi.useRealTimers();
+  });
+
   it("revokes a pending take_turn on hold", async () => {
     vi.useFakeTimers();
     const bus = new PipelineBusImpl();

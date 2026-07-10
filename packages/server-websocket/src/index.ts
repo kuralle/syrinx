@@ -714,6 +714,7 @@ function handleClientMessage(
       contextId: nextContextId,
       timestampMs: Date.now(),
       audio,
+      sampleRateHz: inputSampleRateHz,
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
@@ -773,6 +774,7 @@ function handleClientMessage(
       contextId: nextContextId,
       timestampMs: Date.now(),
       audio: resampleAudioBytes(decodeStrictBase64(message.audio, "audio"), sourceSampleRateHz, inputSampleRateHz, streamingResamplers),
+      sampleRateHz: inputSampleRateHz,
     } satisfies UserAudioReceivedPacket);
     return nextContextId;
   }
