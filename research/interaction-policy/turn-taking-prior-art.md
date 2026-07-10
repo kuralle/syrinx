@@ -9,6 +9,16 @@ card, not inferred.
 
 ## TL;DR (the committed verdict)
 
+> **UPDATE (2026-07-10, second verification pass — see `docs/vap-adoption-findings.md`, which supersedes
+> points 2 and 4 below in part):** the "retrain on owned audio" step has **already been done upstream** —
+> the Kyoto group's MaAI project (successor to VAP-Realtime) publishes **MIT-licensed VAP weights**
+> (`huggingface.co/maai-kyoto`, `vap_mc_*_kyoto`, EN/ZH/JA/tri, mono-channel variants, + MIT backchannel
+> models `vap_bc_*`), and **DualTurn** (`anyreach-ai`, Apache-2.0) ships **ready ONNX** with streaming
+> CPU inference. So Smart Turn is *not* the only license-clean detector, and VAP capability is an
+> **integration + one-time export**, not a training project. Point 1's LiveKit decomposition
+> ("barge-in CNN + backchannel heads") could not be confirmed firsthand — their shipped v1 is an EOU model
+> only. Points 3 and the ship-now recommendation stand unchanged.
+
 1. **No production platform ships a monolithic VAP.** The frontier (LiveKit) *decomposes* turn-taking into
    separately-trained **audio EOU + barge-in CNN + backchannel** heads; Vapi *orchestrates* pluggable
    partner detectors + config; ElevenLabs bundles a proprietary turn model. The industry pattern is

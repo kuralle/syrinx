@@ -30,6 +30,15 @@ only be funded if an eval proves it beats the cheap stack. We want an outside re
 > Also confirmed: the only *license-clean off-the-shelf* detector is **Smart Turn v3 (BSD-2)** — TEN
 > (Agora anti-compete) and LiveKit (framework-locked) weights are legally un-adoptable for a competing platform.
 
+> **UPDATE 2 (2026-07-10, second verification pass — `docs/vap-adoption-findings.md` supersedes parts of the
+> correction above):** the "retrain on owned/licensed audio" step is **already done upstream and released**:
+> MaAI (Kyoto; successor to VAP-Realtime) ships **MIT-licensed pretrained VAP weights** (`maai-kyoto` on HF,
+> `vap_mc_*_kyoto`, EN/ZH/JA/trilingual, incl. mono-channel + MIT backchannel models `vap_bc_*`), and
+> **DualTurn** (Apache-2.0) ships **ready-made ONNX** with ~41–78 ms/step streaming CPU inference. Adoption is
+> therefore an **integration + one-time export, no training**. "Only Smart Turn is license-clean" holds only
+> within the pause-triggered-EOU category. Recommendation amended: **dormant-but-armed** — run the C6 eval
+> against these real checkpoints (days, not months) and let the gate decide.
+
 ---
 
 ## 1. Minimum context: Syrinx + the InteractionPolicy seam
