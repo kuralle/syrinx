@@ -33,6 +33,13 @@ export interface RealtimeAdapter {
    * provider cannot accept text input omit it, and the bridge silently ignores typed turns for them.
    */
   sendText?(text: string): void;
+  /**
+   * Commit any buffered user input and request a response. For Syrinx-OWNED turn detection
+   * (provider server VAD disabled via turnDetection:null): the host calls this when its own
+   * endpointing (InteractionPolicy / VAD) signals end-of-turn. Optional — adapters without
+   * manual turn control omit it.
+   */
+  requestResponse?(): void;
   cancelResponse(audioEndMs: number): void;
   injectToolResult(toolId: string, text: string): void;
   /** Close the provider socket and end the event stream. */

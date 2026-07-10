@@ -95,6 +95,16 @@ export interface RealtimeBridgeOptions {
    * REQUIRES a TTS plugin registered on the session bus (the bridge does not own the registry).
    */
   readonly textOnly?: boolean;
+  /**
+   * Syrinx-owned turn detection (REQ-6): on `eos.turn_complete`, call
+   * `adapter.requestResponse` so Syrinx endpointing/VAD/InteractionPolicy drives
+   * the provider response instead of server VAD.
+   *
+   * MUST be paired with `turnDetection: null` on the adapter — otherwise the
+   * provider's server VAD and Syrinx would BOTH trigger responses (double-turn).
+   * Native mode (`syrinxTurns` absent/false) is unchanged.
+   */
+  readonly syrinxTurns?: boolean;
 }
 
 export class RealtimeBridge implements VoicePlugin {
@@ -143,6 +153,14 @@ export class RealtimeBridge implements VoicePlugin {
         this.inflight?.abort();
       }),
     );
+
+    if (this.opts.syrinxTurns) {
+      this.disposers.push(
+        bus.on("eos.turn_complete", () => {
+          this.adapter.requestResponse?.();
+        }),
+      );
+    }
 
     await this.adapter.open(this.sessionAbort.signal);
     void this.pump();
@@ -523,7 +541,9 @@ export class RealtimeBridge implements VoicePlugin {
     if (this.opts.textOnly) {
       // Already streamed llm.delta/llm.done above. TTS plugin owns tts.end (REQ-5) — forcing
       // it here would cut playout / break barge-in heard-prefix timing.
-      bus.push(Route.Main, turnComplete);
+      // syrinxTurns: endpointing already emitted the user-turn eos.turn_complete that drove
+      // requestResponse; re-emitting here would re-subscribe-fire requestResponse → loop.
+      if (!this.opts.syrinxTurns) bus.push(Route.Main, turnComplete);
       return;
     }
 

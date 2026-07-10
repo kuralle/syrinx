@@ -168,3 +168,21 @@ describe("createOpenAiCompatibleRealtimeAdapter text-only output", () => {
     ]);
   });
 });
+
+describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned turns)", () => {
+  it("sends input_audio_buffer.commit then response.create", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    const baseline = mock.sent.length;
+    adapter.requestResponse!();
+
+    expect(JSON.parse(mock.sent[baseline]!)).toEqual({ type: "input_audio_buffer.commit" });
+    expect(JSON.parse(mock.sent[baseline + 1]!)).toEqual({ type: "response.create" });
+  });
+});

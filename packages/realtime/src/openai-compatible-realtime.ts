@@ -171,6 +171,11 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
     this.requestResponseCreate();
   }
 
+  requestResponse(): void {
+    this.requireSocket().send({ type: "input_audio_buffer.commit" });
+    this.requestResponseCreate();
+  }
+
   cancelResponse(audioEndMs: number): void {
     if (!this.activeResponse) return;
     const socket = this.requireSocket();

@@ -75,6 +75,12 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
     this.sentText.push(text);
   }
 
+  requestResponseCalls = 0;
+
+  requestResponse(): void {
+    this.requestResponseCalls += 1;
+  }
+
   readonly cancelCalls: number[] = [];
 
   cancelResponse(audioEndMs: number): void {
@@ -210,6 +216,86 @@ describe("RealtimeBridge", () => {
 
     await waitForCondition(() => adapter.sentText.length > 0);
     expect(adapter.sentText).toEqual(["when is the late-add deadline?"]);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("with syrinxTurns, eos.turn_complete calls adapter.requestResponse exactly once", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, undefined, { syrinxTurns: true });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "user-turn",
+      timestampMs: Date.now(),
+    });
+
+    await waitForCondition(() => adapter.requestResponseCalls >= 1);
+    expect(adapter.requestResponseCalls).toBe(1);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("without syrinxTurns, eos.turn_complete does not call adapter.requestResponse", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "user-turn",
+      timestampMs: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(adapter.requestResponseCalls).toBe(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("syrinxTurns+textOnly: response_done does not re-trigger requestResponse via eos.turn_complete", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, undefined, {
+      textOnly: true,
+      syrinxTurns: true,
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    // Endpointing owns the user-turn signal → one requestResponse.
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "user-turn",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => adapter.requestResponseCalls >= 1);
+    expect(adapter.requestResponseCalls).toBe(1);
+
+    // Full provider response cycle must not re-emit eos.turn_complete → requestResponse.
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "hi", final: true });
+    adapter.emit({ type: "response_done" });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(adapter.requestResponseCalls).toBe(1);
 
     await bridge.close();
     bus.stop();
