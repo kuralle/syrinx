@@ -203,10 +203,13 @@ export {
 // Interaction policy seam (IP-C1)
 export {
   type InteractionPolicy,
+  type LifecycleInteractionPolicy,
+  isLifecycleInteractionPolicy,
   type InteractionObservation,
   type InteractionDecision,
   type WordTiming,
 } from "./interaction-policy.js";
+export { confidenceToWaitMs, type ConfidenceToWaitConfig } from "./confidence-to-wait.js";
 export { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 export { DeferInteractionPolicy } from "./policies/defer.js";
 export { InteractionCoordinator, type InteractionCaps } from "./interaction-coordinator.js";

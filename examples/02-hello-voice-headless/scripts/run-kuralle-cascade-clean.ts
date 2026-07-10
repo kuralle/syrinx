@@ -20,7 +20,10 @@ import {
 } from "@kuralle-syrinx/core";
 import { ReasoningBridge } from "@kuralle-syrinx/aisdk";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
-import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn";
+import {
+  PipecatEOSPlugin,
+  SmartTurnInteractionPolicy,
+} from "@kuralle-syrinx/pipecat-smart-turn";
 import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
 import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
@@ -40,7 +43,8 @@ import { createFullUniversityRuntime, type FullUniversityRuntime } from "../src/
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(SCRIPT_DIR, "..");
 const FIXTURE_PATH = join(PKG_ROOT, "test", "fixtures", "university-support-add-drop.wav");
-const REPS = 3;
+const requestedReps = Number.parseInt(process.env["SYRINX_WS_MAX_TURNS"] ?? "3", 10);
+const REPS = Number.isFinite(requestedReps) ? Math.min(3, Math.max(1, requestedReps)) : 3;
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES = 320;
 const TRAILING_SILENCE_MS = 1500;
@@ -94,6 +98,7 @@ function createCleanCascadeSession(
     profile: "interactive",
     ttsProvider,
   });
+  const useInteractionPolicy = process.env["SYRINX_INTERACTION_POLICY"] === "smart_turn";
   const session = new VoiceAgentSession({
     plugins: pluginConfig,
     idleTimeout: {
@@ -103,6 +108,12 @@ function createCleanCascadeSession(
     },
     sttForceFinalizeTimeoutMs: 4_500,
     endpointingOwner: "smart_turn",
+    ...(useInteractionPolicy
+      ? {
+          interactionPolicy: new SmartTurnInteractionPolicy(),
+          interactionPolicyConfig: pluginConfig["eos"],
+        }
+      : {}),
     latencyFillerEnabled: false,
   });
   const bridge = new ReasoningBridge(
@@ -111,7 +122,7 @@ function createCleanCascadeSession(
   const plugins: Record<string, VoicePlugin> = {
     stt: new DeepgramSTTPlugin(),
     vad: new SileroVADPlugin(),
-    eos: new PipecatEOSPlugin(),
+    ...(useInteractionPolicy ? {} : { eos: new PipecatEOSPlugin() }),
     bridge,
     tts: ttsProvider === "deepgram" ? new DeepgramTTSPlugin() : new CartesiaTTSPlugin(),
   };
@@ -373,8 +384,11 @@ export async function main(): Promise<void> {
 
   const { runtime, ingestMs } = await getSharedRuntime();
   const samples = paddedFixtureSamples();
+  const endpointing = process.env["SYRINX_INTERACTION_POLICY"] === "smart_turn"
+    ? "injected SmartTurnInteractionPolicy"
+    : "legacy smart-turn EOS plugin";
   console.log(
-    `kuralle cascade clean — smart-turn EOS + full university kuralle brain, ` +
+    `kuralle cascade clean — ${endpointing} + full university kuralle brain, ` +
       `fixture=university-support-add-drop.wav, reps=${String(REPS)}, ` +
       `padded=${String(TRAILING_SILENCE_MS)}ms, ingestMs=${String(Math.round(ingestMs))}`,
   );

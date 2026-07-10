@@ -34,7 +34,7 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
     switch (obs.kind) {
       case "vad_speech_started":
         this.userSpeaking = true;
-        this.arbiter.onSpeechStarted(
+        if (obs.interruptedContextId) this.arbiter.onSpeechStarted(
           {
             kind: "vad.speech_started",
             contextId: obs.contextId,

@@ -24,6 +24,7 @@ import type {
   EndOfSpeechPacket,
   SttPartialPacket,
   SttResultPacket,
+  FinalizeSttPacket,
   UserInputPacket,
   TextToSpeechTextPacket,
   TextToSpeechDonePacket,
@@ -140,6 +141,10 @@ export function eosTurnComplete(
   transcripts: readonly SttResultPacket[],
 ): EndOfSpeechPacket {
   return { kind: "eos.turn_complete", contextId, timestampMs, text, transcripts };
+}
+
+export function finalizeStt(contextId: string, timestampMs: number): FinalizeSttPacket {
+  return { kind: "stt.finalize", contextId, timestampMs };
 }
 
 export function userInput(

@@ -4,7 +4,9 @@ import { describe, it, expect, vi } from "vitest";
 import { VoiceAgentSession } from "./voice-agent-session.js";
 import {
   Route,
+  type InteractionDecision,
   type InteractionObservation,
+  type InteractionPolicy,
   type PipelineBus,
   type PluginConfig,
   type VoicePlugin,
@@ -112,6 +114,36 @@ class EndpointingPlugin extends CapturingPlugin {
   }
 }
 
+class CapturingInteractionPolicy implements InteractionPolicy {
+  readonly observations: InteractionObservation[] = [];
+  readonly resetContextIds: string[] = [];
+  initializeCount = 0;
+  closeCount = 0;
+  initializedConfig: Record<string, unknown> | null = null;
+
+  constructor(
+    private readonly decide: (observation: InteractionObservation) => readonly InteractionDecision[] = () => [],
+  ) {}
+
+  async initialize(config: Record<string, unknown>): Promise<void> {
+    this.initializeCount += 1;
+    this.initializedConfig = config;
+  }
+
+  observe(observation: InteractionObservation): readonly InteractionDecision[] {
+    this.observations.push(observation);
+    return this.decide(observation);
+  }
+
+  reset(contextId: string): void {
+    this.resetContextIds.push(contextId);
+  }
+
+  async close(): Promise<void> {
+    this.closeCount += 1;
+  }
+}
+
 class InterruptAwareStreamingTtsPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
@@ -200,6 +232,85 @@ async function enrollPrimarySpeaker(
 }
 
 describe("VoiceAgentSession", () => {
+  it("owns an injected policy lifecycle and feeds decoded audio plus playout observations", async () => {
+    const policy = new CapturingInteractionPolicy();
+    const session = new VoiceAgentSession({
+      plugins: {},
+      interactionPolicy: policy,
+      interactionPolicyConfig: { model_path: "/tmp/policy.onnx" },
+    });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "user.audio_received",
+      contextId: "turn-policy",
+      timestampMs: 1000,
+      audio: new Uint8Array([0x34, 0x12, 0xcc, 0xff]),
+    } satisfies UserAudioReceivedPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-policy",
+      timestampMs: 1100,
+      audio: new Uint8Array(640),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-policy",
+      timestampMs: 1200,
+      playedOutMs: 20,
+      complete: true,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(policy.initializeCount).toBe(1);
+    expect(policy.initializedConfig).toEqual({ model_path: "/tmp/policy.onnx" });
+    const audioFrame = policy.observations.find((observation) => observation.kind === "audio_frame");
+    expect(audioFrame).toMatchObject({ contextId: "turn-policy", timestampMs: 1000 });
+    expect(audioFrame?.kind === "audio_frame" ? [...(audioFrame.audio ?? [])] : []).toEqual([4660, -52]);
+    expect(policy.observations.filter((observation) => observation.kind === "playout_tick")).toEqual([
+      expect.objectContaining({ contextId: "turn-policy", ttsActive: true }),
+      expect.objectContaining({ contextId: "turn-policy", playedOutMs: 20, ttsActive: false }),
+    ]);
+
+    await closeSession(session);
+    expect(policy.closeCount).toBe(1);
+  });
+
+  it("does not initialize an injected policy when full-duplex defer mode owns interaction", async () => {
+    const policy = new CapturingInteractionPolicy();
+    const session = new VoiceAgentSession({ plugins: {}, interactionPolicy: policy, fullDuplex: true });
+    await session.start();
+    await closeSession(session);
+
+    expect(policy.initializeCount).toBe(0);
+    expect(policy.closeCount).toBe(0);
+    expect(policy.observations).toEqual([]);
+  });
+
+  it("makes an injected policy the sole endpoint owner while keeping provider STT initialized", async () => {
+    const policy = new CapturingInteractionPolicy();
+    const provider = new EndpointingPlugin({
+      owner: "provider_stt",
+      disableConfig: { emit_eos_on_final: false },
+    });
+    const legacySmartTurn = new EndpointingPlugin({ owner: "smart_turn" });
+    const session = new VoiceAgentSession({
+      plugins: { stt: { emit_eos_on_final: true }, eos: {} },
+      endpointingOwner: "smart_turn",
+      interactionPolicy: policy,
+    });
+    session.registerPlugin("stt", provider);
+    session.registerPlugin("eos", legacySmartTurn);
+    await session.start();
+
+    expect(provider.initializeCount).toBe(1);
+    expect(provider.config).toEqual({ emit_eos_on_final: false });
+    expect(legacySmartTurn.initializeCount).toBe(0);
+    expect(policy.initializeCount).toBe(1);
+    await closeSession(session);
+  });
+
   it("passes configured plugin options to each plugin during initialization", async () => {
     const plugin = new CapturingPlugin();
     const session = new VoiceAgentSession({

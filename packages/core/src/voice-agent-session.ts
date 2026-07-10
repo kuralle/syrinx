@@ -67,7 +67,8 @@ import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./v
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
-import type { InteractionPolicy, WordTiming } from "./interaction-policy.js";
+import { isLifecycleInteractionPolicy, type InteractionPolicy, type WordTiming } from "./interaction-policy.js";
+import { pcm16BytesToSamples } from "./audio/pcm.js";
 import { DeferInteractionPolicy } from "./policies/defer.js";
 import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
@@ -175,6 +176,14 @@ export interface VoiceAgentSessionConfig {
   fullDuplex?: boolean;
   /** When true, Syrinx suppresses policy-timed backchannel cue packets (front/provider owns them). */
   emitsBackchannel?: boolean;
+  /**
+   * Optional interaction policy injected by the caller (learned controllers, Smart Turn policy, etc.).
+   * When omitted, the session uses RuleBasedInteractionPolicy. When `fullDuplex` is true, the
+   * coordinator runs observe-only via DeferInteractionPolicy regardless of this setting.
+   */
+  interactionPolicy?: InteractionPolicy;
+  /** Config passed to `interactionPolicy.initialize` when the injected policy is lifecycle-capable. */
+  interactionPolicyConfig?: Record<string, unknown>;
   readonly metricsExporter?: MetricsExporter;
   readonly scheduler?: Scheduler;
   readonly observability?: {
@@ -252,6 +261,10 @@ function toolCueTimerKey(contextId: string, toolId: string): string {
   return `tool_cue:${contextId}:${toolId}`;
 }
 
+function interactionPlayoutTimerKey(contextId: string): string {
+  return `interaction.playout:${contextId}`;
+}
+
 // =============================================================================
 // Session Implementation
 // =============================================================================
@@ -283,7 +296,9 @@ export class VoiceAgentSession {
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
-  private readonly interactionPolicy!: RuleBasedInteractionPolicy;
+  private readonly ruleBasedPolicy!: RuleBasedInteractionPolicy;
+  private readonly injectedInteractionPolicy: InteractionPolicy | null;
+  private readonly activeInteractionPolicy: InteractionPolicy;
   private readonly interaction!: InteractionCoordinator;
   private readonly latencyFiller: LatencyFillerController;
   private firstLlmDeltaReceived = new Set<string>();
@@ -366,7 +381,8 @@ export class VoiceAgentSession {
       },
     });
 
-    this.interactionPolicy = new RuleBasedInteractionPolicy({
+    this.injectedInteractionPolicy = config.interactionPolicy ?? null;
+    this.ruleBasedPolicy = new RuleBasedInteractionPolicy({
       bus: this.bus,
       primarySpeakerGate: this.primarySpeakerGate,
       ttsPlayout: this.ttsPlayout,
@@ -374,11 +390,13 @@ export class VoiceAgentSession {
     });
     const coordinatorPolicy: InteractionPolicy = this.fullDuplex
       ? new DeferInteractionPolicy()
-      : this.interactionPolicy;
+      : (this.injectedInteractionPolicy ?? this.ruleBasedPolicy);
+    this.activeInteractionPolicy = coordinatorPolicy;
     this.interaction = new InteractionCoordinator({
       bus: this.bus,
       policy: coordinatorPolicy,
-      executor: this.interactionPolicy.arbiter,
+      executor: this.ruleBasedPolicy.arbiter,
+      scheduler: this.scheduler,
       caps: { emitsBackchannel: this.emitsBackchannel },
       isUserSpeaking: () => this.userSpeaking,
       isTtsActive: () => this.ttsPlayout.activeContexts().length > 0,
@@ -423,7 +441,7 @@ export class VoiceAgentSession {
   }
 
   private get turnArbiter(): TurnArbiter {
-    return this.interactionPolicy.arbiter;
+    return this.ruleBasedPolicy.arbiter;
   }
 
   // =========================================================================
@@ -452,6 +470,7 @@ export class VoiceAgentSession {
 
     // 1. Wire all bus handlers
     this.wireBusHandlers();
+    this.interaction.initialize();
 
     // 2. Start bus drain loop
     this.busStartPromise = this.bus.start();
@@ -483,9 +502,13 @@ export class VoiceAgentSession {
 
     // 1. Stop idle timeout
     this.idleTimeout.dispose();
+    this.interaction.dispose();
     this.watchdogs.dispose();
     this.observabilityObserver.dispose();
     this.ttsPlayout.clear();
+    for (const contextId of this.firstTtsAudioFired) {
+      this.scheduler.cancel(interactionPlayoutTimerKey(contextId));
+    }
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.turnTimings.clear();
@@ -680,7 +703,19 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
+    this.observeAudioFrame(pkt);
+
     this.watchdogs.scheduleInputCadenceWatchdog(pkt.contextId);
+  }
+
+  private observeAudioFrame(pkt: UserAudioReceivedPacket): void {
+    if (pkt.audio.byteLength < 2 || pkt.audio.byteLength % 2 !== 0) return;
+    this.interaction.observe({
+      kind: "audio_frame",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      audio: pcm16BytesToSamples(pkt.audio),
+    });
   }
 
   private handleSttAudio(pkt: SpeechToTextAudioPacket): void {
@@ -815,7 +850,6 @@ export class VoiceAgentSession {
     const interruptedContextId = this.latestActiveTtsContextId();
     if (!interruptedContextId) {
       this.speakerEnrollmentContextId = pkt.contextId;
-      return;
     }
 
     this.interaction.observe({
@@ -823,7 +857,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       confidence: pkt.confidence,
-      interruptedContextId,
+      ...(interruptedContextId ? { interruptedContextId } : {}),
     });
   }
 
@@ -917,6 +951,7 @@ export class VoiceAgentSession {
     }
 
     this.lastFinalizedContextId = pkt.contextId;
+    this.interaction.reset(pkt.contextId);
 
     // Re-arm per-turn guard state for the next turn. Transports with a stable
     // per-call contextId (telephony callSid) reuse one id across turns, so these
@@ -1262,6 +1297,12 @@ export class VoiceAgentSession {
     const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
     const now = Date.now();
     this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, now);
+    this.interaction.observe({
+      kind: "playout_tick",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      ttsActive: true,
+    });
 
     // Anchor the idle timer to when playout actually *ends* (P2), not to chunk
     // arrival. TTS streams faster than realtime, so extending by each chunk's
@@ -1288,7 +1329,19 @@ export class VoiceAgentSession {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
     this.generatingContextIds.delete(pkt.contextId);
-    this.ttsPlayout.scheduleRelease(pkt.contextId, Date.now());
+    const now = Date.now();
+    this.ttsPlayout.scheduleRelease(pkt.contextId, now);
+    const playoutEndMs = this.ttsPlayout.playoutEnd(pkt.contextId);
+    const remainingMs = playoutEndMs === undefined ? 0 : Math.max(0, playoutEndMs - now);
+    this.scheduler.schedule(interactionPlayoutTimerKey(pkt.contextId), remainingMs, () => {
+      if (this.ttsPlayout.isActive(pkt.contextId)) return;
+      this.interaction.observe({
+        kind: "playout_tick",
+        contextId: pkt.contextId,
+        timestampMs: Date.now(),
+        ttsActive: false,
+      });
+    });
     this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
       component: "tts",
@@ -1299,10 +1352,19 @@ export class VoiceAgentSession {
   }
 
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
+    this.scheduler.cancel(interactionPlayoutTimerKey(pkt.contextId));
     this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete, pkt.playedOutMs);
+    this.interaction.observe({
+      kind: "playout_tick",
+      contextId: pkt.contextId,
+      timestampMs: pkt.timestampMs,
+      playedOutMs: pkt.playedOutMs,
+      ttsActive: !pkt.complete,
+    });
   }
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
+    this.scheduler.cancel(interactionPlayoutTimerKey(pkt.contextId));
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
@@ -1352,6 +1414,7 @@ export class VoiceAgentSession {
    * the LLM, and drops late deltas/audio for the stale context.
    */
   private cancelStaleGeneration(contextId: string, timestampMs: number): void {
+    this.scheduler.cancel(interactionPlayoutTimerKey(contextId));
     this.interruptedGenerationContextIds.add(contextId);
     this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
     this.generatingContextIds.delete(contextId);
@@ -1473,6 +1536,19 @@ export class VoiceAgentSession {
       });
     }
 
+    if (
+      this.activeInteractionPolicy === this.injectedInteractionPolicy &&
+      isLifecycleInteractionPolicy(this.activeInteractionPolicy)
+    ) {
+      const policy = this.activeInteractionPolicy;
+      steps.push({
+        name: "interaction_policy",
+        stage: InitStage.EOS,
+        run: () => policy.initialize(this.config.interactionPolicyConfig ?? {}),
+        cleanup: () => policy.close(),
+      });
+    }
+
     const orderedPluginSteps = steps.sort(
       (a, b) => stageOrder(a.stage) - stageOrder(b.stage),
     );
@@ -1502,6 +1578,20 @@ export class VoiceAgentSession {
   }
 
   private applyEndpointingOwnerInvariant(): void {
+    if (this.activeInteractionPolicy === this.injectedInteractionPolicy) {
+      for (const [name, plugin] of this.plugins) {
+        const capability = plugin.endpointingCapability;
+        if (!capability || capability.owner !== "provider_stt") continue;
+        if (!capability.disableConfig) {
+          throw new Error(`interactionPolicy requires ${name} to expose endpointingCapability.disableConfig`);
+        }
+        this.config.plugins[name] = {
+          ...(this.config.plugins[name] ?? {}),
+          ...capability.disableConfig,
+        };
+      }
+      return;
+    }
     if (this.endpointingOwner === "timer") return;
     const owner: EndpointingOwner = this.endpointingOwner;
     const finalizers = [...this.plugins.entries()]
@@ -1527,6 +1617,9 @@ export class VoiceAgentSession {
   private shouldInitializePlugin(plugin: VoicePlugin): boolean {
     const capability = plugin.endpointingCapability;
     if (!capability) return true;
+    if (this.activeInteractionPolicy === this.injectedInteractionPolicy) {
+      return capability.owner === "provider_stt";
+    }
     if (this.endpointingOwner === "timer") return false;
     if (capability.owner === "smart_turn") return capability.owner === this.endpointingOwner;
     return true;

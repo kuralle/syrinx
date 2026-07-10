@@ -13,7 +13,7 @@ export type InteractionObservation =
       readonly contextId: string;
       readonly timestampMs: number;
       readonly confidence: number;
-      readonly interruptedContextId: string;
+      readonly interruptedContextId?: string;
     }
   | {
       readonly kind: "vad_speech_activity";
@@ -75,7 +75,7 @@ export type InteractionObservation =
 
 export type InteractionDecision =
   | { readonly kind: "keep_listening" }
-  | { readonly kind: "take_turn"; readonly confidence: number }
+  | { readonly kind: "take_turn"; readonly confidence: number; readonly waitMs?: number }
   /** `cue` is a stable pre-cached asset id (e.g. `mm_hmm`), not free-form text. */
   | { readonly kind: "backchannel"; readonly cue: string }
   | { readonly kind: "hold" }
@@ -84,4 +84,17 @@ export type InteractionDecision =
 export interface InteractionPolicy {
   observe(obs: InteractionObservation): readonly InteractionDecision[];
   reset(contextId: string): void;
+}
+
+/** Optional lifecycle for externally supplied model policies (session-owned). */
+export interface LifecycleInteractionPolicy extends InteractionPolicy {
+  initialize(config: Record<string, unknown>): Promise<void>;
+  close(): Promise<void>;
+}
+
+export function isLifecycleInteractionPolicy(
+  policy: InteractionPolicy,
+): policy is LifecycleInteractionPolicy {
+  const candidate = policy as LifecycleInteractionPolicy;
+  return typeof candidate.initialize === "function" && typeof candidate.close === "function";
 }
