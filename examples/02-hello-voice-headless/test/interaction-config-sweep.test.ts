@@ -11,11 +11,11 @@ import {
 } from "../scripts/interaction-config-sweep.js";
 
 describe("CONFIG_MATRIX", () => {
-  it("gates the VAP configs (need wiring + a real model) and leaves cascade+rules runnable", () => {
+  it("exposes every config after policy wiring, real model export, and STT fusion land", () => {
     const byId = new Map(CONFIG_MATRIX.map((c) => [c.id, c]));
     expect(byId.get("cascade+rules")?.gatedReason).toBeUndefined();
-    expect(byId.get("cascade+VAP")?.gatedReason).toBeTruthy();
-    expect(byId.get("cascade+VAP+rich-seam")?.gatedReason).toBeTruthy();
+    expect(byId.get("cascade+VAP")?.gatedReason).toBeUndefined();
+    expect(byId.get("cascade+VAP+rich-seam")?.gatedReason).toBeUndefined();
   });
 });
 

@@ -8,13 +8,10 @@
 // Turn-taking metrics REUSE the shipped Full-Duplex-Bench scorer (eva-evaluator.ts, VE-05):
 // `evaluateEvaExaminer` / `compareEvaToBaseline`. Task success uses the new scorer (task-success.ts).
 //
-// Status: the harness + scorers + verdict rule are complete and unit-tested. The LIVE per-config
-// examiner sweep is a manager-run smoke (credit-heavy). Two configs are GATED:
-//   - `cascade+VAP` / `cascade+VAP+rich-seam`: need (a) VAP wired into the session (an
-//     `interactionPolicy` injection + audio_frame/playout_tick observation feeds — see
-//     sprints/interaction-policy/C6-eval-harness-design.md) and (b) a real VAP ONNX checkpoint
-//     (packages/vap ships StubVapPredictor; upstream VAP is PyTorch-only). With a stub predictor the
-//     VAP row is not meaningful, so it is reported as GATED rather than silently run.
+// Status: the harness + scorers + verdict rule are complete and unit-tested. Session policy injection,
+// stateful DualTurn ONNX, Kyoto VAP, and the rich STT fusion arm are available. The reproducible model
+// frontier runs on Modal via `scripts/modal/run_c6_eot_eval.py`; this local command remains the
+// provider-free task-success and table-contract self-check.
 //
 // Run: `pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless smoke:interaction-eval-matrix`
 // (dry self-check: deterministic task-success over the default set + the table skeleton; no providers).
@@ -42,14 +39,8 @@ export interface ConfigSpec {
 
 export const CONFIG_MATRIX: readonly ConfigSpec[] = [
   { id: "cascade+rules" },
-  {
-    id: "cascade+VAP",
-    gatedReason: "needs VAP session wiring (interactionPolicy injection + audio_frame feed) + a real VAP ONNX model",
-  },
-  {
-    id: "cascade+VAP+rich-seam",
-    gatedReason: "needs VAP wiring + real model + wordTimings fed to VAP",
-  },
+  { id: "cascade+VAP" },
+  { id: "cascade+VAP+rich-seam" },
   { id: "native-realtime" },
   { id: "realtime+delegate" },
 ];
@@ -72,7 +63,7 @@ export function thesisVerdict(rows: readonly MatrixRow[], timingDelta = 5): {
   const vap = rows.find((r) => r.config === "cascade+VAP+rich-seam");
   const native = rows.find((r) => r.config === "native-realtime");
   if (!vap?.turnTaking || !native?.turnTaking) {
-    return { proven: false, reason: "not yet measurable — cascade+VAP+rich-seam or native-realtime rows are gated/absent" };
+    return { proven: false, reason: "not yet measurable — cascade+VAP+rich-seam or native-realtime metrics were not provided" };
   }
   const timingOk = vap.turnTaking.turnTakingTimingScore >= native.turnTaking.turnTakingTimingScore - timingDelta;
   const taskOk =
@@ -122,8 +113,8 @@ function faithfulTraceFor(id: string): TaskTrace {
 
 function main(): void {
   // Deterministic self-check: score the default task set (proves the task-success half runs) and
-  // print the matrix skeleton with the gated configs marked. Live turn-taking numbers are filled by
-  // the manager-run examiner sweep once VAP is wired + a real model exists.
+  // print the matrix skeleton. Live turn-taking numbers come from the Modal C6 model frontier and
+  // provider-backed examiner runs, neither of which is repeated by this provider-free self-check.
   const results = DEFAULT_VOICE_TASKS.map((spec) => scoreTask(spec, faithfulTraceFor(spec.id)));
   const cascadeRulesTaskRate = taskSuccessRate(results);
 
