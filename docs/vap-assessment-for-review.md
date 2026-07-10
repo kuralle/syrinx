@@ -12,11 +12,23 @@ in §7. We have deliberately written the case *for* and *against* VAP so you can
 The code is real and on a branch (§5) if you want to read it.
 
 **TL;DR:** We built the *seam* to make turn-taking controllers swappable (clearly right), and — behind it — a
-`VapInteractionPolicy` package as the "learned controller" (a thesis bet). VAP has **no production-ready ONNX
-model**, is **used by no production platform**, and its operational job is already covered by cheaper,
-shipping, multilingual pieces (Silero VAD + Pipecat Smart Turn + rule-based barge-in). We currently believe
-VAP should stay **dormant behind the seam** and only be funded if an eval proves it beats the cheap stack. We
-want an outside read on that call.
+`VapInteractionPolicy` package as the "learned controller" (a thesis bet). VAP is **used by no production
+platform**, and its operational job is already covered by cheaper, shipping, multilingual pieces (Silero VAD +
+Pipecat Smart Turn + rule-based barge-in). We currently believe VAP should stay **dormant behind the seam** and
+only be funded if an eval proves it beats the cheap stack. We want an outside read on that call.
+
+> **CORRECTED (2026-07-10) — two claims in this doc were revised after a firsthand prior-art + license audit
+> (`research/interaction-policy/turn-taking-prior-art.md`), which supersedes them:**
+> 1. **"No ONNX VAP exists" was WRONG.** `github.com/inokoj/VAP-Realtime` (MIT code) ships an *official* ONNX
+>    exporter, runs **real-time on CPU**, is **stereo**, and has **dedicated backchannel + nodding fine-tunes**.
+>    The real blocker is not existence or technical feasibility — it is that the *distributed weights* are
+>    trained on LDC-restricted Switchboard/Fisher/Candor audio, so a commercial VAP requires **retraining the
+>    MIT architecture on owned/licensed dialogue audio** (a bounded ML project).
+> 2. **"VAP needs a GPU fleet" was overstated.** VAP-Realtime runs real-time on CPU (CPC + a small transformer,
+>    few-M params). The per-inference cost is cheap CPU; the aggregate cost at high *concurrent per-frame* load
+>    is still large but is managed by inference-rate gating + batching, not a mandatory GPU tier.
+> Also confirmed: the only *license-clean off-the-shelf* detector is **Smart Turn v3 (BSD-2)** — TEN
+> (Agora anti-compete) and LiveKit (framework-locked) weights are legally un-adoptable for a competing platform.
 
 ---
 
@@ -130,10 +142,12 @@ The whole InteractionPolicy batch (C3 backchannels, C4 rich STT seam, C5 VAP, C6
 
 ## 6. Current state — honest gaps
 
-1. **No real model.** No public ONNX export of VAP exists (upstream is PyTorch-only; GitHub + web search
-   confirm). We ship a **`StubVapPredictor`** so the package/policy/bench are complete and green, but it makes
-   **no real decisions**. A real model requires a PyTorch→ONNX export (+ almost certainly fine-tuning on our
-   traffic; the reference is English-only) and a **commercial-license review** (not yet done).
+1. **No commercially-clean model wired.** We ship a **`StubVapPredictor`** so the package/policy/bench are
+   complete and green, but it makes **no real decisions**. **CORRECTED:** an ONNX VAP *does* exist —
+   `inokoj/VAP-Realtime` (MIT code, official ONNX exporter, CPU-real-time, stereo, backchannel+nod fine-tunes) —
+   but its distributed weights are trained on LDC-restricted audio. So a real, ship-able VAP requires
+   **retraining that MIT architecture on owned/licensed dialogue audio** + ONNX export — not a mythical model,
+   but a bounded ML project. (Detail + license audit: `research/interaction-policy/turn-taking-prior-art.md`.)
 2. **Not wired end-to-end.** The session can't yet *select* VAP (no `interactionPolicy` injection) and does not
    feed it `audio_frame`/`playout_tick` observations, so even if selected it would receive no audio.
    Additionally, VAP expects **stereo** input; our placeholder `RollingFeatureBuffer` holds one mono channel —
@@ -141,10 +155,12 @@ The whole InteractionPolicy batch (C3 backchannels, C4 rich STT seam, C5 VAP, C6
 3. **Placeholder-buffer defects (documented in `packages/vap/README.md`):** O(n²) full-buffer append (passes
    the bench on a fast dev box; a latency risk on the constrained edge) and a feature-aliasing hazard (harmless
    for the stub; would corrupt a real model's input). Both are latent and to be fixed *with* the real model.
-4. **Cost at scale is severe.** Per-frame inference: at N concurrent calls, ~N × 50 inferences/s (e.g. 60k
-   concurrent → ~3M inferences/s). Even 1 ms CPU/inference ≈ thousands of cores. Running per-frame ONNX inside
-   a Cloudflare Workers isolate is almost certainly the wrong tier — a real deployment needs a dedicated,
-   batched GPU inference service, or a much lower inference rate / gated windows.
+4. **Cost at high concurrent load.** Per-frame inference: at N concurrent calls, ~N × 50 inferences/s (e.g. 60k
+   concurrent → ~3M inferences/s). **CORRECTED (softened):** VAP-Realtime runs *real-time on CPU* (few-M params),
+   so per-inference is cheap — not a mandatory GPU tier. The aggregate at very high concurrency is still large
+   and per-frame ONNX inside a Cloudflare Workers isolate is likely the wrong tier; the levers are
+   **inference-rate gating (run near boundaries / at 10–20 Hz, not 50) + batching**, and only *maybe* a
+   dedicated inference service. This is an infra-design question, not a blocker.
 
 ---
 
