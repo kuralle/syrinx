@@ -21,6 +21,9 @@ export interface RealtimeAdapter {
     /** The front emits its own backchannels ("mhmm"). When true, Syrinx suppresses its own backchannel
      *  cues (RFC InteractionPolicy REQ-4). Absent/false → Syrinx may emit. */
     readonly emitsBackchannel?: boolean;
+    /** Half-cascade: provider can run text-only modality (`modalities:["text"]`) so Syrinx TTS
+     *  drives speech from assistant transcript events. Absent/false → no text-only half-cascade. */
+    readonly supportsTextOnlyModality?: boolean;
   };
 
   open(signal: AbortSignal): Promise<void>;

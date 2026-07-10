@@ -331,6 +331,30 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
         this.assistantTranscript = "";
         break;
       }
+      case "response.output_text.delta": {
+        const delta = msg["delta"];
+        if (typeof delta === "string" && delta.length > 0) {
+          this.assistantTranscript += delta;
+          this.stream.push({
+            type: "transcript",
+            role: "assistant",
+            text: delta,
+            final: false,
+          });
+        }
+        break;
+      }
+      case "response.output_text.done": {
+        const t = typeof msg["text"] === "string" ? msg["text"] : this.assistantTranscript;
+        this.stream.push({
+          type: "transcript",
+          role: "assistant",
+          text: t,
+          final: true,
+        });
+        this.assistantTranscript = "";
+        break;
+      }
       case "conversation.item.input_audio_transcription.completed": {
         // User-side transcript (requires input transcription enabled in session config).
         const transcript = typeof msg["transcript"] === "string" ? msg["transcript"] : "";

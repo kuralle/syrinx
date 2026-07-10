@@ -412,6 +412,7 @@ describe("fromOpenAIRealtime", () => {
       supportsConcurrentToolAudio: true,
       supportsTruncate: true,
       emitsServerSpeechStarted: true,
+      supportsTextOnlyModality: false,
     });
   });
 

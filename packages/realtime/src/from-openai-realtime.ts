@@ -60,6 +60,7 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
       supportsConcurrentToolAudio: true,
       supportsTruncate: true,
       emitsServerSpeechStarted: true,
+      supportsTextOnlyModality: opts.modalities?.length === 1 && opts.modalities[0] === "text",
     },
     buildSessionUpdate: () => {
       const inputAudio: Record<string, unknown> = {

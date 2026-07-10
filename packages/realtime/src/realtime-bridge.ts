@@ -89,6 +89,12 @@ export interface RealtimeBridgeOptions {
     readonly toolName: string;
     readonly args: Record<string, unknown>;
   }) => string | undefined | Promise<string | undefined>;
+  /**
+   * Half-cascade text-only mode: stream assistant transcript into the cascade
+   * `llm.delta → segmenter → tts.text` path and ignore provider audio.
+   * REQUIRES a TTS plugin registered on the session bus (the bridge does not own the registry).
+   */
+  readonly textOnly?: boolean;
 }
 
 export class RealtimeBridge implements VoicePlugin {
@@ -176,11 +182,15 @@ export class RealtimeBridge implements VoicePlugin {
         this.onResponseStarted(bus);
         break;
       case "audio":
-        this.onAudio(bus, ev.pcm16, ev.sampleRateHz);
+        // textOnly: provider audio must not be used (REQ-4) — TTS plugin owns playout.
+        if (!this.opts.textOnly) this.onAudio(bus, ev.pcm16, ev.sampleRateHz);
         break;
       case "transcript":
         if (ev.role === "user") {
           if (ev.final) this.onFinalTranscript(bus, ev.text);
+        } else if (this.opts.textOnly) {
+          // Drive cascade TTS path as text arrives; do not buffer for display-only re-emit.
+          this.onTextOnlyAssistantTranscript(bus, ev.text, ev.final);
         } else if (ev.final && ev.text.trim()) {
           this.turnAssistantText = this.turnAssistantText
             ? `${this.turnAssistantText} ${ev.text.trim()}`
@@ -455,10 +465,42 @@ export class RealtimeBridge implements VoicePlugin {
     bus.push(Route.Main, packet);
   }
 
+  /**
+   * textOnly: stream assistant transcript into the cascade LLM→segmenter→TTS path.
+   * Non-final deltas drive `llm.delta` immediately (no buffer). Final emits `llm.done` only —
+   * the C0 adapter's final carries the full accumulated text, so re-emitting as delta would
+   * duplicate every streamed fragment.
+   */
+  private onTextOnlyAssistantTranscript(bus: PipelineBus, text: string, final: boolean): void {
+    if (!this.contextId) return;
+    const timestampMs = Date.now();
+    if (!final && text) {
+      const delta: LlmDeltaPacket = {
+        kind: "llm.delta",
+        contextId: this.contextId,
+        timestampMs,
+        text,
+      };
+      bus.push(Route.Main, delta);
+      return;
+    }
+    if (final && text.trim()) {
+      const done: LlmResponseDonePacket = {
+        kind: "llm.done",
+        contextId: this.contextId,
+        timestampMs,
+        text,
+      };
+      bus.push(Route.Main, done);
+    }
+  }
+
   private onResponseDone(bus: PipelineBus): void {
     if (!this.contextId) return;
-    this.emitCoalescedAudio(bus, true);
-    this.audioRemainder = new Uint8Array(0);
+    if (!this.opts.textOnly) {
+      this.emitCoalescedAudio(bus, true);
+      this.audioRemainder = new Uint8Array(0);
+    }
 
     const timestampMs = Date.now();
     const transcripts: SttResultPacket[] = this.turnUserText
@@ -477,6 +519,14 @@ export class RealtimeBridge implements VoicePlugin {
       text: this.turnUserText,
       transcripts,
     };
+
+    if (this.opts.textOnly) {
+      // Already streamed llm.delta/llm.done above. TTS plugin owns tts.end (REQ-5) — forcing
+      // it here would cut playout / break barge-in heard-prefix timing.
+      bus.push(Route.Main, turnComplete);
+      return;
+    }
+
     const ttsEnd: TextToSpeechEndPacket = {
       kind: "tts.end",
       contextId: this.contextId,

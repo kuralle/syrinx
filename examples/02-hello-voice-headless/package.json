@@ -38,6 +38,7 @@
     "smoke:latency-filler": "tsx scripts/run-latency-filler-smoke.ts",
     "smoke:realtime-frame": "tsx scripts/run-realtime-frame-smoke.ts",
     "smoke:realtime-oneturn": "tsx scripts/run-realtime-oneturn-smoke.ts",
+    "smoke:half-cascade-oneturn": "tsx scripts/run-half-cascade-oneturn.ts",
     "smoke:realtime-bargein": "tsx scripts/run-realtime-bargein-smoke.ts",
     "smoke:realtime-university": "tsx scripts/run-realtime-university-smoke.ts",
     "smoke:realtime-sinhala-tts": "tsx scripts/run-realtime-sinhala-tts-smoke.ts",

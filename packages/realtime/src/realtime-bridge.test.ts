@@ -1144,4 +1144,129 @@ describe("RealtimeBridge", () => {
 
     await session.close();
   });
+
+  // ── Half-cascade C1: textOnly routing ────────────────────────────────────
+  // In text-only mode the bridge streams assistant transcript into the cascade
+  // llm.delta → segmenter → tts.text path. The TTS plugin owns tts.end.
+
+  it("textOnly: streams assistant transcript deltas as llm.delta in order as they arrive", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, "consult_knowledge", { textOnly: true });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The capital", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: " of France", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: " is Paris.", final: false });
+
+    await waitForCondition(() => deltas.length === 3);
+    expect(deltas.map((d) => d.text)).toEqual(["The capital", " of France", " is Paris."]);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("textOnly: final assistant transcript pushes llm.done and no full-text llm.delta", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, "consult_knowledge", { textOnly: true });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    const dones: LlmResponseDonePacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+    bus.on("llm.done", (pkt) => { dones.push(pkt as LlmResponseDonePacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "Hello ", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: "world.", final: false });
+    // C0 adapter output_text.done carries the FULL accumulated text — must not re-emit as delta.
+    adapter.emit({ type: "transcript", role: "assistant", text: "Hello world.", final: true });
+
+    await waitForCondition(() => dones.length === 1);
+    expect(deltas.map((d) => d.text)).toEqual(["Hello ", "world."]);
+    expect(dones).toHaveLength(1);
+    expect(dones[0]!.text).toBe("Hello world.");
+    // No extra full-text llm.delta for the final event.
+    expect(deltas.some((d) => d.text === "Hello world.")).toBe(false);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("textOnly: provider audio events push no tts.audio", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, "consult_knowledge", { textOnly: true });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const audio: TextToSpeechAudioPacket[] = [];
+    bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "audio",
+      pcm16: frameSizedPcm24k(),
+      sampleRateHz: 24_000,
+    });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => true); // allow pump to drain
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(audio).toHaveLength(0);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("textOnly: onResponseDone does not re-emit assistant llm.delta and does not emit tts.end", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter, undefined, "consult_knowledge", { textOnly: true });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    const dones: LlmResponseDonePacket[] = [];
+    const ends: TextToSpeechEndPacket[] = [];
+    const turnCompletes: EndOfSpeechPacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+    bus.on("llm.done", (pkt) => { dones.push(pkt as LlmResponseDonePacket); });
+    bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
+    bus.on("eos.turn_complete", (pkt) => { turnCompletes.push(pkt as EndOfSpeechPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "Streamed.", final: false });
+    adapter.emit({ type: "transcript", role: "assistant", text: "Streamed.", final: true });
+    await waitForCondition(() => dones.length === 1);
+    const deltasBeforeDone = deltas.length;
+
+    adapter.emit({ type: "response_done" });
+    await waitForCondition(() => turnCompletes.length === 1);
+
+    // No duplicate display-only llm.delta/llm.done from onResponseDone.
+    expect(deltas).toHaveLength(deltasBeforeDone);
+    expect(dones).toHaveLength(1);
+    // TTS plugin owns tts.end in text-only mode — bridge must not force it.
+    expect(ends).toHaveLength(0);
+    expect(turnCompletes).toHaveLength(1);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
 });
