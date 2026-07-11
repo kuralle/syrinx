@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/aisdk",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "private": false,
   "description": "Vercel AI SDK bridge for Syrinx — drive any ai@6 model or agent as the voice pipeline's reasoner, with opt-in speculative generation",
   "keywords": [

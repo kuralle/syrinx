@@ -2,6 +2,60 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.2.0 — 2026-07-11
+
+Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
+(text-only realtime front + Syrinx TTS for correct multilingual audio), reasoner-latency
+levers, and a shared Incremental-Unit substrate. Two new packages. No breaking changes to the
+published 4.1.0 API — all new seams and opt-in features. Grounded in `docs/rfc-*` (interaction-policy
+seam, half-cascade, reasoner-latency, incremental-unit substrate).
+
+### Added — packages
+- **`@kuralle-syrinx/openai-tts`** (new) — generic OpenAI-compatible streaming TTS plugin
+  (`OpenAICompatibleTTSPlugin`) for any `POST /v1/audio/speech` endpoint via `base_url` + `extra_body`,
+  mirroring `livekit-plugins-openai` / Pipecat `OpenAITTSService`. Defaults to OpenAI's own TTS
+  (`gpt-4o-mini-tts`). Pitch-preserving `tempo` control (streaming WSOLA). Self-hosted/proprietary
+  endpoints (e.g. a Sinhala model) are documented config, not baked-in factories.
+- **`@kuralle-syrinx/vap`** (new) — Voice-Activity-Projection interaction policy (`VapInteractionPolicy`)
+  with stateful licensed predictors (DualTurn ONNX, Kyoto VAP) and a Workers variant. Dormant-but-armed
+  behind the InteractionPolicy seam (C6 eval: the cheap Silero+SmartTurn stack still wins — see
+  `docs/c6-vap-eval-results.md`).
+
+### Added — interaction policy (full-duplex turn-taking)
+- **`core`**: `InteractionPolicy` seam + `InteractionCoordinator` collapsing the endpointing owners into
+  one model-agnostic controller; `RuleBasedInteractionPolicy` (behavior-preserving default),
+  `DeferInteractionPolicy` (full-duplex observe-only); session `interactionPolicy` injection with
+  `audio_frame`/`playout_tick` feeds; LiveKit-style `confidenceToWaitMs` curve; backchannel cue layer.
+- **`pipecat-smart-turn`**: `SmartTurnInteractionPolicy` — Silero + Smart Turn v3 + semantic fusion as a
+  first-class injectable policy.
+
+### Added — half-cascade (RFC docs/rfc-half-cascade.md)
+- **`realtime`**: text-only modality — `response.output_text.delta/.done` → transcript events,
+  `caps.supportsTextOnlyModality`; `RealtimeBridge` `textOnly` routing (front text →
+  `llm.delta → segmenter → tts.text`, provider audio suppressed, TTS plugin owns `tts.end`); and
+  `syrinxTurns` + `adapter.requestResponse()` so Syrinx owns turn detection with server VAD off.
+  Live-verified English + Sinhala, single- and multi-turn, with cross-turn context.
+
+### Added — reasoner latency (RFC docs/rfc-reasoner-latency.md)
+- **`core`**: `HedgedReasoner` (threshold-triggered backup, commit-on-first-part) and `RoutingReasoner`
+  (heuristic fast/deep routing) at the `Reasoner` seam; plain-Reasoner path byte-identical.
+
+### Added — Incremental-Unit substrate (Phase 0, RFC docs/rfc-incremental-unit-substrate.md)
+- **`core`**: `InMemoryIuLedger` + `IncrementalUnit` — one commit/revoke primitive; speculative gen and
+  assistant-side heard-prefix re-expressed on the ledger (behavior-preserving); a ledger leak bounded.
+
+### Fixed
+- **`tts-core`**: finish-timeout is now an **inactivity watchdog** (reschedules on audio) instead of a
+  fixed timer from flush — long TTS turns (fast realtime front dumping full text) no longer truncate
+  mid-sentence.
+- **`core`/`server-websocket`**: user `audio_received` carries its true `sampleRateHz` (was hardcoded
+  16 kHz) so learned policies resample correctly; a policy-committed `take_turn` with only interim STT no
+  longer silently drops the turn; `stop()` no longer leaks an interaction-playout timer.
+
+### Notes
+- `@kuralle-syrinx/openai-tts` supersedes the never-published bespoke `zeta-tts` (reshaped, not shipped).
+- Zeta/Sinhala production still needs Modal Flash keep-warm (deferred deploy gate; see rfc-half-cascade C5).
+
 ## 4.1.0 — 2026-07-03
 
 Additive. Two efforts: **cascade refinements** adopted from the production field's published
