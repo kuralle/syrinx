@@ -62,11 +62,14 @@ what a real turn-taking proof requires.
 
 ## Two real issues surfaced by the live run
 
-- **Multi-turn realtime-bridge cancel race (bridge robustness bug).** Running >1 turn in one native
-  session aborts: with `server_vad`, the next turn's `speech_started` makes the bridge issue a barge-in
-  cancel, but the prior response has already completed, so the OpenAI adapter throws
-  `internal_fault: Cancellation failed: no active response found`. A barge-in cancel with no active
-  response should be a no-op. Worked around here with fresh-session-per-turn; tracked for a bridge fix.
+- **Multi-turn realtime-bridge cancel race (bridge robustness bug) — FIXED 2026-07-11 (commit 3272a96).**
+  Running >1 turn in one native session used to abort: with `server_vad`, the next turn's `speech_started`
+  makes the bridge issue a barge-in cancel, but the prior response has already completed, so the OpenAI
+  adapter threw `internal_fault: Cancellation failed: no active response found`. Fixed by swallowing that
+  benign server-side no-op at the adapter. The native arm now runs **one continuous session** (verified
+  live: 3 turns, no abort), so the fresh-session-per-turn workaround is removed. NOTE: this removes the
+  §1 fresh-session score artifact, but the matrix's turn-taking remains confounded by filler-vs-answer
+  (§ above) — the live examiner (`smoke:fullduplex-examiner`) is the real fix, not this matrix.
 - **Turn-taking is not measurable with fixed-fixture driving** (above) — a harness/methodology limit,
   captured so the next attempt builds the live examiner instead of re-running fixtures.
 

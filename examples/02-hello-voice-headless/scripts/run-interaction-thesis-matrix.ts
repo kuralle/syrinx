@@ -517,14 +517,11 @@ async function runCascadeRulesSession(ttsProvider: UniversitySupportTtsProvider)
   }
 }
 
-async function driveOneNativeTurn(apiKey: string, index: number): Promise<TurnCapture> {
-  // Fresh realtime session PER TURN. Multi-turn in one native session aborts:
-  // with server_vad the next turn's speech_started makes the bridge issue a barge-in
-  // cancel, but the prior response already completed → the OpenAI adapter throws
-  // "Cancellation failed: no active response found" (a real bridge robustness gap —
-  // barge-in cancel when nothing is active should no-op; noted for a bridge follow-up).
-  // The proven single-turn realtime smoke is this shape. Per-turn response latency +
-  // task-success (the measured quantities) are unaffected.
+async function runNativeRealtimeSession(apiKey: string): Promise<TurnCapture[]> {
+  // ONE continuous native session for all turns. The multi-turn barge-in cancel race
+  // (server_vad's next-turn speech_started cancels a just-completed response →
+  // "no active response found") is fixed at the adapter (task 0df07a88), so a single
+  // session now survives multiple turns — restoring a real cross-turn timeline.
   let activeTurn: TurnCapture | null = null;
   const baseAdapter = fromOpenAIRealtime({
     apiKey,
@@ -567,21 +564,13 @@ async function driveOneNativeTurn(apiKey: string, index: number): Promise<TurnCa
 
   await session.start();
   try {
-    return await driveOneTurn(session, "native", index, "", (t) => {
+    return await driveTurns(session, "native", (t) => {
       activeTurn = t;
     });
   } finally {
     await session.close();
     await adapter.close();
   }
-}
-
-async function runNativeRealtimeSession(apiKey: string): Promise<TurnCapture[]> {
-  const turns: TurnCapture[] = [];
-  for (let index = 0; index < TURN_COUNT; index += 1) {
-    turns.push(await driveOneNativeTurn(apiKey, index));
-  }
-  return turns;
 }
 
 function chooseTtsProvider(): UniversitySupportTtsProvider {
