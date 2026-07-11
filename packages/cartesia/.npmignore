@@ -1,0 +1,8 @@
+*.test.ts
+*.tsbuildinfo
+*.map
+tsconfig.json
+tsconfig.*.json
+vitest.config.ts
+.DS_Store
+.handoff/
