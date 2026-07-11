@@ -266,6 +266,9 @@ importers:
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../../packages/ws
+      '@kuralle-syrinx/zeta-tts':
+        specifier: workspace:*
+        version: link:../../packages/zeta-tts
       '@mastra/core':
         specifier: ^1.41.0
         version: 1.41.0(@cfworker/json-schema@4.1.1)(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3)

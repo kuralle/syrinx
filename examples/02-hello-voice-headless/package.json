@@ -48,8 +48,6 @@
     "smoke:realtime-gemini-sendtext": "tsx scripts/run-realtime-gemini-sendtext-smoke.ts",
     "smoke:realtime-gemini-bargein": "tsx scripts/run-realtime-gemini-bargein-smoke.ts",
     "smoke:realtime-gemini-multiturn": "tsx scripts/run-realtime-gemini-multiturn-smoke.ts",
-    "smoke:realtime-gemini-bargein": "tsx scripts/run-realtime-gemini-bargein-smoke.ts",
-    "smoke:realtime-gemini-multiturn": "tsx scripts/run-realtime-gemini-multiturn-smoke.ts",
     "smoke:gemini-translate": "tsx scripts/run-gemini-translate-smoke.ts",
     "smoke:grok-stt": "tsx scripts/run-grok-stt-smoke.ts",
     "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
@@ -59,7 +57,8 @@
     "smoke:kuralle-memory": "tsx scripts/run-kuralle-memory-smoke.ts",
     "smoke:kuralle-cascade-clean": "tsx scripts/run-kuralle-cascade-clean.ts",
     "smoke:kuralle-full-text": "tsx scripts/run-kuralle-full-text-smoke.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke:half-cascade-sinhala": "tsx scripts/run-half-cascade-sinhala.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",
@@ -77,7 +76,6 @@
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/test": "workspace:*",
     "@kuralle-syrinx/cartesia": "workspace:*",
-    "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/epsilon": "workspace:*",
     "@kuralle-syrinx/gemini": "workspace:*",
     "@kuralle-agents/core": "^0.8.5",
@@ -91,7 +89,8 @@
     "dotenv": "^16.6.1",
     "wavefile": "^11.0.0",
     "ws": "^8.21.0",
-    "zod": "^4.1.8"
+    "zod": "^4.1.8",
+    "@kuralle-syrinx/zeta-tts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
