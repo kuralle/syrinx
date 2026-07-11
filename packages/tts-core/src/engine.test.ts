@@ -10,20 +10,42 @@ const FORMAT: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 24000, channe
 const SESSION = attributionKey("session");
 
 class FakeTimer implements TimerPort {
-  private readonly timers = new Map<number, () => void>();
+  private readonly timers = new Map<number, { due: number; fn: () => void }>();
   private next = 0;
-  set(_ms: number, fn: () => void): TimerHandle {
+  private time = 0;
+  set(ms: number, fn: () => void): TimerHandle {
     const handle = this.next++;
-    this.timers.set(handle, fn);
+    this.timers.set(handle, { due: this.time + ms, fn });
     return handle;
   }
   clear(handle: TimerHandle): void {
     this.timers.delete(handle as number);
   }
+  /** Advance the fake clock; fire any timers whose due time is now reached. */
+  advance(ms: number): void {
+    this.time += ms;
+    this.fireDue();
+  }
+  /** Fire every pending timer immediately (legacy tests). */
   fire(): void {
-    for (const [handle, fn] of [...this.timers]) {
+    for (const [handle, entry] of [...this.timers]) {
       this.timers.delete(handle);
-      fn();
+      entry.fn();
+    }
+  }
+  private fireDue(): void {
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      const due = [...this.timers.entries()]
+        .filter(([, e]) => e.due <= this.time)
+        .sort((a, b) => a[1].due - b[1].due);
+      for (const [handle, entry] of due) {
+        if (!this.timers.has(handle)) continue;
+        this.timers.delete(handle);
+        entry.fn();
+        progressed = true;
+      }
     }
   }
 }
@@ -187,6 +209,71 @@ describe("TtsEngine — multiplex (epsilon-shape)", () => {
     const audio = h.audio();
     expect(audio).toHaveLength(2);
     expect(audio.every((p) => p["contextId"] === "ctxM")).toBe(true);
+  });
+});
+
+describe("TtsEngine — finish-timeout inactivity watchdog", () => {
+  const FINISH_MS = 2000;
+  const EPS = 500; // advance finishTimeoutMs - ε between audio frames
+
+  it("does not end while audio keeps arriving after flush (even past finishTimeoutMs total)", async () => {
+    const h = harness(new SingleProtocol(), FINISH_MS);
+    await h.engine.onText("long turn", "ctxStream");
+    await h.engine.onDone("ctxStream");
+    expect(h.ends()).toHaveLength(0);
+
+    // Three chunks spaced (FINISH_MS - ε) apart → wall time > FINISH_MS, but never silent that long.
+    const chunks = [
+      [1, 2],
+      [3, 4],
+      [5, 6],
+    ] as const;
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) h.timer.advance(FINISH_MS - EPS);
+      h.engine.onMessage(
+        JSON.stringify({ t: "audio", key: "session", pcm: [...chunks[i]!] }),
+        false,
+      );
+      expect(h.ends()).toHaveLength(0);
+    }
+
+    expect(h.audio()).toHaveLength(3);
+    expect([...(h.audio()[0]!["audio"] as Uint8Array)]).toEqual([1, 2]);
+    expect([...(h.audio()[1]!["audio"] as Uint8Array)]).toEqual([3, 4]);
+    expect([...(h.audio()[2]!["audio"] as Uint8Array)]).toEqual([5, 6]);
+    expect(h.metrics().some((m) => m["name"] === "tts.fake.finish_timeout")).toBe(false);
+
+    // Natural provider end still closes the turn.
+    h.engine.onMessage(JSON.stringify({ t: "done", key: "session" }), false);
+    expect(h.ends()).toHaveLength(1);
+  });
+
+  it("still fires finish-timeout after finishTimeoutMs of silence post-flush (wedged provider)", async () => {
+    const h = harness(new SingleProtocol(), FINISH_MS);
+    await h.engine.onText("a", "ctxWedge");
+    await h.engine.onDone("ctxWedge");
+    expect(h.ends()).toHaveLength(0);
+
+    h.timer.advance(FINISH_MS - 1);
+    expect(h.ends()).toHaveLength(0);
+
+    h.timer.advance(1);
+    expect(h.ends()).toHaveLength(1);
+    expect(h.metrics().some((m) => m["name"] === "tts.fake.finish_timeout")).toBe(true);
+  });
+
+  it("ends immediately on natural context_end even if finish-timeout is armed", async () => {
+    const h = harness(new SingleProtocol(), FINISH_MS);
+    await h.engine.onText("a", "ctxNatural");
+    await h.engine.onDone("ctxNatural");
+    expect(h.ends()).toHaveLength(0);
+
+    h.engine.onMessage(JSON.stringify({ t: "end", key: "session" }), false);
+    expect(h.ends()).toHaveLength(1);
+    // Armed timer must not emit a second end or a finish_timeout metric.
+    h.timer.advance(FINISH_MS * 2);
+    expect(h.ends()).toHaveLength(1);
+    expect(h.metrics().some((m) => m["name"] === "tts.fake.finish_timeout")).toBe(false);
   });
 });
 

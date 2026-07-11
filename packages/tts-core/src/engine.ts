@@ -191,6 +191,13 @@ class TtsEngineImpl implements TtsEngine {
     if (contextId === undefined || this.cancelledContexts.has(contextId)) return;
     if (pcm.byteLength === 0) return;
 
+    // After flush, finish-timeout is an inactivity watchdog: keep it armed only
+    // while the provider is silent. Active audio must reschedule so long turns
+    // (e.g. half-cascade dumping full text then tts.done early) are not cut mid-stream.
+    if (this.pendingEnd.has(contextId) && this.deps.finishTimeoutMs > 0) {
+      this.scheduleFinishTimeout(contextId);
+    }
+
     const prev = this.carry.get(key) ?? EMPTY;
     const buf = prev.byteLength === 0 ? pcm : concatBytes(prev, pcm);
     const evenLen = buf.byteLength - (buf.byteLength % 2);
