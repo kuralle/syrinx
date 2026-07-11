@@ -53,24 +53,45 @@ export interface MatrixRow {
   readonly note?: string;
 }
 
-/** RFC §9.4 verdict: proven iff cascade+VAP+rich-seam matches native-realtime on turn-taking
+export interface ThesisVerdictOpts {
+  readonly cascadeConfig?: ConfigId;
+  readonly timingDelta?: number;
+}
+
+/** RFC §9.4 verdict: proven iff the cascade config matches native-realtime on turn-taking
  *  (within a small delta) WITHOUT a task-success regression. Returns a human verdict + whether the
  *  inputs were even present (unproven when the gated configs have not been run). */
-export function thesisVerdict(rows: readonly MatrixRow[], timingDelta = 5): {
+export function thesisVerdict(
+  rows: readonly MatrixRow[],
+  optsOrTimingDelta: ThesisVerdictOpts | number = {},
+): {
   proven: boolean;
   reason: string;
 } {
-  const vap = rows.find((r) => r.config === "cascade+VAP+rich-seam");
+  const opts: ThesisVerdictOpts =
+    typeof optsOrTimingDelta === "number"
+      ? { timingDelta: optsOrTimingDelta }
+      : { cascadeConfig: "cascade+VAP+rich-seam", timingDelta: 5, ...optsOrTimingDelta };
+  const cascadeConfig = opts.cascadeConfig ?? "cascade+VAP+rich-seam";
+  const timingDelta = opts.timingDelta ?? 5;
+
+  const cascade = rows.find((r) => r.config === cascadeConfig);
   const native = rows.find((r) => r.config === "native-realtime");
-  if (!vap?.turnTaking || !native?.turnTaking) {
-    return { proven: false, reason: "not yet measurable — cascade+VAP+rich-seam or native-realtime metrics were not provided" };
+  if (!cascade?.turnTaking || !native?.turnTaking) {
+    return {
+      proven: false,
+      reason: `not yet measurable — ${cascadeConfig} or native-realtime metrics were not provided`,
+    };
   }
-  const timingOk = vap.turnTaking.turnTakingTimingScore >= native.turnTaking.turnTakingTimingScore - timingDelta;
+  const timingOk =
+    cascade.turnTaking.turnTakingTimingScore >= native.turnTaking.turnTakingTimingScore - timingDelta;
   const taskOk =
-    vap.taskSuccessRate !== undefined &&
+    cascade.taskSuccessRate !== undefined &&
     native.taskSuccessRate !== undefined &&
-    vap.taskSuccessRate >= native.taskSuccessRate - 1e-9;
-  if (timingOk && taskOk) return { proven: true, reason: "cascade+VAP matches native turn-taking with no task-success regression" };
+    cascade.taskSuccessRate >= native.taskSuccessRate - 1e-9;
+  if (timingOk && taskOk) {
+    return { proven: true, reason: `${cascadeConfig} matches native turn-taking with no task-success regression` };
+  }
   return {
     proven: false,
     reason: `not proven — timing ${timingOk ? "ok" : "below native"}, task-success ${taskOk ? "ok" : "regressed"}`,
