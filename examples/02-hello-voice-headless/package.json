@@ -59,7 +59,8 @@
     "smoke:kuralle-full-text": "tsx scripts/run-kuralle-full-text-smoke.ts",
     "test": "vitest run",
     "smoke:half-cascade-sinhala": "tsx scripts/run-half-cascade-sinhala.ts",
-    "smoke:half-cascade-multiturn": "tsx scripts/run-half-cascade-multiturn.ts"
+    "smoke:half-cascade-multiturn": "tsx scripts/run-half-cascade-multiturn.ts",
+    "smoke:half-cascade-conversation": "tsx scripts/run-half-cascade-conversation.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",
