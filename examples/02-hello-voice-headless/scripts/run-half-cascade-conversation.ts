@@ -55,7 +55,7 @@ async function main(): Promise<void> {
   const bridge = new RealtimeBridge(adapter, undefined, undefined, { textOnly: true });
 
   const plugins = SINHALA
-    ? { realtime: {}, zeta: { sample_rate: RATE } }
+    ? { realtime: {}, zeta: { sample_rate: RATE, tempo: 0.9 } } // 10% slower (WSOLA, pitch-preserved) — Zeta's Sinhala prosody rushes
     : { realtime: {}, cartesia: { api_key: cartesiaKey!, sample_rate: RATE } };
   const session = new VoiceAgentSession({ plugins, endpointingOwner: "timer" });
   session.registerPlugin("realtime", bridge);

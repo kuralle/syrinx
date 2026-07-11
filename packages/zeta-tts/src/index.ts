@@ -21,10 +21,16 @@ import {
   optionalStringConfig,
 } from "@kuralle-syrinx/core";
 
+import { WsolaTimeStretch } from "./wsola.js";
+export { WsolaTimeStretch } from "./wsola.js";
+
 const EMPTY = new Uint8Array(0);
 const SOURCE_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_ENGINE_RATE_HZ = 16_000;
 const DEFAULT_NUM_STEPS = 8;
+const DEFAULT_TEMPO = 1.0;
+const TEMPO_MIN = 0.5;
+const TEMPO_MAX = 1.5;
 const DEFAULT_BASE_URL =
   "https://asyncdotengineering--zeta-tts-api-zetattsapi.us-east.modal.direct";
 
@@ -34,6 +40,7 @@ export class ZetaTTSPlugin implements VoicePlugin {
   private apiKey = "";
   private sampleRate = DEFAULT_ENGINE_RATE_HZ;
   private numSteps = DEFAULT_NUM_STEPS;
+  private tempo = DEFAULT_TEMPO;
   private disposers: Array<() => void> = [];
   private inflight = new Set<AbortController>();
 
@@ -48,6 +55,7 @@ export class ZetaTTSPlugin implements VoicePlugin {
       optionalStringConfig(config, "api_key") ?? processEnv("ZETA_API_KEY") ?? "";
     this.sampleRate = readPositiveInteger(config["sample_rate"], DEFAULT_ENGINE_RATE_HZ);
     this.numSteps = readPositiveInteger(config["num_steps"], DEFAULT_NUM_STEPS);
+    this.tempo = readClampedTempo(config["tempo"], DEFAULT_TEMPO);
 
     this.disposers.push(
       bus.on("tts.text", async (pkt: unknown) => {
@@ -124,6 +132,10 @@ export class ZetaTTSPlugin implements VoicePlugin {
 
       const reader = body.getReader();
       const resampler = new StreamingPcm16Resampler(SOURCE_SAMPLE_RATE_HZ, this.sampleRate);
+      const stretch =
+        Math.abs(this.tempo - 1) >= 1e-6
+          ? new WsolaTimeStretch(this.tempo, this.sampleRate)
+          : null;
       let carry: Uint8Array = EMPTY;
 
       while (true) {
@@ -139,23 +151,21 @@ export class ZetaTTSPlugin implements VoicePlugin {
           const pcmBytes = buf.subarray(0, evenLen);
           const samples = bytesToInt16LE(pcmBytes);
           const resampled = resampler.process(samples);
-          if (resampled.length > 0) {
-            const audio = int16ToBytes(resampled);
-            const packet: TextToSpeechAudioPacket = {
-              kind: "tts.audio",
-              contextId,
-              timestampMs: Date.now(),
-              audio,
-              sampleRateHz: this.sampleRate,
-              provider: { name: "zeta", model: "zeta", cancelled: false },
-            };
-            this.bus?.push(Route.Main, packet);
+          const stretched = stretch ? stretch.process(resampled) : resampled;
+          if (stretched.length > 0) {
+            this.emitAudio(contextId, stretched);
           }
         }
         carry = evenLen < buf.byteLength ? buf.subarray(evenLen) : EMPTY;
       }
 
       if (controller.signal.aborted) return;
+      if (stretch) {
+        const tail = stretch.flush();
+        if (tail.length > 0) {
+          this.emitAudio(contextId, tail);
+        }
+      }
       this.emitEnd(contextId);
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted) return;
@@ -177,6 +187,19 @@ export class ZetaTTSPlugin implements VoicePlugin {
       isRecoverable: isRecoverable(category),
     };
     this.bus?.push(Route.Critical, packet);
+  }
+
+  private emitAudio(contextId: string, samples: Int16Array): void {
+    const audio = int16ToBytes(samples);
+    const packet: TextToSpeechAudioPacket = {
+      kind: "tts.audio",
+      contextId,
+      timestampMs: Date.now(),
+      audio,
+      sampleRateHz: this.sampleRate,
+      provider: { name: "zeta", model: "zeta", cancelled: false },
+    };
+    this.bus?.push(Route.Main, packet);
   }
 
   private emitEnd(contextId: string): void {
@@ -206,6 +229,13 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+function readClampedTempo(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < TEMPO_MIN) return TEMPO_MIN;
+  if (value > TEMPO_MAX) return TEMPO_MAX;
+  return value;
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

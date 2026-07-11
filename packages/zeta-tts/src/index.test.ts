@@ -155,6 +155,60 @@ describe("ZetaTTSPlugin", () => {
     await started;
   });
 
+  it("tempo: 0.9 produces more tts.audio bytes than tempo: 1.0 for the same PCM stream", async () => {
+    // ~100 ms of 48 kHz silence → enough samples after resample for WSOLA to stretch.
+    const pcm = pcmSilence48k(4800);
+
+    async function collectAudioBytes(tempo: number): Promise<number> {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          return new Response(streamFromChunks([pcm]), {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }),
+      );
+
+      const bus = new PipelineBusImpl();
+      const started = startBus(bus);
+      const plugin = new ZetaTTSPlugin();
+      let totalBytes = 0;
+      const ends: TextToSpeechEndPacket[] = [];
+      bus.on("tts.audio", (pkt) => {
+        totalBytes += (pkt as TextToSpeechAudioPacket).audio.byteLength;
+      });
+      bus.on("tts.end", (pkt) => {
+        ends.push(pkt as TextToSpeechEndPacket);
+      });
+
+      await plugin.initialize(bus, {
+        endpoint_url: "https://zeta.test",
+        sample_rate: 16000,
+        tempo,
+      });
+
+      bus.push(Route.Main, {
+        kind: "tts.text",
+        contextId: `tempo-${String(tempo)}`,
+        timestampMs: Date.now(),
+        text: "slow",
+      });
+      await waitForCondition(() => ends.length >= 1);
+
+      await plugin.close();
+      bus.stop();
+      await started;
+      vi.unstubAllGlobals();
+      return totalBytes;
+    }
+
+    const bytesAt1 = await collectAudioBytes(1.0);
+    const bytesAt09 = await collectAudioBytes(0.9);
+    expect(bytesAt1).toBeGreaterThan(0);
+    expect(bytesAt09).toBeGreaterThan(bytesAt1);
+  });
+
   it("maps HTTP 503 to a recoverable tts.error", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal(
