@@ -127,6 +127,7 @@ export interface TurnCapture {
   assistantAudioBytes: number;
   assistantPlayoutEndMs: number;
   audioEndedAtMs: number;
+  eosAtMs: number;
   toolCalled: boolean;
   error: string;
 }
@@ -261,6 +262,7 @@ export function syntheticDryTurnCaptures(arm: "cascade" | "native"): TurnCapture
       assistantAudioBytes: INPUT_SAMPLE_RATE_HZ * 2,
       assistantPlayoutEndMs: playoutEnd,
       audioEndedAtMs: speechEnd,
+      eosAtMs: speechEnd,
       toolCalled: true,
       error: "",
     };
@@ -300,6 +302,10 @@ function captureTurn(session: CapturableSession, turn: TurnCapture): () => void 
   const offToolCall = session.bus.on<LlmToolCallPacket>("llm.tool_call", () => {
     turn.toolCalled = true;
   });
+  const offEos = session.bus.on("eos.turn_complete", (pkt) => {
+    const eos = pkt as { timestampMs: number };
+    if (turn.eosAtMs === 0) turn.eosAtMs = eos.timestampMs;
+  });
   const offTtsAudio = session.bus.on<TextToSpeechAudioPacket>("tts.audio", (pkt) => {
     if (turn.firstAudioAtMs === 0) turn.firstAudioAtMs = pkt.timestampMs;
     turn.assistantAudioBytes += pkt.audio.byteLength;
@@ -322,6 +328,7 @@ function captureTurn(session: CapturableSession, turn: TurnCapture): () => void 
   return () => {
     offStt();
     offToolCall();
+    offEos();
     offTtsAudio();
     offTtsEnd();
     session.off("agent_text_delta", onAgentDelta);
@@ -417,6 +424,7 @@ async function driveOneTurn(
     assistantAudioBytes: 0,
     assistantPlayoutEndMs: 0,
     audioEndedAtMs: 0,
+    eosAtMs: 0,
     toolCalled: false,
     error: "",
   };
@@ -630,7 +638,7 @@ export async function emitThesisMatrixResult(result: ThesisMatrixResult): Promis
     }`,
   );
   log(
-    "Turn-taking timing: CONFOUNDED, not a fair comparison here — cascade latency is dominated by the STT force-finalize timeout under synthetic trailing silence, and the native arm runs a fresh session per turn (a multi-turn realtime-bridge cancel workaround) which breaks the cross-turn EVA inter-turn gap. The turnTakingTimingScore column is audit-only; a faithful comparison needs a live full-duplex examiner bot. See docs/interaction-thesis-results.md.",
+    "Turn-taking timing: CONFOUNDED, not a fair comparison here — the native arm runs a fresh session per turn (a multi-turn realtime-bridge cancel workaround) which breaks the cross-turn EVA inter-turn gap (score is a fresh-session artifact); and the raw response latencies aren't like-for-like (native's fast firstAudio is a pre-tool filler, cascade's is the grounded answer). Cascade's ~5s is real LLM+tool latency, not an STT timeout. The turnTakingTimingScore column is audit-only; a faithful comparison needs a live full-duplex examiner bot. See docs/interaction-thesis-results.md.",
   );
   log(`\n(raw verdict-rule output, not the trustworthy result: ${result.verdict.proven ? "proven" : "not proven"} — ${result.verdict.reason})`);
   const json = `${JSON.stringify(result, null, 2)}\n`;
