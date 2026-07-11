@@ -32,6 +32,11 @@ import { createVoiceSessionRecorder } from "@kuralle-syrinx/recorder";
 
 import { measureStereoOverlapMs } from "./eva-evaluator.js";
 import { resolveDailyTask, type DailyTask } from "./examiner-goals.js";
+import {
+  judgeCapturedTurns,
+  renderJudgedTable,
+  type FdeJudgedResult,
+} from "./examiner-judge.js";
 import { ensureRepoRootDotenv, DEFAULT_MODEL } from "../src/run-one-turn.js";
 import {
   createUniversitySupportSession,
@@ -85,6 +90,8 @@ export interface FdeResult {
   readonly totalTurns: number;
   readonly subGoalsCompleted: boolean;
   readonly maxTurnsReached: boolean;
+  /** Present only when judge is enabled (`--judge` / `SYRINX_FDE_JUDGE=1`). */
+  readonly judged?: FdeJudgedResult;
 }
 
 export interface FdeOptions {
@@ -98,6 +105,8 @@ export interface FdeOptions {
   readonly examinerModel: string;
   readonly examinerTtsModel: string;
   readonly agentKind: "cascade" | "native";
+  /** Opt-in post-hoc LLM judge (default false). Dry + judge uses a deterministic stub. */
+  readonly judge?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -753,6 +762,8 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
   await agent.session.start();
 
   const turns: FdeTurnMetrics[] = [];
+  /** Sub-goal active for each recorded turn (for post-hoc judge). */
+  const turnSubGoals: string[] = [];
   let transcript = "";
   let currentSubGoalIndex = 0;
   let lastAgentReply = "";
@@ -763,6 +774,8 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
       // --- Examiner decides next utterance ---
       let utterance: string;
       let subGoalComplete: boolean;
+      const subGoalAtTurn =
+        task.subGoals[currentSubGoalIndex]?.description ?? task.subGoals[0]!.description;
 
       if (dry) {
         const result = dryExaminerGenerateNext({ task, currentSubGoalIndex, turnIndex });
@@ -852,6 +865,7 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
         responseLatencyMs,
         agentReply: lastAgentReply,
       });
+      turnSubGoals.push(subGoalAtTurn);
 
       // --- Advance sub-goal ---
       if (subGoalComplete && currentSubGoalIndex < task.subGoals.length - 1) {
@@ -886,6 +900,21 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
   const maxTurnsReached = turnIndex >= options.maxTurns;
   const subGoalsCompleted = currentSubGoalIndex >= task.subGoals.length - 1;
 
+  // --- Optional post-hoc semantic judge (never re-drives audio) ---
+  let judged: FdeJudgedResult | undefined;
+  if (options.judge) {
+    judged = await judgeCapturedTurns({
+      dry,
+      turns: turns.map((t, i) => ({
+        turn: t.turn,
+        utteranceText: t.utteranceText,
+        agentReply: t.agentReply,
+        responseLatencyMs: t.responseLatencyMs,
+        subGoal: turnSubGoals[i] ?? task.subGoals[0]!.description,
+      })),
+    });
+  }
+
   return {
     task: task.name,
     taskName: task.name,
@@ -897,6 +926,7 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
     totalTurns: turns.length,
     subGoalsCompleted,
     maxTurnsReached,
+    ...(judged ? { judged } : {}),
   };
 }
 
@@ -922,6 +952,11 @@ function renderResultTable(result: FdeResult): string {
 export function isDryMode(argv: readonly string[] = process.argv): boolean {
   if (process.env["SYRINX_FDE_DRY"] === "1") return true;
   return argv.includes("--dry");
+}
+
+export function isJudgeMode(argv: readonly string[] = process.argv): boolean {
+  if (process.env["SYRINX_FDE_JUDGE"] === "1") return true;
+  return argv.includes("--judge");
 }
 
 function ensureLiveEnv(agentKind: "cascade" | "native"): void {
@@ -955,6 +990,7 @@ export function resolveExaminerTtsModel(): string {
 
 async function main(): Promise<void> {
   const dry = isDryMode();
+  const judge = isJudgeMode();
   const agentKind = process.env["SYRINX_FDE_AGENT"] === "native" ? "native" : "cascade";
   if (!dry) {
     ensureRepoRootDotenv();
@@ -971,6 +1007,7 @@ async function main(): Promise<void> {
 
   const result = await runFullduplexExaminer({
     dry,
+    judge,
     agentKind,
     taskName,
     maxTurns,
@@ -992,6 +1029,13 @@ async function main(): Promise<void> {
   console.log(`Conversation overlap: ${result.conversationOverlapMs}ms\n`);
   // eslint-disable-next-line no-console
   console.log(renderResultTable(result));
+
+  if (result.judged) {
+    // eslint-disable-next-line no-console
+    console.log("\n## Semantic judge (post-hoc)\n");
+    // eslint-disable-next-line no-console
+    console.log(renderJudgedTable(result.judged));
+  }
 
   const jsonResult = `${JSON.stringify(result, null, 2)}\n`;
   const resultPath = join(outputDir, "fd-examiner-result.json");

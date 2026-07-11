@@ -86,3 +86,24 @@ why Syrinx-owned endpointing / half-cascade turn control is worth having; not a 
   under fixed-fixture driving. Follow-up: live full-duplex examiner bot; fix the multi-turn bridge
   cancel race. The full thesis ("matches on turn-taking AND no task-success regression") is therefore
   **partially proven** (task-success half only) by this bounded harness.
+
+## Resolution — fair turn-taking via the live examiner + semantic judge (2026-07-11)
+
+Both blockers were fixed (multi-turn bridge cancel-race, commit 3272a96; reasoner-abort race, commit
+c856785) and the confound was dissolved with an FDB-v2-style **LLM judge** over the transcript
+(`smoke:fullduplex-examiner SYRINX_FDE_JUDGE=1`, `examiner-judge.ts`) — scoring Turn-Taking Fluency,
+whether the agent *addressed* the sub-goal, and Takeover Rate, instead of raw first-audio. Both fronts
+run one continuous live session against the same LLM semantic-goal examiner. **Live judged comparison:**
+
+| metric | cascade+rules | native-realtime |
+|---|---|---|
+| Turn-Taking Fluency (median, 1–5) | 3 | **4.5** |
+| addressedGoal rate | **100%** | 75% |
+| Takeover Rate (TOR) | **0%** | 25% |
+
+**Verdict (fair, honest):** native *feels* snappier (higher fluency) but is impatient — 25% takeover
+(it jumps in during pauses, e.g. a 75 ms "response") and 25% of its "responses" are pre-tool fillers
+that never address the goal. Cascade is slower but reliably addresses every turn (100%) and never barges
+(0% TOR). This is the tradeoff the raw-latency confound hid: the judge exposes native's filler/impatience
+as **distinct metrics** rather than a flattering-but-meaningless latency number. Raw runs:
+`runs/fde-judged-{cascade,native}.txt`.
