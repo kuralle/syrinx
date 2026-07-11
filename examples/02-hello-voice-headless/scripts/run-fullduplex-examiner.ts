@@ -434,15 +434,17 @@ function resolveStubExaminerModel(): ReturnType<ReturnType<typeof createOpenAI>>
 class DrySessionBus {
   private listeners = new Map<string, Set<(...args: any[]) => void>>();
   private replyIndex = 0;
+  private responseTimer: ReturnType<typeof setTimeout> | null = null;
 
   push(_route: number, packet: { kind: string; contextId: string; audio?: Uint8Array }): void {
     if (packet.kind !== "user.audio_received") return;
-    // After receiving user audio, auto-emit a canned agent response.
-    // Delays are generous to simulate real agent think-time (~1-2s).
+    // Debounce: respond ONCE, ~400ms after the user STOPS sending audio (like a real agent
+    // responding after the turn ends) — not once per frame. Emitting per-frame produced audio
+    // during the examiner's own utterance (firstAudio before utteranceEnd → negative latency).
     const contextId = packet.contextId;
-    const reply = this.nextReply();
-    setTimeout(() => {
-      // tts.audio — a short burst of "audio" at 16kHz
+    if (this.responseTimer) clearTimeout(this.responseTimer);
+    this.responseTimer = setTimeout(() => {
+      const reply = this.nextReply();
       const samples = new Int16Array(Math.floor(INPUT_SAMPLE_RATE_HZ * 0.5));
       for (let i = 0; i < samples.length; i++) {
         samples[i] = Math.round(Math.sin((2 * Math.PI * 300 * i) / INPUT_SAMPLE_RATE_HZ) * 6000);
@@ -455,20 +457,17 @@ class DrySessionBus {
         sampleRateHz: INPUT_SAMPLE_RATE_HZ,
         provider: { name: "stub", model: "stub", cancelled: false },
       } satisfies TextToSpeechAudioPacket);
-    }, 1200);
-    setTimeout(() => {
-      this.emit("tts.end", {
-        kind: "tts.end",
-        contextId,
-        timestampMs: Date.now(),
-      } satisfies TextToSpeechEndPacket);
-    }, 1500);
-    // Also emit agent_text_delta on the session
-    if (this.onSessionEvent) {
+      if (this.onSessionEvent) {
+        this.onSessionEvent("agent_text_delta", { tsMs: Date.now(), turnId: contextId, delta: reply });
+      }
       setTimeout(() => {
-        this.onSessionEvent?.("agent_text_delta", { tsMs: Date.now(), turnId: contextId, delta: reply });
-      }, 1000);
-    }
+        this.emit("tts.end", {
+          kind: "tts.end",
+          contextId,
+          timestampMs: Date.now(),
+        } satisfies TextToSpeechEndPacket);
+      }, 300);
+    }, 400);
   }
 
   on(kind: string, handler: (...args: any[]) => void): () => void {
