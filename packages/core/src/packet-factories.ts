@@ -43,6 +43,8 @@ import type {
   StopIdleTimeoutPacket,
   ModeSwitchRequestedPacket,
   InteractionBackchannelPacket,
+  InteractionDuckPacket,
+  InteractionResumePacket,
 } from "./packets.js";
 
 const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
@@ -267,4 +269,18 @@ export function interactionBackchannel(
   cue: string,
 ): InteractionBackchannelPacket {
   return { kind: "interaction.backchannel", contextId, timestampMs, cue };
+}
+
+export function interactionDuck(
+  contextId: string,
+  timestampMs: number,
+): InteractionDuckPacket {
+  return { kind: "interaction.duck", contextId, timestampMs };
+}
+
+export function interactionResume(
+  contextId: string,
+  timestampMs: number,
+): InteractionResumePacket {
+  return { kind: "interaction.resume", contextId, timestampMs };
 }

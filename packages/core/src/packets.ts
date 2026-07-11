@@ -480,6 +480,16 @@ export interface InteractionBackchannelPacket extends VoicePacket {
   readonly cue: string;
 }
 
+/** Signal to attenuate active TTS while a barge-in is being evaluated (pending window). */
+export interface InteractionDuckPacket extends VoicePacket {
+  readonly kind: "interaction.duck";
+}
+
+/** Signal to restore attenuated TTS when the pending window resolved without an interrupt. */
+export interface InteractionResumePacket extends VoicePacket {
+  readonly kind: "interaction.resume";
+}
+
 // =============================================================================
 // Behavior Packets
 // =============================================================================

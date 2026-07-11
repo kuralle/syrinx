@@ -2,11 +2,17 @@
 
 import { describe, it, expect } from "vitest";
 import { PipelineBusImpl } from "../pipeline-bus.js";
-import { RuleBasedInteractionPolicy } from "./rule-based.js";
+import { RuleBasedInteractionPolicy, type RuleBasedInteractionPolicyDeps } from "./rule-based.js";
 import { PrimarySpeakerGate } from "../primary-speaker-gate.js";
 import { TtsPlayoutClock } from "../tts-playout-clock.js";
 
-async function createPolicy(minInterruptionMs = 280) {
+async function createPolicy(
+  minInterruptionMs = 280,
+  opts?: {
+    pauseThenResolveBargeIn?: boolean;
+    backchannel?: RuleBasedInteractionPolicyDeps["backchannel"];
+  },
+) {
   const bus = new PipelineBusImpl();
   void bus.start();
   const ttsPlayout = new TtsPlayoutClock();
@@ -15,6 +21,8 @@ async function createPolicy(minInterruptionMs = 280) {
     primarySpeakerGate: new PrimarySpeakerGate(),
     ttsPlayout,
     minInterruptionMs,
+    pauseThenResolveBargeIn: opts?.pauseThenResolveBargeIn,
+    backchannel: opts?.backchannel,
   });
   return { bus, ttsPlayout, policy };
 }
@@ -265,5 +273,62 @@ describe("RuleBasedInteractionPolicy", () => {
       timestampMs: t0 + 300,
     });
     expect(decisions).toEqual([]);
+  });
+
+  it("backchannel disabled returns empty decisions", async () => {
+    const { policy } = await createPolicy(280, { backchannel: { enabled: false } });
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([]);
+  });
+
+  it("backchannel cue-set knob selects first cue", async () => {
+    const { policy } = await createPolicy(280, { backchannel: { cues: ["uh_huh"] } });
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([{ kind: "backchannel", cue: "uh_huh" }]);
+  });
+
+  it("default backchannel cue is mm_hmm", async () => {
+    const { policy } = await createPolicy();
+
+    policy.observe({
+      kind: "delegate_state",
+      contextId: "turn-1",
+      timestampMs: 1000,
+      toolCallPhase: "started",
+    });
+    expect(
+      policy.observe({
+        kind: "delegate_state",
+        contextId: "turn-1",
+        timestampMs: 3000,
+        toolCallPhase: "delayed",
+      }),
+    ).toEqual([{ kind: "backchannel", cue: "mm_hmm" }]);
   });
 });

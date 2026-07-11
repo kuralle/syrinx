@@ -59,18 +59,39 @@ export function isBackchannel(text: string): boolean {
   return BACKCHANNELS.has(norm);
 }
 
+export function isAcknowledgement(text: string, phrases: readonly string[]): boolean {
+  const norm = text
+    .toLowerCase()
+    .replace(/[^a-z\s'-]/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!norm) return false;
+  return phrases.some((p) => {
+    const pNorm = p
+      .toLowerCase()
+      .replace(/[^a-z\s'-]/g, "")
+      .trim()
+      .replace(/\s+/g, " ");
+    return pNorm === norm;
+  });
+}
+
 export interface TurnArbiterDeps {
   readonly bus: PipelineBus;
   readonly primarySpeakerGate: PrimarySpeakerGate;
   readonly ttsPlayout: TtsPlayoutClock;
   readonly minInterruptionMs: number;
   readonly onInterrupt?: (interruptedContextId: string, source: "vad") => void;
+  /** When true, emit `interaction.duck` while evaluating a barge-in during active TTS,
+   *  and `interaction.resume` if the pending window resolves without an interrupt. */
+  readonly pauseThenResolveBargeIn?: boolean;
 }
 
 export class TurnArbiter {
   private turnInterruption: TurnInterruptionState = { kind: "idle" };
   private latestInterimText = "";
   private latestInterimConfidence: number | null = null;
+  private ducked = false;
 
   constructor(private readonly deps: TurnArbiterDeps) {}
 
@@ -166,6 +187,7 @@ export class TurnArbiter {
   commitClientInterrupt(interruptedContextId: string): void {
     if (!this.deps.ttsPlayout.isActive(interruptedContextId)) return;
     this.turnInterruption = { kind: "idle" };
+    this.ducked = false;
     this.deps.primarySpeakerGate.resetBargeInWindow();
     this.deps.bus.push(Route.Background, make.metric(interruptedContextId, "interrupt.committed_after_ms", "0"));
     this.deps.bus.push(Route.Background, make.metric(interruptedContextId, "vaqi.interruption", "1"));
@@ -177,6 +199,7 @@ export class TurnArbiter {
     this.turnInterruption = { kind: "idle" };
     this.latestInterimText = "";
     this.latestInterimConfidence = null;
+    this.ducked = false;
   }
 
   private pendingFor(userContextId: string): PendingTurnInterruption | null {
@@ -203,6 +226,10 @@ export class TurnArbiter {
       firstSpeechMs: pkt.timestampMs,
       awaitingAudio,
     };
+    if (this.deps.pauseThenResolveBargeIn && this.deps.ttsPlayout.isActive(interruptedContextId) && !this.ducked) {
+      this.deps.bus.push(Route.Main, make.interactionDuck(interruptedContextId, pkt.timestampMs));
+      this.ducked = true;
+    }
   }
 
   private setAwaitingAudio(awaitingAudio: boolean): void {
@@ -238,6 +265,7 @@ export class TurnArbiter {
     }
     this.turnInterruption = { kind: "idle" };
     gate.resetBargeInWindow();
+    this.ducked = false;
 
     const { bus, ttsPlayout } = this.deps;
     if (!ttsPlayout.isActive(pending.interruptedContextId)) {
@@ -281,6 +309,10 @@ export class TurnArbiter {
     } else {
       this.turnInterruption = { kind: "idle" };
       this.deps.primarySpeakerGate.resetBargeInWindow();
+      if (this.ducked) {
+        this.deps.bus.push(Route.Main, make.interactionResume(pending.interruptedContextId, Date.now()));
+        this.ducked = false;
+      }
     }
     this.deps.bus.push(
       Route.Background,

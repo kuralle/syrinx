@@ -11,11 +11,19 @@ export interface RuleBasedInteractionPolicyDeps {
   readonly primarySpeakerGate: PrimarySpeakerGate;
   readonly ttsPlayout: TtsPlayoutClock;
   readonly minInterruptionMs: number;
+  /** When true, the underlying TurnArbiter emits duck/resume signals during barge-in evaluation. */
+  readonly pauseThenResolveBargeIn?: boolean;
+  /** Tenant-level backchannel knobs. Default (undefined) = current behavior (`mm_hmm`). */
+  readonly backchannel?: {
+    readonly enabled?: boolean;
+    readonly cues?: readonly string[];
+  };
 }
 
 export class RuleBasedInteractionPolicy implements InteractionPolicy {
   readonly arbiter: TurnArbiter;
   private readonly ttsPlayout: TtsPlayoutClock;
+  private readonly backchannelConfig: RuleBasedInteractionPolicyDeps["backchannel"];
   private pending: InteractionDecision[] = [];
   private bargeInAudioConsumed = false;
   private delegateGapOpen = false;
@@ -24,8 +32,13 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
 
   constructor(deps: RuleBasedInteractionPolicyDeps) {
     this.ttsPlayout = deps.ttsPlayout;
+    this.backchannelConfig = deps.backchannel;
     this.arbiter = new TurnArbiter({
-      ...deps,
+      bus: deps.bus,
+      primarySpeakerGate: deps.primarySpeakerGate,
+      ttsPlayout: deps.ttsPlayout,
+      minInterruptionMs: deps.minInterruptionMs,
+      pauseThenResolveBargeIn: deps.pauseThenResolveBargeIn,
       onInterrupt: (id) => this.pending.push({ kind: "interrupt", interruptedContextId: id }),
     });
   }
@@ -109,7 +122,9 @@ export class RuleBasedInteractionPolicy implements InteractionPolicy {
         if (this.depsTtsActive()) return [];
         if (this.userSpeaking) return [];
         this.delegateCuePlayed = true;
-        return [{ kind: "backchannel", cue: "mm_hmm" }];
+        if (this.backchannelConfig?.enabled === false) return [];
+        const cue = this.backchannelConfig?.cues?.[0] ?? "mm_hmm";
+        return [{ kind: "backchannel", cue }];
       }
       case "complete":
       case "failed":

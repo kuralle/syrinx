@@ -215,7 +215,11 @@ export { confidenceToWaitMs, type ConfidenceToWaitConfig } from "./confidence-to
 export { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 export { DeferInteractionPolicy } from "./policies/defer.js";
 export { InteractionCoordinator, type InteractionCaps } from "./interaction-coordinator.js";
-export { type InteractionBackchannelPacket } from "./packets.js";
+export {
+  type InteractionBackchannelPacket,
+  type InteractionDuckPacket,
+  type InteractionResumePacket,
+} from "./packets.js";
 
 // VoiceAgentSession
 export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";

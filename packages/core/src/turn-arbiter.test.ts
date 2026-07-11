@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { PipelineBusImpl, Route } from "./pipeline-bus.js";
-import { TurnArbiter } from "./turn-arbiter.js";
+import { TurnArbiter, isAcknowledgement } from "./turn-arbiter.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import type {
@@ -18,7 +18,11 @@ import {
   synthesizeTonePcm16,
 } from "./primary-speaker-fixtures.js";
 
-async function createArbiter(minInterruptionMs: number, gate = new PrimarySpeakerGate()) {
+async function createArbiter(
+  minInterruptionMs: number,
+  gate = new PrimarySpeakerGate(),
+  pauseThenResolveBargeIn?: boolean,
+) {
   const bus = new PipelineBusImpl();
   void bus.start();
   const ttsPlayout = new TtsPlayoutClock();
@@ -27,6 +31,7 @@ async function createArbiter(minInterruptionMs: number, gate = new PrimarySpeake
     primarySpeakerGate: gate,
     ttsPlayout,
     minInterruptionMs,
+    pauseThenResolveBargeIn,
   });
   return { bus, ttsPlayout, arbiter, gate };
 }
@@ -475,6 +480,196 @@ describe("TurnArbiter", () => {
     );
 
     expect(lockSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("TurnArbiter pause-then-resolve barge-in (pauseThenResolveBargeIn)", () => {
+  it("emits duck on speech start during active TTS and resume on short-speech suppression", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, new PrimarySpeakerGate(), true);
+    const ducks: { contextId: string; kind: string }[] = [];
+    const resumes: { contextId: string; kind: string }[] = [];
+    bus.on("interaction.duck", (pkt) => {
+      ducks.push(pkt as unknown as { contextId: string; kind: string });
+    });
+    bus.on("interaction.resume", (pkt) => {
+      resumes.push(pkt as unknown as { contextId: string; kind: string });
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    const t0 = 3000;
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: t0,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    await drainBus();
+    expect(ducks).toHaveLength(1);
+    expect(ducks[0]!.contextId).toBe("assistant-turn");
+
+    arbiter.onSpeechEnded(
+      {
+        kind: "vad.speech_ended",
+        contextId: "user",
+        timestampMs: t0 + 120,
+      } satisfies VadSpeechEndedPacket,
+      true,
+    );
+    await drainBus();
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]!.contextId).toBe("assistant-turn");
+  });
+
+  it("emits duck on speech start and resume on backchannel suppression", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, new PrimarySpeakerGate(), true);
+    const ducks: { contextId: string; kind: string }[] = [];
+    const resumes: { contextId: string; kind: string }[] = [];
+    bus.on("interaction.duck", (pkt) => {
+      ducks.push(pkt as unknown as { contextId: string; kind: string });
+    });
+    bus.on("interaction.resume", (pkt) => {
+      resumes.push(pkt as unknown as { contextId: string; kind: string });
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    await drainBus();
+    expect(ducks).toHaveLength(1);
+
+    arbiter.noteInterimEvidence("uh huh");
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]!.contextId).toBe("assistant-turn");
+  });
+
+  it("emits NO resume when a real interrupt is committed", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, new PrimarySpeakerGate(), true);
+    const ducks: { contextId: string; kind: string }[] = [];
+    const resumes: { contextId: string; kind: string }[] = [];
+    bus.on("interaction.duck", (pkt) => {
+      ducks.push(pkt as unknown as { contextId: string; kind: string });
+    });
+    bus.on("interaction.resume", (pkt) => {
+      resumes.push(pkt as unknown as { contextId: string; kind: string });
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    await drainBus();
+    expect(ducks).toHaveLength(1);
+
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+    expect(resumes).toHaveLength(0);
+  });
+
+  it("does NOT emit duck or resume when flag is off", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, new PrimarySpeakerGate(), false);
+    const ducks: { contextId: string; kind: string }[] = [];
+    const resumes: { contextId: string; kind: string }[] = [];
+    bus.on("interaction.duck", (pkt) => {
+      ducks.push(pkt as unknown as { contextId: string; kind: string });
+    });
+    bus.on("interaction.resume", (pkt) => {
+      resumes.push(pkt as unknown as { contextId: string; kind: string });
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    arbiter.noteInterimEvidence("uh huh");
+    arbiter.onSpeechActivity({
+      kind: "vad.speech_activity",
+      contextId: "user",
+      timestampMs: 2300,
+      isAsync: true,
+    } satisfies VadSpeechActivityPacket);
+    await drainBus();
+    expect(ducks).toHaveLength(0);
+    expect(resumes).toHaveLength(0);
+  });
+
+  it("emits exactly one duck per pending window (no double-duck)", async () => {
+    const { bus, ttsPlayout, arbiter } = await createArbiter(280, new PrimarySpeakerGate(), true);
+    const ducks: { contextId: string; kind: string }[] = [];
+    bus.on("interaction.duck", (pkt) => {
+      ducks.push(pkt as unknown as { contextId: string; kind: string });
+    });
+
+    ttsPlayout.noteAudio("assistant-turn", 100, 1000);
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2000,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    // Idempotent: second speech start for same user context must not re-duck
+    arbiter.onSpeechStarted(
+      {
+        kind: "vad.speech_started",
+        contextId: "user",
+        timestampMs: 2100,
+        confidence: 0.99,
+      } satisfies VadSpeechStartedPacket,
+      "assistant-turn",
+    );
+    await drainBus();
+    expect(ducks).toHaveLength(1);
+  });
+});
+
+describe("isAcknowledgement", () => {
+  it("matches exact phrase after normalization", () => {
+    expect(isAcknowledgement("Okay", ["okay", "sure"])).toBe(true);
+    expect(isAcknowledgement("  OK!  ", ["ok"])).toBe(true);
+    expect(isAcknowledgement("uh-huh", ["uh-huh", "uh huh"])).toBe(true);
+    expect(isAcknowledgement("uh huh", ["uh-huh", "uh huh"])).toBe(true);
+    expect(isAcknowledgement("nope", ["okay", "sure"])).toBe(false);
+  });
+
+  it("returns false for empty or whitespace text", () => {
+    expect(isAcknowledgement("", ["ok"])).toBe(false);
+    expect(isAcknowledgement("   ", ["ok"])).toBe(false);
   });
 });
 
