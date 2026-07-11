@@ -54,6 +54,7 @@
     "smoke:zeta-warmup": "tsx scripts/run-zeta-warmup.ts",
     "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
+    "smoke:fullduplex-examiner": "tsx scripts/run-fullduplex-examiner.ts",
     "smoke:interaction-eval-matrix": "tsx scripts/interaction-config-sweep.ts",
     "smoke:interaction-thesis-matrix": "tsx scripts/run-interaction-thesis-matrix.ts",
     "smoke:kuralle-memory": "tsx scripts/run-kuralle-memory-smoke.ts",
