@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //
 // Cascaded voice pipeline for the Cloudflare Workers host: real Deepgram STT
-// (nova-3, provider-endpointed) + kuralle (Vectorize RAG) Reasoner + Deepgram
-// Aura TTS, all dialed over the Workers fetch-upgrade socket (createWorkersSocket)
-// so no Node `ws` is pulled into the edge bundle. Turn-taking is owned by Deepgram
-// endpointing (endpointingOwner: "provider_stt"), so no Silero VAD / Smart Turn
-// ONNX is needed on the hot path.
+// (nova-3) + kuralle (Vectorize RAG) Reasoner + Deepgram Aura TTS, all dialed
+// over the Workers fetch-upgrade socket (createWorkersSocket) so no Node `ws`
+// is pulled into the edge bundle. Default turn-taking is Deepgram endpointing
+// (endpointingOwner: "provider_stt"); when `env.AI` is bound, hosted Workers AI
+// Smart Turn owns EOS via the edge-safe PipecatEOSPlugin (`/eos` subpath, no ONNX).
 //
 // This is the pipeline/brain layer — the host (worker.ts) composes it via
 // `withVoice(Agent)`; this module owns the plugin slots and the reasoner, not the
@@ -14,6 +14,7 @@
 import type { Reasoner } from "@kuralle-syrinx/core";
 import type { CascadedPipeline, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
+import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn/eos";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
 import type { VectorizeIndex } from "@cloudflare/workers-types";
 import { createRealtimeKuralleReasoner } from "./kuralle-realtime-agent.js";
@@ -80,7 +81,11 @@ export const liveCascadedPipeline: CascadedPipeline<LiveSessionEnv> = {
       sample_rate: OUTPUT_SAMPLE_RATE_HZ,
     },
   }),
-  endpointingOwner: "provider_stt",
+  eos: (env) => {
+    const predictor = createWorkersAiSmartTurnPredictor(env);
+    return predictor ? { plugin: new PipecatEOSPlugin(predictor), config: {} } : undefined;
+  },
+  endpointingOwner: (env) => (env.AI ? "smart_turn" : "provider_stt"),
   sttForceFinalizeTimeoutMs: 3500,
 };
 

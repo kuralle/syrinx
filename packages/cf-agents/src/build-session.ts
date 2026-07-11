@@ -72,17 +72,22 @@ export interface CascadedStage {
  * `plugins: { stt, vad?, eos?, bridge, tts }`, reasoner wrapped in a
  * `ReasoningBridge` registered as `"bridge"`.
  */
+export type CascadedEndpointingOwner = "provider_stt" | "smart_turn";
+
 export interface CascadedPipeline<Env> {
   readonly kind: "cascaded";
   readonly stt: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
   readonly tts: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
   readonly vad?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
-  readonly eos?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  /** Optional EOS stage. Returning `undefined` is equivalent to omitting the stage. */
+  readonly eos?: (env: Env, ctx: VoicePipelineContext) => CascadedStage | undefined;
   /**
    * Which component owns end-of-speech. @default "provider_stt". Set to
-   * "smart_turn" when supplying an `eos` stage.
+   * "smart_turn" when supplying an `eos` stage. May be a static literal or an
+   * `(env) => owner` factory for per-request selection (e.g. smart_turn only
+   * when Workers AI is bound).
    */
-  readonly endpointingOwner?: "provider_stt" | "smart_turn";
+  readonly endpointingOwner?: CascadedEndpointingOwner | ((env: Env) => CascadedEndpointingOwner);
   /**
    * Fallback timeout (ms) before the engine force-finalizes a turn when the STT provider's own
    * endpointing/finalize never fires. Maps to `VoiceAgentSession`'s `sttForceFinalizeTimeoutMs`
@@ -139,8 +144,12 @@ export function buildVoiceSession<Env>(
   const tts = pipeline.tts(env, ctx);
   const vad = pipeline.vad?.(env, ctx);
   const eos = pipeline.eos?.(env, ctx);
+  const endpointingOwner =
+    typeof pipeline.endpointingOwner === "function"
+      ? pipeline.endpointingOwner(env)
+      : pipeline.endpointingOwner;
 
-  if (pipeline.endpointingOwner === "smart_turn" && !eos) {
+  if (endpointingOwner === "smart_turn" && !eos) {
     throw new Error(
       'withVoice: a cascaded pipeline with endpointingOwner "smart_turn" must provide an `eos` stage ' +
         "(e.g. a PipecatEOSPlugin); otherwise no component owns end-of-speech and turns never complete.",
@@ -157,7 +166,7 @@ export function buildVoiceSession<Env>(
 
   const session = new VoiceAgentSession({
     plugins,
-    endpointingOwner: pipeline.endpointingOwner ?? "provider_stt",
+    endpointingOwner: endpointingOwner ?? "provider_stt",
     ...(pipeline.sttForceFinalizeTimeoutMs !== undefined
       ? { sttForceFinalizeTimeoutMs: pipeline.sttForceFinalizeTimeoutMs }
       : {}),

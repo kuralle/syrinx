@@ -5,26 +5,61 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
+import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn/eos";
 
 import {
   createLiveReasoner,
+  createWorkersAiSmartTurnPredictor,
   hasLiveSessionCredentials,
   liveCascadedPipeline,
+  type LiveSessionEnv,
 } from "./live-session.js";
+import type { Ai } from "./workers-ai-smart-turn.js";
 
 const srcDir = path.dirname(fileURLToPath(import.meta.url));
 const mockVectorize = {} as import("@cloudflare/workers-types").VectorizeIndex;
 const ctx = { sessionId: "s1" };
 
+function resolveOwner(env: LiveSessionEnv): "provider_stt" | "smart_turn" {
+  const owner = liveCascadedPipeline.endpointingOwner;
+  return typeof owner === "function" ? owner(env) : (owner ?? "provider_stt");
+}
+
+const baseEnv = (): LiveSessionEnv => ({
+  DEEPGRAM_API_KEY: "dg-key",
+  OPENAI_API_KEY: "oa-key",
+  VECTORIZE: mockVectorize,
+});
+
+const mockAi = (): Ai => ({
+  run: async () => ({ is_complete: true, probability: 0.9 }),
+});
+
 describe("liveCascadedPipeline", () => {
-  it("is a provider-endpointed cascade with a tightened force-finalize timeout", () => {
+  it("is a cascaded pipeline with a tightened force-finalize timeout", () => {
     expect(liveCascadedPipeline.kind).toBe("cascaded");
-    expect(liveCascadedPipeline.endpointingOwner).toBe("provider_stt");
     expect(liveCascadedPipeline.sttForceFinalizeTimeoutMs).toBe(3500);
   });
 
+  it("defaults to provider_stt with no eos when env.AI is absent", () => {
+    const env = baseEnv();
+    expect(resolveOwner(env)).toBe("provider_stt");
+    expect(liveCascadedPipeline.eos?.(env, ctx)).toBeUndefined();
+    expect(createWorkersAiSmartTurnPredictor(env)).toBeUndefined();
+  });
+
+  it("selects smart_turn + PipecatEOSPlugin when env.AI is present", () => {
+    const env: LiveSessionEnv = { ...baseEnv(), AI: mockAi() };
+    expect(resolveOwner(env)).toBe("smart_turn");
+    expect(createWorkersAiSmartTurnPredictor(env)).toBeTruthy();
+
+    const eos = liveCascadedPipeline.eos?.(env, ctx);
+    expect(eos).toBeDefined();
+    expect(eos!.plugin).toBeInstanceOf(PipecatEOSPlugin);
+  });
+
   it("builds Deepgram Nova-3 STT (VAD events) and Aura TTS stages from the env", () => {
-    const env = { DEEPGRAM_API_KEY: "dg-key", OPENAI_API_KEY: "oa-key", VECTORIZE: mockVectorize };
+    const env = baseEnv();
     const stt = liveCascadedPipeline.stt(env, ctx);
     expect(stt.plugin).toBeInstanceOf(DeepgramSTTPlugin);
     expect(stt.config).toMatchObject({ model: "nova-3", endpointing: 500, vad_events: true, utterance_end_ms: 1000, api_key: "dg-key" });

@@ -80,4 +80,46 @@ describe("buildVoiceSession", () => {
     };
     expect(() => buildVoiceSession(pipeline, {}, stubReasoner(), ctx)).toThrow(/smart_turn/);
   });
+
+  it("resolves endpointingOwner when provided as an (env) => owner factory", () => {
+    let seenEnv: { ai: boolean } | undefined;
+    const pipeline: VoicePipeline<{ ai: boolean }> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: stubPlugin() }),
+      tts: () => ({ plugin: stubPlugin() }),
+      endpointingOwner: (env) => {
+        seenEnv = env;
+        return env.ai ? "smart_turn" : "provider_stt";
+      },
+    };
+
+    const providerSession = buildVoiceSession(pipeline, { ai: false }, stubReasoner(), ctx);
+    expect(providerSession).toBeInstanceOf(VoiceAgentSession);
+    expect(seenEnv).toEqual({ ai: false });
+
+    expect(() => buildVoiceSession(pipeline, { ai: true }, stubReasoner(), ctx)).toThrow(/smart_turn/);
+  });
+
+  it("builds smart_turn when the factory returns smart_turn and eos is present", () => {
+    const pipeline: VoicePipeline<{ ai: boolean }> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: stubPlugin() }),
+      tts: () => ({ plugin: stubPlugin() }),
+      eos: () => ({ plugin: stubPlugin(), config: {} }),
+      endpointingOwner: (env) => (env.ai ? "smart_turn" : "provider_stt"),
+    };
+    const session = buildVoiceSession(pipeline, { ai: true }, stubReasoner(), ctx);
+    expect(session).toBeInstanceOf(VoiceAgentSession);
+  });
+
+  it("treats an eos factory that returns undefined as no eos stage", () => {
+    const pipeline: VoicePipeline<unknown> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: stubPlugin() }),
+      tts: () => ({ plugin: stubPlugin() }),
+      eos: () => undefined,
+      endpointingOwner: "provider_stt",
+    };
+    expect(buildVoiceSession(pipeline, {}, stubReasoner(), ctx)).toBeInstanceOf(VoiceAgentSession);
+  });
 });

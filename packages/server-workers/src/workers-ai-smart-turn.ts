@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import type { SmartTurnPredictor } from "@kuralle-syrinx/pipecat-smart-turn";
+import type { SmartTurnPredictor } from "@kuralle-syrinx/pipecat-smart-turn/eos";
 import type { PluginConfig } from "@kuralle-syrinx/core";
 
 /** Minimal Cloudflare Workers AI binding surface for the Smart Turn v2 model. */
