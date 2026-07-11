@@ -14,20 +14,25 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateObject } from "ai";
+import { generateObject, tool, stepCountIs } from "ai";
 import { z } from "zod";
 
 import {
   Route,
   StreamingPcm16Resampler,
+  VoiceAgentSession,
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
 } from "@kuralle-syrinx/core";
+import { fromStreamText } from "@kuralle-syrinx/aisdk";
+import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "@kuralle-syrinx/realtime";
+import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 import { createVoiceSessionRecorder } from "@kuralle-syrinx/recorder";
 
 import { measureStereoOverlapMs } from "./eva-evaluator.js";
 import { resolveDailyTask, type DailyTask } from "./examiner-goals.js";
-import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
+import { ensureRepoRootDotenv, DEFAULT_MODEL } from "../src/run-one-turn.js";
 import {
   createUniversitySupportSession,
   type UniversitySupportTtsProvider,
@@ -40,6 +45,9 @@ import {
 export interface AgentUnderTest {
   readonly session: CapturableSession;
   readonly label: string;
+  /** Native-realtime adapter tee writes final assistant transcripts here so
+   *  captureAgentResponse can populate agentReply without agent_text_delta. */
+  onAssistantTranscript?: ((text: string) => void) | null;
 }
 
 /** Minimum surface the examiner uses on the agent session. */
@@ -89,6 +97,7 @@ export interface FdeOptions {
   readonly ttsProvider: UniversitySupportTtsProvider;
   readonly examinerModel: string;
   readonly examinerTtsModel: string;
+  readonly agentKind: "cascade" | "native";
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +108,11 @@ const INPUT_SAMPLE_RATE_HZ = 16000;
 const FRAME_SAMPLES = 320;
 /** Short silence tail so the agent endpointing detects end-of-speech (~800ms). */
 const POST_UTTERANCE_SILENCE_MS = 800;
+/** Between turns, wait until the agent's audio has been quiet this long (response fully
+ *  drained) before the examiner speaks again — correct turn-taking + prevents a long native
+ *  reply's tail bleeding into the next turn's capture. Capped so a stuck stream can't hang. */
+const RESPONSE_QUIET_MS = 1200;
+const RESPONSE_DRAIN_CAP_MS = 25_000;
 const DEFAULT_MAX_TURNS = 6;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 120_000;
 
@@ -120,13 +134,128 @@ export function cascadeAgent(options: {
   return { session, label: "cascade+rules" };
 }
 
-export function nativeRealtimeAgent(): AgentUnderTest {
-  // TODO(P3): implement nativeRealtimeAgent() — gated on multi-turn realtime-bridge
-  // cancel-race fix (task 0df07a88). Currently the native bridge aborts in-flight
-  // responses when server_vad fires a new speech_started for the next turn, but
-  // cancel throws "no active response found" when the prior response already
-  // completed. The fix is a bridge robustness no-op when nothing is active.
-  throw new Error("blocked on multi-turn realtime-bridge cancel-race fix (task 0df07a88)");
+const ASK_UNIVERSITY_TOOL: RealtimeToolDef = {
+  name: "ask_university",
+  description: "Answer university student-relations questions (enrollment, add/drop, advising).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string" } },
+    required: ["query"],
+  },
+};
+
+const UNIVERSITY_SUPPORT_PROMPT = [
+  "You are Syrinx University's Student Relations voice agent.",
+  "For enrollment, add-drop, advising, account, or case-status questions, call resolveLateAddRequest before answering.",
+  "Never invent deadlines, forms, URLs, account holds, or approvals. If a tool result is incomplete, say what must be checked next.",
+  "For spoken replies, use two concise sentences maximum and lead with the student action.",
+  "If transcription sounds uncertain, ask one short clarification instead of guessing.",
+].join("\n");
+
+const supportTools = {
+  resolveLateAddRequest: tool({
+    description: "Resolve a student's late add request, including student status, policy, form, approvals, and case creation.",
+    inputSchema: z.object({
+      studentId: z.string().optional().describe("Student ID if the caller provided one."),
+      name: z.string().optional().describe("Student name if the caller provided one."),
+      courseCode: z.string().optional().describe("Course code or spoken course name."),
+      term: z.string().optional().describe("Academic term if known."),
+    }),
+    execute: async ({ studentId, name, courseCode, term }) => ({
+      student: {
+        studentId: studentId ?? "S10042",
+        name: name ?? "Maya Chen",
+        academicStanding: "good",
+        activeHolds: [],
+        advisor: "Dr. Priya Raman",
+      },
+      policy: {
+        courseCode: courseCode ?? "Biology 101",
+        term: term ?? "Spring 2027",
+        addDeadline: "2027-02-05",
+        today: "2027-02-09",
+        status: "late_add_required",
+        requiredForm: "Late Add Petition",
+        approvals: ["course instructor", "academic advisor", "registrar"],
+        submissionChannel: "Student Relations portal",
+      },
+      case: {
+        caseId: "SR-2027-004812",
+        nextStep:
+          "Submit the Late Add Petition in the Student Relations portal and route it to the instructor, advisor, and registrar.",
+      },
+    }),
+  }),
+};
+
+function teeRealtimeAdapter(
+  inner: RealtimeAdapter,
+  onEvent: (ev: RealtimeEvent) => void,
+): RealtimeAdapter {
+  return {
+    caps: inner.caps,
+    open: (signal) => inner.open(signal),
+    sendAudio: (pcm16) => inner.sendAudio(pcm16),
+    cancelResponse: (audioEndMs) => inner.cancelResponse(audioEndMs),
+    injectToolResult: (toolId, text) => inner.injectToolResult(toolId, text),
+    close: () => inner.close(),
+    events: teeEvents(inner.events, onEvent),
+  };
+}
+
+async function* teeEvents(
+  source: AsyncIterable<RealtimeEvent>,
+  onEvent: (ev: RealtimeEvent) => void,
+): AsyncGenerator<RealtimeEvent> {
+  for await (const ev of source) {
+    onEvent(ev);
+    yield ev;
+  }
+}
+
+export function nativeRealtimeAgent(apiKey: string): AgentUnderTest {
+  const baseAdapter = fromOpenAIRealtime({
+    apiKey,
+    socketFactory: createNodeWsSocket,
+    turnDetection: { type: "server_vad", silence_duration_ms: 500 },
+    tools: [ASK_UNIVERSITY_TOOL],
+  });
+
+  let onAssistantTranscript: ((text: string) => void) | null = null;
+  const adapter = teeRealtimeAdapter(baseAdapter, (ev) => {
+    if (ev.type === "transcript" && ev.role === "assistant" && ev.final && onAssistantTranscript) {
+      onAssistantTranscript(ev.text);
+    }
+  });
+
+  const universityReasoner = fromStreamText({
+    model: createOpenAI({ apiKey })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
+    system: UNIVERSITY_SUPPORT_PROMPT,
+    tools: supportTools,
+    temperature: 0.2,
+    maxOutputTokens: 180,
+    maxRetries: 0,
+    timeout: 45_000,
+    stopWhen: stepCountIs(4),
+  });
+
+  const bridge = new RealtimeBridge(adapter, universityReasoner, ASK_UNIVERSITY_TOOL.name);
+  const session = new VoiceAgentSession({
+    plugins: { realtime: {} },
+    endpointingOwner: "timer",
+  });
+  session.registerPlugin("realtime", bridge);
+
+  return {
+    session,
+    label: "native-realtime",
+    get onAssistantTranscript() {
+      return onAssistantTranscript;
+    },
+    set onAssistantTranscript(v) {
+      onAssistantTranscript = v;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -458,31 +587,43 @@ function pcm16StereoToWav(pcm: Buffer, sampleRate: number): Buffer {
 
 interface TurnCapture {
   firstAudioAtMs: number;
+  lastAudioAtMs: number;
   ttsEndedAtMs: number;
   agentReply: string;
   error: string;
+  /** Ignore agent audio before this wall-clock ms (the examiner's utterance-end) so a
+   *  prior turn's still-streaming reply cannot be mis-captured as this turn's first audio
+   *  (which produced negative latencies for long native replies). 0 = no gate (dry mode). */
+  captureAfterMs: number;
 }
 
 function captureAgentResponse(
-  session: CapturableSession,
+  agent: AgentUnderTest,
   turnId: string,
 ): { capture: TurnCapture; dispose: () => void } {
   const capture: TurnCapture = {
     firstAudioAtMs: 0,
+    lastAudioAtMs: 0,
     ttsEndedAtMs: 0,
     agentReply: "",
     error: "",
+    captureAfterMs: 0,
   };
 
-  const offTtsAudio = session.bus.on("tts.audio", (pkt: unknown) => {
+  // Capture UNFILTERED by contextId (dispose-scoped to one turn — the examiner runs turns
+  // sequentially and disposes between them). Load-bearing for the native arm: the realtime
+  // bridge tags tts.audio/tts.end with its OWN contextId (a fresh uuid per response), never
+  // the examiner's turnId, so a turnId filter captures nothing for native (firstAudio stays 0
+  // → timeout). Cascade tags with turnId via turn.change, but unfiltered works for it too.
+  const offTtsAudio = agent.session.bus.on("tts.audio", (pkt: unknown) => {
     const a = pkt as { contextId?: string; timestampMs: number };
-    if (a.contextId !== turnId) return;
+    capture.lastAudioAtMs = Date.now();
+    if (capture.captureAfterMs > 0 && a.timestampMs < capture.captureAfterMs) return;
     if (capture.firstAudioAtMs === 0) capture.firstAudioAtMs = a.timestampMs;
   });
 
-  const offTtsEnd = session.bus.on("tts.end", (pkt: unknown) => {
+  const offTtsEnd = agent.session.bus.on("tts.end", (pkt: unknown) => {
     const e = pkt as { contextId?: string; timestampMs: number };
-    if (e.contextId !== turnId) return;
     capture.ttsEndedAtMs = e.timestampMs;
   });
 
@@ -491,20 +632,32 @@ function captureAgentResponse(
     capture.agentReply += event.delta;
   };
 
+  const onAssistantTranscript = (text: string) => {
+    capture.agentReply = capture.agentReply
+      ? `${capture.agentReply} ${text}`.trim()
+      : text.trim();
+  };
+
   const onError = (event: { stage: string; category: string; message: string }) => {
     capture.error = `${event.stage}/${event.category}: ${event.message}`;
   };
 
-  session.on("agent_text_delta", onAgentDelta);
-  session.on("error", onError);
+  agent.session.on("agent_text_delta", onAgentDelta);
+  agent.session.on("error", onError);
+  if (agent.onAssistantTranscript !== undefined) {
+    agent.onAssistantTranscript = onAssistantTranscript;
+  }
 
   return {
     capture,
     dispose: () => {
       offTtsAudio();
       offTtsEnd();
-      session.off("agent_text_delta", onAgentDelta);
-      session.off("error", onError);
+      agent.session.off("agent_text_delta", onAgentDelta);
+      agent.session.off("error", onError);
+      if (agent.onAssistantTranscript === onAssistantTranscript) {
+        agent.onAssistantTranscript = null;
+      }
     },
   };
 }
@@ -571,6 +724,8 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
   if (dry) {
     const drySession = createDrySession();
     agent = { session: drySession, label: "stub" };
+  } else if (options.agentKind === "native") {
+    agent = nativeRealtimeAgent(apiKey);
   } else {
     agent = cascadeAgent({ ttsProvider: options.ttsProvider });
   }
@@ -638,17 +793,23 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
       // Install listeners BEFORE sending frames so dry-mode stub events
       // that fire during transmission are captured.
       const turnId = `examiner-turn-${String(turnIndex + 1).padStart(2, "0")}`;
-      const { capture, dispose } = captureAgentResponse(agent.session, turnId);
+      const { capture, dispose } = captureAgentResponse(agent, turnId);
       // Signal turn boundary so the cascade agent scopes TTS events to this turn.
-      agent.session.bus.push(Route.Main, {
-        kind: "turn.change",
-        contextId: turnId,
-        previousContextId: "",
-        reason: "fd_examiner",
-        timestampMs: Date.now(),
-      });
+      // Native realtime owns turn detection via server_vad and must NOT receive turn.change.
+      if (agent.label !== "native-realtime") {
+        agent.session.bus.push(Route.Main, {
+          kind: "turn.change",
+          contextId: turnId,
+          previousContextId: "",
+          reason: "fd_examiner",
+          timestampMs: Date.now(),
+        });
+      }
       await sendPcmFrames(agent.session, samples, turnId);
       const utteranceEndAtMs = Date.now();
+      // Only count agent audio that starts AFTER the examiner stops speaking (dry mode keeps
+      // the stub's deterministic timing → no gate).
+      if (!dry) capture.captureAfterMs = utteranceEndAtMs;
       await sendSilence(agent.session, turnId, POST_UTTERANCE_SILENCE_MS);
 
       // --- Wait for agent response ---
@@ -661,6 +822,19 @@ export async function runFullduplexExaminer(options: FdeOptions): Promise<FdeRes
       } catch (err) {
         dispose();
         throw err;
+      }
+      // Drain the agent's response fully before the next turn. Long native replies keep
+      // streaming after the first ttsEnd; starting the next utterance now lets this turn's
+      // tail bleed into the next capture (a straggler before utteranceEnd → negative latency).
+      // This is also correct turn-taking: wait for the agent to finish before speaking.
+      const drainDeadline = Date.now() + RESPONSE_DRAIN_CAP_MS;
+      while (
+        !dry &&
+        capture.lastAudioAtMs > 0 &&
+        Date.now() < drainDeadline &&
+        Date.now() - capture.lastAudioAtMs < RESPONSE_QUIET_MS
+      ) {
+        await sleep(150);
       }
       dispose();
 
@@ -751,15 +925,17 @@ export function isDryMode(argv: readonly string[] = process.argv): boolean {
   return argv.includes("--dry");
 }
 
-function ensureLiveEnv(): void {
+function ensureLiveEnv(agentKind: "cascade" | "native"): void {
   const missing: string[] = [];
   if (!process.env["OPENAI_API_KEY"]?.trim()) missing.push("OPENAI_API_KEY");
-  if (!process.env["DEEPGRAM_API_KEY"]?.trim()) missing.push("DEEPGRAM_API_KEY");
-  if (
-    !process.env["CARTESIA_API_KEY"]?.trim() &&
-    !process.env["GOOGLE_GENERATIVE_AI_API_KEY"]?.trim()
-  ) {
-    missing.push("CARTESIA_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY");
+  if (agentKind === "cascade") {
+    if (!process.env["DEEPGRAM_API_KEY"]?.trim()) missing.push("DEEPGRAM_API_KEY");
+    if (
+      !process.env["CARTESIA_API_KEY"]?.trim() &&
+      !process.env["GOOGLE_GENERATIVE_AI_API_KEY"]?.trim()
+    ) {
+      missing.push("CARTESIA_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY");
+    }
   }
   if (missing.length > 0) throw new Error(`missing live provider env: ${missing.join(", ")}`);
 }
@@ -780,9 +956,10 @@ export function resolveExaminerTtsModel(): string {
 
 async function main(): Promise<void> {
   const dry = isDryMode();
+  const agentKind = process.env["SYRINX_FDE_AGENT"] === "native" ? "native" : "cascade";
   if (!dry) {
     ensureRepoRootDotenv();
-    ensureLiveEnv();
+    ensureLiveEnv(agentKind);
   }
 
   const outputDir = join(PKG_ROOT, "..", "..", "runs");
@@ -795,6 +972,7 @@ async function main(): Promise<void> {
 
   const result = await runFullduplexExaminer({
     dry,
+    agentKind,
     taskName,
     maxTurns,
     responseTimeoutMs,
