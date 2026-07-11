@@ -124,6 +124,49 @@ describe("PipecatEOSPlugin", () => {
     await started;
   });
 
+  it("releases the lock and processes turn 2 even when the client never sends playout-complete", async () => {
+    // Regression: the browser studio client does not emit `tts.playout_progress {complete}`,
+    // so without the estimated-playout fallback the first turn's context stays locked forever
+    // and turn 2 stalls (found live in the studio playground).
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9, 0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, { finalize_delay_ms: 5, max_delay_ms: 50 });
+    const ctx = "browser-session"; // SAME context across turns, as in a real DO session
+
+    // --- Turn 1 → finalize + lock ---
+    bus.push(Route.Main, { kind: "vad.speech_started", contextId: ctx, timestampMs: Date.now(), confidence: 0.9 });
+    bus.push(Route.Main, { kind: "stt.result", contextId: ctx, timestampMs: Date.now(), text: "hello", confidence: 0.95, language: "en-US" });
+    bus.push(Route.Main, { kind: "vad.speech_ended", contextId: ctx, timestampMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(completions).toHaveLength(1);
+
+    // Assistant responds (audio) then ends — but NO tts.playout_progress{complete} ever arrives.
+    bus.push(Route.Main, { kind: "tts.audio", contextId: ctx, timestampMs: Date.now(), audio: pcm16SamplesToBytes(new Int16Array(320)), sampleRateHz: 16000 });
+    bus.push(Route.Main, { kind: "tts.end", contextId: ctx, timestampMs: Date.now() });
+
+    // Wait past the estimated-playout + grace fallback release.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    // --- Turn 2 on the SAME context — must now be processed (was stalled before the fix) ---
+    bus.push(Route.Main, { kind: "vad.speech_started", contextId: ctx, timestampMs: Date.now(), confidence: 0.9 });
+    bus.push(Route.Main, { kind: "stt.result", contextId: ctx, timestampMs: Date.now(), text: "goodbye", confidence: 0.95, language: "en-US" });
+    bus.push(Route.Main, { kind: "vad.speech_ended", contextId: ctx, timestampMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(completions).toHaveLength(2);
+    expect(completions[1]?.text).toBe("goodbye");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("finalizes on max timeout even if VAD stop never arrives", async () => {
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
