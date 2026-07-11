@@ -490,6 +490,28 @@ export class VoiceAgentSession {
     this._state = SessionState.Ready;
   }
 
+  /**
+   * Best-effort warm of registered plugins' remote/expensive resources. Call after start() to
+   * wake scaled-to-zero endpoints before the first user turn. The host decides when to invoke
+   * this — it is not called automatically from start(). Never throws; failed plugin prewarms
+   * are swallowed and may emit a prewarm.failed metric on the bus.
+   */
+  async prewarm(): Promise<void> {
+    const entries = [...this.plugins.entries()];
+    const results = await Promise.allSettled(
+      entries.map(async ([, plugin]) => {
+        await plugin.prewarm?.();
+      }),
+    );
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result?.status === "rejected") {
+        const [name] = entries[i]!;
+        this.bus.push(Route.Background, make.metric("", "prewarm.failed", name));
+      }
+    }
+  }
+
   /** Shut down the session. Runs finalize chain in reverse order. */
   async close(): Promise<void> {
     if (this._state === SessionState.Closed) return;

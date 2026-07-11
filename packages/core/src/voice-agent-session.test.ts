@@ -3189,6 +3189,50 @@ describe("VoiceAgentSession", () => {
   });
 });
 
+describe("VoiceAgentSession.prewarm", () => {
+  it("calls each plugin prewarm exactly once", async () => {
+    const prewarm = vi.fn(async () => {});
+    const plugin: VoicePlugin = {
+      async initialize() {},
+      async close() {},
+      prewarm,
+    };
+    const session = new VoiceAgentSession({ plugins: { tts: {} } });
+    session.registerPlugin("tts", plugin);
+    await session.start();
+    await session.prewarm();
+    expect(prewarm).toHaveBeenCalledTimes(1);
+    await closeSession(session);
+  });
+
+  it("skips plugins without prewarm", async () => {
+    const plugin: VoicePlugin = {
+      async initialize() {},
+      async close() {},
+    };
+    const session = new VoiceAgentSession({ plugins: { tts: {} } });
+    session.registerPlugin("tts", plugin);
+    await session.start();
+    await expect(session.prewarm()).resolves.toBeUndefined();
+    await closeSession(session);
+  });
+
+  it("does not throw when a plugin prewarm rejects", async () => {
+    const plugin: VoicePlugin = {
+      async initialize() {},
+      async close() {},
+      prewarm: async () => {
+        throw new Error("warm failed");
+      },
+    };
+    const session = new VoiceAgentSession({ plugins: { tts: {} } });
+    session.registerPlugin("tts", plugin);
+    await session.start();
+    await expect(session.prewarm()).resolves.toBeUndefined();
+    await closeSession(session);
+  });
+});
+
 describe("VoiceAgentSession — handler errors must not kill the call", () => {
   it("a throwing bus handler surfaces a recoverable pipeline.error and the session stays alive", async () => {
     const session = new VoiceAgentSession({ plugins: {} });

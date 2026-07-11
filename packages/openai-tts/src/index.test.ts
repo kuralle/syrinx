@@ -390,4 +390,45 @@ describe("OpenAICompatibleTTSPlugin", () => {
     await started;
     errorLog.mockRestore();
   });
+
+  it("prewarm issues GET {baseUrl}/models with auth when api_key is set", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bus = new PipelineBusImpl();
+    const plugin = new OpenAICompatibleTTSPlugin();
+    await plugin.initialize(bus, {
+      base_url: "https://zeta.test/v1",
+      api_key: "sk-test",
+    });
+
+    await plugin.prewarm();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("https://zeta.test/v1/models");
+    expect(init?.method).toBe("GET");
+    expect((init?.headers as Record<string, string>)["Authorization"]).toBe("Bearer sk-test");
+
+    await plugin.close();
+  });
+
+  it("swallows fetch rejection in prewarm", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    const bus = new PipelineBusImpl();
+    const plugin = new OpenAICompatibleTTSPlugin();
+    await plugin.initialize(bus, { base_url: "https://zeta.test/v1" });
+
+    await expect(plugin.prewarm()).resolves.toBeUndefined();
+
+    await plugin.close();
+  });
 });

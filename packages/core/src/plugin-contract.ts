@@ -35,6 +35,13 @@ export interface VoicePlugin {
   initialize(bus: PipelineBus, config: PluginConfig): Promise<void>;
 
   /**
+   * Best-effort warm of remote/expensive resources (open connections, wake a scaled-to-zero
+   * endpoint). Called AFTER initialize, before the first turn. Must not throw fatally — swallow
+   * errors internally. Optional; plugins with nothing to warm omit it.
+   */
+  prewarm?(): Promise<void>;
+
+  /**
    * Tear down the plugin. Called during the finalize chain (reverse order).
    * Close connections, flush buffers, release resources.
    */

@@ -85,6 +85,26 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
     this.bus = null;
   }
 
+  async prewarm(): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const headers: Record<string, string> = {};
+      if (this.apiKey) {
+        headers["Authorization"] = `Bearer ${this.apiKey}`;
+      }
+      await fetch(`${this.baseUrl}/models`, {
+        method: "GET",
+        headers,
+        signal: controller.signal,
+      });
+    } catch {
+      // best-effort
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private abortInflight(): void {
     for (const controller of this.inflight) {
       controller.abort();

@@ -51,6 +51,7 @@
     "smoke:gemini-translate": "tsx scripts/run-gemini-translate-smoke.ts",
     "smoke:grok-stt": "tsx scripts/run-grok-stt-smoke.ts",
     "smoke:grok-tts": "tsx scripts/run-grok-tts-smoke.ts",
+    "smoke:zeta-warmup": "tsx scripts/run-zeta-warmup.ts",
     "smoke:grok-realtime": "tsx scripts/run-grok-realtime-smoke.ts",
     "smoke:eva-bench-examiner": "tsx scripts/run-eva-bench-examiner-smoke.ts",
     "smoke:interaction-eval-matrix": "tsx scripts/interaction-config-sweep.ts",
