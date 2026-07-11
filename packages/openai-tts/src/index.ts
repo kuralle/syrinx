@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //
-// Syrinx Kernel v2 — Zeta HTTP Streaming TTS Plugin
+// Syrinx Kernel v2 — OpenAI-Compatible HTTP Streaming TTS Plugin
 //
-// OpenAI-compatible POST /v1/audio/speech with stream:true returns raw 48 kHz
-// mono s16le PCM. We resample to the engine rate and emit tts.audio / tts.end
-// on the bus. Transport is fetch streaming (not WebSocket); structure mirrors
-// Deepgram TTS (odd-byte carry, interrupt abort, recoverable 503 cold-start).
+// Generic plugin for any OpenAI-compatible POST /audio/speech endpoint with
+// stream:true returning raw mono s16le PCM. Configurable base_url, api_key,
+// model, voice, response_format, source_sample_rate_hz, sample_rate, tempo,
+// and extra_body. Supports WSOLA time-stretch for tempo control.
 
 import type { PipelineBus } from "@kuralle-syrinx/core";
 import {
@@ -25,37 +25,48 @@ import { WsolaTimeStretch } from "./wsola.js";
 export { WsolaTimeStretch } from "./wsola.js";
 
 const EMPTY = new Uint8Array(0);
-const SOURCE_SAMPLE_RATE_HZ = 48_000;
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_MODEL = "gpt-4o-mini-tts";
+const DEFAULT_RESPONSE_FORMAT = "pcm";
+const DEFAULT_SOURCE_SAMPLE_RATE_HZ = 24_000;
 const DEFAULT_ENGINE_RATE_HZ = 16_000;
-const DEFAULT_NUM_STEPS = 8;
 const DEFAULT_TEMPO = 1.0;
 const TEMPO_MIN = 0.5;
 const TEMPO_MAX = 1.5;
-const DEFAULT_BASE_URL =
-  "https://asyncdotengineering--zeta-tts-api-zetattsapi.us-east.modal.direct";
 
-export class ZetaTTSPlugin implements VoicePlugin {
+export class OpenAICompatibleTTSPlugin implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private baseUrl = DEFAULT_BASE_URL;
   private apiKey = "";
+  private model = DEFAULT_MODEL;
+  private voice: string | undefined;
+  private responseFormat = DEFAULT_RESPONSE_FORMAT;
+  private sourceSampleRateHz = DEFAULT_SOURCE_SAMPLE_RATE_HZ;
   private sampleRate = DEFAULT_ENGINE_RATE_HZ;
-  private numSteps = DEFAULT_NUM_STEPS;
   private tempo = DEFAULT_TEMPO;
+  private extraBody: Record<string, unknown> | undefined;
   private disposers: Array<() => void> = [];
   private inflight = new Set<AbortController>();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
     this.baseUrl = stripTrailingSlash(
-      optionalStringConfig(config, "endpoint_url") ??
-        processEnv("ZETA_BASE_URL") ??
+      optionalStringConfig(config, "base_url") ??
+        processEnv("OPENAI_BASE_URL") ??
         DEFAULT_BASE_URL,
     );
     this.apiKey =
-      optionalStringConfig(config, "api_key") ?? processEnv("ZETA_API_KEY") ?? "";
+      optionalStringConfig(config, "api_key") ?? processEnv("OPENAI_API_KEY") ?? "";
+    this.model = optionalStringConfig(config, "model") ?? DEFAULT_MODEL;
+    this.voice = optionalStringConfig(config, "voice");
+    this.responseFormat = optionalStringConfig(config, "response_format") ?? DEFAULT_RESPONSE_FORMAT;
+    this.sourceSampleRateHz = readPositiveInteger(
+      config["source_sample_rate_hz"],
+      DEFAULT_SOURCE_SAMPLE_RATE_HZ,
+    );
     this.sampleRate = readPositiveInteger(config["sample_rate"], DEFAULT_ENGINE_RATE_HZ);
-    this.numSteps = readPositiveInteger(config["num_steps"], DEFAULT_NUM_STEPS);
     this.tempo = readClampedTempo(config["tempo"], DEFAULT_TEMPO);
+    this.extraBody = readPlainObject(config["extra_body"]);
 
     this.disposers.push(
       bus.on("tts.text", async (pkt: unknown) => {
@@ -87,7 +98,7 @@ export class ZetaTTSPlugin implements VoicePlugin {
     const controller = new AbortController();
     this.inflight.add(controller);
 
-    const speechUrl = `${this.baseUrl}/v1/audio/speech`;
+    const speechUrl = `${this.baseUrl}/audio/speech`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -95,43 +106,49 @@ export class ZetaTTSPlugin implements VoicePlugin {
       headers["Authorization"] = `Bearer ${this.apiKey}`;
     }
 
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: text,
+      response_format: this.responseFormat,
+      stream: true,
+      ...this.extraBody,
+    };
+    if (this.voice !== undefined) {
+      body.voice = this.voice;
+    }
+
     try {
       const response = await fetch(speechUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model: "zeta",
-          input: text,
-          response_format: "pcm",
-          stream: true,
-          task_type: "Base",
-          num_steps: this.numSteps,
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         if (response.status === 503) {
           console.error(
-            "[zeta-tts] cold start (HTTP 503) — Modal app may be asleep; keep-warm required for production",
+            "[openai-tts] cold start (HTTP 503) — provider may be warming up; keep-warm required for production",
           );
         }
         const err = Object.assign(
-          new Error(`Zeta TTS HTTP ${String(response.status)}: ${response.statusText || "request failed"}`),
+          new Error(
+            `OpenAI-compatible TTS HTTP ${String(response.status)}: ${response.statusText || "request failed"}`,
+          ),
           { status: response.status },
         );
         this.emitError(contextId, err);
         return;
       }
 
-      const body = response.body;
-      if (!body) {
-        this.emitError(contextId, new Error("Zeta TTS response body is null"));
+      const responseBody = response.body;
+      if (!responseBody) {
+        this.emitError(contextId, new Error("OpenAI-compatible TTS response body is null"));
         return;
       }
 
-      const reader = body.getReader();
-      const resampler = new StreamingPcm16Resampler(SOURCE_SAMPLE_RATE_HZ, this.sampleRate);
+      const reader = responseBody.getReader();
+      const resampler = new StreamingPcm16Resampler(this.sourceSampleRateHz, this.sampleRate);
       const stretch =
         Math.abs(this.tempo - 1) >= 1e-6
           ? new WsolaTimeStretch(this.tempo, this.sampleRate)
@@ -197,7 +214,7 @@ export class ZetaTTSPlugin implements VoicePlugin {
       timestampMs: Date.now(),
       audio,
       sampleRateHz: this.sampleRate,
-      provider: { name: "zeta", model: "zeta", cancelled: false },
+      provider: { name: "openai", model: this.model, cancelled: false },
     };
     this.bus?.push(Route.Main, packet);
   }
@@ -236,6 +253,13 @@ function readClampedTempo(value: unknown, fallback: number): number {
   if (value < TEMPO_MIN) return TEMPO_MIN;
   if (value > TEMPO_MAX) return TEMPO_MAX;
   return value;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
 }
 
 function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {

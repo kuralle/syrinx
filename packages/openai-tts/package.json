@@ -1,23 +1,23 @@
 {
-  "name": "@kuralle-syrinx/zeta-tts",
+  "name": "@kuralle-syrinx/openai-tts",
   "version": "4.1.0",
   "private": false,
-  "description": "Zeta HTTP streaming Sinhala TTS adapter for Syrinx",
+  "description": "OpenAI-compatible streaming TTS plugin for Syrinx",
   "keywords": [
     "voice",
     "voice-agent",
     "speech",
     "syrinx",
-    "zeta",
-    "sinhala",
-    "text-to-speech"
+    "openai",
+    "text-to-speech",
+    "tts"
   ],
   "license": "MIT",
   "homepage": "https://github.com/kuralle/syrinx#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kuralle/syrinx.git",
-    "directory": "packages/zeta-tts"
+    "directory": "packages/openai-tts"
   },
   "bugs": {
     "url": "https://github.com/kuralle/syrinx/issues"

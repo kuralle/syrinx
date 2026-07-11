@@ -245,6 +245,9 @@ importers:
       '@kuralle-syrinx/mastra':
         specifier: workspace:*
         version: link:../../packages/mastra
+      '@kuralle-syrinx/openai-tts':
+        specifier: workspace:*
+        version: link:../../packages/openai-tts
       '@kuralle-syrinx/pipecat-smart-turn':
         specifier: workspace:*
         version: link:../../packages/pipecat-smart-turn
@@ -266,9 +269,6 @@ importers:
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../../packages/ws
-      '@kuralle-syrinx/zeta-tts':
-        specifier: workspace:*
-        version: link:../../packages/zeta-tts
       '@mastra/core':
         specifier: ^1.41.0
         version: 1.41.0(@cfworker/json-schema@4.1.1)(ai@6.0.191(zod@4.4.3))(express@5.2.1)(zod@4.4.3)
@@ -610,6 +610,19 @@ importers:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.19.19)(jsdom@26.1.0)(lightningcss@1.32.0)
 
+  packages/openai-tts:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.19.19)(jsdom@26.1.0)(lightningcss@1.32.0)
+
   packages/pipecat-smart-turn:
     dependencies:
       '@huggingface/transformers':
@@ -887,19 +900,6 @@ importers:
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.0
-        version: 2.1.9(@types/node@22.19.19)(jsdom@26.1.0)(lightningcss@1.32.0)
-
-  packages/zeta-tts:
-    dependencies:
-      '@kuralle-syrinx/core':
-        specifier: workspace:*
-        version: link:../core
-    devDependencies:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

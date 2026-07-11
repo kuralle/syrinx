@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { Route, VoiceAgentSession, type TextToSpeechAudioPacket } from "@kuralle-syrinx/core";
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
-import { ZetaTTSPlugin } from "@kuralle-syrinx/zeta-tts";
+import { OpenAICompatibleTTSPlugin } from "@kuralle-syrinx/openai-tts";
 import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 
 import { ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
@@ -57,11 +57,21 @@ async function main(): Promise<void> {
   const bridge = new RealtimeBridge(adapter, undefined, undefined, { textOnly: true });
 
   const session = new VoiceAgentSession({
-    plugins: { realtime: {}, zeta: { sample_rate: ENGINE_RATE } },
+    plugins: {
+      realtime: {},
+      zeta: {
+        base_url: "https://asyncdotengineering--zeta-tts-api-zetattsapi.us-east.modal.direct/v1",
+        model: "zeta",
+        source_sample_rate_hz: 48000,
+        sample_rate: ENGINE_RATE,
+        tempo: 1.0,
+        extra_body: { task_type: "Base", num_steps: 8 },
+      },
+    },
     endpointingOwner: "timer",
   });
   session.registerPlugin("realtime", bridge);
-  session.registerPlugin("zeta", new ZetaTTSPlugin());
+  session.registerPlugin("zeta", new OpenAICompatibleTTSPlugin());
 
   const chunks: Uint8Array[] = [];
   const providers = new Set<string>();
@@ -97,7 +107,7 @@ async function main(): Promise<void> {
   await writeWav(outPath, chunks);
   const durationS = merge(chunks).byteLength / 2 / ENGINE_RATE;
   console.log(JSON.stringify({
-    ok: nonSilent(chunks) && providers.has("zeta"),
+    ok: nonSilent(chunks) && providers.has("openai"),
     mode: "half-cascade SINHALA", front: "gpt-realtime (text-only, Sinhala instructed)", tts: [...providers],
     v2v_ttfa_ms: firstAudioMs > 0 ? firstAudioMs - userTurnEndMs : -1,
     durationS: Number(durationS.toFixed(2)), audioBytes: merge(chunks).byteLength, sampleRateHz: ENGINE_RATE,
@@ -106,6 +116,6 @@ async function main(): Promise<void> {
 
   await session.close();
   await adapter.close();
-  process.exit(nonSilent(chunks) && providers.has("zeta") ? 0 : 1);
+  process.exit(nonSilent(chunks) && providers.has("openai") ? 0 : 1);
 }
 main().catch((err: unknown) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });

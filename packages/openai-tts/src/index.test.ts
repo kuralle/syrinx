@@ -9,7 +9,7 @@ import {
   type TtsErrorPacket,
 } from "@kuralle-syrinx/core";
 
-import { ZetaTTSPlugin } from "./index.js";
+import { OpenAICompatibleTTSPlugin } from "./index.js";
 
 function startBus(bus: PipelineBusImpl): Promise<void> {
   return bus.start();
@@ -21,11 +21,11 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 2000): Pro
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Timed out waiting for zeta-tts test condition");
+  throw new Error("Timed out waiting for openai-tts test condition");
 }
 
-/** Minimal 48 kHz mono s16le silence: 8 samples (16 bytes). */
-function pcmSilence48k(sampleCount: number): Uint8Array {
+/** Minimal mono s16le silence: `sampleCount` samples (`sampleCount * 2` bytes). */
+function pcmSilence(sampleCount: number): Uint8Array {
   return new Uint8Array(sampleCount * 2);
 }
 
@@ -48,10 +48,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ZetaTTSPlugin", () => {
-  it("POSTs OpenAI-compat speech body with stream pcm and num_steps:8", async () => {
+describe("OpenAICompatibleTTSPlugin", () => {
+  it("POSTs speech body with stream, pcm, and extra_body merged", async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      return new Response(streamFromChunks([pcmSilence48k(8)]), {
+      return new Response(streamFromChunks([pcmSilence(8)]), {
         status: 200,
         headers: { "Content-Type": "application/octet-stream" },
       });
@@ -60,15 +60,16 @@ describe("ZetaTTSPlugin", () => {
 
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new ZetaTTSPlugin();
+    const plugin = new OpenAICompatibleTTSPlugin();
     const ends: TextToSpeechEndPacket[] = [];
     bus.on("tts.end", (pkt) => {
       ends.push(pkt as TextToSpeechEndPacket);
     });
 
     await plugin.initialize(bus, {
-      endpoint_url: "https://zeta.test",
+      base_url: "https://zeta.test/v1",
       sample_rate: 16000,
+      extra_body: { task_type: "Base", num_steps: 8 },
     });
 
     bus.push(Route.Main, {
@@ -85,7 +86,7 @@ describe("ZetaTTSPlugin", () => {
     expect(init?.method).toBe("POST");
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     expect(body).toEqual({
-      model: "zeta",
+      model: "gpt-4o-mini-tts",
       input: "ආයුබෝවන්",
       response_format: "pcm",
       stream: true,
@@ -99,9 +100,90 @@ describe("ZetaTTSPlugin", () => {
     await started;
   });
 
+  it("includes voice in body only when configured", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      return new Response(streamFromChunks([pcmSilence(8)]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new OpenAICompatibleTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      base_url: "https://openai.test/v1",
+      api_key: "sk-test",
+      voice: "alloy",
+      sample_rate: 16000,
+    });
+
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-voice",
+      timestampMs: Date.now(),
+      text: "hello",
+    });
+    await waitForCondition(() => ends.length >= 1);
+
+    const [_url, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.voice).toBe("alloy");
+    expect((init?.headers as Record<string, string>)["Authorization"]).toBe("Bearer sk-test");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("omits voice key when voice is not configured", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      return new Response(streamFromChunks([pcmSilence(8)]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new OpenAICompatibleTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      base_url: "https://openai.test/v1",
+      sample_rate: 16000,
+    });
+
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-no-voice",
+      timestampMs: Date.now(),
+      text: "hi",
+    });
+    await waitForCondition(() => ends.length >= 1);
+
+    const [_url, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("voice");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("streams PCM into tts.audio at engine sampleRateHz then tts.end", async () => {
     // Two chunks with an odd-byte split so the plugin must carry across frames.
-    const full = pcmSilence48k(48); // 96 bytes
+    const full = pcmSilence(48); // 96 bytes
     const chunkA = full.subarray(0, 15); // odd
     const chunkB = full.subarray(15);
 
@@ -117,7 +199,7 @@ describe("ZetaTTSPlugin", () => {
 
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new ZetaTTSPlugin();
+    const plugin = new OpenAICompatibleTTSPlugin();
     const audio: TextToSpeechAudioPacket[] = [];
     const ends: TextToSpeechEndPacket[] = [];
     bus.on("tts.audio", (pkt) => {
@@ -128,7 +210,7 @@ describe("ZetaTTSPlugin", () => {
     });
 
     await plugin.initialize(bus, {
-      endpoint_url: "https://zeta.test",
+      base_url: "https://openai.test/v1",
       sample_rate: 16000,
     });
 
@@ -155,9 +237,63 @@ describe("ZetaTTSPlugin", () => {
     await started;
   });
 
+  it("source_sample_rate_hz drives the resampler output length", async () => {
+    // 96 bytes = 48 samples. Different source rates → different resampled lengths.
+    const pcm48k = pcmSilence(48);
+
+    async function collectAudioBytes(sourceRate: number): Promise<number> {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          return new Response(streamFromChunks([pcm48k]), {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }),
+      );
+
+      const bus = new PipelineBusImpl();
+      const started = startBus(bus);
+      const plugin = new OpenAICompatibleTTSPlugin();
+      let totalBytes = 0;
+      const ends: TextToSpeechEndPacket[] = [];
+      bus.on("tts.audio", (pkt) => {
+        totalBytes += (pkt as TextToSpeechAudioPacket).audio.byteLength;
+      });
+      bus.on("tts.end", (pkt) => {
+        ends.push(pkt as TextToSpeechEndPacket);
+      });
+
+      await plugin.initialize(bus, {
+        base_url: "https://openai.test/v1",
+        sample_rate: 16000,
+        source_sample_rate_hz: sourceRate,
+      });
+
+      bus.push(Route.Main, {
+        kind: "tts.text",
+        contextId: `rate-${String(sourceRate)}`,
+        timestampMs: Date.now(),
+        text: "test",
+      });
+      await waitForCondition(() => ends.length >= 1);
+
+      await plugin.close();
+      bus.stop();
+      await started;
+      vi.unstubAllGlobals();
+      return totalBytes;
+    }
+
+    const bytesAt48k = await collectAudioBytes(48_000);
+    const bytesAt24k = await collectAudioBytes(24_000);
+    expect(bytesAt48k).toBeGreaterThan(0);
+    expect(bytesAt24k).toBeGreaterThan(bytesAt48k);
+  });
+
   it("tempo: 0.9 produces more tts.audio bytes than tempo: 1.0 for the same PCM stream", async () => {
-    // ~100 ms of 48 kHz silence → enough samples after resample for WSOLA to stretch.
-    const pcm = pcmSilence48k(4800);
+    // ~100 ms of 24 kHz silence → enough samples after resample for WSOLA to stretch.
+    const pcm = pcmSilence(2400);
 
     async function collectAudioBytes(tempo: number): Promise<number> {
       vi.stubGlobal(
@@ -172,7 +308,7 @@ describe("ZetaTTSPlugin", () => {
 
       const bus = new PipelineBusImpl();
       const started = startBus(bus);
-      const plugin = new ZetaTTSPlugin();
+      const plugin = new OpenAICompatibleTTSPlugin();
       let totalBytes = 0;
       const ends: TextToSpeechEndPacket[] = [];
       bus.on("tts.audio", (pkt) => {
@@ -183,7 +319,7 @@ describe("ZetaTTSPlugin", () => {
       });
 
       await plugin.initialize(bus, {
-        endpoint_url: "https://zeta.test",
+        base_url: "https://openai.test/v1",
         sample_rate: 16000,
         tempo,
       });
@@ -218,14 +354,14 @@ describe("ZetaTTSPlugin", () => {
 
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
-    const plugin = new ZetaTTSPlugin();
+    const plugin = new OpenAICompatibleTTSPlugin();
     const errors: TtsErrorPacket[] = [];
     bus.on("tts.error", (pkt) => {
       errors.push(pkt as TtsErrorPacket);
     });
 
     await plugin.initialize(bus, {
-      endpoint_url: "https://zeta.test",
+      base_url: "https://openai.test/v1",
       sample_rate: 16000,
     });
 
@@ -245,7 +381,9 @@ describe("ZetaTTSPlugin", () => {
         isRecoverable: true,
       }),
     ]);
-    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("[zeta-tts] cold start"));
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining("[openai-tts] cold start"),
+    );
 
     await plugin.close();
     bus.stop();

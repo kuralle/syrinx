@@ -12,10 +12,10 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Route, VoiceAgentSession, StreamingPcm16Resampler, type TextToSpeechAudioPacket } from "@kuralle-syrinx/core";
+import { Route, VoiceAgentSession, StreamingPcm16Resampler, type PluginConfig, type TextToSpeechAudioPacket } from "@kuralle-syrinx/core";
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
 import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
-import { ZetaTTSPlugin } from "@kuralle-syrinx/zeta-tts";
+import { OpenAICompatibleTTSPlugin } from "@kuralle-syrinx/openai-tts";
 import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 
 import { ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
@@ -54,12 +54,22 @@ async function main(): Promise<void> {
   const adapter = fromOpenAIRealtime({ apiKey, socketFactory: createNodeWsSocket, modalities: ["text"], turnDetection: { type: "server_vad", silence_duration_ms: 500 }, instructions });
   const bridge = new RealtimeBridge(adapter, undefined, undefined, { textOnly: true });
 
-  const plugins = SINHALA
-    ? { realtime: {}, zeta: { sample_rate: RATE, tempo: 0.9 } } // 10% slower (WSOLA, pitch-preserved) — Zeta's Sinhala prosody rushes
-    : { realtime: {}, cartesia: { api_key: cartesiaKey!, sample_rate: RATE } };
+  const plugins: Record<string, PluginConfig> = { realtime: {} };
+  if (SINHALA) {
+    plugins.zeta = {
+      base_url: "https://asyncdotengineering--zeta-tts-api-zetattsapi.us-east.modal.direct/v1",
+      model: "zeta",
+      source_sample_rate_hz: 48000,
+      sample_rate: RATE,
+      tempo: 0.9,
+      extra_body: { task_type: "Base", num_steps: 8 },
+    };
+  } else {
+    plugins.cartesia = { api_key: cartesiaKey!, sample_rate: RATE };
+  }
   const session = new VoiceAgentSession({ plugins, endpointingOwner: "timer" });
   session.registerPlugin("realtime", bridge);
-  session.registerPlugin(SINHALA ? "zeta" : "cartesia", SINHALA ? new ZetaTTSPlugin() : new CartesiaTTSPlugin());
+  session.registerPlugin(SINHALA ? "zeta" : "cartesia", SINHALA ? new OpenAICompatibleTTSPlugin() : new CartesiaTTSPlugin());
 
   let current: Uint8Array[] = [];
   let lastAudioMs = 0;
@@ -100,7 +110,7 @@ async function main(): Promise<void> {
   const outPath = join(OUTPUT_DIR, "conversation.wav");
   await writeFile(outPath, Buffer.from(wav.toBuffer()));
 
-  console.log(JSON.stringify({ ok: perTurn.every((p) => p.assistantBytes > 0), language: SINHALA ? "sinhala" : "english", front: "gpt-realtime-2 (text-only)", tts: SINHALA ? "zeta" : "cartesia sonic-3", turns: perTurn, durationS: Number((samples.length / RATE).toFixed(1)), outPath }));
+  console.log(JSON.stringify({ ok: perTurn.every((p) => p.assistantBytes > 0), language: SINHALA ? "sinhala" : "english", front: "gpt-realtime-2 (text-only)", tts: SINHALA ? "openai-tts (zeta-config)" : "cartesia sonic-3", turns: perTurn, durationS: Number((samples.length / RATE).toFixed(1)), outPath }));
   process.exit(perTurn.every((p) => p.assistantBytes > 0) ? 0 : 1);
 }
 main().catch((err: unknown) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });

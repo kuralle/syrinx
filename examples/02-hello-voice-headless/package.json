@@ -92,7 +92,7 @@
     "wavefile": "^11.0.0",
     "ws": "^8.21.0",
     "zod": "^4.1.8",
-    "@kuralle-syrinx/zeta-tts": "workspace:*"
+    "@kuralle-syrinx/openai-tts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
