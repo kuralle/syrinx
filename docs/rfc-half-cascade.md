@@ -3,7 +3,7 @@
 **Category:** Architectural Change
 **Author:** octalpixel
 **Date:** 2026-07-09
-**Status:** Draft
+**Status:** Implemented (C0–C4 shipped + live-verified 2026-07-11; C5 deferred — see Implementation Status below)
 **Reviewers:** (maintainer)
 **Related:**
 - `docs/rfc-interaction-policy-seam.md` (turn-detection seam — a hard dependency; see REQ-6)
@@ -267,12 +267,45 @@ verbatim from the live spike (`research/half-cascade-spike-results.md`).
 | C4 | Latency A/B smoke: half-cascade vs native per `(front, TTS)`; `turn_latency` decomposition | `examples/02-hello-voice-headless/scripts/*` | REQ-7 | Produces v2v TTFA per config; English/fast-TTS within budget asserted |
 | C5 | Zeta keep-warm (Modal `min_containers=1`) — infra prereq for Sinhala prod | Modal deploy config | REQ-7; spike | No 40–60 s cold start on first call after idle |
 
-- [ ] **C0** adapter text-only output (unblocks everything; spike-confirmed)
-- [ ] **C1** bridge text-only routing
-- [ ] **C2** Zeta TTS plugin
-- [ ] **C3** turn-detection dependency (needs InteractionPolicy)
-- [ ] **C4** latency A/B smoke
-- [ ] **C5** Zeta keep-warm (infra)
+- [x] **C0** adapter text-only output (unblocks everything; spike-confirmed)
+- [x] **C1** bridge text-only routing
+- [x] **C2** TTS plugin (shipped as the generic `@kuralle-syrinx/openai-tts`, not `zeta-tts` — see below)
+- [x] **C3** turn-detection dependency (Syrinx-owned turns via InteractionPolicy)
+- [x] **C4** latency A/B smoke (live proofs; English ~0.8–1.6s, Sinhala relaxed)
+- [ ] **C5** Zeta keep-warm (infra / deploy — deferred, see below)
+
+## Implementation Status (2026-07-11)
+
+Shipped on branch `feat/half-cascade` (unmerged; not yet released):
+
+- **C0** (`realtime`) — `response.output_text.delta/.done` → assistant transcript events;
+  `caps.supportsTextOnlyModality`.
+- **C1** (`realtime-bridge.ts`) — `textOnly` streams the front's text into
+  `llm.delta → segmenter → tts.text`; suppresses provider audio; the **TTS plugin owns `tts.end`**
+  (REQ-5). A live-testing bug (double-emit / forced `tts.end`) was caught and fixed.
+- **C2** — **Q1 resolved: generic OpenAI-compatible TTS plugin, not a Zeta-specific one.**
+  `@kuralle-syrinx/openai-tts` (`OpenAICompatibleTTSPlugin`) speaks any `POST /v1/audio/speech`
+  endpoint via `base_url` + `extra_body`, mirroring `livekit-plugins-openai` / Pipecat
+  `OpenAITTSService`. Zeta is proprietary/internal → a **documented config** (README + the example
+  smokes: `base_url`=Modal, `model:"zeta"`, `source_sample_rate_hz:48000`,
+  `extra_body:{task_type,num_steps}`), never a `fromZeta` factory and no internal URL in package source.
+- **C3** (`realtime-adapter`/`bridge`) — `adapter.requestResponse()` (commit + `response.create`) +
+  bridge `syrinxTurns`: Syrinx's `eos.turn_complete` drives the front (server VAD off). Live-proven:
+  provider stays silent until Syrinx signals.
+- **C4** — live smokes (`smoke:half-cascade-oneturn` / `-syrinx-turns` / `-sinhala` / `-conversation`
+  / `-multiturn`). English + Sinhala single- and multi-turn conversations verified (context carried
+  across turns; structural faithful voicing via Syrinx TTS confirmed by provider attribution + STT).
+- **Adjacent fixes:** `tts-core` finish-timeout made **inactivity-based** (a fixed 2s timer was
+  truncating long half-cascade turns mid-sentence); `openai-tts` **WSOLA `tempo`** control
+  (pitch-preserving time-stretch) for Sinhala pacing.
+
+### C5 — Zeta keep-warm (deferred, infra gate)
+The Zeta endpoint runs on **Modal Flash** (traffic-driven autoscaler, GPU memory-snapshot restore,
+`.modal.direct` URL). When scaled to zero it returns **503 fail-fast** rather than cold-booting on
+request; the autoscaler brings a container up on sustained traffic (a `GET /v1/models` nudge wakes it).
+Production Sinhala therefore needs the **Flash autoscaler minimum ≥ 1** — a config on the Zeta Modal app
+(the `asyncdotengineering` infra, not this repo), plus/or a pre-warm nudge for dev. This is a deploy +
+ongoing-GPU-cost gate.
 
 ## 9. Validation and Testing
 
