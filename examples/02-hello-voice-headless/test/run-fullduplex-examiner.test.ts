@@ -36,6 +36,7 @@ describe("fullduplex examiner dry mode", () => {
   function dryOptions(): Parameters<typeof runFullduplexExaminer>[0] {
     return {
       dry: true,
+      agentKind: "cascade",
       taskName: "book-advising-appointment",
       maxTurns: 6,
       responseTimeoutMs: 10_000,
