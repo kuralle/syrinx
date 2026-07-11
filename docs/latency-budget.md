@@ -95,3 +95,18 @@ Consolidated from the program's per-sprint proceed evidence (this session) — t
 | **composed** (route→hedge) | **869 ms** | 3329 ms |
 
 **Verdict.** **Hedging cuts the tail −59%** (worst-case 6580 → 2725 ms) — the Sierra "hedging → P99 −70%" claim, confirmed live; composed cuts P50 ~14%. **The v2v P50 < 1s headline is NOT met by B+C alone** with these models: LLM-TTFT P50 ~870–1005 ms + STT-final (~400 ms) + TTS-TTFB (~300 ms) ⇒ v2v ≈ 1.5–1.7 s. Getting under 1s requires **Lever D's speculative-start overlap** (already shipped — the `speculative` flag on `ReasoningBridge` over the IU ledger) to hide LLM-TTFT under the STT-settle window, plus model choice; B+C **reduce** latency (tail especially), **D** is what actually clears 1s. Caveats: n=9 (worst-of-9 ≈ P95, noisy); routing's fast-model win was not exercised (the fixture turn is > the classify length threshold → always `deep`, `route.mispredict: 0`) — a short/mixed fixture is needed to measure routing's mean-latency gain. `plain gpt-4.1-mini` here (P50 1005 ms) is faster than the S1-00 baseline (3290 ms) — provider-side improvement, not a seam change.
+
+## Lever D speculative-start live gate + OQ2 (RL-WBS-5 close, 2026-07-11)
+
+The sub-1s claim rests on **Lever D** (speculative-start overlap), not B/C — measured live via `smoke:flux-speculative-ab` (live Deepgram Flux `eager_eot_threshold 0.4` in both arms + live gpt-4o-mini; only the bridge's `speculative` flag differs). Headline metric: **confirmed endpoint (`eos.turn_complete`) → first `llm.delta`** — the residual LLM-TTFT the speculation did *not* hide. 3 A/B runs:
+
+| Run | OFF endpoint→first-token | ON endpoint→first-token | saved |
+|---|---|---|---|
+| 1 | 1546 ms | 760 ms | 786 ms |
+| 2 | 753 ms | 618 ms | 135 ms |
+| 3 | 756 ms | 538 ms | 218 ms |
+| **median** | **756 ms** | **618 ms** | **~218 ms** |
+
+**OQ2 — interim↔final divergence.** Every run, **both** arms: `1 llm call, eager endpoints 1, resumed 0`. The single eager (interim) endpoint matched the final transcript, so the speculative draft **promoted without regeneration** — **zero divergence-caused rework, zero wasted LLM call** on this clean pause-free utterance. This bounds OQ2's *cost* (nil on a clean turn); it does not characterise divergence across noisy/mid-pause turns (n=1 fixture).
+
+**Verdict (honest close).** Speculative-start (D) beat the plain path on endpoint→first-token in **all 3 runs** (saved 135–786 ms). v2v from the confirmed endpoint ≈ ON first-token (618 ms median) + TTS-TTFB (~300 ms) ≈ **~0.9 s** — **at the edge of the 800 ms SLO / clearing the 1500 ms P99 band**, achieved via **D**, not B/C. This is not a comfortable sub-800 ms; it is D landing v2v right at the 1s line on a clean turn, exactly as the RFC thesis predicts. The composed `route→hedge→speculative` config is drop-in at `withVoice({ reasoner })` (no seam change; see `sprints/reasoner-latency/OUTCOMES.md`). Raw runs: `runs/spec-ab-run{1,2,3}.txt`.
