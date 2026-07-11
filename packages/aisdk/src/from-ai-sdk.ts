@@ -150,7 +150,12 @@ async function* mapTextStreamParts(
         return;
       }
       case "abort": {
+        // An abort is a benign cancellation (barge-in aborted the reasoner), NOT an error.
+        // Carry the web/Node standard `name === "AbortError"` so downstream `isAbortError`
+        // guards (realtime-bridge runDelegate, ReasoningBridge) swallow it instead of
+        // surfacing a fatal `bridge.error/internal_fault`.
         const cause = new Error(part.reason ?? "AI SDK stream aborted");
+        cause.name = "AbortError";
         yield toErrorPart(cause);
         return;
       }

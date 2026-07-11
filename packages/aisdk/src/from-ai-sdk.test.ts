@@ -92,6 +92,10 @@ function toolErrorPart(toolCallId: string, toolName: string, error: unknown): Te
   } as TextStreamPart<ToolSet>;
 }
 
+function abortPart(reason: string): TextStreamPart<ToolSet> {
+  return { type: "abort", reason } as TextStreamPart<ToolSet>;
+}
+
 async function collectParts(reasoner: Reasoner, turn: ReasonerTurn): Promise<ReasoningPart[]> {
   const parts: ReasoningPart[] = [];
   for await (const part of reasoner.stream(turn)) {
@@ -145,6 +149,26 @@ describe("from-ai-sdk adapters", () => {
     if (parts[1]?.type === "error") {
       expect(parts[1].cause.message).toBe("provider failed");
       expect(parts[1].recoverable).toBe(false);
+    }
+  });
+
+  it("maps an abort part to an AbortError-named cause so downstream isAbortError guards swallow it", async () => {
+    // Regression: a barge-in aborts the reasoner mid-delegate → the AI SDK emits an `abort`
+    // stream part. If the cause isn't named "AbortError", the realtime-bridge's isAbortError
+    // guard misses it and surfaces a fatal bridge.error/internal_fault (the native multi-turn crash).
+    const reasoner = fromStreamFactory(async function* () {
+      yield textDelta("partial");
+      yield abortPart("This operation was aborted");
+    });
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts[1]?.type).toBe("error");
+    if (parts[1]?.type === "error") {
+      expect(parts[1].cause.name).toBe("AbortError");
+      // The web/Node abort convention: err.name === "AbortError".
+      const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
+      expect(isAbortError(parts[1].cause)).toBe(true);
     }
   });
 
