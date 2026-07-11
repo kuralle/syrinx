@@ -400,6 +400,38 @@ describe("fromOpenAIRealtime", () => {
     }
   });
 
+  it("swallows the benign response-cancel race error so multi-turn sessions survive", async () => {
+    // Regression: a new turn's speech_started fires a barge-in cancel just as the prior response
+    // completes → the server rejects the cancel ("no active response found"). This is a no-op and
+    // must NOT surface as an error (it previously killed multi-turn native sessions).
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const eventsTask = collectEvents(adapter.events, 2);
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    // Two benign cancel-race errors (by code, and by message only) — both must be swallowed.
+    mock.inject({
+      type: "error",
+      error: { message: "Cancellation failed: no active response found", code: "response_cancel_not_active" },
+    });
+    mock.inject({ type: "error", error: { message: "Cancellation failed: no active response found." } });
+    // A real event afterwards must still flow — proving the errors were swallowed, not fatal.
+    mock.inject({ type: "response.created" });
+    mock.inject({ type: "response.done" });
+
+    const events = await eventsTask;
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events).toEqual([{ type: "response_started" }, { type: "response_done" }]);
+  });
+
   it("exposes gpt-realtime-2 capability flags", () => {
     const mock = createMockSocketHarness();
     const adapter = fromOpenAIRealtime({

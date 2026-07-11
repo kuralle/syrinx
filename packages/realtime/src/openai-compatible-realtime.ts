@@ -385,6 +385,14 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
             : this.config.defaultErrorMessage;
         const code =
           errObj && typeof errObj === "object" ? (errObj as Record<string, unknown>)["code"] : undefined;
+        // A `response.cancel` that raced a just-completed response ("no active response found")
+        // is benign — the cancel is a server-side no-op. This is the multi-turn barge-in cancel
+        // race (a new turn's speech_started fires a cancel as the prior response completes). Do
+        // NOT surface it: it would trip strict consumers and pollute error-rate monitoring.
+        const codeStr = typeof code === "string" ? code : "";
+        if (codeStr === "response_cancel_not_active" || /no active response|cancellation failed/i.test(message)) {
+          break;
+        }
         const recoverable = code !== "invalid_api_key" && code !== "authentication_failed";
         this.stream.push({
           type: "error",
