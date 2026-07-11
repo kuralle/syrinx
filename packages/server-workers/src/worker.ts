@@ -21,6 +21,8 @@ export interface Env extends LiveSessionEnv {
   TWILIO_VOICE_CONVERSATIONS: DurableObjectNamespace;
   /** Optional: when bound, full call audio is recorded to this bucket. */
   RECORDINGS?: R2Bucket;
+  /** Optional: Cloudflare Workers AI binding for hosted Smart Turn endpointing. */
+  AI?: import("./workers-ai-smart-turn.js").Ai;
 }
 
 const INPUT_SAMPLE_RATE_HZ = 16000;

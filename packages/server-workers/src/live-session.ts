@@ -17,6 +17,7 @@ import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
 import type { VectorizeIndex } from "@cloudflare/workers-types";
 import { createRealtimeKuralleReasoner } from "./kuralle-realtime-agent.js";
+import { WorkersAiSmartTurnPredictor, type Ai } from "./workers-ai-smart-turn.js";
 
 /** Provider secrets + optional tuning, supplied as Workers env/secret bindings. */
 export interface LiveSessionEnv {
@@ -24,6 +25,8 @@ export interface LiveSessionEnv {
   readonly OPENAI_API_KEY?: string;
   readonly OPENAI_MODEL?: string;
   readonly VECTORIZE: VectorizeIndex;
+  /** Optional Cloudflare Workers AI binding for hosted Smart Turn. */
+  readonly AI?: Ai;
 }
 
 const DEFAULT_DEEPGRAM_TTS_MODEL = "aura-2-thalia-en";
@@ -86,6 +89,12 @@ export async function createLiveReasoner(env: LiveSessionEnv, ctx: VoicePipeline
   requireKey(env.OPENAI_API_KEY, "OPENAI_API_KEY");
   if (!env.VECTORIZE) throw new Error("VECTORIZE binding is required to start a live voice session");
   return createRealtimeKuralleReasoner(env, { sessionId: ctx.sessionId });
+}
+
+/** Factory: returns a hosted Smart Turn predictor when `env.AI` is present, otherwise undefined. */
+export function createWorkersAiSmartTurnPredictor(env: LiveSessionEnv): WorkersAiSmartTurnPredictor | undefined {
+  if (!env.AI) return undefined;
+  return new WorkersAiSmartTurnPredictor(env.AI);
 }
 
 function requireKey(value: string | undefined, name: string): string {

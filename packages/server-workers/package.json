@@ -48,6 +48,7 @@
     "@kuralle-syrinx/cartesia": "workspace:*",
     "@kuralle-syrinx/realtime": "workspace:*",
     "@kuralle-syrinx/recorder": "workspace:*",
+    "@kuralle-syrinx/pipecat-smart-turn": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*",
     "agents": "0.14.0",
     "ai": "^6.0.0",
