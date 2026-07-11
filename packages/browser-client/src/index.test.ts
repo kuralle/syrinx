@@ -205,6 +205,30 @@ describe("SyrinxBrowserClient — audio sequence", () => {
     ]);
   });
 
+  it("ignores Cloudflare Agents SDK control frames (cf_agent_*) without a spurious error", () => {
+    // Regression: a cf-agents `withVoice` worker's Agent base broadcasts cf_agent_* control
+    // frames on the voice socket. The client used to throw on the unknown type → emit an
+    // `error` event → a false red "Error" badge in the studio. It must ignore them, and
+    // still parse real voice messages that follow.
+    const client = makeClient();
+    const errors: unknown[] = [];
+    const messages: unknown[] = [];
+    client.on((event) => {
+      if (event.type === "error") errors.push(event.error);
+      if (event.type === "message") messages.push(event.message);
+    });
+    client.connect();
+
+    sockets[0]!.dispatch("message", { data: JSON.stringify({ type: "cf_agent_mcp_servers", mcp: {} }) });
+    sockets[0]!.dispatch("message", { data: JSON.stringify({ type: "cf_agent_state", state: {} }) });
+    sockets[0]!.dispatch("message", {
+      data: JSON.stringify({ type: "turn_complete", turnId: "t1", transcript: "hi" }),
+    });
+
+    expect(errors).toEqual([]);
+    expect(messages).toEqual([{ type: "turn_complete", turnId: "t1", transcript: "hi" }]);
+  });
+
   it("surfaces malformed server JSON messages as client errors", () => {
     const client = makeClient();
     const messages: unknown[] = [];

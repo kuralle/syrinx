@@ -535,7 +535,15 @@ export class SyrinxBrowserClient {
   private handleJsonMessage(data: unknown): void {
     if (typeof data !== "string") return;
     try {
-      const message = parseStudioMessage(JSON.parse(data) as unknown);
+      const parsed = JSON.parse(data) as unknown;
+      // Cloudflare Agents SDK control frames (cf_agent_state, cf_agent_mcp_servers, …) are
+      // broadcast by the Agent base class on the same socket a cf-agents `withVoice` worker
+      // uses for voice. They are not part of the Syrinx voice protocol — ignore them rather
+      // than throwing (which surfaced a spurious `error` event → a false "Error" badge).
+      if (isRecord(parsed) && typeof parsed["type"] === "string" && parsed["type"].startsWith("cf_agent")) {
+        return;
+      }
+      const message = parseStudioMessage(parsed);
       if (message.type === "ready") {
         if (message.sessionId !== undefined) this.currentSessionId = message.sessionId;
         if (message.audio?.outputSampleRateHz && message.audio.outputSampleRateHz !== this.outputSampleRateHz) {
