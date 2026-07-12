@@ -54,6 +54,8 @@ interface TurnState {
   sttQuietTimer: ReturnType<typeof setTimeout> | null;
   maxTimer: ReturnType<typeof setTimeout> | null;
   deferTimer: ReturnType<typeof setTimeout> | null;
+  /** Absolute per-turn cap; never cleared by clearTurnTimers (survives speech restarts). */
+  absoluteTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class PipecatEOSPlugin implements VoicePlugin {
@@ -68,6 +70,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private incompleteFallbackMs = 2000;
   private semanticShortcutDelayMs = 50;
   private semanticDeferFallbackMs = 4000;
+  private maxTurnDurationMs = 15000;
   private semanticEndpointingEnabled = true;
   private probabilityThreshold = 0.5;
   private readonly lockedContextIds = new Set<string>();
@@ -94,6 +97,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
     this.semanticShortcutDelayMs = readNonNegativeNumber(config["semantic_shortcut_delay_ms"], 50);
     this.semanticDeferFallbackMs = readNonNegativeNumber(config["semantic_defer_fallback_ms"], 4000);
+    this.maxTurnDurationMs = readNonNegativeNumber(config["max_turn_duration_ms"], 15000);
     this.semanticEndpointingEnabled = readBooleanConfig(config["semantic_endpointing_enabled"], true);
     this.probabilityThreshold = readProbability(config["probability_threshold"], 0.5);
     await this.predictor.initialize(config);
@@ -135,6 +139,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     }
     for (const state of this.turns.values()) {
       clearTurnTimers(state);
+      this.clearAbsoluteCap(state);
     }
     this.turns.clear();
     for (const playout of this.lockedPlayout.values()) {
@@ -307,9 +312,43 @@ export class PipecatEOSPlugin implements VoicePlugin {
       sttQuietTimer: null,
       maxTimer: null,
       deferTimer: null,
+      absoluteTimer: null,
     };
     this.turns.set(contextId, state);
+    this.scheduleAbsoluteCap(state);
     return state;
+  }
+
+  // Armed once at turn onset; never rescheduled so continuous noise cannot starve the ceiling.
+  private scheduleAbsoluteCap(state: TurnState): void {
+    if (state.finalized || state.absoluteTimer || this.maxTurnDurationMs <= 0) return;
+    state.absoluteTimer = setTimeout(() => {
+      state.absoluteTimer = null;
+      this.onAbsoluteCap(state);
+    }, this.maxTurnDurationMs);
+  }
+
+  private clearAbsoluteCap(state: TurnState): void {
+    if (state.absoluteTimer) clearTimeout(state.absoluteTimer);
+    state.absoluteTimer = null;
+  }
+
+  private onAbsoluteCap(state: TurnState): void {
+    if (state.finalized) return;
+    const transcript = latestTranscript(state.finalSegments, state.latestInterim);
+    if (!transcript.trim() && state.finalPackets.length === 0) {
+      clearTurnTimers(state);
+      this.clearAbsoluteCap(state);
+      this.turns.delete(state.contextId);
+      return;
+    }
+    state.boundaryAnalyzed = true;
+    state.smartTurnComplete = true;
+    state.semanticComplete = true;
+    this.requestSttFinalize(state.contextId);
+    if (state.finalPackets.length > 0) {
+      this.finalize(state);
+    }
   }
 
   private scheduleFinalize(state: TurnState, delayMs: number): void {
@@ -456,6 +495,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     state.finalized = true;
     this.lockedContextIds.add(state.contextId);
     clearTurnTimers(state);
+    this.clearAbsoluteCap(state);
     this.bus?.push(Route.Main, {
       kind: "eos.turn_complete",
       contextId: state.contextId,

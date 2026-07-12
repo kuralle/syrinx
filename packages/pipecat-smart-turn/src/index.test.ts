@@ -844,3 +844,133 @@ describe("PipecatEOSPlugin — STT-quiet fallback (wedged VAD)", () => {
     await started;
   });
 });
+
+describe("PipecatEOSPlugin — absolute turn duration cap", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("force-finalizes under continuous input with no speech_ended or STT quiet", async () => {
+    // Fail-without-fix: temporarily set max_turn_duration_ms: 0 (or maxTurnDurationMs=0) and this hangs open.
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 5,
+      max_delay_ms: 0,
+      stt_quiet_fallback_ms: 0,
+      max_turn_duration_ms: 80,
+    });
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-abs-cap",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-abs-cap",
+      timestampMs: Date.now(),
+      text: "Just want to understand what you can do.",
+      confidence: 0.95,
+      language: "en-US",
+    });
+
+    // Continuous noise: never speech_ended; keep STT + audio alive so quiet/max paths cannot fire.
+    // Repeated speech_started would starve a resettable timer; the absolute cap must still fire.
+    for (let i = 0; i < 4; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      bus.push(Route.Main, {
+        kind: "vad.speech_started",
+        contextId: "turn-abs-cap",
+        timestampMs: Date.now(),
+        confidence: 0.9,
+      });
+      bus.push(Route.Main, {
+        kind: "stt.interim",
+        contextId: "turn-abs-cap",
+        timestampMs: Date.now(),
+        text: `still talking ${String(i)}`,
+      });
+      bus.push(Route.Main, {
+        kind: "vad.audio",
+        contextId: "turn-abs-cap",
+        timestampMs: Date.now(),
+        audio: pcm16SamplesToBytes(new Int16Array(160)),
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(completions).toEqual([
+      expect.objectContaining({
+        kind: "eos.turn_complete",
+        contextId: "turn-abs-cap",
+        text: "Just want to understand what you can do.",
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not force-finalize when max_turn_duration_ms is disabled", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 5,
+      max_delay_ms: 0,
+      stt_quiet_fallback_ms: 0,
+      max_turn_duration_ms: 0,
+    });
+
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: "turn-abs-off",
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-abs-off",
+      timestampMs: Date.now(),
+      text: "never ends under continuous noise",
+      confidence: 0.95,
+      language: "en-US",
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      bus.push(Route.Main, {
+        kind: "stt.interim",
+        contextId: "turn-abs-off",
+        timestampMs: Date.now(),
+        text: `noise ${String(i)}`,
+      });
+      bus.push(Route.Main, {
+        kind: "vad.audio",
+        contextId: "turn-abs-off",
+        timestampMs: Date.now(),
+        audio: pcm16SamplesToBytes(new Int16Array(160)),
+      });
+    }
+
+    expect(completions).toEqual([]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+});
