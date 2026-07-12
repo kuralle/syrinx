@@ -3,6 +3,9 @@
 import { fileURLToPath } from "node:url";
 
 import { optionalStringConfig, type PluginConfig } from "@kuralle-syrinx/core";
+import type { SmartTurnPredictor } from "./smart-turn-types.js";
+
+export type { SmartTurnPredictor } from "./smart-turn-types.js";
 
 type Ort = typeof import("onnxruntime-node");
 type InferenceSession = import("onnxruntime-node").InferenceSession;
@@ -14,12 +17,6 @@ interface FeatureExtractor {
 const SAMPLE_RATE = 16000;
 const MAX_AUDIO_SAMPLES = SAMPLE_RATE * 8;
 const DEFAULT_MODEL_PATH = fileURLToPath(new URL("../models/smart-turn-v3.2-cpu.onnx", import.meta.url));
-
-export interface SmartTurnPredictor {
-  initialize(config: PluginConfig): Promise<void>;
-  predict(audio: Float32Array): Promise<number>;
-  close(): Promise<void>;
-}
 
 export class LocalSmartTurnV3Predictor implements SmartTurnPredictor {
   private ort: Ort | null = null;

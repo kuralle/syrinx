@@ -750,6 +750,9 @@ importers:
       '@kuralle-syrinx/kuralle':
         specifier: workspace:*
         version: link:../kuralle
+      '@kuralle-syrinx/pipecat-smart-turn':
+        specifier: workspace:*
+        version: link:../pipecat-smart-turn
       '@kuralle-syrinx/realtime':
         specifier: workspace:*
         version: link:../realtime
