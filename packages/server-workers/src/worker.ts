@@ -39,6 +39,11 @@ export class VoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<E
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,
   resumeWindowMs: 15_000,
+  // Browser/studio clients: no telephony-style idle re-engagement. The 15s default nags
+  // ("Are you still there?") and disconnects a user who is granting mic or reading the UI
+  // before speaking; the DO hibernates abandoned browser sessions anyway. Telephony keeps
+  // the default on TwilioVoiceConversation below.
+  idleTimeout: { durationMs: 0 },
 }) {}
 
 /** Telephony cascaded host (Twilio Media Streams μ-law 8 kHz over /twilio). Same pipeline/brain. */

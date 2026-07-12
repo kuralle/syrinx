@@ -1304,6 +1304,52 @@ describe("VoiceAgentSession", () => {
     }
   });
 
+  it("durationMs:0 disables the idle timeout, including the extend/playout path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const session = new VoiceAgentSession({
+      plugins: {},
+      idleTimeout: {
+        durationMs: 0,
+        maxConsecutive: 0,
+        escalationMessages: ["still there?"],
+        disconnectAfterMax: false,
+      },
+    });
+    const injected: string[] = [];
+
+    await session.start();
+    session.bus.on("inject.message", (pkt) => {
+      injected.push((pkt as unknown as { text: string }).text);
+    });
+
+    try {
+      session.bus.push(Route.Main, {
+        kind: "behavior.idle_timeout_start",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // tts.audio drives extend(playoutMs); with durationMs:0 it must arm nothing.
+      session.bus.push(Route.Main, {
+        kind: "tts.audio",
+        contextId: "turn-1",
+        timestampMs: Date.now(),
+        audio: new Uint8Array(3200),
+        sampleRateHz: 16000,
+      } satisfies TextToSpeechAudioPacket);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(injected).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      await closeSession(session);
+    }
+  });
+
   it("stops assistant audio output within 50ms of VAD barge-in", async () => {
     const tts = new InterruptAwareStreamingTtsPlugin();
     // Gate disabled: this test exercises the immediate-cut path latency.

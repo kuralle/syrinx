@@ -2,6 +2,7 @@
 
 import {
   VoiceAgentSession,
+  type IdleTimeoutConfig,
   type Reasoner,
   type ReasonerMessage,
   type ReasonerSessionStore,
@@ -36,6 +37,12 @@ export interface VoiceSessionWiring {
   readonly contextProvider?: () => readonly ReasonerMessage[];
   /** G3: ms before a pending tool call fires its "delayed" (still-working) cue. */
   readonly delayCueAfterMs?: number;
+  /**
+   * Idle-timeout override. Defaults to the 15s telephony re-engagement. Browser/edge
+   * hosts pass `{ durationMs: 0 }` to disable it — a playground/demo user granting mic
+   * or reading the UI should never be nagged ("Are you still there?") or disconnected.
+   */
+  readonly idleTimeout?: Partial<IdleTimeoutConfig>;
 }
 
 /**
@@ -128,6 +135,7 @@ export function buildVoiceSession<Env>(
       plugins: { realtime: {} },
       endpointingOwner: "timer",
       ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
+      ...(wiring.idleTimeout !== undefined ? { idleTimeout: wiring.idleTimeout } : {}),
     });
     session.registerPlugin("realtime", bridge);
     return session;
@@ -171,6 +179,7 @@ export function buildVoiceSession<Env>(
       ? { sttForceFinalizeTimeoutMs: pipeline.sttForceFinalizeTimeoutMs }
       : {}),
     ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
+    ...(wiring.idleTimeout !== undefined ? { idleTimeout: wiring.idleTimeout } : {}),
   });
   session.registerPlugin("stt", stt.plugin);
   session.registerPlugin(

@@ -118,6 +118,7 @@ export class IdleTimeoutManager {
    */
   extend(ms: number): void {
     this.clearTimer();
+    if (this.config.durationMs <= 0) return;
     this.timerScheduled = true;
     this.scheduler.schedule("voice.idle_timeout", this.config.durationMs + ms, () => {
       this.timerScheduled = false;

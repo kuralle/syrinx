@@ -24,7 +24,7 @@ import {
 } from "@kuralle-syrinx/server-websocket/edge";
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
-import type { Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
+import type { IdleTimeoutConfig, Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
 import {
   connectionManagedSocket,
@@ -158,6 +158,13 @@ export interface WithVoiceOptions<Env> {
    * ("still working") wire cue fires. 0 disables the delayed phase. Default: 2000.
    */
   readonly delayCueAfterMs?: number;
+  /**
+   * Idle-timeout override for this host. Omitted → the 15s telephony re-engagement
+   * ("Are you still there?" then disconnect). Browser/edge hosts should pass
+   * `{ durationMs: 0 }` to disable it: a demo/playground user granting mic or reading
+   * the UI must not be nagged or hung up on. Leave the default on `"twilio"` hosts.
+   */
+  readonly idleTimeout?: Partial<IdleTimeoutConfig>;
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   readonly resumeWindowMs?: number;
@@ -302,6 +309,7 @@ export function withVoice<Env, TBase extends AgentLike>(
         };
         const wiring: VoiceSessionWiring = {
           ...(options.delayCueAfterMs !== undefined ? { delayCueAfterMs: options.delayCueAfterMs } : {}),
+          ...(options.idleTimeout !== undefined ? { idleTimeout: options.idleTimeout } : {}),
           ...(durable
             ? options.pipeline.kind === "realtime"
               ? { contextProvider: () => liveHistory }
