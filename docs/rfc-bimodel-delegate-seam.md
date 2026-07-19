@@ -1,6 +1,7 @@
 # RFC: The bi-model delegate seam — result envelope, observability, preamble lifecycle, durable resume, and packaging the Responder-Thinker
 
-> Status: **Draft** (2026-07-02). Author: research-led. Grounded in a live-consumer review
+> Status: **Implemented** — WBS-1..5 built + verified, released in 4.0.0 (2026-07-03).
+> Drafted 2026-07-02. Author: research-led. Grounded in a live-consumer review
 > (`SESSION-HANDOFF-syrinx-core-roadmap.md` §2 — the SLIIT chatbot's hand-rolled workarounds) cross-checked
 > against a competitive teardown of Pipecat, LiveKit Agents, Vapi/Retell/Bland, and the provider realtime
 > SDKs (OpenAI Realtime + Agents SDK, Deepgram Voice Agent, ElevenLabs, Gemini Live) — same doc §3.

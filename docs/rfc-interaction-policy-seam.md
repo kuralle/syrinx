@@ -3,7 +3,10 @@
 **Category:** Architectural Change
 **Author:** octalpixel
 **Date:** 2026-07-09
-**Status:** Draft
+**Status:** Implemented — released in 4.2.0 (2026-07-11). §8 chunks C1–C6 all built and verified.
+The C6 eval gate resolved VAP to **dormant-but-armed** (cheap Silero+SmartTurn+rules 659 ms / AUC .804
+beat Kyoto+STT 1175 ms / AUC .762) — the VAP code ships behind the seam, the rule-based stack stays
+default. See `docs/c6-vap-eval-results.md` and `docs/vap-adoption-findings.md`.
 **Reviewers:** (maintainer)
 **Related:**
 - `.understanding/syrinx-voice-engine-understand.md` (code map + invariants; contextId overload)

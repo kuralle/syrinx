@@ -1,6 +1,8 @@
 # RFC: WS transport correctness hardening (Wave 1)
 
-> **Status:** Ready-for-build · **Branch:** `v2` · **Owner:** manager (octalpixel) · **Date:** 2026-06-06
+> **Status:** **Implemented** — shipped on `v2` and released; bounded reconnect (`maxReconnectAttempts`,
+> `maxReconnectDurationMs`), quick-failure give-up, and link verification live in `packages/ws`.
+> · **Owner:** manager (octalpixel) · **Drafted:** 2026-06-06
 > **Source plan:** [`../bi-model-research/transport-hardening-plan.md`](../bi-model-research/transport-hardening-plan.md)
 > (staff-architect-reviewed, codex high → revised). This RFC executes **Wave 1 only**: the *evidenced,
 > no-product-decision* correctness fixes. Out of scope (later waves, each needs a decision/spike): inbound

@@ -3,7 +3,11 @@
 **Category:** Architectural Change
 **Author:** octalpixel
 **Date:** 2026-07-09
-**Status:** Draft
+**Status:** Implemented — released in 4.2.0 (2026-07-11). §8 chunks C1 (ledger core), C2
+(speculative-on-ledger), C3 (assistant IU + heard-prefix) shipped, plus an unbounded-ledger leak fix.
+**C4 rescoped** (the poison-set migration was net-harmful — no real dual bookkeeping existed) and
+**C5 deferred** (premise stale; the telephony P0 it targeted was already fixed in v4.1.x) — see
+`docs/rfc-incremental-unit-substrate-amendment-C5.md`.
 **Reviewers:** (maintainer)
 **Related:**
 - `research/incremental-processing-deep-dive.md` (the academic grounding — verified sources)
