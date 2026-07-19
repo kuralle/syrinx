@@ -1,6 +1,10 @@
 {
-  "version": "plandesk-connect-v1",
-  "serverUrl": "http://127.0.0.1:3400",
-  "projectId": "4ccbf28b-24c0-486a-8b4e-245676dc8e64",
-  "projectName": "Syrinx vNext"
+  "version": "plandesk-connect-v2",
+  "serverUrl": "http://127.0.0.1:7526",
+  "orgId": "00000000-0000-4000-8000-0000000000a1",
+  "workspaceId": "r0NjPakMkkgdosw7yQB2XA8EGcElpev4",
+  "workspaceName": "Syrinx vNext",
+  "projectIds": [
+    "fdda744e-5d70-4e7e-ac62-e6f2c2108bc5"
+  ]
 }
