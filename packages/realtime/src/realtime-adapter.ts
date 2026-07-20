@@ -67,6 +67,7 @@ export interface RealtimeResumeMessage {
 export type RealtimeEvent =
   | { type: "audio"; pcm16: Uint8Array; sampleRateHz: number }
   | { type: "speech_started" }
+  | { type: "speech_stopped" }
   | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
   | { type: "tool_call"; toolId: string; toolName: string; args: Record<string, unknown> }
   | { type: "response_started" }

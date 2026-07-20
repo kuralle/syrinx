@@ -931,6 +931,85 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("pushes vad.speech_ended when the realtime provider reports speech stopped", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const ended: unknown[] = [];
+    bus.on("vad.speech_ended", (pkt) => { ended.push(pkt); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "speech_stopped" });
+    adapter.emit({ type: "response_started" });
+
+    await waitForCondition(() => ended.length === 1);
+    expect(ended[0]).toMatchObject({
+      kind: "vad.speech_ended",
+      contextId: expect.any(String),
+      timestampMs: expect.any(Number),
+    });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("streams native assistant transcript deltas onto the llm bus before response completion", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The fee is ten dollars.", final: false });
+
+    await waitForCondition(() => deltas.length === 1);
+    expect(deltas[0]).toMatchObject({
+      kind: "llm.delta",
+      text: "The fee is ten dollars.",
+    });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("produces a non-empty turn-latency breakdown for a native turn", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const session = new VoiceAgentSession({ plugins: {} });
+    session.registerPlugin("realtime", bridge);
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => { events.push(event); });
+
+    await session.start();
+    adapter.emit({ type: "speech_stopped" });
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The fee is ten dollars.", final: false });
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "audio", pcm16: frameSizedPcm24k(), sampleRateHz: 24_000 });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => events.length === 1);
+    expect(events[0]).toEqual(expect.objectContaining({
+      anchor: "speech_end",
+      llmTtftMs: expect.any(Number),
+      textAggregationMs: expect.any(Number),
+      ttsTtfbMs: expect.any(Number),
+      unattributedMs: expect.any(Number),
+    }));
+
+    await session.close();
+  });
+
   it("surfaces a delta-only assistant transcript (Gemini Live: no final transcript event)", async () => {
     // Gemini Live streams the assistant transcript as non-final fragments and never emits a
     // final transcript. The bridge must still surface the concatenated words as llm.delta/llm.done

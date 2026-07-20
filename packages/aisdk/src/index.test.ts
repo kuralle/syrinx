@@ -36,6 +36,56 @@ const ZERO_USAGE = {
 };
 
 describe("ReasoningBridge", () => {
+  it("emits LLM call-count and per-pass TTFT metrics", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield textDelta("Hello.");
+      yield finish("stop");
+    }));
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-metrics", "Hi"));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    await waitFor(() => packets.filter(({ packet }) => (packet as { name?: string }).name === "llm.pass_ttft_ms").length === 1);
+
+    const metrics = packets.filter(({ packet }) => (packet as { kind?: string }).kind === "metric.conversation");
+    expect(metrics.filter(({ packet }) => (packet as { name?: string }).name === "llm.call_started")).toHaveLength(1);
+    expect(metrics.filter(({ packet }) => (packet as { name?: string }).name === "llm.pass_ttft_ms").map(({ packet }) => packet)).toEqual([
+      expect.objectContaining({ contextId: "turn-metrics", value: expect.stringMatching(/^\d+(\.\d+)?$/) }),
+    ]);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("counts sequential tool-loop inference passes and records each pass TTFT", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
+      yield toolCall("call-1", "retrieve", { q: "fees" });
+      yield toolResult("call-1", "retrieve", "ten dollars");
+      yield textDelta("The fee is ten dollars.");
+      yield finish("stop");
+    }));
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-two-passes", "What is the fee?"));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+    await waitFor(() => packets.filter(({ packet }) => (packet as { name?: string }).name === "llm.pass_ttft_ms").length === 2);
+
+    const metrics = packets.filter(({ packet }) => (packet as { kind?: string }).kind === "metric.conversation");
+    expect(metrics.filter(({ packet }) => (packet as { name?: string }).name === "llm.call_started")).toHaveLength(2);
+    expect(metrics.filter(({ packet }) => (packet as { name?: string }).name === "llm.pass_ttft_ms")).toHaveLength(2);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
   it("emits llm.done only after a normal provider stop finish", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const plugin = new ReasoningBridge(fromStreamFactory(async function* () {
@@ -932,6 +982,38 @@ describe("ReasoningBridge speculative generation", () => {
     expect(streams).toBe(0);
     expect(kinds(packets).filter((k) => k.startsWith("llm."))).toHaveLength(0);
   });
+
+  it("emits speculative draft lifecycle metrics for promotion and discard", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        yield textDelta("Draft.");
+        yield finish("stop");
+      }),
+      { speculative: true },
+    );
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    bus.push(Route.Main, eosInterim("turn-spec-metrics", "hello"));
+    await waitFor(() => metricNames(packets).includes("speculative.draft_started"));
+    bus.push(Route.Main, eosInterim("turn-spec-metrics", "hello there"));
+    await waitFor(() => metricNames(packets).includes("speculative.draft_discarded"));
+    bus.push(Route.Main, turnComplete("turn-spec-metrics", "hello there"));
+    await waitFor(() => metricNames(packets).includes("speculative.draft_promoted"));
+
+    expect(metricNames(packets)).toEqual([
+      "speculative.draft_started",
+      "speculative.draft_discarded",
+      "speculative.draft_started",
+      "speculative.draft_promoted",
+    ]);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
 });
 
 function baseConfig(): Record<string, unknown> {
@@ -942,6 +1024,13 @@ function baseConfig(): Record<string, unknown> {
     retry_max_attempts: 1,
     timeout_ms: 1000,
   };
+}
+
+function metricNames(packets: Array<{ packet: unknown }>): string[] {
+  return packets
+    .filter(({ packet }) => (packet as { kind?: string }).kind === "metric.conversation")
+    .map(({ packet }) => (packet as { name: string }).name)
+    .filter((name) => name.startsWith("speculative."));
 }
 
 function turnComplete(contextId: string, text: string): EndOfSpeechPacket {

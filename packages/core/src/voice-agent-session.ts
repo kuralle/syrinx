@@ -31,6 +31,7 @@ import type {
   InterruptionDetectedPacket,
   DelegateQueryPacket,
   DelegateResultPacket,
+  ConversationMetricPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   LlmToolCallPacket,
@@ -218,15 +219,22 @@ export interface VoiceAgentSessionEvents {
    * back to the endpoint decision) — `fillerUsed` flags turns where a latency filler spoke
    * first, and `backchannelUsed` flags turns where a wait-gap cue played before the answer.
    * Decomposition: eouDelayMs (speech end → endpoint) + llmTtftMs (endpoint →
-   * first LLM delta) + ttsTtfbMs (first TTS text dispatched → first audio).
+   * first LLM delta) + textAggregationMs (first LLM delta → first TTS text) +
+   * ttsTtfbMs (first TTS text dispatched → first audio). `unattributedMs` is the
+   * explicit residual after subtracting only the stages present in this payload.
    */
   turn_latency: (event: {
     tsMs: number;
     turnId: string;
     ttfaMs: number;
+    anchor: "speech_end" | "eos";
     eouDelayMs?: number;
     llmTtftMs?: number;
+    textAggregationMs?: number;
     ttsTtfbMs?: number;
+    unattributedMs: number;
+    llmCallCount?: number;
+    llmPassTtftMs?: readonly number[];
     fillerUsed: boolean;
     backchannelUsed: boolean;
   }) => void;
@@ -249,6 +257,8 @@ interface TurnTiming {
   eosMs?: number;
   firstLlmDeltaMs?: number;
   firstTtsTextMs?: number;
+  llmCallCount?: number;
+  llmPassTtftMs?: number[];
   fillerUsed?: boolean;
   backchannelUsed?: boolean;
 }
@@ -640,6 +650,7 @@ export class VoiceAgentSession {
       this.lastFinalizedContextId = "";
       if (pkt.previousContextId) {
         this.sttPartialWordTimings.delete(pkt.previousContextId);
+        this.carryTurnTimingAcrossContextChange(pkt.previousContextId, pkt.contextId);
       }
     });
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
@@ -650,6 +661,7 @@ export class VoiceAgentSession {
     this.bus.on("llm.done", this.handleLlmDone.bind(this));
     this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
     this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
+    this.bus.on("metric.conversation", this.handleConversationMetric.bind(this));
 
     // Delegate (Responder-Thinker) observability — G2, RFC bimodel-delegate-seam
     this.bus.on("delegate.query", this.handleDelegateQuery.bind(this));
@@ -923,6 +935,23 @@ export class VoiceAgentSession {
     this.watchdogs.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
   }
 
+  /**
+   * A realtime front rotates its contextId when the provider starts responding
+   * (`RealtimeBridge.onResponseStarted`), so the user-side anchors (`speechEndedMs`, `eosMs`)
+   * are recorded under the PREVIOUS context while `tts.audio` — and therefore the
+   * `turn_latency` emit — lands under the new one. Without carrying the record across the
+   * rotation, `emitTurnLatency` finds no anchor and silently drops every native turn.
+   *
+   * Only fills gaps: anything the new context already recorded wins.
+   */
+  private carryTurnTimingAcrossContextChange(previousContextId: string, contextId: string): void {
+    const previous = this.turnTimings.get(previousContextId);
+    if (!previous) return;
+    this.turnTimings.delete(previousContextId);
+    const current = this.turnTimings.get(contextId);
+    this.turnTimings.set(contextId, { ...previous, ...current });
+  }
+
   private timingFor(contextId: string): TurnTiming {
     let timing = this.turnTimings.get(contextId);
     if (!timing) {
@@ -933,24 +962,43 @@ export class VoiceAgentSession {
   }
 
   private emitTurnLatency(contextId: string, firstAudioMs: number): void {
-    const timing = this.turnTimings.get(contextId);
+    const timing = this.timingFor(contextId);
     this.turnTimings.delete(contextId);
-    if (!timing) return;
     const anchorMs = timing.speechEndedMs ?? timing.eosMs;
     if (anchorMs === undefined) return; // text-injected or fallback turn — not a voice TTFA
+    const anchor = timing.speechEndedMs !== undefined ? "speech_end" : "eos";
+    const eouDelayMs =
+      timing.speechEndedMs !== undefined && timing.eosMs !== undefined
+        ? timing.eosMs - timing.speechEndedMs
+        : undefined;
+    const llmAnchorMs = timing.eosMs ?? timing.speechEndedMs;
+    const llmTtftMs =
+      llmAnchorMs !== undefined && timing.firstLlmDeltaMs !== undefined
+        ? timing.firstLlmDeltaMs - llmAnchorMs
+        : undefined;
+    const textAggregationMs =
+      timing.firstLlmDeltaMs !== undefined && timing.firstTtsTextMs !== undefined
+        ? timing.firstTtsTextMs - timing.firstLlmDeltaMs
+        : undefined;
+    const ttsTtfbMs =
+      timing.firstTtsTextMs !== undefined
+        ? firstAudioMs - timing.firstTtsTextMs
+        : undefined;
+    const attributedMs = [eouDelayMs, llmTtftMs, textAggregationMs, ttsTtfbMs]
+      .filter((value): value is number => value !== undefined)
+      .reduce((sum, value) => sum + value, 0);
     this.emit("turn_latency", {
       tsMs: firstAudioMs,
       turnId: contextId,
       ttfaMs: firstAudioMs - anchorMs,
-      ...(timing.speechEndedMs !== undefined && timing.eosMs !== undefined
-        ? { eouDelayMs: timing.eosMs - timing.speechEndedMs }
-        : {}),
-      ...(timing.eosMs !== undefined && timing.firstLlmDeltaMs !== undefined
-        ? { llmTtftMs: timing.firstLlmDeltaMs - timing.eosMs }
-        : {}),
-      ...(timing.firstTtsTextMs !== undefined
-        ? { ttsTtfbMs: firstAudioMs - timing.firstTtsTextMs }
-        : {}),
+      anchor,
+      ...(eouDelayMs !== undefined ? { eouDelayMs } : {}),
+      ...(llmTtftMs !== undefined ? { llmTtftMs } : {}),
+      ...(textAggregationMs !== undefined ? { textAggregationMs } : {}),
+      ...(ttsTtfbMs !== undefined ? { ttsTtfbMs } : {}),
+      unattributedMs: firstAudioMs - anchorMs - attributedMs,
+      ...(timing.llmCallCount !== undefined ? { llmCallCount: timing.llmCallCount } : {}),
+      ...(timing.llmPassTtftMs !== undefined ? { llmPassTtftMs: [...timing.llmPassTtftMs] } : {}),
       fillerUsed: timing.fillerUsed === true,
       backchannelUsed: timing.backchannelUsed === true,
     });
@@ -1287,6 +1335,20 @@ export class VoiceAgentSession {
       },
       timestampMs: pkt.timestampMs,
     });
+  }
+
+  private handleConversationMetric(pkt: ConversationMetricPacket): void {
+    if (pkt.name === "llm.call_started") {
+      const timing = this.timingFor(pkt.contextId);
+      timing.llmCallCount = (timing.llmCallCount ?? 0) + 1;
+      return;
+    }
+    if (pkt.name === "llm.pass_ttft_ms") {
+      const ttftMs = Number(pkt.value);
+      if (!Number.isFinite(ttftMs)) return;
+      const timing = this.timingFor(pkt.contextId);
+      (timing.llmPassTtftMs ??= []).push(ttftMs);
+    }
   }
 
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {

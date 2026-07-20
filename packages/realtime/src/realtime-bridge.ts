@@ -115,6 +115,7 @@ export class RealtimeBridge implements VoicePlugin {
   private turnAssistantText = "";
   /** Concatenated streamed transcript fragments — providers that emit deltas only, no final (Gemini Live). */
   private turnAssistantDeltas = "";
+  private pendingSpeechEndedAtMs: number | null = null;
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
   private delegateTask: Promise<void> | null = null;
@@ -216,6 +217,12 @@ export class RealtimeBridge implements VoicePlugin {
         } else if (!ev.final && ev.text) {
           // Streamed fragments already carry their own leading spaces — concatenate verbatim.
           this.turnAssistantDeltas += ev.text;
+          bus.push(Route.Main, {
+            kind: "llm.delta",
+            contextId: this.contextId,
+            timestampMs: Date.now(),
+            text: ev.text,
+          });
         }
         break;
       case "tool_call":
@@ -226,6 +233,9 @@ export class RealtimeBridge implements VoicePlugin {
         break;
       case "speech_started":
         this.onSpeechStarted(bus);
+        break;
+      case "speech_stopped":
+        this.onSpeechStopped(bus);
         break;
       case "resumption_handle": {
         // G4: persist-worthy native-resume handle (Gemini). Background route —
@@ -445,6 +455,20 @@ export class RealtimeBridge implements VoicePlugin {
     bus.push(Route.Critical, packet);
   }
 
+  private onSpeechStopped(bus: PipelineBus): void {
+    const timestampMs = Date.now();
+    if (!this.contextId) {
+      // Server VAD reports speech end before response.created mints the response context.
+      this.pendingSpeechEndedAtMs = timestampMs;
+      return;
+    }
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: this.contextId,
+      timestampMs,
+    });
+  }
+
   private onResponseStarted(bus: PipelineBus): void {
     const previousContextId = this.contextId;
     this.contextId = crypto.randomUUID();
@@ -453,6 +477,14 @@ export class RealtimeBridge implements VoicePlugin {
     this.turnAssistantDeltas = "";
     this.playedMs = 0;
     this.audioRemainder = new Uint8Array(0);
+    if (this.pendingSpeechEndedAtMs !== null) {
+      bus.push(Route.Main, {
+        kind: "vad.speech_ended",
+        contextId: this.contextId,
+        timestampMs: this.pendingSpeechEndedAtMs,
+      });
+      this.pendingSpeechEndedAtMs = null;
+    }
     const packet: TurnChangePacket = {
       kind: "turn.change",
       contextId: this.contextId,
@@ -558,19 +590,21 @@ export class RealtimeBridge implements VoicePlugin {
     // providers that only emit non-final deltas (Gemini Live).
     const assistantText = this.turnAssistantText.trim() || this.turnAssistantDeltas.trim();
     if (assistantText) {
-      const delta: LlmDeltaPacket = {
-        kind: "llm.delta",
-        contextId: this.contextId,
-        timestampMs,
-        text: assistantText,
-      };
       const done: LlmResponseDonePacket = {
         kind: "llm.done",
         contextId: this.contextId,
         timestampMs,
         text: assistantText,
       };
-      bus.push(Route.Main, delta, done);
+      if (this.turnAssistantDeltas.length === 0) {
+        bus.push(Route.Main, {
+          kind: "llm.delta",
+          contextId: this.contextId,
+          timestampMs,
+          text: assistantText,
+        });
+      }
+      bus.push(Route.Main, done);
     }
     bus.push(Route.Main, turnComplete, ttsEnd);
   }

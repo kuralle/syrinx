@@ -311,6 +311,9 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
       case "input_audio_buffer.speech_started":
         this.stream.push({ type: "speech_started" });
         break;
+      case "input_audio_buffer.speech_stopped":
+        this.stream.push({ type: "speech_stopped" });
+        break;
       case "response.output_audio_transcript.delta": {
         const delta = msg["delta"];
         if (typeof delta === "string" && delta.length > 0) {

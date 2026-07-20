@@ -601,11 +601,118 @@ describe("VoiceAgentSession", () => {
       tsMs: expect.any(Number),
       turnId: "turn-1",
       ttfaMs: 1150,
+      anchor: "speech_end",
       eouDelayMs: 200,
       llmTtftMs: 700,
+      textAggregationMs: 0,
       ttsTtfbMs: 250,
+      unattributedMs: 0,
       fillerUsed: false,
       backchannelUsed: false,
+    });
+
+    await closeSession(session);
+  });
+
+  it("emits turn_latency when the realtime front rotates contextId mid-turn", async () => {
+    // Regression: RealtimeBridge.onResponseStarted rotates contextId when the provider starts
+    // responding, so the user-side anchor lands on the OLD context while tts.audio lands on the
+    // NEW one. Every existing turn_latency test used a single contextId and so never caught this;
+    // live native runs emitted nothing at all.
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 500_000;
+    session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "ctx-a", timestampMs: t0 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The front begins responding under a brand-new contextId.
+    session.bus.push(Route.Main, {
+      kind: "turn.change",
+      contextId: "ctx-b",
+      previousContextId: "ctx-a",
+      reason: "realtime_response_started",
+      timestampMs: t0 + 200,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, { kind: "llm.delta", contextId: "ctx-b", timestampMs: t0 + 300, text: "Hi." });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "ctx-b",
+      timestampMs: t0 + 600,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    // Anchored on the speech-end recorded under the PREVIOUS context, not silently dropped.
+    expect(events[0]?.["anchor"]).toBe("speech_end");
+    expect(events[0]?.["ttfaMs"]).toBe(600);
+
+    await session.close();
+  });
+
+  it("emits turn_latency when first audio arrives before eos", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 400_000;
+    session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "native-turn", timestampMs: t0 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: "native-turn",
+      timestampMs: t0 + 50,
+      name: "llm.call_started",
+      value: "1",
+    });
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: "native-turn",
+      timestampMs: t0 + 50,
+      name: "llm.pass_ttft_ms",
+      value: "100",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, { kind: "llm.delta", contextId: "native-turn", timestampMs: t0 + 100, text: "Hello." });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "native-turn",
+      timestampMs: t0 + 400,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "native-turn",
+      timestampMs: t0 + 1_000,
+      text: "hello",
+      transcripts: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      turnId: "native-turn",
+      ttfaMs: 400,
+      anchor: "speech_end",
+      llmTtftMs: 100,
+      textAggregationMs: 0,
+      ttsTtfbMs: 300,
+      unattributedMs: 0,
+      llmCallCount: 1,
+      llmPassTtftMs: [100],
     });
 
     await closeSession(session);
@@ -641,11 +748,32 @@ describe("VoiceAgentSession", () => {
     expect(events[0]).toMatchObject({
       turnId: "turn-2",
       ttfaMs: 400,
+      anchor: "eos",
       fillerUsed: true,
       backchannelUsed: false,
+      unattributedMs: 0,
     });
     expect(events[0]!["eouDelayMs"]).toBeUndefined();
 
+    await closeSession(session);
+  });
+
+  it("does not emit turn_latency for audio without a voice or endpoint anchor", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: unknown[] = [];
+    session.on("turn_latency", (event) => { events.push(event); });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "text-only",
+      timestampMs: 500_400,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toEqual([]);
     await closeSession(session);
   });
 

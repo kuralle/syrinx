@@ -188,6 +188,7 @@ export class ReasoningBridge implements VoicePlugin {
         ) {
           this.iuLedger.commit(draft.id);
           this.speculativeDraft = null;
+          this.metric(eos.contextId, "speculative.draft_promoted");
           for (const flush of draft.hold.buffered.splice(0)) flush();
           return;
         }
@@ -259,6 +260,7 @@ export class ReasoningBridge implements VoicePlugin {
   /** Start (or restart, if a newer eager endpoint supersedes) the speculative draft. */
   private async runDraft(userText: string, contextId: string): Promise<void> {
     this.discardDraft();
+    this.metric(contextId, "speculative.draft_started");
     const id = this.iuIdFor(contextId);
     this.iuLedger.add({ id, kind: "user_turn", state: "hypothesized" });
     const controller = new AbortController();
@@ -291,9 +293,20 @@ export class ReasoningBridge implements VoicePlugin {
     this.speculativeDraft = null;
     const committed = this.iuLedger.get(draft.id)?.state === "committed";
     if (!committed) {
+      this.metric(draft.contextId, "speculative.draft_discarded");
       this.iuLedger.revoke(draft.id);
       draft.controller.abort();
     }
+  }
+
+  private metric(contextId: string, name: string, value = "1"): void {
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name,
+      value,
+    });
   }
 
   private async processTurn(
@@ -340,6 +353,20 @@ export class ReasoningBridge implements VoicePlugin {
     let emittedDelta = false;
     let committed = false;
     let grounded = false;
+    let passStartedMs = 0;
+    let passTtftRecorded = false;
+    const recordPassTtft = (): void => {
+      if (passTtftRecorded) return;
+      passTtftRecorded = true;
+      const firstOutputMs = Date.now();
+      push(Route.Main, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs: firstOutputMs,
+        name: "llm.pass_ttft_ms",
+        value: String(firstOutputMs - passStartedMs),
+      });
+    };
 
     // G2 observability: the turn's query is on its way to the reasoner (Background
     // route, droppable — RFC bimodel-delegate-seam R4). Cascade turns have no
@@ -355,6 +382,15 @@ export class ReasoningBridge implements VoicePlugin {
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         grounded = false;
+        passStartedMs = Date.now();
+        passTtftRecorded = false;
+        push(Route.Main, {
+          kind: "metric.conversation",
+          contextId,
+          timestampMs: passStartedMs,
+          name: "llm.call_started",
+          value: "1",
+        });
         try {
           // Drafts never consume a suspended-run pointer: takePending mutates the
           // store, and a retracted draft would silently lose the resume.
@@ -374,6 +410,7 @@ export class ReasoningBridge implements VoicePlugin {
               case "text-delta":
                 reply += part.text;
                 emittedDelta = true;
+                recordPassTtft();
                 push(Route.Main, {
                   kind: "llm.delta",
                   contextId,
@@ -382,6 +419,7 @@ export class ReasoningBridge implements VoicePlugin {
                 });
                 break;
               case "tool-call":
+                recordPassTtft();
                 push(Route.Main, {
                   kind: "llm.tool_call",
                   contextId,
@@ -400,6 +438,15 @@ export class ReasoningBridge implements VoicePlugin {
                   toolId: part.toolId,
                   toolName: part.toolName,
                   result: part.result,
+                });
+                passStartedMs = Date.now();
+                passTtftRecorded = false;
+                push(Route.Main, {
+                  kind: "metric.conversation",
+                  contextId,
+                  timestampMs: passStartedMs,
+                  name: "llm.call_started",
+                  value: "1",
                 });
                 break;
               case "error":

@@ -185,4 +185,23 @@ describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned tu
     expect(JSON.parse(mock.sent[baseline]!)).toEqual({ type: "input_audio_buffer.commit" });
     expect(JSON.parse(mock.sent[baseline + 1]!)).toEqual({ type: "response.create" });
   });
+
+  it("surfaces input_audio_buffer.speech_stopped", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+    let event: RealtimeEvent | undefined;
+    const eventsTask = collectEvents(adapter.events, 1).then((events) => {
+      event = events[0];
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+    mock.inject({ type: "input_audio_buffer.speech_stopped" });
+
+    await waitFor(() => event !== undefined);
+    await eventsTask;
+    expect(event).toEqual({ type: "speech_stopped" });
+  });
 });
