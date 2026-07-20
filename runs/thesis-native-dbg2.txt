@@ -1,0 +1,284 @@
+$ tsx scripts/run-interaction-thesis-matrix.ts
+reusing 01-late-add
+reusing 02-registration-holds
+reusing 03-financial-aid
+reusing 04-advisor-approval
+reusing 05-instructor-email
+reusing 06-international-status
+reusing 07-housing
+reusing 08-accessibility
+reusing 09-athletics
+reusing 10-lab-fee
+reusing 11-case-open
+reusing 12-next-steps
+reusing 13-clarify-deadline
+reusing 14-appointment
+reusing 15-summary
+reusing 16-goodbye
+reusing 17-parent-consent
+reusing 18-department-seat
+reusing 19-class-attendance
+reusing 20-refund-risk
+reusing 21-appeal-path
+reusing 22-notification-preference
+reusing 23-readback
+reusing 24-final-confirmation
+[THESIS-DBG] adapter ev=speech_started 
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=tool_call 
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] native-turn-01 sent; waiting for assistant audio...
+[THESIS-DBG] native-turn-01 OK firstAudio=1783768974224 ttsEnd=1783768976428 tool=true reply="Are you still there? Got it, let me check what your universi"
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=speech_started 
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=tool_call 
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] native-turn-02 sent; waiting for assistant audio...
+[THESIS-DBG] native-turn-02 OK firstAudio=1783769000109 ttsEnd=1783769001974 tool=true reply="Are you still there? Got it—this is time-sensitive, so let m"
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=speech_started 
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=tool_call 
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] native-turn-03 sent; waiting for assistant audio...
+[THESIS-DBG] native-turn-03 OK firstAudio=1783769025696 ttsEnd=1783769027448 tool=true reply="Are you still there? Okay, let me check how late adds and fu"
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] single-arm run (native) — not a publishable matrix
+# Interaction thesis matrix (cascade+rules vs native-realtime)
+
+| config | turn-taking | overlap | avg-latency(ms) | task-success | note |
+|---|---|---|---|---|---|
+| cascade+rules | 0 | 100 | 0 | 0.00 |  |
+| native-realtime | 20 | 100 | 1084 | 1.00 |  |
+
+Thesis verdict: not proven — not proven — timing below native, task-success regressed
+
+{
+  "generatedAt": "2026-07-11T11:23:50.948Z",
+  "dry": false,
+  "rows": [
+    {
+      "config": "cascade+rules",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 0,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 0
+      },
+      "taskSuccessRate": 0
+    },
+    {
+      "config": "native-realtime",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 20,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 1084
+      },
+      "taskSuccessRate": 1
+    }
+  ],
+  "verdict": {
+    "proven": false,
+    "reason": "not proven — timing below native, task-success regressed"
+  },
+  "turns": {
+    "cascadeRules": [],
+    "nativeRealtime": [
+      {
+        "id": "native-turn-01",
+        "fixtureId": "01-late-add",
+        "responseLatencyMs": 1076,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-02",
+        "fixtureId": "02-registration-holds",
+        "responseLatencyMs": 1060,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-03",
+        "fixtureId": "03-financial-aid",
+        "responseLatencyMs": 1115,
+        "taskSucceeded": true
+      }
+    ]
+  }
+}
+

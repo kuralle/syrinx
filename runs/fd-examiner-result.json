@@ -1,0 +1,98 @@
+{
+  "task": "book-advising-appointment",
+  "taskName": "book-advising-appointment",
+  "dry": false,
+  "turns": [
+    {
+      "turn": 1,
+      "utteranceText": "Hi, this is Maya Chen, student ID S10042. I'm calling to book an academic advising appointment with Dr. Priya Raman.",
+      "utteranceEndAtMs": 1783784514993,
+      "firstResponseAudioAtMs": 1783784516300,
+      "responseEndAtMs": 1783784517592,
+      "responseLatencyMs": 1307,
+      "agentReply": "Okay, let me check advising availability so we can get your appointment set up."
+    },
+    {
+      "turn": 2,
+      "utteranceText": "Thanks! I really need to meet before the late add deadline for Biology 101, so I appreciate your help with this.",
+      "utteranceEndAtMs": 1783784531884,
+      "firstResponseAudioAtMs": 1783784534034,
+      "responseEndAtMs": 1783784536032,
+      "responseLatencyMs": 2150,
+      "agentReply": "I can help, but I still need the academic term to look up Dr. Priya Raman’s availability. Which term is this for, for example Fall 2026 or Spring 2027?"
+    },
+    {
+      "turn": 3,
+      "utteranceText": "It's for Fall 2026. Thank you for checking!",
+      "utteranceEndAtMs": 1783784545589,
+      "firstResponseAudioAtMs": 1783784545664,
+      "responseEndAtMs": 1783784547004,
+      "responseLatencyMs": 75,
+      "agentReply": "Got it, I’ll check Fall 2026 availability and get you the earliest option."
+    },
+    {
+      "turn": 4,
+      "utteranceText": "Great, thank you! I really appreciate it.",
+      "utteranceEndAtMs": 1783784554376,
+      "firstResponseAudioAtMs": 1783784556144,
+      "responseEndAtMs": 1783784553200,
+      "responseLatencyMs": 1768,
+      "agentReply": "You’re very welcome. It’s still processing on the university side, and I’ll share the earliest available option before the late-add deadline as soon as it comes through."
+    }
+  ],
+  "responseLatenciesMs": [
+    1307,
+    2150,
+    75,
+    1768
+  ],
+  "medianResponseLatencyMs": 1537.5,
+  "conversationOverlapMs": 400,
+  "totalTurns": 4,
+  "subGoalsCompleted": false,
+  "maxTurnsReached": true,
+  "judged": {
+    "turns": [
+      {
+        "turn": 1,
+        "turnTakingFluency": 5,
+        "instructionFollowing": 5,
+        "addressedGoal": true,
+        "note": "The agent responded promptly and directly addressed the user's request to book an appointment.",
+        "takeover": false
+      },
+      {
+        "turn": 2,
+        "turnTakingFluency": 4,
+        "instructionFollowing": 4,
+        "addressedGoal": true,
+        "note": "The agent's response was timely and relevant, addressing the user's need to meet before the deadline while also requesting necessary information.",
+        "takeover": false
+      },
+      {
+        "turn": 3,
+        "turnTakingFluency": 5,
+        "instructionFollowing": 4,
+        "addressedGoal": true,
+        "note": "The agent responded promptly and addressed the user's sub-goal, but did not explicitly accept the offered appointment time.",
+        "takeover": true
+      },
+      {
+        "turn": 4,
+        "turnTakingFluency": 3,
+        "instructionFollowing": 2,
+        "addressedGoal": false,
+        "note": "The agent's response was polite but did not address the user's sub-goal of accepting the appointment time or asking for availability.",
+        "takeover": false
+      }
+    ],
+    "aggregates": {
+      "medianTurnTakingFluency": 4.5,
+      "medianInstructionFollowing": 4,
+      "addressedGoalRate": 0.75,
+      "takeoverRate": 0.25
+    },
+    "torThresholdMs": 400,
+    "stub": false
+  }
+}

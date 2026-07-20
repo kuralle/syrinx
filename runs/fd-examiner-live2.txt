@@ -1,0 +1,15 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+# Full-Duplex Examiner (increment 1)
+
+Task: book-advising-appointment | Turns: 4 | Goals done: true | Max reached: false
+Response latencies (ms): 4729, 5912, 2387, 2301 | Median: 3558
+Conversation overlap: 1400ms
+
+| Turn | Utterance | Resp Latency (ms) | Agent Reply |
+|---|---|---|---|
+| 1 | Hi, my name is Maya Chen, and my student ID is S10042. I'... | 4729 | I can book a video academic advising appointmen... |
+| 2 | That sounds great! I’d like to confirm the appointment fo... | 5912 | Your academic advising appointment with Dr. Pri... |
+| 3 | Thanks for confirming the appointment! Just to check, is ... | 2387 | Please bring any relevant documents related to ... |
+| 4 | Got it, I’ll make sure to bring those documents and my st... | 2301 | You're welcome, Maya. If you need any further a... |
+
+Result written to /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-result.json

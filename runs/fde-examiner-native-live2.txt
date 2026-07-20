@@ -1,0 +1,17 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+# Full-Duplex Examiner (increment 1)
+
+Task: book-advising-appointment | Turns: 6 | Goals done: false | Max reached: true
+Response latencies (ms): 1334, -5507, 1908, -6681, 1311, -6023 | Median: -2098
+Conversation overlap: 1500ms
+
+| Turn | Utterance | Resp Latency (ms) | Agent Reply |
+|---|---|---|---|
+| 1 | Hi, this is Maya Chen, student ID S10042. I’d like to boo... | 1334 |  |
+| 2 | I just wanted to follow up and see if you can help me sch... | -5507 | To move forward, we need to confirm that you’re... |
+| 3 | Yes, I’m a current student. I’m a Biology major, and my s... | 1908 |  |
+| 4 | I really need to meet with Dr. Raman before the late add ... | -6681 | Could you please confirm the academic term for ... |
+| 5 | I'm looking to schedule the appointment for the current f... | 1311 | Got it, you’re aiming for the current fall term... |
+| 6 | Thank you! I really appreciate it. Do you have any availa... | -6023 | The late add deadline for Biology 101 has passe... |
+
+Result written to /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-result.json

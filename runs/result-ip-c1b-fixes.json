@@ -1,0 +1,37 @@
+{
+  "status": "done",
+  "summary": "Fixed review findings #1 (sample-rate), #3 (dropped turn), #4 (timer leak) at root cause with regression tests; #2 and #5 investigated and confirmed non-defects (evidence in notes); adversarial hunt found no additional bugs.",
+  "claims": [
+    {
+      "command": "pnpm -r typecheck",
+      "exit_code": 2,
+      "note": "Only failure is the pre-existing examples/02-hello-voice-headless/scripts/run-studio-bargein-e2e.ts (missing playwright-core), documented in SESSION-HANDOFF. All packages typecheck clean."
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/core typecheck && pnpm --filter @kuralle-syrinx/core test",
+      "exit_code": 0,
+      "note": "278 tests incl. 3 new regression tests (#1 sample-rate, #3 interim-complete + empty-no-complete, #4 timer-cancel-on-close)."
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/server-websocket typecheck && pnpm --filter @kuralle-syrinx/server-websocket test",
+      "exit_code": 0,
+      "note": "241 tests; 8 emitter edits declaring true sample rate."
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/vap test",
+      "exit_code": 0,
+      "note": "8 tests."
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/pipecat-smart-turn test",
+      "exit_code": 0,
+      "note": "33 tests."
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/realtime test",
+      "exit_code": 0,
+      "note": "51 tests."
+    }
+  ],
+  "question": ""
+}

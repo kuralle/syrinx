@@ -1,0 +1,8 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+Error: agent response timeout after 120000ms (firstAudio=0, ttsEnd=0)
+    at waitForAgentResponse (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:655:9)
+    at async runFullduplexExaminer (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:799:9)
+    at async main (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:940:18)
+/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @kuralle-syrinx-example/02-hello-voice-headless@0.0.0 smoke:fullduplex-examiner: `tsx scripts/run-fullduplex-examiner.ts`
+Exit status 1

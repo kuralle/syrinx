@@ -1,0 +1,28 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+# Full-Duplex Examiner (increment 1)
+
+Task: book-advising-appointment | Turns: 3 | Goals done: true | Max reached: false
+Response latencies (ms): 5274, 5893, 4163 | Median: 5274
+Conversation overlap: 1000ms
+
+| Turn | Utterance | Resp Latency (ms) | Agent Reply |
+|---|---|---|---|
+| 1 | Hi, this is Maya Chen, student ID S10042. I'm calling to ... | 5274 | I have booked your academic advising appointmen... |
+| 2 | Thanks for booking that appointment! I really need to mee... | 5893 | The appointment time with Dr. Priya Raman at 2:... |
+| 3 | Great, I appreciate the confirmation! Just to clarify, ar... | 4163 | There are no specific forms required to fill ou... |
+
+## Semantic judge (post-hoc)
+
+| Turn | Fluency | Instruction | Addressed | Takeover | Note |
+|---|---|---|---|---|---|
+| 1 | 3 | 5 | yes | no | The agent's response was timely but slightly ... |
+| 2 | 3 | 5 | yes | no | The agent's response was timely but slightly ... |
+| 3 | 4 | 5 | yes | no | The agent responded promptly and provided rel... |
+
+Judged aggregates (torThreshold=400ms, stub=false):
+  median turnTakingFluency: 3
+  median instructionFollowing: 5
+  addressedGoalRate: 100.0%
+  takeoverRate (TOR): 0.0%
+
+Result written to /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-result.json

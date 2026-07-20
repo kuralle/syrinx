@@ -1,0 +1,30 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+# Full-Duplex Examiner (increment 1)
+
+Task: book-advising-appointment | Turns: 4 | Goals done: false | Max reached: true
+Response latencies (ms): 1307, 2150, 75, 1768 | Median: 1537.5
+Conversation overlap: 400ms
+
+| Turn | Utterance | Resp Latency (ms) | Agent Reply |
+|---|---|---|---|
+| 1 | Hi, this is Maya Chen, student ID S10042. I'm calling to ... | 1307 | Okay, let me check advising availability so we ... |
+| 2 | Thanks! I really need to meet before the late add deadlin... | 2150 | I can help, but I still need the academic term ... |
+| 3 | It's for Fall 2026. Thank you for checking! | 75 | Got it, I’ll check Fall 2026 availability and g... |
+| 4 | Great, thank you! I really appreciate it. | 1768 | You’re very welcome. It’s still processing on t... |
+
+## Semantic judge (post-hoc)
+
+| Turn | Fluency | Instruction | Addressed | Takeover | Note |
+|---|---|---|---|---|---|
+| 1 | 5 | 5 | yes | no | The agent responded promptly and directly add... |
+| 2 | 4 | 4 | yes | no | The agent's response was timely and relevant,... |
+| 3 | 5 | 4 | yes | yes | The agent responded promptly and addressed th... |
+| 4 | 3 | 2 | no | no | The agent's response was polite but did not a... |
+
+Judged aggregates (torThreshold=400ms, stub=false):
+  median turnTakingFluency: 4.5
+  median instructionFollowing: 4
+  addressedGoalRate: 75.0%
+  takeoverRate (TOR): 25.0%
+
+Result written to /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-result.json

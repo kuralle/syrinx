@@ -1,0 +1,40 @@
+=== LIVE native turn decomposition (n=1) ===
+fixture: 01-late-add | prompt: strict | tools: 1
+
+agent said (first 240 chars — look for a pre-tool preamble):
+  Are you still there?Okay, let me check the late add options and what approvals you’ll likely need.
+speech duration: 20243ms
+
+v2v (last speech frame -> first assistant audio): 1060ms
+
+stage attribution:
+  endpoint   (speechEnd -> eos.turn_complete)    2879ms  271.6%
+  llm        (eos -> first delta, minus tools)      0ms  0.0%
+  tools      (1 call(s), sum of round-trips)      0ms  0.0%
+  tts_ttfb   (tts.text -> first tts.audio)       6277ms  592.2%
+  ----------------------------------------------------------
+  attributed                                     9156ms  863.8%
+  UNATTRIBUTED residual                         -8096ms  -763.8%
+
+per-tool:
+  ask_university               NO RESULT PACKET
+
+=== what the ALREADY-SHIPPED `turn_latency` event reported ===
+  ttfaMs            482ms   anchor=speech_end  (fillerUsed=false)
+  eouDelayMs        n/ams
+  llmTtftMs         237ms
+  textAggregationMs n/ams
+  ttsTtfbMs         n/ams
+  unattributedMs    245ms
+  llmCallCount      n/a  passTtft=[]
+
+speculative draft churn (wasted = discarded; each discard aborted an LLM call):
+  started=0  discarded=0  promoted=0
+
+raw marks (ms since speechEnd):
+  sttFinal      n/a
+  eos           2879
+  firstLlmDelta -5240
+  firstTtsText  -5217
+  firstTtsAudio 1060
+  ttsEnd        2879

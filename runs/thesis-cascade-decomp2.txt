@@ -1,0 +1,169 @@
+$ tsx scripts/run-interaction-thesis-matrix.ts
+reusing 01-late-add
+reusing 02-registration-holds
+reusing 03-financial-aid
+reusing 04-advisor-approval
+reusing 05-instructor-email
+reusing 06-international-status
+reusing 07-housing
+reusing 08-accessibility
+reusing 09-athletics
+reusing 10-lab-fee
+reusing 11-case-open
+reusing 12-next-steps
+reusing 13-clarify-deadline
+reusing 14-appointment
+reusing 15-summary
+reusing 16-goodbye
+reusing 17-parent-consent
+reusing 18-department-seat
+reusing 19-class-attendance
+reusing 20-refund-risk
+reusing 21-appeal-path
+reusing 22-notification-preference
+reusing 23-readback
+reusing 24-final-confirmation
+[THESIS-DBG] single-arm run (cascade) — not a publishable matrix
+# Interaction thesis matrix (cascade+rules vs native-realtime)
+
+| config | turn-taking | overlap | avg-latency(ms) | task-success | note |
+|---|---|---|---|---|---|
+| cascade+rules | 100 | 100 | 5771 | 1.00 |  |
+| native-realtime | 0 | 100 | 0 | 0.00 |  |
+
+Task-success parity (trustworthy): NO REGRESSION — cascade 1.00 >= native 0.00
+Turn-taking timing: CONFOUNDED, not a fair comparison here — cascade latency is dominated by the STT force-finalize timeout under synthetic trailing silence, and the native arm runs a fresh session per turn (a multi-turn realtime-bridge cancel workaround) which breaks the cross-turn EVA inter-turn gap. The turnTakingTimingScore column is audit-only; a faithful comparison needs a live full-duplex examiner bot. See docs/interaction-thesis-results.md.
+
+(raw verdict-rule output, not the trustworthy result: proven — cascade+rules matches native turn-taking with no task-success regression)
+
+{
+  "generatedAt": "2026-07-11T13:08:47.691Z",
+  "dry": false,
+  "rows": [
+    {
+      "config": "cascade+rules",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 100,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 5771
+      },
+      "taskSuccessRate": 1
+    },
+    {
+      "config": "native-realtime",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 0,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 0
+      },
+      "taskSuccessRate": 0
+    }
+  ],
+  "verdict": {
+    "proven": true,
+    "reason": "cascade+rules matches native turn-taking with no task-success regression"
+  },
+  "turns": {
+    "cascadeRules": [
+      {
+        "id": "cascade-turn-01",
+        "fixtureId": "01-late-add",
+        "responseLatencyMs": 6217,
+        "taskSucceeded": true
+      },
+      {
+        "id": "cascade-turn-02",
+        "fixtureId": "02-registration-holds",
+        "responseLatencyMs": 4694,
+        "taskSucceeded": true
+      },
+      {
+        "id": "cascade-turn-03",
+        "fixtureId": "03-financial-aid",
+        "responseLatencyMs": 6402,
+        "taskSucceeded": true
+      }
+    ],
+    "nativeRealtime": []
+  },
+  "rawTurns": {
+    "cascadeRules": [
+      {
+        "id": "cascade-turn-01",
+        "fixtureId": "01-late-add",
+        "perturbation": "clean",
+        "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I missed the normal add deadline because the Biology one oh one lab seat opened after my wait list cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the instructor before I file anything.",
+        "inputAudioMs": 20251,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 808320,
+        "startedAtMs": 1783775210383,
+        "speechStartedAtMs": 1783775210383,
+        "speechEndedAtMs": 1783775231625,
+        "sttFinalAtMs": 1783775221107,
+        "firstAgentAtMs": 1783775237219,
+        "firstAudioAtMs": 1783775237842,
+        "ttsEndedAtMs": 1783775241143,
+        "sttTranscript": "Hi. I'm Maya Chen. Student ID s 10042. I missed the normal ad deadline because the biology one zero one lab seat opened",
+        "agentReply": "You can add the BIO 101 lecture and lab together by submitting a Late Add Petition through the Student Relations portal. Please contact your academic advisor or the advising desk first, and notify International Student Services while the petition is pending.",
+        "assistantAudioBytes": 445256,
+        "assistantPlayoutEndMs": 1783775251756.25,
+        "audioEndedAtMs": 1783775231625,
+        "eosAtMs": 1783775233444,
+        "toolCalled": true,
+        "error": ""
+      },
+      {
+        "id": "cascade-turn-02",
+        "fixtureId": "02-registration-holds",
+        "perturbation": "clean",
+        "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
+        "inputAudioMs": 16451,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 686720,
+        "startedAtMs": 1783775252279,
+        "speechStartedAtMs": 1783775252279,
+        "speechEndedAtMs": 1783775269519,
+        "sttFinalAtMs": 1783775257785,
+        "firstAgentAtMs": 1783775273296,
+        "firstAudioAtMs": 1783775274213,
+        "ttsEndedAtMs": 1783775277756,
+        "sttTranscript": "Thanks. That makes sense. Before I start the petition,",
+        "agentReply": "You have no registration holds blocking your late add petition for BIO 101. You should upload the instructor's email and lab-seat confirmation, then submit the Late Add Petition through the Student Relations portal while notifying International Student Services and Financial Aid.",
+        "assistantAudioBytes": 467830,
+        "assistantPlayoutEndMs": 1783775288833.6875,
+        "audioEndedAtMs": 1783775269519,
+        "eosAtMs": 1783775270685,
+        "toolCalled": true,
+        "error": ""
+      },
+      {
+        "id": "cascade-turn-03",
+        "fixtureId": "03-financial-aid",
+        "perturbation": "clean",
+        "inputText": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled credits, Biology would put me at twelve, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
+        "inputAudioMs": 16171,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 677760,
+        "startedAtMs": 1783775289357,
+        "speechStartedAtMs": 1783775289357,
+        "speechEndedAtMs": 1783775306407,
+        "sttFinalAtMs": 1783775294855,
+        "firstAgentAtMs": 1783775311880,
+        "firstAudioAtMs": 1783775312809,
+        "ttsEndedAtMs": 1783775316174,
+        "sttTranscript": "If the course is added late, I also need to understand whether it",
+        "agentReply": "Adding BIO 101 late will increase your enrollment to 12 credits, which should update your full-time status before the financial aid review on Friday afternoon. Make sure to notify Financial Aid today when you submit the Late Add Petition to ensure your status is reflected in time.",
+        "assistantAudioBytes": 460116,
+        "assistantPlayoutEndMs": 1783775327188.625,
+        "audioEndedAtMs": 1783775306407,
+        "eosAtMs": 1783775307578,
+        "toolCalled": true,
+        "error": ""
+      }
+    ],
+    "nativeRealtime": []
+  }
+}
+

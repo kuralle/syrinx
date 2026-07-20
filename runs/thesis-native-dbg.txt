@@ -1,0 +1,125 @@
+$ tsx scripts/run-interaction-thesis-matrix.ts
+reusing 01-late-add
+reusing 02-registration-holds
+reusing 03-financial-aid
+reusing 04-advisor-approval
+reusing 05-instructor-email
+reusing 06-international-status
+reusing 07-housing
+reusing 08-accessibility
+reusing 09-athletics
+reusing 10-lab-fee
+reusing 11-case-open
+reusing 12-next-steps
+reusing 13-clarify-deadline
+reusing 14-appointment
+reusing 15-summary
+reusing 16-goodbye
+reusing 17-parent-consent
+reusing 18-department-seat
+reusing 19-class-attendance
+reusing 20-refund-risk
+reusing 21-appeal-path
+reusing 22-notification-preference
+reusing 23-readback
+reusing 24-final-confirmation
+[THESIS-DBG] adapter ev=speech_started 
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=tool_call 
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] native-turn-01 sent; waiting for assistant audio...
+[THESIS-DBG] native-turn-01 OK firstAudio=1783768759046 ttsEnd=1783768761747 tool=true reply="Are you still there? Okay, let me walk through how late adds"
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=speech_started 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] adapter ev=error 
+[THESIS-DBG] adapter ev=response_started 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=transcript assistant/interim
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=audio 
+[THESIS-DBG] adapter ev=transcript assistant/final
+[THESIS-DBG] adapter ev=tool_call 
+[THESIS-DBG] adapter ev=response_done 
+[THESIS-DBG] native-turn-02 sent; waiting for assistant audio...
+[THESIS-DBG] native-turn-02 FAILED firstAudio=1783768765606 ttsEnd=1783768785364 tool=true reply="You should submit a Late Add Petition through Got it—let me " err=bridge.error/internal_fault: Cancellation failed: no active response found
+Error: bridge.error/internal_fault: Cancellation failed: no active response found
+    at waitForTurnComplete (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:356:27)
+    at driveTurns (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:425:11)
+    at async runNativeRealtimeSession (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:529:12)
+    at async main (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:596:48)
+/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @kuralle-syrinx-example/02-hello-voice-headless@0.0.0 smoke:interaction-thesis-matrix: `tsx scripts/run-interaction-thesis-matrix.ts`
+Exit status 1

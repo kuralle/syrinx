@@ -1,0 +1,17 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+# Full-Duplex Examiner (increment 1)
+
+Task: book-advising-appointment | Turns: 6 | Goals done: false | Max reached: true
+Response latencies (ms): 1432, -7406, 1178, -9086, -9481, 1502 | Median: -3114
+Conversation overlap: 1000ms
+
+| Turn | Utterance | Resp Latency (ms) | Agent Reply |
+|---|---|---|---|
+| 1 | Hi, this is Maya Chen, student ID S10042. I’d like to boo... | 1432 | Got it, you’d like to meet with Dr. Priya Raman... |
+| 2 | Thanks! I really need to meet before the late add deadlin... | -7406 | Maya should contact Dr. Priya Raman's office or... |
+| 3 | I understand, but I really need to confirm that I can mee... | 1178 | Let me check what the university says about mee... |
+| 4 | Okay, thank you! I really appreciate your help with this.... | -9086 | Maya should contact Dr. Priya Raman directly to... |
+| 5 | I understand, but can you help me find out if there are a... | -9481 | Maya should contact Dr. Priya Raman directly to... |
+| 6 | I appreciate the information, but I really need to know i... | 1502 | Maya should submit the Late Add Petition throug... |
+
+Result written to /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-result.json

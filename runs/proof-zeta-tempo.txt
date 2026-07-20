@@ -1,0 +1,20 @@
+# Zeta TTS pitch-preserving tempo (WSOLA) — proof
+# Branch: feat/half-cascade
+# Date: 2026-07-11
+
+pnpm --filter @kuralle-syrinx/zeta-tts typecheck
+exit_code=0
+
+pnpm --filter @kuralle-syrinx/zeta-tts test
+exit_code=0
+
+# Tests (9 total)
+# wsola.test.ts:
+#   - length scaling: tempo=0.9 lengthens output ≈ input/tempo (±1 frame)
+#   - length scaling: tempo=1.2 shortens output ≈ input/tempo (±1 frame)
+#   - pitch preserved: tempo=0.9 zero-crossing period matches input within 5%
+#   - passthrough: tempo=1.0 returns input samples unchanged
+#   - streaming invariance: one chunk vs many small chunks → same total length (±1 frame)
+# index.test.ts:
+#   - tempo: 0.9 produces more tts.audio bytes than tempo: 1.0 for the same PCM stream
+#   (+ 3 pre-existing)

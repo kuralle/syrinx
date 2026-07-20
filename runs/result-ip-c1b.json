@@ -1,0 +1,26 @@
+{
+  "status": "done",
+  "claims": [
+    {
+      "command": "pnpm --filter @kuralle-syrinx/core typecheck && pnpm --filter @kuralle-syrinx/core test",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/pipecat-smart-turn typecheck && pnpm --filter @kuralle-syrinx/pipecat-smart-turn test",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/deepgram typecheck && pnpm --filter @kuralle-syrinx/deepgram test",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/vap typecheck && pnpm --filter @kuralle-syrinx/vap test",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm --filter @kuralle-syrinx/realtime typecheck && pnpm --filter @kuralle-syrinx/realtime test",
+      "exit_code": 0
+    }
+  ],
+  "question": ""
+}

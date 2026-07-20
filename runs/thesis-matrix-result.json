@@ -1,0 +1,130 @@
+{
+  "generatedAt": "2026-07-11T14:16:46.123Z",
+  "dry": false,
+  "rows": [
+    {
+      "config": "cascade+rules",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 0,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 0
+      },
+      "taskSuccessRate": 0
+    },
+    {
+      "config": "native-realtime",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 35,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": -4647
+      },
+      "taskSuccessRate": 1
+    }
+  ],
+  "verdict": {
+    "proven": false,
+    "reason": "not proven — timing below native, task-success regressed"
+  },
+  "turns": {
+    "cascadeRules": [],
+    "nativeRealtime": [
+      {
+        "id": "native-turn-01",
+        "fixtureId": "01-late-add",
+        "responseLatencyMs": 1238,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-02",
+        "fixtureId": "02-registration-holds",
+        "responseLatencyMs": 1237,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-03",
+        "fixtureId": "03-financial-aid",
+        "responseLatencyMs": -16417,
+        "taskSucceeded": true
+      }
+    ]
+  },
+  "rawTurns": {
+    "cascadeRules": [],
+    "nativeRealtime": [
+      {
+        "id": "native-turn-01",
+        "fixtureId": "01-late-add",
+        "perturbation": "clean",
+        "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I missed the normal add deadline because the Biology one oh one lab seat opened after my wait list cleared this morning. I need to know whether I can still add the lecture and lab together, what form I should submit, and whether I should contact the instructor before I file anything.",
+        "inputAudioMs": 20251,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 808320,
+        "startedAtMs": 1783779330501,
+        "speechStartedAtMs": 1783779330501,
+        "speechEndedAtMs": 1783779352029,
+        "sttFinalAtMs": 0,
+        "firstAgentAtMs": 1783779345477,
+        "firstAudioAtMs": 1783779353267,
+        "ttsEndedAtMs": 1783779354755,
+        "sttTranscript": "",
+        "agentReply": "Are you still there? Okay, Maya, let me check the registrar policies and then I’ll walk you through your options.Okay, Maya, let me check the registrar policies and then I’ll walk you through your options.",
+        "assistantAudioBytes": 137600,
+        "assistantPlayoutEndMs": 1783779357568,
+        "audioEndedAtMs": 1783779352029,
+        "eosAtMs": 1783779354755,
+        "toolCalled": true,
+        "error": ""
+      },
+      {
+        "id": "native-turn-02",
+        "fixtureId": "02-registration-holds",
+        "perturbation": "clean",
+        "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
+        "inputAudioMs": 16451,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 686720,
+        "startedAtMs": 1783779358091,
+        "speechStartedAtMs": 1783779358091,
+        "speechEndedAtMs": 1783779375306,
+        "sttFinalAtMs": 0,
+        "firstAgentAtMs": 1783779378668,
+        "firstAudioAtMs": 1783779376543,
+        "ttsEndedAtMs": 1783779378668,
+        "sttTranscript": "",
+        "agentReply": "Got it—since this involves your records, I’ll check your status and then explain what it means.Got it—since this involves your records, I’ll check your status and then explain what it means.",
+        "assistantAudioBytes": 169600,
+        "assistantPlayoutEndMs": 1783779381843,
+        "audioEndedAtMs": 1783779375306,
+        "eosAtMs": 1783779358999,
+        "toolCalled": true,
+        "error": ""
+      },
+      {
+        "id": "native-turn-03",
+        "fixtureId": "03-financial-aid",
+        "perturbation": "clean",
+        "inputText": "If the course is added late, I also need to understand whether it changes my financial aid status. I am currently at nine enrolled credits, Biology would put me at twelve, and my scholarship office told me full time status has to be reflected before their review on Friday afternoon.",
+        "inputAudioMs": 16171,
+        "userRecorderOffsetBytes": 0,
+        "userRecorderByteLength": 677760,
+        "startedAtMs": 1783779382370,
+        "speechStartedAtMs": 1783779382370,
+        "speechEndedAtMs": 1783779399288,
+        "sttFinalAtMs": 0,
+        "firstAgentAtMs": 1783779402849,
+        "firstAudioAtMs": 1783779382871,
+        "ttsEndedAtMs": 1783779402849,
+        "sttTranscript": "",
+        "agentReply": "Maya Chen has no registration holds blocking her Late Add Petition for BI Let’s sort out how the credit change could affect your full-time status before that review.Let’s sort out how the credit change could affect your full-time status before that review.",
+        "assistantAudioBytes": 195200,
+        "assistantPlayoutEndMs": 1783779405616,
+        "audioEndedAtMs": 1783779399288,
+        "eosAtMs": 1783779383113,
+        "toolCalled": true,
+        "error": ""
+      }
+    ]
+  }
+}
