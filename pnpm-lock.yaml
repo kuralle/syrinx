@@ -595,8 +595,8 @@ importers:
         version: link:../core
     devDependencies:
       '@kuralle-agents/core':
-        specifier: ^0.8.5
-        version: 0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
+        specifier: ^0.13.0
+        version: 0.13.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -1638,6 +1638,12 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
+
+  '@kuralle-agents/core@0.13.0':
+    resolution: {integrity: sha512-EM9I0NOJV+fxAW7D9rDgO0G9wO9xrvPmcKN7ChUGb00osoA/WhssbcF3Trq9XjOo1vBJoxnFaT6LRQbORVlAhQ==}
+    peerDependencies:
+      ai: ^6.0.0
+      zod: ^4.0.0
 
   '@kuralle-agents/core@0.8.5':
     resolution: {integrity: sha512-uGVSm/s9T5lbDg7RuTSf2Vb6DuFUZ/doFUmB3fENmnh3WevfxxfgHr1oienhOzfNxbn3Pcn9pQsB3Ck1oQlVTA==}
@@ -5257,6 +5263,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@kuralle-agents/core@0.13.0(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
+    dependencies:
+      ai: 6.0.191(zod@4.4.3)
+      chrono-node: 2.9.1
+      zod: 4.4.3
 
   '@kuralle-agents/core@0.8.5(ai@6.0.191(zod@4.4.3))(zod@4.4.3)':
     dependencies:

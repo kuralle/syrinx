@@ -26,7 +26,18 @@ export interface KuralleMessageLike {
 export interface KuralleStoredSession {
   readonly id: string;
   messages: KuralleMessageLike[];
-  [key: string]: unknown;
+  /**
+   * Durable-run bookkeeping the bridge reads for flow-resume. Optional and unknown-typed
+   * because kuralle owns its shape.
+   *
+   * This was a `[key: string]: unknown` catch-all, which made the interface unsatisfiable
+   * by any concrete type: a real `Session` has no index signature, so it could never be
+   * assigned here. Nothing caught that, because nothing type-checked the bridge against
+   * the real Runtime — see `real-runtime.compile-check.ts`. Only this one key is read.
+   */
+  durableRuns?: unknown;
+  /** Working-memory blob the bridge inspects on resume. Kuralle owns its shape. */
+  workingMemory?: unknown;
 }
 
 export interface KuralleSessionStoreLike {
@@ -45,7 +56,18 @@ export interface KuralleRunOptions {
   readonly userId?: string;
   readonly agentId?: string;
   readonly abortSignal?: AbortSignal;
-  readonly historyDelta?: ReadonlyArray<{ readonly role: string; readonly content: string }>;
+  /**
+   * Prior turns seeded into an empty kuralle session (G4 resume-by-seed).
+   *
+   * Deliberately narrower than it looks: the real `Runtime.run` takes `ModelMessage[]`,
+   * whose `role` is a union, so a `string` role here would be too wide to assign — and a
+   * mutable array, so `ReadonlyArray` would not assign either. The producer
+   * (`buildHistoryDeltaSeed`) already filters to user/assistant, so this only makes the
+   * declaration honest about what the code was doing.
+   *
+   * `real-runtime.compile-check.ts` pins this against the actual Runtime type.
+   */
+  historyDelta?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
 export interface KuralleRuntimeLike {
@@ -101,7 +123,10 @@ function seedHistoryDelta(
 ): Pick<KuralleRunOptions, "historyDelta"> | Record<string, never> {
   if (session && session.messages.length > 0) return {};
   const delta = messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(
+      (message): message is typeof message & { role: "user" | "assistant" } =>
+        message.role === "user" || message.role === "assistant",
+    )
     .map((message) => ({ role: message.role, content: message.content }));
   return delta.length > 0 ? { historyDelta: delta } : {};
 }
