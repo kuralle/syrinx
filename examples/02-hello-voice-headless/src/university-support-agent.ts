@@ -15,12 +15,31 @@ import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
 
+/**
+ * The tool-preamble line is load-bearing for latency, not style.
+ *
+ * A tool-calling turn cannot answer before the tool returns, so the grounded answer is gated
+ * behind at least two sequential inference passes. But a model CAN stream text before the tool
+ * call — OpenAI documents this as a "tool preamble", and the AI SDK surfaces it as ordinary
+ * `text-delta` parts ahead of the tool-call part, so Syrinx's existing llm.delta -> tts.text path
+ * speaks it with no code change.
+ *
+ * Measured on this agent (live, n=2 per arm, same fixture/tools/model):
+ *   without the preamble line   ttfaMs 3813 / 4114   (first audio IS the grounded answer)
+ *   with it                     ttfaMs 1404 / 1732   (first audio is the preamble)
+ *
+ * ~2400ms off time-to-first-audio. Note honestly what this does and does not do: time-to-ANSWER
+ * is unchanged. It converts ~4s of silence into ~1.5s to first *truthful, grounded* speech —
+ * unlike a generic filler ("So,") or an impatience probe ("Are you still there?"), which buy the
+ * same number while telling the user nothing. Evidence: runs/phase0-spike-implementation-notes.md (A8).
+ */
 export const UNIVERSITY_SUPPORT_SYSTEM_PROMPT = [
   "You are Syrinx University's Student Relations voice agent.",
   "This is one ongoing phone conversation. Use the previous turns for references like it, that, the case, or the petition.",
-  "Call studentRelationsLookup before answering student-services requests when the answer depends on student records, deadlines, holds, offices, fees, appointments, or case status.",
+  "Before calling a tool, first say ONE short spoken sentence naming what you are about to check (for example: \"Let me pull up your registration record.\"). Then call the tool.",
+  "Use studentRelationsLookup whenever the answer depends on student records, deadlines, holds, offices, fees, appointments, or case status.",
   "Never invent deadlines, approvals, holds, fees, visa guidance, accommodations, appointments, or case status.",
-  "For voice, answer in two concise complete sentences. Confirm the action first, then mention the constraint or next owner.",
+  "After the tool result, answer in two concise complete sentences. Confirm the action first, then mention the constraint or next owner.",
   "Never end with an incomplete sentence or phrase. Every answer must end with punctuation.",
 ].join("\n");
 
@@ -89,6 +108,10 @@ export interface UniversitySupportSessionOptions {
   readonly profile: UniversitySupportProfile;
   readonly ttsProvider?: UniversitySupportTtsProvider;
   readonly latencyFillerEnabled?: boolean;
+  /** Override the system prompt. Used by latency spikes to A/B prompt phrasing. */
+  readonly systemPrompt?: string;
+  /** Override the reasoner's step cap. Default 3. */
+  readonly maxSteps?: number;
 }
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
@@ -113,13 +136,13 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     eos: new PipecatEOSPlugin(),
     bridge: new ReasoningBridge(fromStreamText({
       model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
-      system: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
+      system: options.systemPrompt ?? UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
       tools: studentRelationsTools,
       temperature: 0.2,
       maxOutputTokens: interactive ? 1024 : 1400,
       maxRetries: 0,
       timeout: interactive ? 30_000 : 60_000,
-      stopWhen: stepCountIs(3),
+      stopWhen: stepCountIs(options.maxSteps ?? 3),
     })),
     tts: createTtsPlugin(ttsProvider),
   };
