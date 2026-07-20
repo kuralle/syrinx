@@ -124,8 +124,6 @@ export class ObservabilityObserver {
 
     const dims = this.dimsFor(speechId, cancelled);
     const tags = {
-      sessionId: this.deps.sessionId,
-      speechId,
       provider: dims.provider,
       model: dims.model,
       region: dims.region,

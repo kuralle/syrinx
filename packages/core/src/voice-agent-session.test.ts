@@ -12,6 +12,7 @@ import {
   type VoicePlugin,
 } from "./index.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
+import { InMemoryMetricsExporter } from "./observability.js";
 import type { Scheduler, ScheduledCallback } from "./scheduler.js";
 import { ErrorCategory, type InteractionBackchannelPacket } from "./packets.js";
 import type {
@@ -567,7 +568,12 @@ describe("VoiceAgentSession", () => {
   });
 
   it("emits a decomposed turn_latency session event on first TTS audio", async () => {
-    const session = new VoiceAgentSession({ plugins: {} });
+    const exporter = new InMemoryMetricsExporter();
+    const session = new VoiceAgentSession({
+      plugins: {},
+      metricsExporter: exporter,
+      observability: { sessionId: "session-1", provider: "cascade", model: "model-1", region: "region-1" },
+    });
     const events: Array<Record<string, unknown>> = [];
     session.on("turn_latency", (event) => {
       events.push(event);
@@ -615,6 +621,28 @@ describe("VoiceAgentSession", () => {
       fillerUsed: false,
       backchannelUsed: false,
     });
+
+    expect(exporter.histograms.filter((h) => h.name.startsWith("turn.")).map((h) => [h.name, h.valueMs])).toEqual([
+      ["turn.ttfa_ms", 1150],
+      ["turn.eou_delay_ms", 200],
+      ["turn.llm_ttft_ms", 700],
+      ["turn.text_aggregation_ms", 0],
+      ["turn.tts_ttfb_ms", 250],
+      ["turn.unattributed_ms", 0],
+    ]);
+    for (const histogram of exporter.histograms.filter((h) => h.name.startsWith("turn."))) {
+      expect(histogram.tags).toEqual({
+        provider: "cascade",
+        model: "model-1",
+        region: "region-1",
+        cancelled: "false",
+        anchor: "speech_end",
+        filler_used: "false",
+        backchannel_used: "false",
+      });
+      expect(histogram.tags).not.toHaveProperty("sessionId");
+      expect(histogram.tags).not.toHaveProperty("speechId");
+    }
 
     await closeSession(session);
   });
@@ -713,7 +741,8 @@ describe("VoiceAgentSession", () => {
   });
 
   it("does not carry prior-context text stages into a new native turn", async () => {
-    const session = new VoiceAgentSession({ plugins: {} });
+    const exporter = new InMemoryMetricsExporter();
+    const session = new VoiceAgentSession({ plugins: {}, metricsExporter: exporter });
     const events: Array<Record<string, unknown>> = [];
     session.on("turn_latency", (event) => {
       events.push(event);
@@ -758,6 +787,10 @@ describe("VoiceAgentSession", () => {
     expect(events[0]?.["llmTtftMs"]).toBeUndefined();
     expect(events[0]?.["textAggregationMs"]).toBeUndefined();
     expect(events[0]?.["ttsTtfbMs"]).toBeUndefined();
+    expect(exporter.histograms.filter((h) => h.name.startsWith("turn.")).map((h) => h.name)).toEqual([
+      "turn.ttfa_ms",
+      "turn.unattributed_ms",
+    ]);
 
     await session.close();
   });

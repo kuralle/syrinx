@@ -321,6 +321,8 @@ export class VoiceAgentSession {
   private readonly inputCadenceTimeoutMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private readonly observabilityObserver: ObservabilityObserver;
+  private readonly metricsExporter: MetricsExporter;
+  private readonly observabilityDims: { provider: string; model: string; region: string };
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
   private pendingTurnLatency = new Map<string, number>();
@@ -437,15 +439,17 @@ export class VoiceAgentSession {
     });
 
     const obs = config.observability;
+    this.metricsExporter = config.metricsExporter ?? noopMetricsExporter;
+    this.observabilityDims = {
+      provider: obs?.provider ?? "unknown",
+      model: obs?.model ?? "unknown",
+      region: obs?.region ?? "unknown",
+    };
     this.observabilityObserver = new ObservabilityObserver({
       bus: this.bus,
-      exporter: config.metricsExporter ?? noopMetricsExporter,
+      exporter: this.metricsExporter,
       sessionId: obs?.sessionId ?? "",
-      dims: {
-        provider: obs?.provider ?? "unknown",
-        model: obs?.model ?? "unknown",
-        region: obs?.region ?? "unknown",
-      },
+      dims: this.observabilityDims,
       getContextId: () => this.currentContextId,
     });
 
@@ -1003,21 +1007,44 @@ export class VoiceAgentSession {
     const attributedMs = [eouDelayMs, llmTtftMs, textAggregationMs, ttsTtfbMs]
       .filter((value): value is number => value !== undefined)
       .reduce((sum, value) => sum + value, 0);
+    const ttfaMs = firstAudioMs - anchorMs;
+    const unattributedMs = ttfaMs - attributedMs;
+    const fillerUsed = timing.fillerUsed === true;
+    const backchannelUsed = timing.backchannelUsed === true;
     this.emit("turn_latency", {
       tsMs: firstAudioMs,
       turnId: contextId,
-      ttfaMs: firstAudioMs - anchorMs,
+      ttfaMs,
       anchor,
       ...(eouDelayMs !== undefined ? { eouDelayMs } : {}),
       ...(llmTtftMs !== undefined ? { llmTtftMs } : {}),
       ...(textAggregationMs !== undefined ? { textAggregationMs } : {}),
       ...(ttsTtfbMs !== undefined ? { ttsTtfbMs } : {}),
-      unattributedMs: firstAudioMs - anchorMs - attributedMs,
+      unattributedMs,
       ...(timing.llmCallCount !== undefined ? { llmCallCount: timing.llmCallCount } : {}),
       ...(timing.llmPassTtftMs !== undefined ? { llmPassTtftMs: [...timing.llmPassTtftMs] } : {}),
-      fillerUsed: timing.fillerUsed === true,
-      backchannelUsed: timing.backchannelUsed === true,
+      fillerUsed,
+      backchannelUsed,
     });
+
+    const tags = {
+      ...this.observabilityDims,
+      cancelled: this.interruptedGenerationContextIds.has(contextId) ? "true" : "false",
+      anchor,
+      filler_used: String(fillerUsed),
+      backchannel_used: String(backchannelUsed),
+    };
+    const histograms: Array<readonly [string, number | undefined]> = [
+      ["turn.ttfa_ms", ttfaMs],
+      ["turn.eou_delay_ms", eouDelayMs],
+      ["turn.llm_ttft_ms", llmTtftMs],
+      ["turn.text_aggregation_ms", textAggregationMs],
+      ["turn.tts_ttfb_ms", ttsTtfbMs],
+      ["turn.unattributed_ms", unattributedMs],
+    ];
+    for (const [name, valueMs] of histograms) {
+      if (valueMs !== undefined) this.metricsExporter.observeHistogram(name, valueMs, tags);
+    }
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
