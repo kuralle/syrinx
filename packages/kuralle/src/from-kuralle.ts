@@ -70,6 +70,18 @@ export interface KuralleRunOptions {
   historyDelta?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
+/**
+ * The slice of kuralle's `Runtime` this bridge calls, as a loose structural shape.
+ *
+ * Deliberately hand-written rather than `Pick<Runtime, ...>`. Deriving was tried and is
+ * strictly worse here: it drags in `TurnHandle`, `HarnessStreamPart`, `Session` and
+ * `RunOptions` wholesale, so every test fake and adapter would have to construct
+ * full-fidelity kuralle objects to call a bridge whose whole point is loose coupling.
+ *
+ * The drift that freedom costs is contained by `real-runtime.compile-check.ts`, which
+ * asserts the REAL `Runtime` still satisfies this shape. That check is what was missing —
+ * not stricter types. It is the same pattern `cf-agents` uses for the agents SDK.
+ */
 export interface KuralleRuntimeLike {
   run(opts: KuralleRunOptions): KuralleTurnHandle;
   getSession?(sessionId: string): Promise<KuralleStoredSession | null>;
