@@ -127,6 +127,21 @@ export class ReasoningBridge implements VoicePlugin {
        * unconfirmed endpoints cost extra LLM calls (Deepgram measures +50–70% at
        * eager thresholds 0.3–0.5). Drafts never consume a suspended-run pointer —
        * `runStore` resume stays confirmed-turn-only.
+       *
+       * **Only enable this with a confidence-gated eager endpointer (Deepgram Flux).**
+       * Promotion requires `draft.userText === eos.text` — exact equality. Flux
+       * guarantees the EndOfTurn transcript matches the preceding EagerEndOfTurn when
+       * no TurnResumed intervened, so drafts promote. `PipecatEOSPlugin` instead pushes
+       * `eos.interim` on EVERY non-empty STT interim, and each interim discards the prior
+       * draft and starts a new call, so the surviving draft is built on an interim
+       * transcript that rarely matches the final one.
+       *
+       * Measured live on smart-turn, one turn, university fixture:
+       *   ON  — started 13, discarded 13, promoted 0; ttfa 1724ms, llmTtft 1269ms
+       *   OFF — started  0, discarded  0, promoted 0; ttfa 1302ms, llmTtft 1025ms
+       *
+       * Thirteen wasted LLM calls, zero promotions, and latency got *worse*. The lever
+       * is Flux-specific; on a per-interim endpointer it is pure cost.
        */
       speculative?: boolean;
     } = {},
