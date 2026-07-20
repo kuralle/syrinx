@@ -84,7 +84,7 @@ export interface DelegateQueryContext<Env = unknown> {
 
 /**
  * Fired when the Reasoner produced the turn's final answer. Self-contained (carries the
- * query again) so a consumer can log/persist the grounded Q&A pair from this one hook.
+ * query again) so a consumer can log/persist the grounded Q&A pair or message its client.
  */
 export interface DelegateResultContext<Env = unknown> {
   readonly query: string;
@@ -95,6 +95,7 @@ export interface DelegateResultContext<Env = unknown> {
   readonly toolName?: string;
   readonly turnId: string;
   readonly sessionId: string;
+  /** The connection that initiated this delegate; use `send(...)` for an app message to that client. */
   readonly connection: VoiceConnection;
   /** The Worker env — bindings for logging/persistence (e.g. an R2 bucket). */
   readonly env: Env;
@@ -140,8 +141,9 @@ export interface WithVoiceOptions<Env> {
   readonly onDelegateQuery?: (ctx: DelegateQueryContext<Env>) => void | Promise<void>;
   /**
    * Delegate observability (G2): fired when the Reasoner produced the turn's final answer —
-   * the hook for logging/persisting the grounded Q&A pair (query + answer + durationMs +
-   * grounded). Throwing here never affects the call.
+   * the hook for logging/persisting the grounded Q&A pair or sending a post-result app message
+   * through `ctx.connection` (query + answer + durationMs + grounded). Throwing here never affects
+   * the call.
    */
   readonly onDelegateResult?: (ctx: DelegateResultContext<Env>) => void | Promise<void>;
   /**
@@ -169,8 +171,10 @@ export interface WithVoiceOptions<Env> {
   readonly outputSampleRateHz?: number;
   readonly resumeWindowMs?: number;
   /**
-   * Derive the Syrinx session id. Defaults to the `?sessionId=` query param, then
-   * the Agent instance `name` (each routed DO instance is one stable session).
+   * Derive the Syrinx session id. When supplied, this resolver is authoritative;
+   * otherwise the `?sessionId=` query param is used, then a per-connection random id.
+   * The Agent instance `name` is not used because concurrent connections to one DO
+   * must not silently share a session.
    */
   readonly sessionId?: (request: Request, agentName: string) => string;
 }
