@@ -594,6 +594,11 @@ describe("VoiceAgentSession", () => {
       audio: new Uint8Array(320),
       sampleRateHz: 16000,
     });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-1",
+      timestampMs: t0 + 1200,
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(events).toHaveLength(1);
@@ -612,6 +617,56 @@ describe("VoiceAgentSession", () => {
     });
 
     await closeSession(session);
+  });
+
+  it("still emits turn_latency when a barge-in interrupts before tts.end", async () => {
+    // Emission is deferred to tts.end while generation is active, so later tool passes
+    // are counted. That must not make interrupted turns vanish: barge-in correlates with
+    // slow turns, so dropping them would bias the metric toward the fast ones — the worst
+    // turns disappearing from exactly the number meant to surface them.
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 600_000;
+    const ctx = "barged-turn";
+    session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: ctx, timestampMs: t0 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: ctx,
+      timestampMs: t0 + 100,
+      text: "hello",
+      transcripts: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, { kind: "llm.delta", contextId: ctx, timestampMs: t0 + 300, text: "Hi." });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: ctx,
+      timestampMs: t0 + 700,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The user barges in — tts.end never arrives for this turn.
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: ctx,
+      timestampMs: t0 + 900,
+      source: "vad",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.["ttfaMs"]).toBe(700); // anchored on first audio, not on the interrupt
+    expect(events[0]?.["anchor"]).toBe("speech_end");
+
+    await session.close();
   });
 
   it("emits turn_latency when the realtime front rotates contextId mid-turn", async () => {
@@ -653,6 +708,56 @@ describe("VoiceAgentSession", () => {
     // Anchored on the speech-end recorded under the PREVIOUS context, not silently dropped.
     expect(events[0]?.["anchor"]).toBe("speech_end");
     expect(events[0]?.["ttfaMs"]).toBe(600);
+
+    await session.close();
+  });
+
+  it("does not carry prior-context text stages into a new native turn", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 600_000;
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "idle-prior",
+      timestampMs: t0 - 100,
+      text: "The previous answer.",
+    });
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "native-response",
+      timestampMs: t0,
+    });
+    session.bus.push(Route.Main, {
+      kind: "turn.change",
+      contextId: "native-response",
+      previousContextId: "idle-prior",
+      reason: "realtime_response_started",
+      timestampMs: t0 + 1,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "native-response",
+      timestampMs: t0 + 798,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      turnId: "native-response",
+      anchor: "speech_end",
+      ttfaMs: 798,
+      unattributedMs: 798,
+    });
+    expect(events[0]?.["llmTtftMs"]).toBeUndefined();
+    expect(events[0]?.["textAggregationMs"]).toBeUndefined();
+    expect(events[0]?.["ttsTtfbMs"]).toBeUndefined();
 
     await session.close();
   });
@@ -742,6 +847,11 @@ describe("VoiceAgentSession", () => {
       audio: new Uint8Array(320),
       sampleRateHz: 16000,
     });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "turn-2",
+      timestampMs: t0 + 450,
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(events).toHaveLength(1);
@@ -756,6 +866,93 @@ describe("VoiceAgentSession", () => {
     expect(events[0]!["eouDelayMs"]).toBeUndefined();
 
     await closeSession(session);
+  });
+
+  it("includes provider passes that finish after first audio", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => {
+      events.push(event);
+    });
+    await session.start();
+
+    const t0 = 700_000;
+    session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "tool-turn", timestampMs: t0 });
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "tool-turn",
+      timestampMs: t0 + 200,
+      text: "check the fee",
+      transcripts: [],
+    });
+    session.bus.push(Route.Main, {
+      kind: "metric.conversation",
+      contextId: "tool-turn",
+      timestampMs: t0 + 200,
+      name: "llm.call_started",
+      value: "1",
+    });
+    session.bus.push(Route.Main, {
+      kind: "metric.conversation",
+      contextId: "tool-turn",
+      timestampMs: t0 + 300,
+      name: "llm.pass_ttft_ms",
+      value: "100",
+    });
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "tool-turn",
+      timestampMs: t0 + 300,
+      text: "Let me check.",
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "tool-turn",
+      timestampMs: t0 + 400,
+      audio: new Uint8Array(320),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "metric.conversation",
+      contextId: "tool-turn",
+      timestampMs: t0 + 600,
+      name: "llm.call_started",
+      value: "1",
+    });
+    session.bus.push(Route.Main, {
+      kind: "metric.conversation",
+      contextId: "tool-turn",
+      timestampMs: t0 + 800,
+      name: "llm.pass_ttft_ms",
+      value: "200",
+    });
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "tool-turn",
+      timestampMs: t0 + 900,
+      text: "Let me check. The fee is ten dollars.",
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "tool-turn",
+      timestampMs: t0 + 950,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      turnId: "tool-turn",
+      ttfaMs: 400,
+      eouDelayMs: 200,
+      llmTtftMs: 100,
+      textAggregationMs: 0,
+      ttsTtfbMs: 100,
+      unattributedMs: 0,
+      llmCallCount: 2,
+      llmPassTtftMs: [100, 200],
+    });
+
+    await session.close();
   });
 
   it("does not emit turn_latency for audio without a voice or endpoint anchor", async () => {

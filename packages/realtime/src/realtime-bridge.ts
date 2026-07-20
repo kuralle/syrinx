@@ -348,6 +348,23 @@ export class RealtimeBridge implements VoicePlugin {
     this.inflight = controller;
     let answer = "";
     let grounded = false;
+    let passStartedMs = Date.now();
+    let passTtftRecorded = false;
+    const pushConversationMetric = (name: string, value: string, timestampMs: number): void => {
+      bus.push(Route.Main, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs,
+        name,
+        value,
+      });
+    };
+    const recordPassTtft = (timestampMs: number): void => {
+      if (passTtftRecorded) return;
+      passTtftRecorded = true;
+      pushConversationMetric("llm.pass_ttft_ms", String(timestampMs - passStartedMs), timestampMs);
+    };
+    pushConversationMetric("llm.call_started", "1", passStartedMs);
 
     // G2 observability: the query is on its way to the reasoner (Background route, R4).
     const queryStartedMs = Date.now();
@@ -371,10 +388,17 @@ export class RealtimeBridge implements VoicePlugin {
       })) {
         switch (part.type) {
           case "text-delta":
+            recordPassTtft(Date.now());
             answer += part.text;
+            break;
+          case "tool-call":
+            recordPassTtft(Date.now());
             break;
           case "tool-result":
             grounded = true;
+            passStartedMs = Date.now();
+            passTtftRecorded = false;
+            pushConversationMetric("llm.call_started", "1", passStartedMs);
             break;
           case "finish":
             if (!answer && part.text) answer = part.text;

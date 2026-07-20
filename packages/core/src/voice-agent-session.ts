@@ -214,14 +214,18 @@ export interface VoiceAgentSessionEvents {
    */
   tool_call_cue: (event: { tsMs: number; turnId: string; phase: "started" | "delayed" | "complete" | "failed"; toolId: string; toolName: string; afterMs?: number }) => void;
   /**
-   * Per-turn latency decomposition, emitted once at the turn's first TTS audio.
+   * Per-turn latency decomposition, timestamped at the turn's first TTS audio.
+   * When generation is still active at first audio, emission waits for `tts.end` so
+   * provider passes that follow a spoken tool preamble are included in the totals.
    * `ttfaMs` is anchored to the real end of user speech (VAD speech-end, falling
    * back to the endpoint decision) — `fillerUsed` flags turns where a latency filler spoke
    * first, and `backchannelUsed` flags turns where a wait-gap cue played before the answer.
    * Decomposition: eouDelayMs (speech end → endpoint) + llmTtftMs (endpoint →
    * first LLM delta) + textAggregationMs (first LLM delta → first TTS text) +
-   * ttsTtfbMs (first TTS text dispatched → first audio). `unattributedMs` is the
-   * explicit residual after subtracting only the stages present in this payload.
+   * ttsTtfbMs (first TTS text dispatched → first audio). A stage is omitted when the
+   * front does not produce that Syrinx packet for this turn: realtime fronts may emit
+   * provider audio directly, and provider-owned endpointing may complete after audio.
+   * `unattributedMs` is the explicit residual after subtracting only the stages present.
    */
   turn_latency: (event: {
     tsMs: number;
@@ -319,6 +323,7 @@ export class VoiceAgentSession {
   private readonly observabilityObserver: ObservabilityObserver;
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
+  private pendingTurnLatency = new Map<string, number>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
   private readonly pendingInteractionPlayoutTimers = new Set<string>();
@@ -546,6 +551,7 @@ export class VoiceAgentSession {
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.turnTimings.clear();
+    this.pendingTurnLatency.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
     this.ttsTextBuffers.clear();
@@ -961,6 +967,14 @@ export class VoiceAgentSession {
     return timing;
   }
 
+  /** Emit a deferred turn_latency if one is pending, then clear it. Safe to call twice. */
+  private flushPendingTurnLatency(contextId: string): void {
+    const firstAudioMs = this.pendingTurnLatency.get(contextId);
+    if (firstAudioMs === undefined) return;
+    this.pendingTurnLatency.delete(contextId);
+    this.emitTurnLatency(contextId, firstAudioMs);
+  }
+
   private emitTurnLatency(contextId: string, firstAudioMs: number): void {
     const timing = this.timingFor(contextId);
     this.turnTimings.delete(contextId);
@@ -968,7 +982,9 @@ export class VoiceAgentSession {
     if (anchorMs === undefined) return; // text-injected or fallback turn — not a voice TTFA
     const anchor = timing.speechEndedMs !== undefined ? "speech_end" : "eos";
     const eouDelayMs =
-      timing.speechEndedMs !== undefined && timing.eosMs !== undefined
+      timing.speechEndedMs !== undefined &&
+      timing.eosMs !== undefined &&
+      timing.eosMs <= firstAudioMs
         ? timing.eosMs - timing.speechEndedMs
         : undefined;
     const llmAnchorMs = timing.eosMs ?? timing.speechEndedMs;
@@ -1033,6 +1049,7 @@ export class VoiceAgentSession {
     // - interruptedGenerationContextIds: else turn N+1's LLM/TTS packets are dropped after a prior barge-in
     // - fallbackInjectedContexts: else only one error fallback can ever be spoken per call
     this.firstTtsAudioFired.delete(pkt.contextId);
+    this.pendingTurnLatency.delete(pkt.contextId);
     this.interruptedGenerationContextIds.delete(pkt.contextId);
     this.fallbackInjectedContexts.delete(pkt.contextId);
 
@@ -1371,7 +1388,11 @@ export class VoiceAgentSession {
         );
         this.turnUserStoppedAtMs.delete(pkt.contextId);
       }
-      this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+      if (this.generatingContextIds.has(pkt.contextId)) {
+        this.pendingTurnLatency.set(pkt.contextId, pkt.timestampMs);
+      } else {
+        this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+      }
     }
 
     this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
@@ -1418,6 +1439,11 @@ export class VoiceAgentSession {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
     this.generatingContextIds.delete(pkt.contextId);
+    const firstAudioMs = this.pendingTurnLatency.get(pkt.contextId);
+    if (firstAudioMs !== undefined) {
+      this.pendingTurnLatency.delete(pkt.contextId);
+      this.emitTurnLatency(pkt.contextId, firstAudioMs);
+    }
     const now = Date.now();
     this.ttsPlayout.scheduleRelease(pkt.contextId, now);
     const playoutEndMs = this.ttsPlayout.playoutEnd(pkt.contextId);
@@ -1468,6 +1494,12 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
+    // A barged turn still produced first audio, and its TTFA is a real measurement.
+    // Deferring emission to tts.end (so later tool passes are counted) must not make
+    // interrupted turns vanish from the metric: barge-in correlates with slow turns,
+    // so silently dropping them biases the sample toward the fast ones — the worst
+    // turns would disappear from exactly the number meant to detect them.
+    this.flushPendingTurnLatency(pkt.contextId);
     this.turnTimings.delete(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
@@ -1518,6 +1550,7 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(contextId);
     this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
     this.generatingContextIds.delete(contextId);
+    this.pendingTurnLatency.delete(contextId);
     this.latencyFiller.cancel(contextId);
     this.turnTimings.delete(contextId);
     this.firstLlmDeltaReceived.delete(contextId);

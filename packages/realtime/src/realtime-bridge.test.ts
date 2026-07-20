@@ -548,6 +548,48 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("emits per-pass conversation metrics for delegated tool loops", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "tool-call", toolId: "rag-1", toolName: "retrieve", args: { q: "fees" } };
+        yield { type: "tool-result", toolId: "rag-1", toolName: "retrieve", result: "ten dollars" };
+        yield { type: "text-delta", text: "The fee is ten dollars." };
+        yield { type: "finish", reason: "stop", text: "The fee is ten dollars." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const metrics: Array<{ name: string; value: string }> = [];
+    const bus = new PipelineBusImpl({
+      onPacket: (_route, packet) => {
+        if (packet.kind === "metric.conversation") {
+          const metric = packet as unknown as { name: string; value: string };
+          metrics.push({ name: metric.name, value: metric.value });
+        }
+      },
+    });
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_metrics_1",
+      toolName: "consult_knowledge",
+      args: { query: "What is the fee?" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(metrics.filter((metric) => metric.name === "llm.call_started")).toHaveLength(2);
+    expect(metrics.filter((metric) => metric.name === "llm.pass_ttft_ms")).toHaveLength(2);
+    expect(metrics.filter((metric) => metric.name === "llm.pass_ttft_ms").every((metric) => Number(metric.value) >= 0)).toBe(true);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("G2/WBS-1: delegate.result grounded=false when the reasoner used no tool", async () => {
     const adapter = new FakeRealtimeAdapter();
     const reasoner: Reasoner = {
