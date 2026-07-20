@@ -12,6 +12,7 @@ const sendRealtimeInput = vi.fn();
 const sendToolResponse = vi.fn();
 const sendClientContent = vi.fn();
 const closeSession = vi.fn();
+const GoogleGenAI = vi.fn();
 
 let onopen: (() => void) | null = null;
 let onmessage: ((msg: LiveServerMessage) => void) | null = null;
@@ -34,7 +35,7 @@ const liveConnect = vi.fn().mockImplementation(async ({ callbacks }: {
 });
 
 vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(() => ({
+  GoogleGenAI: GoogleGenAI.mockImplementation(() => ({
     live: { connect: liveConnect },
   })),
   Modality: { AUDIO: "AUDIO" },
@@ -45,6 +46,7 @@ afterEach(() => {
   sendToolResponse.mockClear();
   sendClientContent.mockClear();
   closeSession.mockClear();
+  GoogleGenAI.mockClear();
   liveConnect.mockClear();
   onopen = null;
   onmessage = null;
@@ -97,6 +99,11 @@ describe("fromGeminiLive", () => {
         },
       }],
     }]);
+    // Both directions default ON. Input in particular must stay on: RealtimeBridge turns
+    // `role: "user"` transcripts into stt.result packets, so defaulting it off would silently
+    // remove all user-side text on the Gemini front. #32 asked for configurable, not disabled.
+    expect(connectArg.config["inputAudioTranscription"]).toEqual({});
+    expect(connectArg.config["outputAudioTranscription"]).toEqual({});
 
     const pcm = new Uint8Array([0, 1, 2, 3]);
     adapter.sendAudio(pcm);
@@ -127,6 +134,47 @@ describe("fromGeminiLive", () => {
 
     adapter.cancelResponse(420);
     expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds the documented transcription, speech, and API-version setup options", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      transcription: {
+        input: true,
+        output: { languageCodes: ["en-US"] },
+      },
+      speechConfig: { voice: "Kore", languageCode: "en-US" },
+      apiVersion: "v1alpha",
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      apiKey: "test-key",
+      httpOptions: { apiVersion: "v1alpha" },
+    });
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config).toMatchObject({
+      inputAudioTranscription: {},
+      outputAudioTranscription: { languageCodes: ["en-US"] },
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+        languageCode: "en-US",
+      },
+    });
+  });
+
+  it("allows either transcription direction to be disabled", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      transcription: { input: false, output: false },
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["inputAudioTranscription"]).toBeUndefined();
+    expect(connectArg.config["outputAudioTranscription"]).toBeUndefined();
   });
 
   it("G4/WBS-4: native resume — always enables sessionResumption, passes a prior handle through, surfaces new handles", async () => {

@@ -10,11 +10,35 @@ const DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const OUTPUT_SAMPLE_RATE_HZ = 24_000;
 
+export interface GeminiLiveTranscriptionOptions {
+  /**
+   * Enable input transcription, or provide Gemini's AudioTranscriptionConfig. Enabled by default.
+   *
+   * Default stays ON because `RealtimeBridge` turns `role: "user"` transcripts into `stt.result`
+   * packets — defaulting this off would silently remove all user-side text on the Gemini front.
+   * Issue #32 asked for it to be *configurable*, not disabled.
+   */
+  readonly input?: boolean | Record<string, unknown>;
+  /** Enable output transcription, or provide Gemini's AudioTranscriptionConfig. Enabled by default. */
+  readonly output?: boolean | Record<string, unknown>;
+}
+
+export interface GeminiLiveSpeechConfig {
+  /** Prebuilt Gemini voice name, mapped to speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName. */
+  readonly voice?: string;
+  /** ISO language code for speech synthesis. */
+  readonly languageCode?: string;
+}
+
 export interface GeminiLiveOptions {
   readonly apiKey: string;
   readonly model?: string;
   readonly systemInstruction?: string;
   readonly tools?: readonly RealtimeToolDef[];
+  readonly transcription?: GeminiLiveTranscriptionOptions;
+  readonly speechConfig?: GeminiLiveSpeechConfig;
+  /** Gemini Developer API version, e.g. `v1alpha` for preview-only Live features. */
+  readonly apiVersion?: string;
   /**
    * G4 native resume: a `sessionResumption` handle from a prior session's
    * `resumption_handle` events. Gemini restores the conversation server-side —
@@ -61,16 +85,32 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       }],
     }));
 
+    const transcription = this.opts.transcription;
     const config: Record<string, unknown> = {
       responseModalities: [Modality.AUDIO],
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
       // G4: always on so the server issues resumption handles; a prior handle
       // resumes the conversation server-side (native resume — no replay).
       sessionResumption: this.opts.sessionResumptionHandle
         ? { handle: this.opts.sessionResumptionHandle }
         : {},
     };
+    const inputTranscription = transcription?.input ?? true;
+    const outputTranscription = transcription?.output ?? true;
+    if (inputTranscription !== false) {
+      config["inputAudioTranscription"] = inputTranscription === true ? {} : inputTranscription;
+    }
+    if (outputTranscription !== false) {
+      config["outputAudioTranscription"] = outputTranscription === true ? {} : outputTranscription;
+    }
+    const speechConfig = this.opts.speechConfig;
+    if (speechConfig && (speechConfig.voice !== undefined || speechConfig.languageCode !== undefined)) {
+      config["speechConfig"] = {
+        ...(speechConfig.voice === undefined
+          ? {}
+          : { voiceConfig: { prebuiltVoiceConfig: { voiceName: speechConfig.voice } } }),
+        ...(speechConfig.languageCode === undefined ? {} : { languageCode: speechConfig.languageCode }),
+      };
+    }
     if (this.opts.systemInstruction) {
       config["systemInstruction"] = this.opts.systemInstruction;
     }
@@ -83,7 +123,12 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       this.openRejecter = reject;
     });
 
-    const ai = new GoogleGenAI({ apiKey: this.opts.apiKey });
+    const ai = new GoogleGenAI({
+      apiKey: this.opts.apiKey,
+      ...(this.opts.apiVersion === undefined
+        ? {}
+        : { httpOptions: { apiVersion: this.opts.apiVersion } }),
+    });
 
     this.session = await ai.live.connect({
       model,
