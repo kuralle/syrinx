@@ -63,7 +63,8 @@
     "test": "vitest run",
     "smoke:half-cascade-sinhala": "tsx scripts/run-half-cascade-sinhala.ts",
     "smoke:half-cascade-multiturn": "tsx scripts/run-half-cascade-multiturn.ts",
-    "smoke:half-cascade-conversation": "tsx scripts/run-half-cascade-conversation.ts"
+    "smoke:half-cascade-conversation": "tsx scripts/run-half-cascade-conversation.ts",
+    "smoke:turn-latency": "tsx scripts/run-turn-latency-smoke.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",

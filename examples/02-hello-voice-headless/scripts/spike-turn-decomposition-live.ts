@@ -127,6 +127,7 @@ function wire(
   m: Marks,
   sink: TurnLatencyEvent[],
   spoken: { text: string; firstAtMs: number },
+  spec: { started: number; discarded: number; promoted: number },
 ): () => void {
   const onTurnLatency = (e: TurnLatencyEvent): void => {
     sink.push(e);
@@ -135,7 +136,19 @@ function wire(
 
   // SYRINX_SPIKE_TRACE=1 prints the ordered (kind, contextId) sequence. Guessing at why
   // turn_latency does not fire has already cost one wrong fix; this shows the actual identities.
+  // Speculative draft churn. smart-turn pushes eos.interim on EVERY non-empty interim
+  // (Flux gates on eager_eot_threshold), and each interim discards the prior draft and
+  // starts a new LLM call — so the repo's "zero wasted calls" OQ2 result, measured on
+  // Flux, may not hold here. These counters are what make that measurable at all.
   const traceOffs: Array<() => void> = [];
+  traceOffs.push(
+    session.bus.on("metric.conversation", (pkt) => {
+      const name = (pkt as unknown as { name: string }).name;
+      if (name === "speculative.draft_started") spec.started += 1;
+      else if (name === "speculative.draft_discarded") spec.discarded += 1;
+      else if (name === "speculative.draft_promoted") spec.promoted += 1;
+    }),
+  );
   if (process.env["SYRINX_SPIKE_TRACE"] === "1") {
     const t0 = Date.now();
     for (const kind of [
@@ -312,12 +325,17 @@ async function main(): Promise<void> {
       inputSampleRate: 16_000,
       profile: "interactive",
       ...(PROMPT_MODE === "preamble" ? { systemPrompt: PREAMBLE_PROMPT } : {}),
+      ...(process.env["SYRINX_SPIKE_SPECULATIVE"] === "1" ? { speculative: true } : {}),
+      ...(process.env["SYRINX_SPIKE_HEDGE_MS"]
+        ? { hedgeAfterMs: Number(process.env["SYRINX_SPIKE_HEDGE_MS"]) }
+        : {}),
     });
 
   const m = newMarks();
   const shipped: TurnLatencyEvent[] = [];
   const spoken = { text: "", firstAtMs: 0 };
-  const unwire = wire(session, m, shipped, spoken);
+  const spec = { started: 0, discarded: 0, promoted: 0 };
+  const unwire = wire(session, m, shipped, spoken, spec);
   const contextId = "spike-decomp-1";
 
   await session.start();
@@ -417,6 +435,9 @@ async function main(): Promise<void> {
           `  llmCallCount      ${e.llmCallCount ?? "n/a"}  passTtft=[${(e.llmPassTtftMs ?? []).join(", ")}]`,
         ])
       : ["  (turn_latency never fired)"]),
+    "",
+    "speculative draft churn (wasted = discarded; each discard aborted an LLM call):",
+    `  started=${spec.started}  discarded=${spec.discarded}  promoted=${spec.promoted}`,
     "",
     "raw marks (ms since speechEnd):",
     `  sttFinal      ${m.sttFinalMs > 0 ? m.sttFinalMs - m.speechEndMs : "n/a"}`,

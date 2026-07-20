@@ -4,7 +4,13 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@kuralle-syrinx/core";
+import {
+  HedgedReasoner,
+  VoiceAgentSession,
+  type PluginConfig,
+  type Reasoner,
+  type VoicePlugin,
+} from "@kuralle-syrinx/core";
 import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
 import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn";
@@ -112,6 +118,49 @@ export interface UniversitySupportSessionOptions {
   readonly systemPrompt?: string;
   /** Override the reasoner's step cap. Default 3. */
   readonly maxSteps?: number;
+  /**
+   * Start a speculative draft on each interim endpoint (Lever D). Off by default.
+   *
+   * Cost is endpointer-dependent and unmeasured on this path: smart-turn pushes
+   * `eos.interim` on EVERY non-empty interim, while Deepgram Flux gates on
+   * `eager_eot_threshold` — and the repo's "zero wasted calls" result was measured on
+   * Flux. Each interim discards the prior draft and starts a new LLM call, so the
+   * `speculative.draft_*` counters are the thing to watch when enabling this.
+   */
+  readonly speculative?: boolean;
+  /**
+   * Wrap the reasoner in `HedgedReasoner` — race a threshold-delayed backup and commit
+   * on whichever produces the first ReasoningPart. Built and live-gated for the
+   * reasoner-latency RFC (tail -59% at n=9) but never composed on this path. Off by default.
+   */
+  readonly hedgeAfterMs?: number;
+}
+
+function buildReasoner(
+  options: UniversitySupportSessionOptions,
+  interactive: boolean,
+): Reasoner {
+  const make = (): Reasoner =>
+    fromStreamText({
+      model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(
+        process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
+      ),
+      system: options.systemPrompt ?? UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
+      tools: studentRelationsTools,
+      temperature: 0.2,
+      maxOutputTokens: interactive ? 1024 : 1400,
+      maxRetries: 0,
+      timeout: interactive ? 30_000 : 60_000,
+      stopWhen: stepCountIs(options.maxSteps ?? 3),
+    });
+
+  if (options.hedgeAfterMs === undefined) return make();
+  // Two independent backends — the hedge races them and aborts the loser.
+  return new HedgedReasoner({
+    primary: make(),
+    backup: make(),
+    hedgeAfterMs: options.hedgeAfterMs,
+  });
 }
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
@@ -134,16 +183,9 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     stt: new DeepgramSTTPlugin(),
     vad: new SileroVADPlugin(),
     eos: new PipecatEOSPlugin(),
-    bridge: new ReasoningBridge(fromStreamText({
-      model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
-      system: options.systemPrompt ?? UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
-      tools: studentRelationsTools,
-      temperature: 0.2,
-      maxOutputTokens: interactive ? 1024 : 1400,
-      maxRetries: 0,
-      timeout: interactive ? 30_000 : 60_000,
-      stopWhen: stepCountIs(options.maxSteps ?? 3),
-    })),
+    bridge: new ReasoningBridge(buildReasoner(options, interactive), {
+      speculative: options.speculative === true,
+    }),
     tts: createTtsPlugin(ttsProvider),
   };
   for (const [name, plugin] of Object.entries(plugins)) {
