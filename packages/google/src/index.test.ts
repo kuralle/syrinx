@@ -9,6 +9,7 @@ import {
   type SttInterimPacket,
   type SttResultPacket,
   type EndOfSpeechPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 import { GoogleSTTPlugin } from "./index.js";
 
@@ -175,6 +176,160 @@ describe("GoogleSTTPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(configs[0]?.streamingConfig?.config?.explicitDecodingConfig?.sampleRateHertz).toBe(8000);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage stt from tracked audio bytes on final", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            alternatives: [{ transcript: "hello world", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    // 640 bytes pcm_s16le @ 16kHz = 640 / 2 / 16000 = 0.02 s
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "latest_long",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("prefers resultEndOffset for audioSeconds when present", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            resultEndOffset: "1.250s",
+            alternatives: [{ transcript: "hello world", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      model: "latest_long",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-offset",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-offset",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 1.25,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded even when emit_eos_on_final is false", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            alternatives: [{ transcript: "account number please", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "latest_long",
+      emit_eos_on_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-smartturn",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-smartturn",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 0.02,
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();

@@ -44,17 +44,25 @@ function catalogKey(provider: string | undefined, model: string | undefined): st
  */
 export const DEFAULT_PRICE_CATALOG: PriceCatalog = {
   source:
-    "voice-prices@1 | deepgram.com/pricing PAYG Nova-3 streaming monolingual $0.0077/min → $0.000128333/s; " +
+    "voice-prices@2 | deepgram.com/pricing PAYG Nova-3 streaming monolingual $0.0077/min → $0.000128333/s; " +
     "deepgram.com/pricing Aura-2 TTS $0.030/1k chars → $30/1M; " +
     "cartesia.ai/pricing + docs.cartesia.ai/pricing ~1 credit/char, PAYG ~$50/1M chars (cloudtalk.io cartesia-pricing 2026); " +
     "openai tts-1 $15/1M chars (openai.com api pricing); gpt-4o-mini-tts text $0.60/1M (community/azure listed text input rate); " +
-    "openai GPT-4.1-mini $0.40/$1.60 per 1M in/out (developers.openai.com/api/docs/pricing; Azure GPT-4.1-mini-2025-04-14 Global)",
-  version: "1",
+    "openai GPT-4.1-mini $0.40/$1.60 per 1M in/out (developers.openai.com/api/docs/pricing; Azure GPT-4.1-mini-2025-04-14 Global); " +
+    "cloud.google.com/speech-to-text/pricing V2 standard recognition $0.016/min → $0.000266667/s (latest_long); " +
+    "ai.google.dev/pricing Gemini 2.5 Flash TTS preview text $0.50/1M chars (Gemini API TTS text input rate, 2026); " +
+    "grok/stt + grok/* TTS + epsilon/epsilon-tts intentionally ABSENT (no public list price → costOf unpriced, never silent $0)",
+  version: "2",
   stt: {
     "deepgram/nova-3": { usdPerAudioSecond: 0.0077 / 60 },
     "deepgram/nova-2": { usdPerAudioSecond: 0.0077 / 60 },
     "deepgram/flux-general-en": { usdPerAudioSecond: 0.0077 / 60 },
+    // Google Cloud Speech-to-Text V2 standard streaming recognition list rate.
+    "google/latest_long": { usdPerAudioSecond: 0.016 / 60 },
+    "google/latest_short": { usdPerAudioSecond: 0.016 / 60 },
+    "google/chirp_2": { usdPerAudioSecond: 0.016 / 60 },
     "local/whisper": { usdPerAudioSecond: 0 },
+    // grok/stt: no public list price — omit so costOf → unpriced
   },
   llm: {
     "openai/gpt-4.1-mini": {
@@ -72,7 +80,12 @@ export const DEFAULT_PRICE_CATALOG: PriceCatalog = {
     "openai/gpt-4o-mini-tts": { usdPer1MCharacters: 0.6 },
     "openai/tts-1": { usdPer1MCharacters: 15 },
     "deepgram/aura-2-thalia-en": { usdPer1MCharacters: 30 },
+    // Gemini TTS preview models — Gemini API TTS text input list rate.
+    "gemini/gemini-3.1-flash-tts-preview": { usdPer1MCharacters: 0.5 },
+    "gemini/gemini-2.5-flash-preview-tts": { usdPer1MCharacters: 0.5 },
+    "gemini/gemini-2.5-pro-preview-tts": { usdPer1MCharacters: 0.5 },
     "local/tts": { usdPer1MCharacters: 0 },
+    // grok/* voice keys + epsilon/epsilon-tts: no public list — omit → unpriced
   },
 };
 

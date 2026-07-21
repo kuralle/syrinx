@@ -8,6 +8,7 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TtsErrorPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import {
@@ -261,6 +262,111 @@ describe("EpsilonTTSPlugin", () => {
 
     expect(audio).toEqual([]);
     expect(ends).toEqual([]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage tts and characters equal to synthesized text length", async () => {
+    const text = "Hello there.";
+    const baseUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "speak") {
+          const requestId = msg["request_id"] as string;
+          socket.send(encodeEpsilonBinaryFrame(requestId, new Uint8Array([1, 2, 3, 4])), { binary: true });
+          socket.send(JSON.stringify({ type: "done", request_id: requestId }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new EpsilonTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-epsilon-key",
+      base_url: baseUrl,
+      voice: "sinhala",
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      text,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.done",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      text,
+    });
+    await waitForCondition(() => ends.length >= 1 && usage.length >= 1);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "tts",
+        provider: "epsilon",
+        model: "epsilon-tts",
+        characters: text.length,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("does not emit usage.recorded for a cancelled Epsilon TTS turn", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    const baseUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        received.push(msg);
+        if (msg["type"] === "cancel") {
+          const requestId = msg["request_id"] as string;
+          socket.send(JSON.stringify({ type: "done", request_id: requestId }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new EpsilonTTSPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-epsilon-key",
+      base_url: baseUrl,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-cancel",
+      timestampMs: Date.now(),
+      text: "This will be cancelled.",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    bus.push(Route.Critical, {
+      kind: "interrupt.tts",
+      contextId: "turn-cancel",
+      timestampMs: Date.now(),
+    });
+    await waitForCondition(() => received.some((m) => m["type"] === "cancel"));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([]);
 
     await plugin.close();
     bus.stop();

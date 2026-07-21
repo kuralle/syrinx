@@ -59,6 +59,73 @@ describe("costOf", () => {
     expect(costOf(packet, DEFAULT_PRICE_CATALOG)).toEqual({ usd: null, unpriced: true });
   });
 
+  it("prices new catalog providers (google STT, gemini TTS)", () => {
+    const stt = costOf(
+      usage({
+        contextId: "t1",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 60,
+      }),
+      DEFAULT_PRICE_CATALOG,
+    );
+    expect(stt.unpriced).toBeUndefined();
+    expect(stt.usd).toBeCloseTo(0.016, 10);
+
+    const tts = costOf(
+      usage({
+        contextId: "t1",
+        stage: "tts",
+        provider: "gemini",
+        model: "gemini-2.5-flash-preview-tts",
+        characters: 1_000_000,
+      }),
+      DEFAULT_PRICE_CATALOG,
+    );
+    expect(tts.unpriced).toBeUndefined();
+    expect(tts.usd).toBe(0.5);
+  });
+
+  it("returns unpriced for grok/epsilon providers with no public list price", () => {
+    expect(
+      costOf(
+        usage({
+          contextId: "t1",
+          stage: "stt",
+          provider: "grok",
+          model: "stt",
+          audioSeconds: 10,
+        }),
+        DEFAULT_PRICE_CATALOG,
+      ),
+    ).toEqual({ usd: null, unpriced: true });
+    expect(
+      costOf(
+        usage({
+          contextId: "t1",
+          stage: "tts",
+          provider: "grok",
+          model: "eve",
+          characters: 1000,
+        }),
+        DEFAULT_PRICE_CATALOG,
+      ),
+    ).toEqual({ usd: null, unpriced: true });
+    expect(
+      costOf(
+        usage({
+          contextId: "t1",
+          stage: "tts",
+          provider: "epsilon",
+          model: "epsilon-tts",
+          characters: 1000,
+        }),
+        DEFAULT_PRICE_CATALOG,
+      ),
+    ).toEqual({ usd: null, unpriced: true });
+  });
+
   it("returns unpriced when provider or model is missing", () => {
     const packet = usage({
       contextId: "t1",

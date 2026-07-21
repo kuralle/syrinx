@@ -8,6 +8,7 @@ import {
   type SttErrorPacket,
   type SttInterimPacket,
   type SttResultPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { GrokSTTPlugin } from "./stt.js";
@@ -205,6 +206,124 @@ describe("GrokSTTPlugin", () => {
     await waitFor(controlMessages);
 
     expect(JSON.parse(controlMessages[0]!)).toEqual({ type: "audio.done" });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage stt and audioSeconds from provider duration at final", async () => {
+    let binarySeen = 0;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.send(JSON.stringify({ type: "transcript.created" }));
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        binarySeen += 1;
+        socket.send(JSON.stringify({
+          type: "transcript.partial",
+          text: "hello world",
+          is_final: true,
+          speech_final: true,
+          duration: 1.2,
+          end_of_turn_confidence: 0.95,
+        }));
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new GrokSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    // transcript.created must land before binary audio is accepted.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    for (let i = 0; i < 100 && (binarySeen < 1 || usage.length < 1); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "stt",
+        provider: "grok",
+        model: "stt",
+        audioSeconds: 1.2,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded under smart-turn endpointing (emit_eos_on_final=false)", async () => {
+    let binarySeen = 0;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.send(JSON.stringify({ type: "transcript.created" }));
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        binarySeen += 1;
+        socket.send(JSON.stringify({
+          type: "transcript.partial",
+          text: "account number please",
+          is_final: true,
+          speech_final: false,
+          duration: 0.8,
+          end_of_turn_confidence: 0.9,
+        }));
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new GrokSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-smartturn",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(320),
+    });
+    for (let i = 0; i < 100 && (binarySeen < 1 || usage.length < 1); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-smartturn",
+        stage: "stt",
+        provider: "grok",
+        model: "stt",
+        audioSeconds: 0.8,
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();

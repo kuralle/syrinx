@@ -8,6 +8,7 @@
 // how an inbound JSON/binary frame decodes to a domain event, keyed by `request_id`.
 
 import {
+  Route,
   assertAudioFormat,
   optionalStringConfig,
   readProviderRetryConfig,
@@ -33,6 +34,7 @@ import { parseEpsilonBinaryFrame } from "./binary-frame.js";
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 120_000;
 const EPSILON_SAMPLE_RATE_HZ = 24_000;
+const EPSILON_MODEL = "epsilon-tts";
 const EPSILON_VOICES = ["sinhala", "english", "tamil"] as const;
 
 export type EpsilonVoice = (typeof EPSILON_VOICES)[number];
@@ -42,6 +44,7 @@ export type { ParsedEpsilonBinaryFrame } from "./binary-frame.js";
 
 class EpsilonWireProtocol implements WireProtocol {
   private readonly seq = new Map<string, number>();
+  private readonly charactersByKey = new Map<AttributionKey, number>();
 
   constructor(private readonly voice: EpsilonVoice) {}
 
@@ -52,6 +55,7 @@ class EpsilonWireProtocol implements WireProtocol {
   }
 
   encodeText(key: AttributionKey, text: string): SocketData[] {
+    this.charactersByKey.set(key, (this.charactersByKey.get(key) ?? 0) + text.length);
     return [JSON.stringify({ type: "speak", request_id: key, input: text, voice: this.voice })];
   }
 
@@ -61,6 +65,7 @@ class EpsilonWireProtocol implements WireProtocol {
   }
 
   encodeCancel(key: AttributionKey): SocketData[] {
+    this.charactersByKey.delete(key);
     return [JSON.stringify({ type: "cancel", request_id: key })];
   }
 
@@ -79,12 +84,37 @@ class EpsilonWireProtocol implements WireProtocol {
     const requestId = typeof msg["request_id"] === "string" ? msg["request_id"] : "";
     const key = requestId ? attributionKey(requestId) : null;
     switch (typeof msg["type"] === "string" ? msg["type"] : "") {
-      case "done":
+      case "done": {
         // One request finished; the context ends when all its requests are done (refcount).
-        return key ? [{ type: "utterance_end", key }] : [];
+        if (!key) return [];
+        const characters = this.charactersByKey.get(key) ?? 0;
+        this.charactersByKey.delete(key);
+        const events: WireEvent[] = [];
+        // Sideband before utterance_end so the engine still has the key→context mapping.
+        if (characters > 0) {
+          events.push({
+            type: "sideband",
+            key,
+            route: Route.Background,
+            build: (ctxId, timestampMs) => ({
+              kind: "usage.recorded",
+              contextId: ctxId,
+              timestampMs,
+              stage: "tts" as const,
+              provider: "epsilon",
+              model: EPSILON_MODEL,
+              characters,
+            }),
+          });
+        }
+        events.push({ type: "utterance_end", key });
+        return events;
+      }
       case "cancelled":
+        if (key) this.charactersByKey.delete(key);
         return key ? [{ type: "cancelled", key }] : [];
       case "error":
+        if (key) this.charactersByKey.delete(key);
         return [{ type: "error", key, error: epsilonProviderError(msg) }];
       default:
         return [];
@@ -107,7 +137,7 @@ export class EpsilonTTSPlugin implements VoicePlugin {
 
     this.session = await startStreamingTtsSession(bus, {
       protocol: new EpsilonWireProtocol(voice),
-      provider: { name: "epsilon", model: "epsilon-tts", region: "global" },
+      provider: { name: "epsilon", model: EPSILON_MODEL, region: "global" },
       format: audioFormat,
       sampleRateHz: sampleRate,
       url: () => buildEpsilonWsUrl(baseUrl, apiKey),

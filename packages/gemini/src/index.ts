@@ -66,6 +66,8 @@ export class GeminiTTSPlugin implements VoicePlugin {
   // only turn N+1 and turn N's stale audio could still stream after the interrupt.
   private readonly abortControllers = new Map<string, AbortController>();
   private textByContextId = new Map<string, string>();
+  /** Synthesized character counts per contextId — billed on successful tts.end. */
+  private charactersByContextId = new Map<string, number>();
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
   private readonly audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: SAMPLE_RATE, channels: 1 };
@@ -95,15 +97,18 @@ export class GeminiTTSPlugin implements VoicePlugin {
         this.textByContextId.delete(donePkt.contextId);
         const text = donePkt.text || buffered;
         if (!text.trim()) {
+          this.charactersByContextId.delete(donePkt.contextId);
           this.emitEnd(donePkt.contextId);
           return;
         }
+        this.charactersByContextId.set(donePkt.contextId, text.length);
         await this.synthesize(text, donePkt.contextId);
       }),
 
       // Listen for TTS interrupts — abort only the interrupted turn's synthesis.
       bus.on("interrupt.tts", (pkt) => {
         const ctxId = (pkt as { contextId: string }).contextId;
+        this.charactersByContextId.delete(ctxId);
         const controller = this.abortControllers.get(ctxId);
         if (controller) {
           controller.abort();
@@ -134,23 +139,25 @@ export class GeminiTTSPlugin implements VoicePlugin {
     for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
       try {
         const audioChunks = await this.synthesizeOnce(text, contextId, signal);
-        if (!signal.aborted && audioChunks > 0) {
-          this.bus?.push(Route.Main, {
-            kind: "tts.end",
-            contextId,
-            timestampMs: Date.now(),
-          });
+        if (signal.aborted) {
+          this.charactersByContextId.delete(contextId);
+          return;
         }
-        if (!signal.aborted && audioChunks === 0) {
-          throw new Error("Gemini TTS returned no audio chunks");
+        if (audioChunks > 0) {
+          this.emitEnd(contextId);
+          return;
         }
-        return;
+        throw new Error("Gemini TTS returned no audio chunks");
       } catch (err) {
-        if (signal.aborted) return;
+        if (signal.aborted) {
+          this.charactersByContextId.delete(contextId);
+          return;
+        }
 
         const category = categorizeTtsError(err);
         const recoverable = isRecoverable(category);
         if (!recoverable || attempt >= this.retryConfig.maxAttempts) {
+          this.charactersByContextId.delete(contextId);
           this.bus?.push(Route.Critical, {
             kind: "tts.error",
             contextId,
@@ -176,6 +183,19 @@ export class GeminiTTSPlugin implements VoicePlugin {
   }
 
   private emitEnd(contextId: string): void {
+    const characters = this.charactersByContextId.get(contextId) ?? 0;
+    this.charactersByContextId.delete(contextId);
+    if (characters > 0) {
+      this.bus?.push(Route.Background, {
+        kind: "usage.recorded",
+        contextId,
+        timestampMs: Date.now(),
+        stage: "tts",
+        provider: "gemini",
+        model: this.model,
+        characters,
+      });
+    }
     this.bus?.push(Route.Main, {
       kind: "tts.end",
       contextId,
@@ -239,12 +259,14 @@ export class GeminiTTSPlugin implements VoicePlugin {
   flush(): void {
     for (const controller of this.abortControllers.values()) controller.abort();
     this.abortControllers.clear();
+    this.charactersByContextId.clear();
   }
 
   async close(): Promise<void> {
     this.flush();
     for (const dispose of this.disposers.splice(0)) dispose();
     this.textByContextId.clear();
+    this.charactersByContextId.clear();
     this.bus = null;
   }
 }

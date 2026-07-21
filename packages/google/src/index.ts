@@ -73,6 +73,11 @@ export class GoogleSTTPlugin implements VoicePlugin {
   private confidenceThreshold = 0;
   private emitEosOnFinal = true;
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
+  /** Audio bytes + billed markers per context for usage.recorded audioSeconds. */
+  private audioStatsByContextId = new Map<
+    string,
+    { bytes: number; billedBytes: number; billedOffsetSeconds: number }
+  >();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -114,21 +119,27 @@ export class GoogleSTTPlugin implements VoicePlugin {
       bus.on("stt.audio", async (pkt: unknown) => {
         const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
         this.currentContextId = audioPkt.contextId ?? this.currentContextId;
-        await this.sendAudio(audioPkt.audio);
+        await this.sendAudio(audioPkt.audio, this.currentContextId);
       }),
       bus.on("turn.change", (pkt: unknown) => {
-        this.currentContextId = (pkt as { contextId: string }).contextId;
+        const next = (pkt as { contextId: string }).contextId;
+        if (this.currentContextId && this.currentContextId !== next) {
+          this.audioStatsByContextId.delete(this.currentContextId);
+        }
+        this.currentContextId = next;
       }),
     );
   }
 
-  async sendAudio(audio: Uint8Array): Promise<void> {
+  async sendAudio(audio: Uint8Array, contextId = this.currentContextId): Promise<void> {
     if (audio.byteLength === 0) return;
     try {
       assertAudioPayload(this.audioFormat, audio);
       if (!this.conn) throw new Error("Google STT is not connected");
       await this.conn.ensureReady();
       this.conn.send(audio);
+      const stats = this.audioStats(contextId);
+      stats.bytes += audio.byteLength;
     } catch (err) {
       this.emitError(err instanceof Error ? err : new Error(String(err)));
     }
@@ -139,6 +150,7 @@ export class GoogleSTTPlugin implements VoicePlugin {
     await this.conn?.close();
     this.conn = null;
     this.bus = null;
+    this.audioStatsByContextId.clear();
   }
 
   private sendConfig(): void {
@@ -187,19 +199,22 @@ export class GoogleSTTPlugin implements VoicePlugin {
         }
 
         if (result.isFinal === true) {
+          const contextId = this.currentContextId;
           this.bus?.push(Route.Main, {
             kind: "stt.result",
-            contextId: this.currentContextId,
+            contextId,
             timestampMs: Date.now(),
             text,
             confidence,
             language: this.languageCode,
             provider: { name: "google", model: this.model, region: "global" },
           });
+          // Final-result funnel — fires under smart-turn endpointing too.
+          this.emitSttUsage(contextId, result);
           if (this.emitEosOnFinal) {
             this.bus?.push(Route.Main, {
               kind: "eos.turn_complete",
-              contextId: this.currentContextId,
+              contextId,
               timestampMs: Date.now(),
               text,
               transcripts: [],
@@ -217,6 +232,60 @@ export class GoogleSTTPlugin implements VoicePlugin {
     } catch {
       // Provider keepalives or malformed transient messages are ignored.
     }
+  }
+
+  private audioStats(contextId: string): {
+    bytes: number;
+    billedBytes: number;
+    billedOffsetSeconds: number;
+  } {
+    let stats = this.audioStatsByContextId.get(contextId);
+    if (!stats) {
+      stats = { bytes: 0, billedBytes: 0, billedOffsetSeconds: 0 };
+      this.audioStatsByContextId.set(contextId, stats);
+    }
+    return stats;
+  }
+
+  /**
+   * Prefer provider result timing (`resultEndOffset` / `resultEndTime`) when present;
+   * otherwise bill tracked PCM16 mono bytes as audio-seconds (bytes/2/sampleRate).
+   * Multiple is_final segments each bill their delta so totals sum to the turn.
+   */
+  private emitSttUsage(contextId: string, result: Record<string, unknown>): void {
+    const stats = this.audioStats(contextId);
+    const offsetSeconds = parseDurationSeconds(result["resultEndOffset"] ?? result["resultEndTime"]);
+    if (offsetSeconds !== null && offsetSeconds > 0) {
+      const audioSeconds = offsetSeconds - stats.billedOffsetSeconds;
+      if (audioSeconds <= 0) return;
+      stats.billedOffsetSeconds = offsetSeconds;
+      // Keep byte marker in sync so a later final without offset does not double-bill.
+      stats.billedBytes = stats.bytes;
+      this.bus?.push(Route.Background, {
+        kind: "usage.recorded",
+        contextId,
+        timestampMs: Date.now(),
+        stage: "stt",
+        provider: "google",
+        model: this.model,
+        audioSeconds,
+      });
+      return;
+    }
+
+    const newBytes = stats.bytes - stats.billedBytes;
+    if (newBytes <= 0) return;
+    stats.billedBytes = stats.bytes;
+    const audioSeconds = newBytes / 2 / this.sampleRate;
+    this.bus?.push(Route.Background, {
+      kind: "usage.recorded",
+      contextId,
+      timestampMs: Date.now(),
+      stage: "stt",
+      provider: "google",
+      model: this.model,
+      audioSeconds,
+    });
   }
 
   private emitError(error: Error, category = categorizeSttError(error)): void {
@@ -241,6 +310,39 @@ export class GoogleSTTPlugin implements VoicePlugin {
       value,
     });
   }
+}
+
+/** Parse Google protobuf Duration JSON (`"1.250s"` or `{seconds,nanos}`) → seconds, or null. */
+function parseDurationSeconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.endsWith("s")) {
+      const n = Number(trimmed.slice(0, -1));
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    }
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as { seconds?: unknown; nanos?: unknown };
+    const seconds =
+      typeof obj.seconds === "number"
+        ? obj.seconds
+        : typeof obj.seconds === "string"
+          ? Number(obj.seconds)
+          : 0;
+    const nanos =
+      typeof obj.nanos === "number"
+        ? obj.nanos
+        : typeof obj.nanos === "string"
+          ? Number(obj.nanos)
+          : 0;
+    if (!Number.isFinite(seconds) || !Number.isFinite(nanos)) return null;
+    const total = seconds + nanos / 1e9;
+    return total >= 0 ? total : null;
+  }
+  return null;
 }
 
 async function defaultSocketFactory(): Promise<SocketFactory> {

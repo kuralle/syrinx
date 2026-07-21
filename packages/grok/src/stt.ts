@@ -48,6 +48,8 @@ export class GrokSTTPlugin implements VoicePlugin {
   private currentContextId = "";
   private transcriptReady = false;
   private disposers: Array<() => void> = [];
+  /** Cumulative billed audio-seconds per context (provider duration is cumulative from stream start). */
+  private billedDurationByContextId = new Map<string, number>();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -107,9 +109,14 @@ export class GrokSTTPlugin implements VoicePlugin {
         void this.handleAudioPacket(pkt as { audio: Uint8Array; contextId?: string });
       }),
       bus.on("turn.change", (pkt: unknown) => {
-        this.currentContextId = (pkt as { contextId: string }).contextId;
+        const next = (pkt as { contextId: string }).contextId;
+        if (this.currentContextId && this.currentContextId !== next) {
+          this.billedDurationByContextId.delete(this.currentContextId);
+        }
+        this.currentContextId = next;
       }),
       bus.on("interrupt.stt", () => {
+        if (this.currentContextId) this.billedDurationByContextId.delete(this.currentContextId);
         this.currentContextId = "";
       }),
       bus.on("stt.finalize", () => {
@@ -199,19 +206,22 @@ export class GrokSTTPlugin implements VoicePlugin {
     };
 
     if (isFinal) {
+      const contextId = this.currentContextId;
       this.bus?.push(Route.Main, {
         kind: "stt.result",
-        contextId: this.currentContextId,
+        contextId,
         timestampMs: Date.now(),
         text,
         confidence,
         language: this.language,
         provider,
       });
+      // Bill at the final-result funnel so usage fires under smart-turn endpointing too.
+      this.emitSttUsage(contextId, typeof msg["duration"] === "number" ? msg["duration"] : undefined);
       if (this.emitEosOnFinal && speechFinal) {
         this.bus?.push(Route.Main, {
           kind: "eos.turn_complete",
-          contextId: this.currentContextId,
+          contextId,
           timestampMs: Date.now(),
           text,
           transcripts: [],
@@ -225,6 +235,23 @@ export class GrokSTTPlugin implements VoicePlugin {
       contextId: this.currentContextId,
       timestampMs: Date.now(),
       text,
+    });
+  }
+
+  private emitSttUsage(contextId: string, duration: number | undefined): void {
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return;
+    const billed = this.billedDurationByContextId.get(contextId) ?? 0;
+    const audioSeconds = duration - billed;
+    if (audioSeconds <= 0) return;
+    this.billedDurationByContextId.set(contextId, duration);
+    this.bus?.push(Route.Background, {
+      kind: "usage.recorded",
+      contextId,
+      timestampMs: Date.now(),
+      stage: "stt",
+      provider: "grok",
+      model: "stt",
+      audioSeconds,
     });
   }
 
@@ -255,6 +282,7 @@ export class GrokSTTPlugin implements VoicePlugin {
     this.conn = null;
     this.bus = null;
     this.transcriptReady = false;
+    this.billedDurationByContextId.clear();
   }
 }
 
