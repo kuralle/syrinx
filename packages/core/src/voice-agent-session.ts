@@ -1877,6 +1877,18 @@ export class VoiceAgentSession {
   }
 
   private handleInjectMessage(pkt: InjectMessagePacket): void {
+    if (pkt.mode === "context") {
+      const bridge = this.plugins.get("bridge") as (VoicePlugin & {
+        injectContext?: (text: string) => void;
+      }) | undefined;
+      if (bridge?.injectContext) {
+        bridge.injectContext(pkt.text);
+      } else {
+        console.warn("VoiceAgentSession: context injection requested but the bridge does not support injectContext");
+      }
+      return;
+    }
+
     // Inject as synthetic LLM output — goes through normal TTS path
     this.bus.push(Route.Main, make.llmDelta(pkt.contextId, Date.now(), pkt.text));
     this.bus.push(Route.Main, make.llmDone(pkt.contextId, Date.now(), pkt.text));

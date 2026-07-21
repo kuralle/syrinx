@@ -70,6 +70,20 @@ function inject(msg: Partial<LiveServerMessage> & Record<string, unknown>): void
 }
 
 describe("fromGeminiLive", () => {
+  it("frames silent context as a user-role update because Gemini drops system history", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key" });
+
+    await adapter.open(new AbortController().signal);
+    adapter.injectContext!("Use the verified deadline.");
+
+    expect(sendClientContent).toHaveBeenCalledWith({
+      turns: [{ role: "user", parts: [{ text: "[Context-only instruction]\nUse the verified deadline." }] }],
+      turnComplete: false,
+    });
+
+    await adapter.close();
+  });
+
   it("emits client calls for open, audio, and tool result", async () => {
     const adapter = fromGeminiLive({
       apiKey: "test-key",

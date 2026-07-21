@@ -140,6 +140,33 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 }
 
 describe("fromOpenAIRealtime", () => {
+  it("injects silent context as an OpenAI system conversation item", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    adapter.injectContext!("Use the verified deadline.");
+
+    expect(JSON.parse(mock.sent[1]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: "Use the verified deadline." }],
+      },
+    });
+
+    await adapter.close();
+  });
+
   it("emits exact client events for open, audio, cancel, and tool result", async () => {
     const mock = createMockSocketHarness();
     const adapter = fromOpenAIRealtime({

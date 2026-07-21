@@ -67,6 +67,22 @@ class CapturingPlugin implements VoicePlugin {
   }
 }
 
+class ContextCapturingBridgePlugin implements VoicePlugin {
+  readonly injectedContext: string[] = [];
+
+  async initialize(): Promise<void> {
+    // no-op
+  }
+
+  injectContext(text: string): void {
+    this.injectedContext.push(text);
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
+}
+
 class OrderedClosePlugin implements VoicePlugin {
   constructor(
     private readonly name: string,
@@ -1751,6 +1767,68 @@ describe("VoiceAgentSession", () => {
       vi.useRealTimers();
       await closeSession(session);
     }
+  });
+
+  it("routes context injections to the bridge without creating spoken LLM output", async () => {
+    const bridge = new ContextCapturingBridgePlugin();
+    const session = new VoiceAgentSession({ plugins: { bridge: {} } });
+    session.registerPlugin("bridge", bridge);
+    const deltas: LlmDeltaPacket[] = [];
+    const ttsText: TextToSpeechTextPacket[] = [];
+    session.bus.on("llm.delta", (pkt) => {
+      deltas.push(pkt as LlmDeltaPacket);
+    });
+    session.bus.on("tts.text", (pkt) => {
+      ttsText.push(pkt as TextToSpeechTextPacket);
+    });
+
+    await session.start();
+    session.bus.push(Route.Main, {
+      kind: "inject.message",
+      contextId: "observer-turn",
+      timestampMs: Date.now(),
+      text: "Use the verified deadline.",
+      mode: "context",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(bridge.injectedContext).toEqual(["Use the verified deadline."]);
+    expect(deltas).toEqual([]);
+    expect(ttsText).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("keeps omitted or speak injections on the synthetic TTS path and starts idle timeout", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const deltas: LlmDeltaPacket[] = [];
+    const dones: LlmResponseDonePacket[] = [];
+    const idleStarts: string[] = [];
+    session.bus.on("llm.delta", (pkt) => {
+      deltas.push(pkt as LlmDeltaPacket);
+    });
+    session.bus.on("llm.done", (pkt) => {
+      dones.push(pkt as LlmResponseDonePacket);
+    });
+    session.bus.on("behavior.idle_timeout_start", (pkt) => {
+      idleStarts.push((pkt as { contextId: string }).contextId);
+    });
+
+    await session.start();
+    session.bus.push(Route.Main, {
+      kind: "inject.message",
+      contextId: "spoken-injection",
+      timestampMs: Date.now(),
+      text: "Please say this.",
+      mode: "speak",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(deltas).toEqual([expect.objectContaining({ text: "Please say this." })]);
+    expect(dones).toEqual([expect.objectContaining({ text: "Please say this." })]);
+    expect(idleStarts).toContain("spoken-injection");
+
+    await closeSession(session);
   });
 
   it("stops assistant audio output within 50ms of VAD barge-in", async () => {

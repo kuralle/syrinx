@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { reasoningResume, reasoningSuspended, sttPartial } from "./packet-factories.js";
+import { injectMessage, reasoningResume, reasoningSuspended, sttPartial } from "./packet-factories.js";
 
 describe("sttPartial", () => {
   it("returns a stt.partial packet with optional wordTimings", () => {
@@ -48,6 +48,24 @@ describe("reasoningResume", () => {
       timestampMs: 5678,
       runId: "run-1",
       data: "user answer",
+    });
+  });
+});
+
+describe("injectMessage", () => {
+  it("keeps speak as the omitted default and carries context mode when requested", () => {
+    expect(injectMessage("ctx-1", 1000, "say this")).toEqual({
+      kind: "inject.message",
+      contextId: "ctx-1",
+      timestampMs: 1000,
+      text: "say this",
+    });
+    expect(injectMessage("ctx-1", 1000, "remember this", "context")).toEqual({
+      kind: "inject.message",
+      contextId: "ctx-1",
+      timestampMs: 1000,
+      text: "remember this",
+      mode: "context",
     });
   });
 });

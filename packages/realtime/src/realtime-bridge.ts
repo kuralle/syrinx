@@ -130,6 +130,16 @@ export class RealtimeBridge implements VoicePlugin {
     private readonly opts: RealtimeBridgeOptions = {},
   ) {}
 
+  injectContext(text: string): void {
+    // Provider history differs here: OpenAI retains system items, while Gemini drops
+    // system/developer history, so the adapter selects the provider-safe representation.
+    if (this.adapter.injectContext) {
+      this.adapter.injectContext(text);
+      return;
+    }
+    console.warn("RealtimeBridge: context injection requested but the adapter does not support it");
+  }
+
   async initialize(bus: PipelineBus, _cfg: PluginConfig): Promise<void> {
     this.bus = bus;
     this.sessionAbort = new AbortController();

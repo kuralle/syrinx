@@ -36,6 +36,44 @@ const ZERO_USAGE = {
 };
 
 describe("ReasoningBridge", () => {
+  it("adds transient context to the next turn without replacing or persisting the base prompt", async () => {
+    const store = new InMemoryReasonerSessionStore();
+    store.save("session-1", [{ role: "system", content: "Base policy." }]);
+    const seenMessages: ReasonerTurn["messages"][] = [];
+    const reasoner: Reasoner = {
+      stream: (turn) => {
+        seenMessages.push([...turn.messages]);
+        return (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "text-delta", text: "Acknowledged." };
+          yield { type: "finish", reason: "stop", text: "Acknowledged." };
+        })();
+      },
+    };
+    const plugin = new ReasoningBridge(reasoner, { sessionStore: store, sessionId: "session-1" });
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    plugin.injectContext("Correction: use the verified deadline.");
+    bus.push(Route.Main, turnComplete("turn-context", "What is the deadline?"));
+    await waitFor(() => seenMessages.length === 1);
+
+    expect(seenMessages[0]).toEqual([
+      { role: "system", content: "Base policy." },
+      { role: "system", content: "Correction: use the verified deadline." },
+    ]);
+    await waitFor(() => store.load("session-1").some((message) => message.role === "assistant"));
+    expect(store.load("session-1")).toEqual([
+      { role: "system", content: "Base policy." },
+      { role: "user", content: "What is the deadline?" },
+      { role: "assistant", content: "Acknowledged." },
+    ]);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
   it("emits LLM call-count and per-pass TTFT metrics", async () => {
     const packets: Array<{ route: Route; packet: unknown }> = [];
     const plugin = new ReasoningBridge(fromStreamFactory(async function* () {

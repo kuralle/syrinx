@@ -33,6 +33,8 @@ export interface RealtimeAdapter {
    * provider cannot accept text input omit it, and the bridge silently ignores typed turns for them.
    */
   sendText?(text: string): void;
+  /** Inject transient context without requesting a provider response. */
+  injectContext?(text: string): void;
   /**
    * Commit any buffered user input and request a response. For Syrinx-OWNED turn detection
    * (provider server VAD disabled via turnDetection:null): the host calls this when its own

@@ -70,6 +70,10 @@ export class ReasoningBridge implements VoicePlugin {
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
   private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
+  private readonly transientContextMessages = new Set<{
+    role: "system";
+    content: string;
+  }>();
   private activeGeneration: { contextId: string; controller: AbortController } | null = null;
   // At most one speculative draft at a time; `hold` gates its side effects.
   private speculativeDraft: {
@@ -149,6 +153,12 @@ export class ReasoningBridge implements VoicePlugin {
     if (this.opts.onResumeConflict === "replay") {
       throw new Error("onResumeConflict 'replay' not yet supported — use 'restart'");
     }
+  }
+
+  injectContext(text: string): void {
+    const message = { role: "system" as const, content: text };
+    this.history.push(message);
+    this.transientContextMessages.add(message);
   }
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -678,6 +688,7 @@ export class ReasoningBridge implements VoicePlugin {
     this.assistantMsgByContext.clear();
     this.wordTimestampsByContext.clear();
     this.playedOutMsByContext.clear();
+    this.transientContextMessages.clear();
     this.bus = null;
   }
 
@@ -696,7 +707,14 @@ export class ReasoningBridge implements VoicePlugin {
     const sessionId = this.opts.sessionId;
     if (!store || !sessionId) return;
     try {
-      void Promise.resolve(store.save(sessionId, this.history.map((message) => ({ ...message })))).catch(
+      void Promise.resolve(
+        store.save(
+          sessionId,
+          this.history
+            .filter((message) => !this.transientContextMessages.has(message as { role: "system"; content: string }))
+            .map((message) => ({ ...message })),
+        ),
+      ).catch(
         () => undefined,
       );
     } catch {
@@ -775,6 +793,9 @@ export class ReasoningBridge implements VoicePlugin {
     // Drop tracked per-turn state that has aged out of the history window.
     for (const [ctx, msg] of this.assistantMsgByContext) {
       if (!this.history.includes(msg)) this.clearTurnState(ctx);
+    }
+    for (const message of this.transientContextMessages) {
+      if (!this.history.includes(message)) this.transientContextMessages.delete(message);
     }
   }
 

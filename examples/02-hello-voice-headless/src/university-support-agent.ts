@@ -21,6 +21,7 @@ import { DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
+import { evaluateUniversitySupportTurn, UniversitySupportObserver } from "./university-support-observer.js";
 
 /**
  * The tool-preamble line is load-bearing for latency, not style.
@@ -190,6 +191,7 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     bridge: new ReasoningBridge(buildReasoner(options, interactive), {
       speculative: options.speculative === true,
     }),
+    observer: new UniversitySupportObserver(evaluateUniversitySupportTurn),
     tts: createTtsPlugin(ttsProvider),
   };
   for (const [name, plugin] of Object.entries(plugins)) {

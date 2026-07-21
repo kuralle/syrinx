@@ -70,9 +70,14 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
   }
 
   readonly sentText: string[] = [];
+  readonly injectedContexts: string[] = [];
 
   sendText(text: string): void {
     this.sentText.push(text);
+  }
+
+  injectContext(text: string): void {
+    this.injectedContexts.push(text);
   }
 
   requestResponseCalls = 0;
@@ -133,6 +138,16 @@ describe("RealtimeBridge", () => {
 
   afterEach(() => {
     for (const bus of buses.splice(0)) bus.stop();
+  });
+
+  it("forwards silent context to the adapter without creating a response", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+
+    bridge.injectContext("Correction: use the verified deadline.");
+
+    expect(adapter.injectedContexts).toEqual(["Correction: use the verified deadline."]);
+    expect(adapter.requestResponseCalls).toBe(0);
   });
 
   it("maps one turn to turn.change → tts.audio → eos.turn_complete → tts.end with one contextId", async () => {

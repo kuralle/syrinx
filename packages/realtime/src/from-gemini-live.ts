@@ -170,6 +170,15 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     });
   }
 
+  injectContext(text: string): void {
+    // Gemini Live drops system/developer roles from conversation history. A silent,
+    // incomplete user turn preserves the steering context without requesting a response.
+    this.requireSession().sendClientContent({
+      turns: [{ role: "user", parts: [{ text: `[Context-only instruction]\n${text}` }] }],
+      turnComplete: false,
+    });
+  }
+
   cancelResponse(_audioEndMs: number): void {
     // Gemini handles interruption server-side via `interrupted`; no truncate API.
   }

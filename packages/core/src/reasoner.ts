@@ -8,6 +8,9 @@
 
 /** A reasoning backend reduced to one normalized pull-stream per turn. */
 export interface Reasoner {
+  /** Add transient steering context consumed by the next turn, when supported. */
+  injectContext?(text: string): void;
+
   /**
    * Drive one reasoning turn. The returned async-iterable IS the response.
    * Cancellation (barge-in) is via `turn.signal` (abort) — the adapter forwards

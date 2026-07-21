@@ -514,6 +514,8 @@ export interface StopIdleTimeoutPacket extends VoicePacket {
 export interface InjectMessagePacket extends VoicePacket {
   readonly kind: "inject.message";
   readonly text: string;
+  /** Defaults to speak for compatibility with existing inject.message producers. */
+  readonly mode?: "speak" | "context";
 }
 
 export interface DisconnectRequestedPacket extends VoicePacket {

@@ -256,8 +256,13 @@ export function ttsError(
   return { kind: "tts.error", contextId, timestampMs, component: "tts", category, cause, isRecoverable };
 }
 
-export function injectMessage(contextId: string, timestampMs: number, text: string): InjectMessagePacket {
-  return { kind: "inject.message", contextId, timestampMs, text };
+export function injectMessage(
+  contextId: string,
+  timestampMs: number,
+  text: string,
+  mode?: InjectMessagePacket["mode"],
+): InjectMessagePacket {
+  return { kind: "inject.message", contextId, timestampMs, text, ...(mode ? { mode } : {}) };
 }
 
 export function llmDelta(contextId: string, timestampMs: number, text: string): LlmDeltaPacket {

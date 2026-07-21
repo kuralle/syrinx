@@ -171,6 +171,17 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
     this.requestResponseCreate();
   }
 
+  injectContext(text: string): void {
+    this.requireSocket().send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text }],
+      },
+    });
+  }
+
   requestResponse(): void {
     this.requireSocket().send({ type: "input_audio_buffer.commit" });
     this.requestResponseCreate();
