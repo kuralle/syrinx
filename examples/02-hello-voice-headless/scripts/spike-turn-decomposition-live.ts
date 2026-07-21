@@ -22,7 +22,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
+import { InMemoryMetricsExporter, Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { fromStreamText } from "@kuralle-syrinx/aisdk";
 import { RealtimeBridge, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
 import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
@@ -318,12 +318,16 @@ async function main(): Promise<void> {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (ARM === "native" && !apiKey) throw new Error("OPENAI_API_KEY required for the native arm");
 
+  // Real exporter so the live run exercises the counter EXPORT path, not just the
+  // in-process manifest event. (cascade arm only; native has no reasoner usage here.)
+  const exporter = new InMemoryMetricsExporter();
   const native = ARM === "native" ? createNativeSession(apiKey as string) : null;
   const session =
     native?.session ??
     createUniversitySupportSession({
       inputSampleRate: 16_000,
       profile: "interactive",
+      metricsExporter: exporter,
       ...(PROMPT_MODE === "preamble" ? { systemPrompt: PREAMBLE_PROMPT } : {}),
       ...(process.env["SYRINX_SPIKE_SPECULATIVE"] === "1" ? { speculative: true } : {}),
       ...(process.env["SYRINX_SPIKE_HEDGE_MS"]
@@ -418,6 +422,12 @@ async function main(): Promise<void> {
           ),
         )
       : ["  (no usage captured)"]),
+    "usage counters exported (name = value [tags]):",
+    ...(exporter.counters.filter((c) => c.name.startsWith("usage.")).length
+      ? exporter.counters
+          .filter((c) => c.name.startsWith("usage."))
+          .map((c) => `  ${c.name} = ${c.value}  [${JSON.stringify(c.tags)}]`)
+      : ["  (no usage counters exported)"]),
     "",
     "stage attribution:",
     `  endpoint   (speechEnd -> eos.turn_complete)  ${String(endpoint).padStart(6)}ms  ${pct(endpoint)}`,

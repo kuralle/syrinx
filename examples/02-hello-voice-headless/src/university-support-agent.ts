@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   HedgedReasoner,
   VoiceAgentSession,
+  type MetricsExporter,
   type PluginConfig,
   type Reasoner,
   type VoicePlugin,
@@ -116,6 +117,8 @@ export interface UniversitySupportSessionOptions {
   readonly latencyFillerEnabled?: boolean;
   /** Override the system prompt. Used by latency spikes to A/B prompt phrasing. */
   readonly systemPrompt?: string;
+  /** Inject a metrics exporter so a live run can prove the usage/latency export path. */
+  readonly metricsExporter?: MetricsExporter;
   /** Override the reasoner's step cap. Default 3. */
   readonly maxSteps?: number;
   /**
@@ -177,6 +180,7 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     sttForceFinalizeTimeoutMs: options.profile === "longform" ? 15_000 : 4_500,
     endpointingOwner: "smart_turn",
     latencyFillerEnabled: options.latencyFillerEnabled === true,
+    ...(options.metricsExporter ? { metricsExporter: options.metricsExporter } : {}),
   });
 
   const plugins: Record<string, VoicePlugin> = {

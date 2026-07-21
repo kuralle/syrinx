@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { FinishReason, TextStreamPart, ToolSet } from "ai";
 import type { Reasoner, ReasonerTurn, ReasoningPart } from "@kuralle-syrinx/core";
-import { fromAiSdkAgent, fromStreamFactory, type AiSdkAgentLike } from "./from-ai-sdk.js";
+import { fromAiSdkAgent, fromStreamFactory, modelIdentity, type AiSdkAgentLike } from "./from-ai-sdk.js";
 
 const ZERO_USAGE = {
   inputTokens: 0,
@@ -205,6 +205,17 @@ describe("from-ai-sdk adapters", () => {
       );
       expect(parts[0].recoverable).toBe(true);
     }
+  });
+
+  it("extracts provider/model for cost attribution from a model object and a bare id", () => {
+    // Regression: the bridge emitted usage with EMPTY provider/model in production while a
+    // session-layer test that hand-supplied them stayed green. modelIdentity is the real
+    // extraction the bridge threads onto finish usage, so usage counters carry a model tag.
+    const objectModel = { provider: "openai", modelId: "gpt-4.1-mini" } as never;
+    expect(modelIdentity(objectModel)).toEqual({ provider: "openai", model: "gpt-4.1-mini" });
+
+    // A bare id string: the id IS the model; provider is unknown, so it's omitted (not "").
+    expect(modelIdentity("openai/gpt-4.1-mini" as never)).toEqual({ model: "openai/gpt-4.1-mini" });
   });
 
   it("maps finish(length) to finish with accumulated text", async () => {

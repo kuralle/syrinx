@@ -70,6 +70,10 @@ export type ReasoningPart =
 
 /** Token usage a reasoner may attach to its terminal `finish` part. */
 export interface ReasonerUsage {
+  /** Provider slug (e.g. "openai"), for low-cardinality cost attribution. */
+  readonly provider?: string;
+  /** Model id (e.g. "gpt-4.1-mini"). Without this, spend cannot be attributed to a model. */
+  readonly model?: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
