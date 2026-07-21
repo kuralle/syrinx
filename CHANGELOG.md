@@ -84,6 +84,18 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   (`examples/02-hello-voice-headless`, single-flight + per-violation dedup), proving the seam without
   baking policy into core.
 
+### Added — phone-line turn quality
+- **`pipecat-smart-turn`**: `fuseEndpointDecision` gains a **minimum-speech** third condition
+  (`minSpeechMs`, default `0` = unchanged) — endpoint only when acoustic AND semantic AND enough real
+  speech, so a brief cough/noise burst no longer trips a false turn end (the AssemblyAI/LiveKit 3-way AND).
+  Per-turn voiced-ms is accumulated in the EOS plugin and threaded through the interaction policy.
+- **`core`**: opt-in **outbound loudness normalization** (`audio/loudness.ts` `normalizeLoudness` —
+  running-RMS gain toward a target, slew-limited, with an exponential soft-limit that asymptotes below the
+  Int16 ceiling so it never hard-clips or wraps), wired in `handleTtsAudio` via an `outboundLoudness`
+  session config. **Default off** (byte-identical passthrough); telephony legs benefit, the browser leg
+  (getUserMedia AEC/gain) is unaffected. The engine-level, provider-agnostic piece only — number
+  verbalization / pronunciation / SSML remain prompt/provider concerns, out of scope.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
