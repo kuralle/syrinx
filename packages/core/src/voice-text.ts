@@ -96,8 +96,39 @@ export function appendVoiceText(existing: string, next: string): string {
  * doing it wrong (wrong locale, wrong magnitude) speaks worse than leaving the digits. That is
  * a separate stage, not a silent omission.
  */
-export function normalizeForSpeech(text: string): string {
+/**
+ * Strip leaked tool-call protocol tokens so TTS never speaks them.
+ *
+ * A model emits tool calls in its own syntax (`<|tool_call|>…`, `<tool_call>…</tool_call>`,
+ * `[TOOL_CALLS]`, harmony `<|channel|>commentary`). The inference server is supposed to parse
+ * that into the structured `tool_calls` field; when the serving stack lacks the right parser
+ * the tokens fall through as ordinary assistant text and the pipeline speaks the markup aloud.
+ * LiveKit's finding: the same weights score 100% behind one endpoint and 0% behind another —
+ * it is the serving stack, not the model. Syrinx (and the Kuralle runtime) both read only the
+ * finalized structured tool-call and never text-scrape, so neither catches a leaked one.
+ *
+ * This is a high-precision guard: it removes only unambiguous sentinel tokens/blocks that never
+ * occur in real speech. It does NOT try to strip bare JSON function calls — that is ambiguous and
+ * stripping legitimate content is worse than the rare leak. A leak of that shape is a serving-stack
+ * bug to fix at the endpoint (LiveKit's "one curl" diagnosis), not something to paper over here.
+ */
+export function stripLeakedToolCalls(text: string): string {
   let out = text;
+  // Paired XML-style blocks (Qwen/Hermes/Mistral): drop the whole block including inner JSON.
+  out = out.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "");
+  out = out.replace(/<tool_response>[\s\S]*?<\/tool_response>/gi, "");
+  // Harmony: a channel token is immediately followed by its label (analysis/commentary/final).
+  // Match the label only right after the token so a legitimate "commentary" in prose is untouched.
+  out = out.replace(/<\|channel\|>\s*(?:analysis|commentary|final)\b/gi, "");
+  // Special sentinel tokens (Gemma/Llama/harmony): <|...|> never appears in spoken text.
+  out = out.replace(/<\|[^|]*\|>/g, "");
+  // Mistral marker.
+  out = out.replace(/\[TOOL_CALLS\]/gi, "");
+  return out.replace(/[ \t]{2,}/g, " ").trim();
+}
+
+export function normalizeForSpeech(text: string): string {
+  let out = stripLeakedToolCalls(text);
   // Links/images: [label](url) -> label ; ![alt](url) -> alt
   out = out.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1");
   // Bold/italic/strikethrough: **x** __x__ *x* _x_ ~~x~~ -> x

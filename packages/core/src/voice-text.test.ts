@@ -1,7 +1,35 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech, stripLeakedToolCalls } from "./voice-text.js";
+
+describe("stripLeakedToolCalls", () => {
+  it("removes XML-style tool_call blocks including inner JSON", () => {
+    expect(
+      stripLeakedToolCalls('Sure. <tool_call>{"name":"lookup","arguments":{"id":"7"}}</tool_call>'),
+    ).toBe("Sure.");
+  });
+
+  it("removes special sentinel tokens (Gemma/Llama/harmony) and Mistral markers", () => {
+    expect(stripLeakedToolCalls("<|tool_call|> checking now")).toBe("checking now");
+    expect(stripLeakedToolCalls("<|channel|>commentary answer")).toBe("answer");
+    expect(stripLeakedToolCalls("[TOOL_CALLS] one moment")).toBe("one moment");
+  });
+
+  it("leaves real speech with legitimate punctuation untouched", () => {
+    const prose = "The deadline is February 5th, and the fee is 40 dollars.";
+    expect(stripLeakedToolCalls(prose)).toBe(prose);
+  });
+
+  it("does NOT strip bare JSON (ambiguous — that's a serving-stack bug, not ours to guess)", () => {
+    const s = 'Your balance is {"amount": 42}.';
+    expect(stripLeakedToolCalls(s)).toBe(s);
+  });
+
+  it("is applied inside normalizeForSpeech so leaked markup never reaches TTS", () => {
+    expect(normalizeForSpeech("<tool_call>{}</tool_call>**Done.**")).toBe("Done.");
+  });
+});
 
 describe("normalizeForSpeech", () => {
   it("strips bold, italic, strikethrough, and code markers", () => {
