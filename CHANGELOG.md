@@ -44,6 +44,34 @@ billing, dashboards, and quotas are downstream consumers.
   for the session/provider layer to refuse or fall back. Standalone and fully unit-tested — the session
   wires it in a later change.
 
+**Observability seams — build any dashboard on the engine's signals.** The engine emits structured,
+low-cardinality signals; billing, dashboards (Lens-style), and evals are downstream consumers. Additive.
+
+### Added — two-layer observability + localization
+- **`core`**: `MetricTags.layer` (`"infrastructure" | "conversation"`) set on every metric emit, and
+  `localizeTurn()` composing a per-turn `turn.localization` verdict (infra-breached → conversation-flagged
+  → none) so a consumer can route "was this a system failure or an agent failure?" without collapsing the
+  dual-dimension (task-success vs satisfaction) scores into one number.
+
+### Added — acoustic signals as observability
+- **`core` / `vap` / `pipecat-smart-turn`**: `AcousticSignalPacket` (`acoustic.signal`:
+  prosody / backchannel / interruption / primary_speaker / echo_rejected / cadence), tagged
+  `layer: "conversation"` and emitted from the sources Syrinx already computes for turn-taking
+  (`PrimarySpeakerGate`, the VAP policy sink, the turn-arbiter, backchannel/cadence). A **signal** surface
+  only — sentiment/emotion classification stays a consumer, not baked into core; the VAP-dormant path
+  emits no prosody and does not throw.
+
+### Added — surface dropped Kuralle orchestration parts
+- **`core` / `kuralle` / `aisdk` / `realtime` / `cf-agents`**: `ReasoningPart` gains an additive
+  `control` variant (passthrough for handoff / conversation-outcome / escalation / flow-transition) and a
+  terminal `blocked` variant (moderation); `from-kuralle` now maps these instead of dropping them at
+  `default`, and surfaces them through the existing `delegate.result` host channel. **Correctness fix:** a
+  `safety-blocked` turn now **speaks** its `userFacingMessage` (cascade emits `llm.delta`/`llm.done` →
+  TTS; realtime injects a tool result) and ends the turn cleanly, instead of degrading into the generic
+  "stream ended without a done part" error. Both `ReasoningPart` consumers (`ReasoningBridge`,
+  `RealtimeBridge`) handle the new variants; the wrapper reasoners (`HedgedReasoner`, `RoutingReasoner`)
+  pass them through.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
