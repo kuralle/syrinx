@@ -72,7 +72,13 @@ import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
 import { isLifecycleInteractionPolicy, type InteractionPolicy, type WordTiming } from "./interaction-policy.js";
-import { pcm16BytesToSamples } from "./audio/pcm.js";
+import { pcm16BytesToSamples, pcm16SamplesToBytes } from "./audio/pcm.js";
+import {
+  createLoudnessState,
+  normalizeLoudness,
+  type LoudnessConfig,
+  type LoudnessState,
+} from "./audio/loudness.js";
 import { DeferInteractionPolicy } from "./policies/defer.js";
 import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
@@ -146,6 +152,8 @@ export interface VoiceAgentSessionConfig {
    * instead of hanging. 0 disables. Default: 15000.
    */
   ttsStallMs?: number;
+  /** Optional per-session Int16 RMS normalization for outbound assistant audio. Disabled by default. */
+  outboundLoudness?: LoudnessConfig;
   /**
    * Max ms of silence on inbound user audio while the session is Ready before a
    * recoverable transport warning is emitted. Continuous streams (telephony, open
@@ -372,6 +380,8 @@ export class VoiceAgentSession {
   private firstLlmDeltaReceived = new Set<string>();
   private readonly vaqiMissedResponseMs: number;
   private readonly ttsStallMs: number;
+  private readonly outboundLoudnessConfig: LoudnessConfig | null;
+  private readonly outboundLoudnessState: LoudnessState | null;
   private readonly inputCadenceTimeoutMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private readonly observabilityObserver: ObservabilityObserver;
@@ -416,6 +426,8 @@ export class VoiceAgentSession {
     this.fullDuplex = config.fullDuplex === true;
     this.emitsBackchannel = config.emitsBackchannel === true;
     this.config = config;
+    this.outboundLoudnessConfig = config.outboundLoudness ?? null;
+    this.outboundLoudnessState = this.outboundLoudnessConfig ? createLoudnessState() : null;
     this.scheduler = config.scheduler ?? new TimerScheduler();
     this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
@@ -1630,14 +1642,17 @@ export class VoiceAgentSession {
       }
     }
 
-    this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
+    const audio = this.normalizeOutboundAudio(pkt.audio);
+    // Transport subscribers receive this same packet after the core handler.
+    if (audio !== pkt.audio) Object.assign(pkt, { audio });
+    this.primarySpeakerGate.observeAssistantPlayout(audio);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.watchdogs.armTtsStallTimer(pkt.contextId);
 
     // Mark active and advance this context's playout cursor by the chunk's
     // realtime duration.
     const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
-    const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
+    const audioDurationMs = estimatePcm16Duration(audio, sampleRateHz);
     const now = Date.now();
     this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, now);
     this.interaction.observe({
@@ -1645,7 +1660,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       ttsActive: true,
-      audio: pcm16BytesToSamples(pkt.audio),
+      audio: pcm16BytesToSamples(audio),
       sampleRateHz,
     });
 
@@ -1662,12 +1677,26 @@ export class VoiceAgentSession {
       type: "audio",
       data: {
         context_id: pkt.contextId,
-        bytes: String(pkt.audio.length),
+        bytes: String(audio.length),
       },
       timestampMs: pkt.timestampMs,
     });
 
-    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), pkt.audio, sampleRateHz));
+    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), audio, sampleRateHz));
+  }
+
+  private normalizeOutboundAudio(audio: Uint8Array): Uint8Array {
+    if (
+      !this.outboundLoudnessConfig ||
+      !this.outboundLoudnessState ||
+      audio.byteLength % 2 !== 0
+    ) {
+      return audio;
+    }
+    const samples = pcm16BytesToSamples(audio);
+    return pcm16SamplesToBytes(
+      normalizeLoudness(samples, this.outboundLoudnessState, this.outboundLoudnessConfig),
+    );
   }
 
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {

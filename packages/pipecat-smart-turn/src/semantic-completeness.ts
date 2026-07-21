@@ -11,6 +11,7 @@ export interface SemanticEndpointFusionConfig {
   readonly finalizeDelayMs: number;
   readonly semanticShortcutDelayMs: number;
   readonly incompleteFallbackMs: number;
+  readonly minSpeechMs?: number;
 }
 
 export interface EndpointFusionDecision {
@@ -111,6 +112,7 @@ export function scoreSemanticCompleteness(text: string): SemanticCompletenessSco
 export function fuseEndpointDecision(
   smartTurnComplete: boolean,
   semantic: SemanticCompletenessScore,
+  speechMs: number,
   config: SemanticEndpointFusionConfig,
 ): EndpointFusionDecision {
   if (!config.enabled) {
@@ -121,7 +123,7 @@ export function fuseEndpointDecision(
     };
   }
 
-  if (smartTurnComplete && semantic.complete) {
+  if (smartTurnComplete && semantic.complete && speechMs >= (config.minSpeechMs ?? 0)) {
     return {
       release: true,
       requestFinalize: true,

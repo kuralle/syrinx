@@ -22,6 +22,7 @@ const DEFAULT_MAX_AUDIO_SAMPLES = SAMPLE_RATE * 8;
 interface SmartTurnState {
   readonly contextId: string;
   audio: number[];
+  speechMs: number;
   finalSegments: string[];
   latestInterim: string;
   speechActive: boolean;
@@ -40,6 +41,7 @@ export interface SmartTurnInteractionPolicyConfig {
   readonly semantic_shortcut_delay_ms?: number;
   readonly incomplete_fallback_ms?: number;
   readonly semantic_defer_fallback_ms?: number;
+  readonly min_speech_ms?: number;
   readonly max_audio_samples?: number;
 }
 
@@ -51,6 +53,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
   private semanticShortcutDelayMs = 50;
   private incompleteFallbackMs = 2000;
   private semanticDeferFallbackMs = 4000;
+  private minSpeechMs = 0;
   private maxAudioSamples = DEFAULT_MAX_AUDIO_SAMPLES;
   private initialized = false;
 
@@ -63,6 +66,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
     this.semanticShortcutDelayMs = readNonNegativeNumber(config["semantic_shortcut_delay_ms"], 50);
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
     this.semanticDeferFallbackMs = readNonNegativeNumber(config["semantic_defer_fallback_ms"], 4000);
+    this.minSpeechMs = readNonNegativeNumber(config["min_speech_ms"], 0);
     this.maxAudioSamples = readPositiveNumber(config["max_audio_samples"], DEFAULT_MAX_AUDIO_SAMPLES);
     await this.predictor.initialize(config);
     this.initialized = true;
@@ -72,7 +76,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
     const state = this.stateFor(observation.contextId);
     switch (observation.kind) {
       case "audio_frame":
-        this.appendAudio(state, observation.audio);
+        this.appendAudio(state, observation.audio, observation.sampleRateHz);
         break;
       case "stt_partial":
         if (observation.text.trim()) state.latestInterim = observation.text.trim();
@@ -118,6 +122,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
     const state: SmartTurnState = {
       contextId,
       audio: [],
+      speechMs: 0,
       finalSegments: [],
       latestInterim: "",
       speechActive: false,
@@ -135,6 +140,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
   private beginSpeech(state: SmartTurnState): void {
     this.clearFallback(state);
     state.audio = [];
+    state.speechMs = 0;
     state.finalSegments = [];
     state.latestInterim = "";
     state.speechActive = true;
@@ -145,9 +151,12 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
     state.pendingDecisions = [];
   }
 
-  private appendAudio(state: SmartTurnState, audio?: Int16Array): void {
+  private appendAudio(state: SmartTurnState, audio: Int16Array | undefined, sampleRateHz = SAMPLE_RATE): void {
     if (!audio?.length) return;
     for (const sample of audio) state.audio.push(sample / 32768);
+    if (state.speechActive && sampleRateHz > 0) {
+      state.speechMs += (audio.length / sampleRateHz) * 1000;
+    }
     const overflow = state.audio.length - this.maxAudioSamples;
     if (overflow > 0) state.audio.splice(0, overflow);
   }
@@ -177,13 +186,16 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
     const smartTurnComplete = state.probability > this.probabilityThreshold;
     const transcript = latestTranscript(state.finalSegments, state.latestInterim);
     if (!transcript) {
-      if (smartTurnComplete) this.issueTakeTurn(state, state.probability);
-      else this.scheduleFallback(state, this.incompleteFallbackMs);
+      if (smartTurnComplete && state.speechMs >= this.minSpeechMs) {
+        this.issueTakeTurn(state, state.probability);
+      } else {
+        this.scheduleFallback(state, this.incompleteFallbackMs);
+      }
       return;
     }
 
     const semantic = scoreSemanticCompleteness(transcript);
-    const fusion = fuseEndpointDecision(smartTurnComplete, semantic, this.fusionConfig());
+    const fusion = fuseEndpointDecision(smartTurnComplete, semantic, state.speechMs, this.fusionConfig());
     if (fusion.release) {
       const confidence = smartTurnComplete ? Math.max(state.probability, semantic.confidence) : semantic.confidence;
       this.issueTakeTurn(state, confidence);
@@ -237,6 +249,7 @@ export class SmartTurnInteractionPolicy implements LifecycleInteractionPolicy {
       finalizeDelayMs: this.finalizeDelayMs,
       semanticShortcutDelayMs: this.semanticShortcutDelayMs,
       incompleteFallbackMs: this.incompleteFallbackMs,
+      minSpeechMs: this.minSpeechMs,
     };
   }
 }

@@ -124,6 +124,63 @@ describe("PipecatEOSPlugin", () => {
     await started;
   });
 
+  it("holds a complete semantic endpoint until the turn has enough voiced PCM", async () => {
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new PipecatEOSPlugin(new PredictableSmartTurn([0.9, 0.9]));
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    await plugin.initialize(bus, {
+      finalize_delay_ms: 5,
+      incomplete_fallback_ms: 1000,
+      max_delay_ms: 0,
+      min_speech_ms: 20,
+    });
+    const contextId = "turn-min-speech";
+    bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId,
+      timestampMs: Date.now(),
+      confidence: 0.9,
+    });
+    bus.push(Route.Main, {
+      kind: "vad.audio",
+      contextId,
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(160)),
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId,
+      timestampMs: Date.now(),
+      text: "What are your office hours?",
+      confidence: 0.95,
+    });
+    bus.push(Route.Main, { kind: "vad.speech_ended", contextId, timestampMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(completions).toEqual([]);
+
+    bus.push(Route.Main, { kind: "vad.speech_started", contextId, timestampMs: Date.now(), confidence: 0.9 });
+    bus.push(Route.Main, {
+      kind: "vad.audio",
+      contextId,
+      timestampMs: Date.now(),
+      audio: pcm16SamplesToBytes(new Int16Array(160)),
+    });
+    bus.push(Route.Main, { kind: "vad.speech_ended", contextId, timestampMs: Date.now() });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(completions).toEqual([
+      expect.objectContaining({ contextId, text: "What are your office hours?" }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("releases the lock and processes turn 2 even when the client never sends playout-complete", async () => {
     // Regression: the browser studio client does not emit `tts.playout_progress {complete}`,
     // so without the estimated-playout fallback the first turn's context stays locked forever

@@ -53,6 +53,7 @@ import {
   ASSISTANT_ECHO_TONE_HZ,
   synthesizeTonePcm16,
 } from "./primary-speaker-fixtures.js";
+import { pcm16BytesToSamples, pcm16SamplesToBytes } from "./audio/pcm.js";
 
 class CapturingPlugin implements VoicePlugin {
   config: PluginConfig | null = null;
@@ -1637,6 +1638,44 @@ describe("VoiceAgentSession", () => {
         truncate: false,
       },
     ]);
+
+    await closeSession(session);
+  });
+
+  it("normalizes outbound TTS audio before assistant recording when opted in", async () => {
+    const session = new VoiceAgentSession({
+      plugins: {},
+      outboundLoudness: { targetRms: 8000, maxGainStep: 10 },
+    });
+    const recorded: RecordAssistantAudioPacket[] = [];
+    const forwarded: TextToSpeechAudioPacket[] = [];
+
+    await session.start();
+    session.bus.on("tts.audio", (pkt) => {
+      forwarded.push(pkt as TextToSpeechAudioPacket);
+    });
+    session.bus.on("record.assistant_audio", (pkt) => {
+      recorded.push(pkt as RecordAssistantAudioPacket);
+    });
+
+    const input = pcm16SamplesToBytes(new Int16Array(320).fill(1000));
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "turn-loudness",
+      timestampMs: Date.now(),
+      audio: input,
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recorded).toHaveLength(1);
+    expect(forwarded).toHaveLength(1);
+    const output = pcm16BytesToSamples(recorded[0]!.audio);
+    expect(output).not.toEqual(pcm16BytesToSamples(input));
+    expect(forwarded[0]!.audio).toEqual(recorded[0]!.audio);
+    expect(Math.sqrt(output.reduce((sum, sample) => sum + sample * sample, 0) / output.length)).toBe(8000);
+    expect(Math.max(...output)).toBeLessThanOrEqual(32767);
+    expect(Math.min(...output)).toBeGreaterThanOrEqual(-32768);
 
     await closeSession(session);
   });

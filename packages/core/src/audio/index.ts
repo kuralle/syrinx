@@ -3,3 +3,4 @@
 export { pcm16BytesToSamples, pcm16SamplesToBytes, bigEndianPcm16BytesToSamples, pcm16SamplesToBigEndianBytes } from "./pcm.js";
 export { decodeMuLawToPcm16, encodePcm16ToMuLaw } from "./mulaw.js";
 export { resamplePcm16, resamplePcm16Streaming, StreamingPcm16Resampler } from "./resample.js";
+export { createLoudnessState, normalizeLoudness, type LoudnessConfig, type LoudnessState } from "./loudness.js";

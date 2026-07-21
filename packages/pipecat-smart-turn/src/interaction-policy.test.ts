@@ -117,6 +117,31 @@ describe("SmartTurnInteractionPolicy", () => {
     await policy.close();
   });
 
+  it("holds a complete endpoint below the configured voiced-duration minimum", async () => {
+    const policy = new SmartTurnInteractionPolicy(new PredictableSmartTurn([1]));
+    await policy.initialize({ min_speech_ms: 20 });
+
+    policy.observe(speechStarted("turn-min-speech"));
+    policy.observe({
+      kind: "audio_frame",
+      contextId: "turn-min-speech",
+      timestampMs: 1200,
+      audio: new Int16Array(160),
+      sampleRateHz: 16000,
+    });
+    policy.observe({
+      kind: "stt_partial",
+      contextId: "turn-min-speech",
+      timestampMs: 1400,
+      text: "What are your office hours?",
+    });
+    policy.observe(speechEnded("turn-min-speech"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(policy.observe(audioFrame("turn-min-speech"))).toEqual([{ kind: "hold" }]);
+    await policy.close();
+  });
+
   it("keeps synchronous audio-frame observation p99 within 5ms", async () => {
     const policy = new SmartTurnInteractionPolicy(new PredictableSmartTurn([]));
     await policy.initialize({ max_audio_samples: 16000 });
