@@ -88,6 +88,7 @@
     "@kuralle-agents/rag": "^0.8.5",
     "@kuralle-agents/skills": "^0.8.5",
     "@kuralle-syrinx/grok": "workspace:*",
+    "@kuralle-syrinx/elevenlabs": "workspace:*",
     "@kuralle-syrinx/pipecat-smart-turn": "workspace:*",
     "@kuralle-syrinx/silero-vad": "workspace:*",
     "@evan/opus": "1.0.3",

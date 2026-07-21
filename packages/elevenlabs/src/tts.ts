@@ -31,15 +31,18 @@ import type { SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 const DEFAULT_MODEL_ID = "eleven_flash_v2_5";
+const DEFAULT_VOICE_SETTINGS: Record<string, unknown> = { stability: 0.5, similarity_boost: 0.75 };
 
 interface ElevenLabsWireConfig {
   readonly modelId: string;
   readonly audioFormat: AudioFormat;
+  readonly voiceSettings: Record<string, unknown>;
 }
 
 /** Exported for unit tests that exercise encode/decode without a live socket. */
 export class ElevenLabsWireProtocol implements WireProtocol {
   private readonly charactersByKey = new Map<AttributionKey, number>();
+  private readonly initializedKeys = new Set<AttributionKey>();
 
   constructor(private readonly cfg: ElevenLabsWireConfig) {}
 
@@ -49,7 +52,15 @@ export class ElevenLabsWireProtocol implements WireProtocol {
 
   encodeText(key: AttributionKey, text: string): SocketData[] {
     this.charactersByKey.set(key, (this.charactersByKey.get(key) ?? 0) + text.length);
-    return [JSON.stringify({ text, context_id: key })];
+    const frames: SocketData[] = [];
+    // Multi-stream requires initializing a context (voice_settings) before its first text —
+    // without it ElevenLabs accepts the text but generates NO audio (a final with no audio frames).
+    if (!this.initializedKeys.has(key)) {
+      this.initializedKeys.add(key);
+      frames.push(JSON.stringify({ text: " ", context_id: key, voice_settings: this.cfg.voiceSettings }));
+    }
+    frames.push(JSON.stringify({ text, context_id: key }));
+    return frames;
   }
 
   encodeFinish(contextId: string, _activeKeys: readonly AttributionKey[]): SocketData[] {
@@ -58,6 +69,7 @@ export class ElevenLabsWireProtocol implements WireProtocol {
 
   encodeCancel(key: AttributionKey, _contextId: string): SocketData[] {
     this.charactersByKey.delete(key);
+    this.initializedKeys.delete(key);
     return [JSON.stringify({ context_id: key, close_context: true })];
   }
 
@@ -112,6 +124,7 @@ export class ElevenLabsWireProtocol implements WireProtocol {
         });
       }
       events.push({ type: "context_end", key });
+      this.initializedKeys.delete(key);
     }
     return events;
   }
@@ -127,6 +140,7 @@ export class ElevenLabsTTSPlugin implements VoicePlugin {
     const voiceId = optionalStringConfig(config, "voice_id") ?? DEFAULT_VOICE_ID;
     const modelId = optionalStringConfig(config, "model_id") ?? DEFAULT_MODEL_ID;
     const sampleRate = (config["sample_rate"] as number) ?? 16000;
+    const voiceSettings = (config["voice_settings"] as Record<string, unknown> | undefined) ?? DEFAULT_VOICE_SETTINGS;
     const languageCode = optionalStringConfig(config, "language_code") ?? optionalStringConfig(config, "language");
     const baseUrl =
       optionalStringConfig(config, "endpoint_url") ??
@@ -136,7 +150,7 @@ export class ElevenLabsTTSPlugin implements VoicePlugin {
     const outputFormat = pcmOutputFormat(sampleRate);
 
     this.session = await startStreamingTtsSession(bus, {
-      protocol: new ElevenLabsWireProtocol({ modelId, audioFormat }),
+      protocol: new ElevenLabsWireProtocol({ modelId, audioFormat, voiceSettings }),
       provider: { name: "elevenlabs", model: modelId, region: "global" },
       format: audioFormat,
       sampleRateHz: sampleRate,

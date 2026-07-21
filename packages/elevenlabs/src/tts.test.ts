@@ -63,14 +63,16 @@ describe("ElevenLabsWireProtocol", () => {
   const protocol = new ElevenLabsWireProtocol({
     modelId: "eleven_flash_v2_5",
     audioFormat: { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 },
+    voiceSettings: { stability: 0.5, similarity_boost: 0.75 },
   });
 
   it("encodes multi-stream text/flush/cancel/close frames", () => {
     const key = attributionKey("turn-1");
-    expect(JSON.parse(String(protocol.encodeText(key, "Hello ")[0]))).toEqual({
-      text: "Hello ",
-      context_id: "turn-1",
-    });
+    // First text for a context prepends the required init frame (voice_settings), then the text.
+    expect(protocol.encodeText(key, "Hello ").map((f) => JSON.parse(String(f)))).toEqual([
+      { text: " ", context_id: "turn-1", voice_settings: { stability: 0.5, similarity_boost: 0.75 } },
+      { text: "Hello ", context_id: "turn-1" },
+    ]);
     expect(JSON.parse(String(protocol.encodeFinish("turn-1", [key])[0]))).toEqual({
       context_id: "turn-1",
       flush: true,
@@ -187,6 +189,7 @@ describe("ElevenLabsTTSPlugin", () => {
     await waitForCondition(() => ends.length >= 1 && usage.length >= 1 && audio.length >= 1);
 
     expect(received).toEqual([
+      expect.objectContaining({ text: " ", context_id: "turn-usage" }),
       expect.objectContaining({ text, context_id: "turn-usage" }),
       expect.objectContaining({ context_id: "turn-usage", flush: true }),
     ]);
@@ -248,6 +251,7 @@ describe("ElevenLabsTTSPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(received).toEqual([
+      expect.objectContaining({ context_id: "turn-interrupt", text: " " }),
       expect.objectContaining({ context_id: "turn-interrupt", text: "This will be interrupted." }),
       expect.objectContaining({ context_id: "turn-interrupt", close_context: true }),
     ]);

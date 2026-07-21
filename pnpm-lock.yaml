@@ -240,6 +240,9 @@ importers:
       '@kuralle-syrinx/deepgram':
         specifier: workspace:*
         version: link:../../packages/deepgram
+      '@kuralle-syrinx/elevenlabs':
+        specifier: workspace:*
+        version: link:../../packages/elevenlabs
       '@kuralle-syrinx/epsilon':
         specifier: workspace:*
         version: link:../../packages/epsilon
