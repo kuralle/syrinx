@@ -47,6 +47,38 @@ interface E2EResult {
   readonly clientToServerInterruptMs: number | null;
 }
 
+// playwright-core is loaded at runtime from an external install (see PLAYWRIGHT_DIR) and is
+// intentionally NOT a workspace dependency, so `typeof import("playwright-core")` cannot resolve
+// at compile time. These minimal structural types cover exactly the surface this e2e uses.
+interface PwFrame {
+  readonly payload: string | Buffer;
+}
+interface PwWebSocket {
+  url(): string;
+  on(event: "framesent" | "framereceived", handler: (frame: PwFrame) => void): void;
+}
+interface PwLocator {
+  click(): Promise<void>;
+}
+interface PwPage {
+  on(event: "websocket", handler: (socket: PwWebSocket) => void): void;
+  goto(url: string, options?: { waitUntil?: string }): Promise<unknown>;
+  getByRole(role: string, options?: { name?: string }): PwLocator;
+}
+interface PwBrowser {
+  newPage(): Promise<PwPage>;
+  close(): Promise<void>;
+}
+interface PlaywrightCoreModule {
+  readonly chromium: {
+    launch(options?: {
+      executablePath?: string;
+      headless?: boolean;
+      args?: readonly string[];
+    }): Promise<PwBrowser>;
+  };
+}
+
 function silence(seconds: number): Int16Array {
   return new Int16Array(Math.round(seconds * SAMPLE_RATE));
 }
@@ -93,7 +125,7 @@ async function main(): Promise<void> {
   await composeFakeMicWav();
 
   const { chromium } = require(join(PLAYWRIGHT_DIR, "node_modules", "playwright-core")) as
-    typeof import("playwright-core");
+    PlaywrightCoreModule;
 
   const browser = await chromium.launch({
     executablePath: CHROME_PATH,
