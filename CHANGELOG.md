@@ -96,6 +96,17 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   (getUserMedia AEC/gain) is unaffected. The engine-level, provider-agnostic piece only — number
   verbalization / pronunciation / SSML remain prompt/provider concerns, out of scope.
 
+### Added — mid-stream STT reconfigure seam (vendor-agnostic)
+- **`core` / `deepgram`**: `SttReconfigure` / `SttReconfigurePartial` — a vendor-agnostic seam for
+  per-turn STT reconfiguration (keyterms, end-of-turn thresholds, language hints) that normalizes the
+  differing vendor wire shapes (Deepgram Flux `Configure`, AssemblyAI `UpdateConfiguration`,
+  Speechmatics `SetRecognitionConfig`) behind one interface an `InteractionPolicy` can actuate.
+  `DeepgramFluxSTTPlugin.reconfigure()` implements it via the Flux in-band `Configure` control message —
+  no reconnect, live-verified (`ConfigureSuccess` ~234 ms) — surfacing `ConfigureSuccess`/`ConfigureFailure`
+  as metrics. **Scope note:** per-turn STT reconfigure is a commodity capability (LiveKit `stt.update_options`,
+  Pipecat `STTUpdateSettingsFrame`, AssemblyAI `agent_context` all ship it), **not a differentiator** —
+  this lands the seam + one implementation; the actuating policy layer is intentionally deferred.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
