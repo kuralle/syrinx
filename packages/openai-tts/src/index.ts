@@ -203,6 +203,7 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
           this.emitAudio(contextId, tail);
         }
       }
+      this.emitUsage(contextId, text.length);
       this.emitEnd(contextId);
     } catch (err) {
       if (isAbortError(err) || controller.signal.aborted) return;
@@ -237,6 +238,19 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
       provider: { name: "openai", model: this.model, cancelled: false },
     };
     this.bus?.push(Route.Main, packet);
+  }
+
+  private emitUsage(contextId: string, characters: number): void {
+    if (characters <= 0) return;
+    this.bus?.push(Route.Background, {
+      kind: "usage.recorded",
+      contextId,
+      timestampMs: Date.now(),
+      stage: "tts",
+      provider: "openai",
+      model: this.model,
+      characters,
+    });
   }
 
   private emitEnd(contextId: string): void {

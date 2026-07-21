@@ -462,6 +462,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     boundedAdd(this.finalizedContextIds, ctxId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
+    this.emitSttUsage(ctxId);
     this.pushResult(transcript, confidence, ctxId);
 
     if (this.emitEosOnFinal) {
@@ -483,6 +484,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
+    this.emitSttUsage(contextId);
     this.bus.push(Route.Main, {
       kind: "eos.turn_complete",
       contextId,
@@ -492,6 +494,21 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     });
     this.audioStatsByContextId.delete(contextId);
     this.resetPendingTranscript(contextId);
+  }
+
+  private emitSttUsage(contextId: string): void {
+    const stats = this.audioStatsByContextId.get(contextId);
+    const bytes = stats?.bytes ?? 0;
+    const audioSeconds = bytes / 2 / this.sampleRate;
+    this.bus?.push(Route.Background, {
+      kind: "usage.recorded",
+      contextId,
+      timestampMs: Date.now(),
+      stage: "stt",
+      provider: "deepgram",
+      model: this.model,
+      audioSeconds,
+    });
   }
 
   private pushResult(

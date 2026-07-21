@@ -7,6 +7,7 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TtsErrorPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { OpenAICompatibleTTSPlugin } from "./index.js";
@@ -49,6 +50,57 @@ afterEach(() => {
 });
 
 describe("OpenAICompatibleTTSPlugin", () => {
+  it("emits usage.recorded with stage tts and characters equal to synthesized text length", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(streamFromChunks([pcmSilence(8)]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new OpenAICompatibleTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const text = "Hello usage.";
+    await plugin.initialize(bus, {
+      base_url: "https://tts.test/v1",
+      model: "gpt-4o-mini-tts",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      text,
+    });
+    await waitForCondition(() => ends.length >= 1 && usage.length >= 1);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "tts",
+        provider: "openai",
+        model: "gpt-4o-mini-tts",
+        characters: text.length,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("POSTs speech body with stream, pcm, and extra_body merged", async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       return new Response(streamFromChunks([pcmSilence(8)]), {

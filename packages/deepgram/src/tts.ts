@@ -81,6 +81,8 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposers: Array<() => void> = [];
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 24000, channels: 1 };
+  /** Synthesized character counts per contextId — billed on successful tts.end. */
+  private charactersByContextId = new Map<string, number>();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -143,7 +145,11 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     if (this.cancelledContexts.has(contextId)) return;
     this.activeContexts.add(contextId);
     this.currentContextId = contextId;
-    if (!(await this.trySend(SPEAK(text), contextId))) this.activeContexts.delete(contextId);
+    if (!(await this.trySend(SPEAK(text), contextId))) {
+      this.activeContexts.delete(contextId);
+      return;
+    }
+    this.charactersByContextId.set(contextId, (this.charactersByContextId.get(contextId) ?? 0) + text.length);
   }
 
   private async finishContext(contextId: string): Promise<void> {
@@ -166,6 +172,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.activeContexts.clear();
     this.cancelledContexts.clear();
+    this.charactersByContextId.clear();
     for (const timer of this.finishTimers.values()) clearTimeout(timer);
     this.finishTimers.clear();
     this.currentContextId = "";
@@ -178,7 +185,10 @@ export class DeepgramTTSPlugin implements VoicePlugin {
 
   private async cancelActiveContexts(): Promise<void> {
     const contextIds = [...this.activeContexts];
-    for (const contextId of contextIds) boundedAdd(this.cancelledContexts, contextId, MAX_CANCELLED_CONTEXTS);
+    for (const contextId of contextIds) {
+      boundedAdd(this.cancelledContexts, contextId, MAX_CANCELLED_CONTEXTS);
+      this.charactersByContextId.delete(contextId);
+    }
     this.activeContexts.clear();
     for (const contextId of contextIds) this.clearFinishTimeout(contextId);
     this.currentContextId = "";
@@ -298,7 +308,10 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private failActiveContexts(err: Error): void {
     const contextIds = [...this.activeContexts];
     this.activeContexts.clear();
-    for (const contextId of contextIds) this.clearFinishTimeout(contextId);
+    for (const contextId of contextIds) {
+      this.clearFinishTimeout(contextId);
+      this.charactersByContextId.delete(contextId);
+    }
     this.currentContextId = "";
     this.carry = EMPTY;
     // A dropped socket voids any in-flight Clear/Cleared handshake: the server
@@ -330,6 +343,19 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   }
 
   private emitEnd(contextId: string): void {
+    const characters = this.charactersByContextId.get(contextId) ?? 0;
+    this.charactersByContextId.delete(contextId);
+    if (characters > 0) {
+      this.bus?.push(Route.Background, {
+        kind: "usage.recorded",
+        contextId,
+        timestampMs: Date.now(),
+        stage: "tts",
+        provider: "deepgram",
+        model: this.model,
+        characters,
+      });
+    }
     this.bus?.push(Route.Main, {
       kind: "tts.end",
       contextId,

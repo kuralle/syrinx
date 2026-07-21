@@ -10,6 +10,7 @@ import {
   type SttInterimPacket,
   type SttPartialPacket,
   type SttResultPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { DeepgramSTTPlugin } from "./stt.js";
@@ -276,6 +277,57 @@ describe("DeepgramSTTPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(turnCompletes).toEqual([{ text: "book a room", contextId: "turn-1" }]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage stt and audioSeconds when a turn completes", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: true,
+          channel: { alternatives: [{ transcript: "hello", confidence: 0.95 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    // 640 bytes pcm_s16le @ 16kHz = 640 / 2 / 16000 = 0.02 s
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await waitFor(usage);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "stt",
+        provider: "deepgram",
+        model: "nova-3",
+        audioSeconds: 0.02,
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();

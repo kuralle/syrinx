@@ -44,6 +44,8 @@ interface CartesiaWireConfig {
 }
 
 class CartesiaWireProtocol implements WireProtocol {
+  private readonly charactersByKey = new Map<AttributionKey, number>();
+
   constructor(private readonly cfg: CartesiaWireConfig) {}
 
   attributionFor(contextId: string): { key: AttributionKey; contextId: string } {
@@ -51,6 +53,7 @@ class CartesiaWireProtocol implements WireProtocol {
   }
 
   encodeText(key: AttributionKey, text: string): SocketData[] {
+    this.charactersByKey.set(key, (this.charactersByKey.get(key) ?? 0) + text.length);
     return [
       JSON.stringify({
         model_id: this.cfg.modelId,
@@ -82,6 +85,7 @@ class CartesiaWireProtocol implements WireProtocol {
   }
 
   encodeCancel(key: AttributionKey): SocketData[] {
+    this.charactersByKey.delete(key);
     return [JSON.stringify({ context_id: key, cancel: true })];
   }
 
@@ -124,7 +128,29 @@ class CartesiaWireProtocol implements WireProtocol {
         events.push({ type: "error", key, error: err instanceof Error ? err : new Error(String(err)) });
       }
     }
-    if (msg["done"] === true) events.push({ type: "context_end", key });
+    if (msg["done"] === true) {
+      const characters = this.charactersByKey.get(key) ?? 0;
+      this.charactersByKey.delete(key);
+      // Sideband before context_end so the engine still has the key→context mapping.
+      if (characters > 0) {
+        const modelId = this.cfg.modelId;
+        events.push({
+          type: "sideband",
+          key,
+          route: Route.Background,
+          build: (ctxId, timestampMs) => ({
+            kind: "usage.recorded",
+            contextId: ctxId,
+            timestampMs,
+            stage: "tts" as const,
+            provider: "cartesia",
+            model: modelId,
+            characters,
+          }),
+        });
+      }
+      events.push({ type: "context_end", key });
+    }
     return events;
   }
 }

@@ -73,6 +73,7 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
   private conn: WebSocketConnection | null = null;
   private currentContextId = "";
   private disposers: Array<() => void> = [];
+  private audioBytesByContextId = new Map<string, number>();
 
   constructor(private readonly socketFactory?: SocketFactory) {}
 
@@ -145,6 +146,10 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
       bus.on("stt.audio", async (pkt: unknown) => {
         const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
         if (audioPkt.contextId) this.currentContextId = audioPkt.contextId;
+        if (this.currentContextId && audioPkt.audio.byteLength > 0) {
+          const prev = this.audioBytesByContextId.get(this.currentContextId) ?? 0;
+          this.audioBytesByContextId.set(this.currentContextId, prev + audioPkt.audio.byteLength);
+        }
         if (!this.conn) return;
         try {
           await this.conn.ensureReady();
@@ -233,6 +238,7 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
           language: "en",
           provider: { name: "deepgram", model: this.model, region: "global" },
         });
+        this.emitSttUsage(contextId);
         if (this.emitEosOnFinal) {
           this.bus?.push(Route.Main, {
             kind: "eos.turn_complete",
@@ -245,6 +251,21 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
         return;
       }
     }
+  }
+
+  private emitSttUsage(contextId: string): void {
+    const bytes = this.audioBytesByContextId.get(contextId) ?? 0;
+    this.audioBytesByContextId.delete(contextId);
+    const audioSeconds = bytes / 2 / this.sampleRate;
+    this.bus?.push(Route.Background, {
+      kind: "usage.recorded",
+      contextId,
+      timestampMs: Date.now(),
+      stage: "stt",
+      provider: "deepgram",
+      model: this.model,
+      audioSeconds,
+    });
   }
 
   private pushMetric(contextId: string, name: string, value: string): void {
@@ -273,6 +294,7 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
 
   async close(): Promise<void> {
     for (const dispose of this.disposers.splice(0)) dispose();
+    this.audioBytesByContextId.clear();
     if (this.conn) {
       if (this.conn.isReady) {
         try {

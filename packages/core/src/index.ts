@@ -134,6 +134,22 @@ export {
   type PipelineErrorPacket,
 } from "./packets.js";
 
+// Metering: price catalog + spend-cap guard (standalone; session wires later)
+export {
+  type SttPrice,
+  type LlmPrice,
+  type TtsPrice,
+  type PriceCatalog,
+  type CostResult,
+  DEFAULT_PRICE_CATALOG,
+  costOf,
+} from "./pricing.js";
+export {
+  SpendCapGuard,
+  type SpendCapConfig,
+  type SpendCapCheck,
+} from "./spend-cap.js";
+
 // Observability backbone (VE-07)
 export {
   monotonicNowMs,

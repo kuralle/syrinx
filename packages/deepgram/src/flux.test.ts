@@ -10,6 +10,7 @@ import {
   type InterimEndOfSpeechPacket,
   type SttInterimPacket,
   type SttResultPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { DeepgramFluxSTTPlugin } from "./flux.js";
@@ -223,5 +224,40 @@ describe("DeepgramFluxSTTPlugin", () => {
     await started;
 
     expect(speechStarts.length).toBe(1);
+  });
+
+  it("emits usage.recorded with stage stt and audioSeconds on EndOfTurn", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local);
+    // startPlugin already sent 320 bytes @ 16kHz → 320/2/16000 = 0.01 s
+
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const socket = local.sockets[0]!;
+    socket.send(
+      turnInfo("EndOfTurn", {
+        transcript: "hello flux",
+        words: [{ word: "hello", confidence: 0.9 }],
+      }),
+    );
+    await waitFor(usage);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-1",
+        stage: "stt",
+        provider: "deepgram",
+        model: "flux-general-en",
+        audioSeconds: 0.01,
+      }),
+    ]);
   });
 });
