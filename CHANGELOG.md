@@ -72,6 +72,18 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   `RealtimeBridge`) handle the new variants; the wrapper reasoners (`HedgedReasoner`, `RoutingReasoner`)
   pass them through.
 
+### Added — silent context-injection seam (background-observer guardrails)
+- **`core` / `aisdk` / `realtime`**: `inject.message` gains `mode?: "speak" | "context"` (default `speak`,
+  back-compat) and `Reasoner.injectContext?(text)`, so a background observer LLM can bias the agent's
+  **next** turn without blocking or being spoken (LiveKit's observer-guardrail pattern). Cascade
+  (`ReasoningBridge`) appends an additive `{role:"system"}` message to history and keeps it **out of the
+  durable session store** (transient steering, not durable history); the base system prompt is never
+  replaced. Realtime handles the provider asymmetry: OpenAI injects a system `conversation.item.create`;
+  Gemini Live (which drops system/developer roles) falls back to a `role:"user"`, `turnComplete:false`
+  context turn — documented, never a silent no-op. The observer loop ships as an example
+  (`examples/02-hello-voice-headless`, single-flight + per-violation dedup), proving the seam without
+  baking policy into core.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
