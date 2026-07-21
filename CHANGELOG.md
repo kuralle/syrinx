@@ -125,6 +125,18 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   lever. The *auto-policy* (inferring what to bias / when from the dialogue act) is intentionally deferred —
   nobody ships that either, so deferring it stays at parity.
 
+### Added — package `@kuralle-syrinx/elevenlabs` (TTS + STT)
+- **`elevenlabs`** (new): a top-tier vendor with both streaming modalities, on the shared transport.
+  - **TTS** — `ElevenLabsTTSPlugin`: multi-context WebSocket (`multi-stream-input`, concurrent contexts
+    keyed by `context_id`) on `tts-core`; sends the required `InitializeConnectionMulti` frame before a
+    context's first text; base64 audio; `usage.recorded{tts, characters}` via sideband.
+  - **STT** — `ElevenLabsSTTPlugin`: **Scribe v2 Realtime** WebSocket — `partial_transcript` → `stt.interim`,
+    `committed_transcript` → `stt.result`; `usage.recorded{stt, audioSeconds}` at the final funnel with
+    delta-billing; reuses `@kuralle-syrinx/ws` (reconnect/replay).
+  - Real cited pricing in `core/pricing.ts` (Scribe v2 $0.39/hr; Flash/Turbo $50/1M, Multilingual $100/1M chars).
+  - Live-verified: **STT** end-to-end (transcript + usage). **TTS** is unit-proven + protocol-grounded in the
+    live docs; live TTS *audio* pending a paid EL account (free tier: "cannot use library voices via the API").
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
