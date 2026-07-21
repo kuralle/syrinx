@@ -129,13 +129,29 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
 - **`elevenlabs`** (new): a top-tier vendor with both streaming modalities, on the shared transport.
   - **TTS** — `ElevenLabsTTSPlugin`: multi-context WebSocket (`multi-stream-input`, concurrent contexts
     keyed by `context_id`) on `tts-core`; sends the required `InitializeConnectionMulti` frame before a
-    context's first text; base64 audio; `usage.recorded{tts, characters}` via sideband.
+    context's first text; base64 audio; `usage.recorded{tts, characters}` **billed on audio received**
+    (EL streams audio with `isFinal:null` and a rejected generation returns an empty final that must not
+    be billed). `output_format` and a `generation_config` passthrough are dev-configurable, not pinned.
   - **STT** — `ElevenLabsSTTPlugin`: **Scribe v2 Realtime** WebSocket — `partial_transcript` → `stt.interim`,
     `committed_transcript` → `stt.result`; `usage.recorded{stt, audioSeconds}` at the final funnel with
     delta-billing; reuses `@kuralle-syrinx/ws` (reconnect/replay).
   - Real cited pricing in `core/pricing.ts` (Scribe v2 $0.39/hr; Flash/Turbo $50/1M, Multilingual $100/1M chars).
-  - Live-verified: **STT** end-to-end (transcript + usage). **TTS** is unit-proven + protocol-grounded in the
-    live docs; live TTS *audio* pending a paid EL account (free tier: "cannot use library voices via the API").
+  - **Live-verified end-to-end** (TTS audio + usage, STT transcript + usage). Default voice is a premade
+    voice accessible to free API accounts (library voices like Rachel require a paid plan; overridable via `voice_id`).
+
+### Changed — config flexibility (default, never hard-pin)
+- **all TTS/STT/Realtime adapters**: audited so every provider knob is dev-overridable with the prior value
+  as the default, plus a provider-specific passthrough for fields the adapter doesn't enumerate — extending
+  the Gemini-Live fix (`c8aa3fa`, #28/#29/#31/#32) and the `openai-tts` `extra_body` model across the board.
+  Highlights: cartesia/gemini `generation_config`; deepgram/grok STT `query_params`; deepgram encoding/container;
+  google language_codes/location/recognizer/encoding; realtime `sessionExtra`/`sessionConfig` merged into
+  `session.update`. Behavior-preserving; each override is unit-tested.
+
+### Changed — Epsilon → example
+- **`epsilon`** package **removed** (dead endpoint). Its code moved into
+  `examples/02-hello-voice-headless/src/custom-tts-provider/` as a **"how to build a custom TTS provider"**
+  reference (WireProtocol on `tts-core` + `ws`). No package, no dependency edge. Real multi-context WS
+  TTS/STT now lives in `@kuralle-syrinx/elevenlabs`.
 
 ## 4.2.0 — 2026-07-11
 
