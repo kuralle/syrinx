@@ -151,7 +151,7 @@ export class TurnArbiter {
         if (
           this.deps.primarySpeakerGate.isEnabled() &&
           this.deps.primarySpeakerGate.hasProfile() &&
-          !this.deps.primarySpeakerGate.shouldCommitBargeIn()
+          !this.deps.primarySpeakerGate.shouldCommitBargeIn(pending.userContextId)
         ) {
           this.suppress(pending, "interrupt.suppressed_non_primary", durationMs);
         } else {
@@ -249,7 +249,7 @@ export class TurnArbiter {
     if (nowMs - pending.firstSpeechMs < this.deps.minInterruptionMs) return;
 
     const gate = this.deps.primarySpeakerGate;
-    if (gate.isEnabled() && gate.hasProfile() && !gate.shouldCommitBargeIn()) {
+    if (gate.isEnabled() && gate.hasProfile() && !gate.shouldCommitBargeIn(pending.userContextId)) {
       this.suppress(pending, "interrupt.suppressed_non_primary", nowMs - pending.firstSpeechMs);
       return;
     }

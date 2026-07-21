@@ -43,6 +43,10 @@ function done(sessionId?: string): KuralleStreamPart {
   return { type: "done", sessionId };
 }
 
+function safetyBlocked(userFacingMessage: string): KuralleStreamPart {
+  return { type: "safety-blocked", userFacingMessage };
+}
+
 async function* partsToEvents(parts: KuralleStreamPart[]): AsyncIterable<KuralleStreamPart> {
   for (const p of parts) yield p;
 }
@@ -218,6 +222,38 @@ describe("fromKuralleRuntime", () => {
       expect(parts[0].cause.message).toBe("boom");
       expect(parts[0].recoverable).toBe(false);
     }
+  });
+
+  it("maps safety-blocked to a terminal blocked part without the missing-done error", async () => {
+    const reasoner = fromKuralleRuntime(
+      fakeRuntime([safetyBlocked("I cannot help with that request.")]),
+      { sessionId: "sess-safety" },
+    );
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      {
+        type: "blocked",
+        userFacingMessage: "I cannot help with that request.",
+        payload: { type: "safety-blocked", userFacingMessage: "I cannot help with that request." },
+      },
+    ]);
+    expect(parts.some((part) => part.type === "error")).toBe(false);
+  });
+
+  it("preserves orchestration parts as opaque control parts", async () => {
+    const handoff = { type: "handoff", targetAgent: "billing", reason: "account question" } satisfies KuralleStreamPart;
+    const outcome = { type: "conversation-outcome", outcome: { taskSuccess: true, satisfaction: false } } satisfies KuralleStreamPart;
+    const reasoner = fromKuralleRuntime(fakeRuntime([handoff, outcome, done()]), { sessionId: "sess-control" });
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      { type: "control", name: "handoff", payload: handoff },
+      { type: "control", name: "conversation-outcome", payload: outcome },
+      { type: "finish", reason: "stop", text: "" },
+    ]);
   });
 
   it("yields terminal error when stream ends without done", async () => {

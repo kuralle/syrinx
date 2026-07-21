@@ -623,6 +623,85 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("surfaces control parts and continues to the delegate result", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "control", name: "handoff", payload: { targetAgent: "billing" } };
+        yield { type: "text-delta", text: "Billing can help." };
+        yield { type: "finish", reason: "stop", text: "Billing can help." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_control",
+      toolName: "consult_knowledge",
+      args: { query: "billing" },
+    });
+
+    await waitForCondition(() => results.length === 2);
+    expect(results[0]).toMatchObject({
+      control: { name: "handoff", payload: { targetAgent: "billing" } },
+    });
+    expect(results[1]).toMatchObject({ answer: "Billing can help." });
+    expect(adapter.injectedToolResults[0]!.text).toContain("Billing can help.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("surfaces a blocked part as a safe terminal delegate result", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield {
+          type: "blocked",
+          userFacingMessage: "I cannot help with that request.",
+          payload: { moderator: "safety" },
+        };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_blocked",
+      toolName: "consult_knowledge",
+      args: { query: "unsafe" },
+    });
+
+    await waitForCondition(() => results.length === 1);
+    expect(results[0]).toMatchObject({
+      answer: "I cannot help with that request.",
+      blocked: {
+        userFacingMessage: "I cannot help with that request.",
+        payload: { moderator: "safety" },
+      },
+    });
+    expect(adapter.injectedToolResults[0]!.text).toContain("I cannot help with that request.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("G2/WBS-1: failed delegate emits delegate.query but no delegate.result", async () => {
     const adapter = new FakeRealtimeAdapter();
     const reasoner: Reasoner = {

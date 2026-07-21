@@ -93,6 +93,8 @@ export interface DelegateResultContext<Env = unknown> {
   readonly grounded: boolean;
   readonly toolId?: string;
   readonly toolName?: string;
+  readonly control?: { name: string; payload: unknown };
+  readonly blocked?: { userFacingMessage: string; payload?: unknown };
   readonly turnId: string;
   readonly sessionId: string;
   /** The connection that initiated this delegate; use `send(...)` for an app message to that client. */
@@ -409,6 +411,8 @@ export function withVoice<Env, TBase extends AgentLike>(
                   grounded: e.grounded,
                   toolId: e.toolId,
                   toolName: e.toolName,
+                  control: e.control,
+                  blocked: e.blocked,
                   turnId: e.turnId,
                   sessionId,
                   connection: voiceConnection,

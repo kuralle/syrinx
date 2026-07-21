@@ -32,6 +32,7 @@ import type {
   DelegateQueryPacket,
   DelegateResultPacket,
   ConversationMetricPacket,
+  AcousticSignalPacket,
   UsageStage,
   UsageRecordedPacket,
   LlmDeltaPacket,
@@ -83,6 +84,7 @@ import {
   VoiceSessionWatchdogs,
 } from "./voice-agent-session-util.js";
 import { noopMetricsExporter, type MetricsExporter } from "./observability.js";
+import { localizeTurn, type ObservabilityLayer } from "./observability.js";
 import { ObservabilityObserver } from "./observability-observer.js";
 import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
@@ -194,6 +196,7 @@ export interface VoiceAgentSessionConfig {
     readonly provider?: string;
     readonly model?: string;
     readonly region?: string;
+    readonly layer?: ObservabilityLayer;
   };
 }
 
@@ -206,7 +209,18 @@ export interface VoiceAgentSessionEvents {
   agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
   agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
   delegate_query: (event: { tsMs: number; turnId: string; query: string; toolId?: string; toolName?: string }) => void;
-  delegate_result: (event: { tsMs: number; turnId: string; query: string; answer: string; durationMs: number; grounded: boolean; toolId?: string; toolName?: string }) => void;
+  delegate_result: (event: {
+    tsMs: number;
+    turnId: string;
+    query: string;
+    answer: string;
+    durationMs: number;
+    grounded: boolean;
+    toolId?: string;
+    toolName?: string;
+    control?: { name: string; payload: unknown };
+    blocked?: { userFacingMessage: string; payload?: unknown };
+  }) => void;
   /**
    * G3: typed preamble/filler lifecycle for a pending tool call (Vapi-shaped:
    * started / delayed / complete / failed). `delayed` is time-triggered by
@@ -300,6 +314,25 @@ function interactionPlayoutTimerKey(contextId: string): string {
   return `interaction.playout:${contextId}`;
 }
 
+function turnLocalizationTimerKey(contextId: string): string {
+  return `turn.localization:${contextId}`;
+}
+
+function isInfrastructureMetric(name: string): boolean {
+  return /(?:^|\.)(?:vad|stt|tts|tool|input|pipeline)\.(?:error|malfunction|timeout|stall|cadence)|(?:^|\.)(?:stage|error)\./i.test(name);
+}
+
+function isConversationEvaluationMetric(name: string, value: string): boolean {
+  if (!/(?:^|\.)(?:outcome|eval|evaluation|satisfaction|task_success|observer)(?:\.|$)/i.test(name)) {
+    return false;
+  }
+  return !/^(?:0|false|none|success|successful|passed|pass|good|healthy|ok)$/i.test(value.trim());
+}
+
+function isConversationControlName(name: string): boolean {
+  return /^(?:conversation-outcome|outcome|escalation|handoff|flow-transition|node-enter|node-exit|flow-enter|flow-end)$/.test(name);
+}
+
 // =============================================================================
 // Session Implementation
 // =============================================================================
@@ -343,7 +376,12 @@ export class VoiceAgentSession {
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private readonly observabilityObserver: ObservabilityObserver;
   private readonly metricsExporter: MetricsExporter;
-  private readonly observabilityDims: { provider: string; model: string; region: string };
+  private readonly observabilityDims: {
+    provider: string;
+    model: string;
+    region: string;
+    layer?: ObservabilityLayer;
+  };
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
   private pendingTurnLatency = new Map<string, number>();
@@ -363,6 +401,11 @@ export class VoiceAgentSession {
   private userSpeaking = false;
   private lastFinalizedContextId = "";
   private readonly sttPartialWordTimings = new Map<string, readonly WordTiming[]>();
+  private readonly turnLocalizationStates = new Map<
+    string,
+    { infrastructureBreached: boolean; conversationFlagged: boolean }
+  >();
+  private readonly emittedTurnLocalizations = new Set<string>();
 
   constructor(config: VoiceAgentSessionConfig) {
     const owner = config.endpointingOwner;
@@ -380,6 +423,14 @@ export class VoiceAgentSession {
     this.delayCueAfterMs = config.delayCueAfterMs ?? 2000;
     this.primarySpeakerGate = new PrimarySpeakerGate({
       enabled: config.primarySpeakerBargeInEnabled !== false,
+      onDecision: (decision) => {
+        this.emitAcousticSignal(decision.contextId, Date.now(), decision.signal, {
+          accepted: decision.accepted,
+          frameCount: decision.frameCount,
+          primaryHits: decision.primaryHits,
+          echoRejectedFrames: decision.echoRejectedFrames,
+        });
+      },
     });
     this.latencyFiller = new LatencyFillerController({
       enabled: config.latencyFillerEnabled === true,
@@ -433,6 +484,9 @@ export class VoiceAgentSession {
       ? new DeferInteractionPolicy()
       : (this.injectedInteractionPolicy ?? this.ruleBasedPolicy);
     this.activeInteractionPolicy = coordinatorPolicy;
+    coordinatorPolicy.setAcousticSignalSink?.((signal) => {
+      this.emitAcousticSignal(signal.contextId, signal.timestampMs, signal.signal, signal.payload);
+    });
     this.interaction = new InteractionCoordinator({
       bus: this.bus,
       policy: coordinatorPolicy,
@@ -467,6 +521,7 @@ export class VoiceAgentSession {
       provider: obs?.provider ?? "unknown",
       model: obs?.model ?? "unknown",
       region: obs?.region ?? "unknown",
+      layer: obs?.layer,
     };
     this.observabilityObserver = new ObservabilityObserver({
       bus: this.bus,
@@ -578,6 +633,12 @@ export class VoiceAgentSession {
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.turnTimings.clear();
+    for (const contextId of this.turnLocalizationStates.keys()) {
+      this.scheduler.cancel(turnLocalizationTimerKey(contextId));
+      this.emitTurnLocalization(contextId);
+    }
+    this.turnLocalizationStates.clear();
+    this.emittedTurnLocalizations.clear();
     this.pendingTurnLatency.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
@@ -1036,6 +1097,7 @@ export class VoiceAgentSession {
       .reduce((sum, value) => sum + value, 0);
     const ttfaMs = firstAudioMs - anchorMs;
     const unattributedMs = ttfaMs - attributedMs;
+    if (unattributedMs >= 500) this.markInfrastructureBreach(contextId);
     const fillerUsed = timing.fillerUsed === true;
     const backchannelUsed = timing.backchannelUsed === true;
     this.emit("turn_latency", {
@@ -1056,6 +1118,7 @@ export class VoiceAgentSession {
 
     const tags = {
       ...this.observabilityDims,
+      layer: "infrastructure" as const,
       cancelled: this.interruptedGenerationContextIds.has(contextId) ? "true" : "false",
       anchor,
       filler_used: String(fillerUsed),
@@ -1090,9 +1153,14 @@ export class VoiceAgentSession {
     const otherTtsActive = this.ttsPlayout.activeContexts().some((c) => c !== pkt.contextId);
     if (otherTtsActive && isBackchannel(pkt.text)) {
       this.bus.push(Route.Background, make.metric(pkt.contextId, "turn.backchannel_dropped", pkt.text));
+      this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "backchannel", { text: pkt.text });
       return;
     }
 
+    if (this.emittedTurnLocalizations.has(pkt.contextId)) {
+      this.emittedTurnLocalizations.delete(pkt.contextId);
+      this.turnLocalizationStates.delete(pkt.contextId);
+    }
     this.lastFinalizedContextId = pkt.contextId;
     this.interaction.reset(pkt.contextId);
 
@@ -1368,6 +1436,9 @@ export class VoiceAgentSession {
   }
 
   private handleDelegateResult(pkt: DelegateResultPacket): void {
+    if (pkt.control && isConversationControlName(pkt.control.name)) {
+      this.markConversationFlag(pkt.contextId);
+    }
     this.emit("delegate_result", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1377,6 +1448,8 @@ export class VoiceAgentSession {
       grounded: pkt.grounded,
       toolId: pkt.toolId,
       toolName: pkt.toolName,
+      ...(pkt.control ? { control: pkt.control } : {}),
+      ...(pkt.blocked ? { blocked: pkt.blocked } : {}),
     });
     this.debugPush({
       component: "delegate",
@@ -1412,6 +1485,11 @@ export class VoiceAgentSession {
   }
 
   private handleConversationMetric(pkt: ConversationMetricPacket): void {
+    if (isInfrastructureMetric(pkt.name)) this.markInfrastructureBreach(pkt.contextId);
+    if (isConversationEvaluationMetric(pkt.name, pkt.value)) this.markConversationFlag(pkt.contextId);
+    if (pkt.name === "input.cadence_stall_ms") {
+      this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "cadence", { value: pkt.value });
+    }
     if (pkt.name === "llm.call_started") {
       const timing = this.timingFor(pkt.contextId);
       timing.llmCallCount = (timing.llmCallCount ?? 0) + 1;
@@ -1423,6 +1501,62 @@ export class VoiceAgentSession {
       const timing = this.timingFor(pkt.contextId);
       (timing.llmPassTtftMs ??= []).push(ttftMs);
     }
+  }
+
+  private emitAcousticSignal(
+    contextId: string,
+    timestampMs: number,
+    signal: AcousticSignalPacket["signal"],
+    payload?: Readonly<Record<string, unknown>>,
+  ): void {
+    this.bus.push(Route.Background, make.acousticSignal(contextId, timestampMs, signal, payload));
+    this.metricsExporter.observeCounter?.(`acoustic.${signal}`, 1, {
+      provider: this.observabilityDims.provider,
+      model: this.observabilityDims.model,
+      region: this.observabilityDims.region,
+      layer: "conversation",
+    });
+  }
+
+  private localizationStateFor(contextId: string): {
+    infrastructureBreached: boolean;
+    conversationFlagged: boolean;
+  } {
+    const existing = this.turnLocalizationStates.get(contextId);
+    if (existing) return existing;
+    const state = { infrastructureBreached: false, conversationFlagged: false };
+    this.turnLocalizationStates.set(contextId, state);
+    return state;
+  }
+
+  private markInfrastructureBreach(contextId: string): void {
+    this.localizationStateFor(contextId).infrastructureBreached = true;
+  }
+
+  private markConversationFlag(contextId: string): void {
+    this.localizationStateFor(contextId).conversationFlagged = true;
+  }
+
+  private emitTurnLocalization(contextId: string): void {
+    if (this.emittedTurnLocalizations.has(contextId)) return;
+    const state = this.localizationStateFor(contextId);
+    this.emittedTurnLocalizations.add(contextId);
+    this.bus.push(
+      Route.Background,
+      make.turnLocalization(
+        contextId,
+        Date.now(),
+        localizeTurn(state),
+        state.infrastructureBreached,
+        state.conversationFlagged,
+      ),
+    );
+  }
+
+  private scheduleTurnLocalization(contextId: string): void {
+    this.scheduler.schedule(turnLocalizationTimerKey(contextId), 0, () => {
+      this.emitTurnLocalization(contextId);
+    });
   }
 
   private static readonly USAGE_FIELDS = [
@@ -1455,6 +1589,7 @@ export class VoiceAgentSession {
         stage: pkt.stage,
         provider: pkt.provider ?? "",
         model: pkt.model ?? "",
+        layer: "infrastructure" as const,
       };
       for (const field of VoiceAgentSession.USAGE_FIELDS) {
         const value = pkt[field];
@@ -1556,6 +1691,7 @@ export class VoiceAgentSession {
       data: {},
       timestampMs: Date.now(),
     });
+    this.scheduleTurnLocalization(pkt.contextId);
   }
 
   private scheduleInteractionPlayoutTick(contextId: string, delayMs: number): void {
@@ -1600,6 +1736,9 @@ export class VoiceAgentSession {
     // so silently dropping them biases the sample toward the fast ones — the worst
     // turns would disappear from exactly the number meant to detect them.
     this.flushPendingTurnLatency(pkt.contextId);
+    this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "interruption", {
+      source: pkt.source,
+    });
     this.turnTimings.delete(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
@@ -1664,6 +1803,12 @@ export class VoiceAgentSession {
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {
+    this.markInfrastructureBreach(pkt.contextId);
+    this.metricsExporter.observeCounter?.("error.stage", 1, {
+      stage: pkt.component,
+      category: pkt.category,
+      layer: "infrastructure",
+    });
     this.emit("error", {
       tsMs: pkt.timestampMs,
       stage: `${pkt.component}.error`,
@@ -1703,6 +1848,7 @@ export class VoiceAgentSession {
     // leave the caller in unexplained silence: if the reasoning layer failed the turn,
     // speak a graceful fallback (G4 — Deepgram guide "never fail silently").
     this.maybeSpeakErrorFallback(pkt);
+    this.emitTurnLocalization(pkt.contextId);
   }
 
   private maybeSpeakErrorFallback(pkt: VoiceErrorPacket): void {

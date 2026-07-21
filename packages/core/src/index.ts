@@ -126,6 +126,9 @@ export {
 export {
   type MessageCreatePacket,
   type ConversationMetricPacket,
+  type AcousticSignalPacket,
+  type AcousticSignal,
+  type TurnLocalizationPacket,
   type UsageStage,
   type UsageRecordedPacket,
   type TurnBoundaryKind,
@@ -154,6 +157,10 @@ export {
 export {
   monotonicNowMs,
   type MetricTags,
+  type ObservabilityLayer,
+  type TurnLocalizationVerdict,
+  type TurnLocalizationSignals,
+  localizeTurn,
   type SpanHandle,
   type MetricsExporter,
   noopMetricsExporter,
@@ -227,6 +234,8 @@ export {
   isLifecycleInteractionPolicy,
   type InteractionObservation,
   type InteractionDecision,
+  type AcousticSignalObservation,
+  type AcousticSignalSink,
   type WordTiming,
 } from "./interaction-policy.js";
 export { confidenceToWaitMs, type ConfidenceToWaitConfig } from "./confidence-to-wait.js";
@@ -253,6 +262,7 @@ export {
   extractSpeakerFingerprint,
   fingerprintSimilarity,
   type SpeakerFingerprint,
+  type PrimarySpeakerGateDecision,
   type PrimarySpeakerGateConfig,
 } from "./primary-speaker-gate.js";
 export {

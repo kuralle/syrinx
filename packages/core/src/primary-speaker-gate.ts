@@ -19,12 +19,23 @@ export interface PrimarySpeakerGateConfig {
   readonly enabled?: boolean;
   readonly similarityThreshold?: number;
   readonly echoDominanceMargin?: number;
+  readonly onDecision?: (decision: PrimarySpeakerGateDecision) => void;
+}
+
+export interface PrimarySpeakerGateDecision {
+  readonly contextId: string;
+  readonly signal: "primary_speaker" | "echo_rejected";
+  readonly accepted: boolean;
+  readonly frameCount: number;
+  readonly primaryHits: number;
+  readonly echoRejectedFrames: number;
 }
 
 export class PrimarySpeakerGate {
   private readonly enabled: boolean;
   private readonly similarityThreshold: number;
   private readonly echoDominanceMargin: number;
+  private readonly onDecision?: PrimarySpeakerGateConfig["onDecision"];
   private profile: SpeakerFingerprint | null = null;
   private enrollFrames: SpeakerFingerprint[] = [];
   private bargeInFrames: SpeakerFingerprint[] = [];
@@ -34,6 +45,7 @@ export class PrimarySpeakerGate {
     this.enabled = config.enabled !== false;
     this.similarityThreshold = config.similarityThreshold ?? 0.72;
     this.echoDominanceMargin = config.echoDominanceMargin ?? 0.12;
+    this.onDecision = config.onDecision;
   }
 
   isEnabled(): boolean {
@@ -73,22 +85,30 @@ export class PrimarySpeakerGate {
     this.assistantProfile = frame;
   }
 
-  shouldCommitBargeIn(): boolean {
+  shouldCommitBargeIn(contextId = ""): boolean {
     if (!this.enabled || this.profile === null) return true;
     if (this.bargeInFrames.length === 0) return false;
 
     let primaryHits = 0;
+    let echoRejectedFrames = 0;
     for (const frame of this.bargeInFrames) {
       const primarySim = fingerprintSimilarity(frame, this.profile);
       if (this.assistantProfile !== null) {
         const echoSim = fingerprintSimilarity(frame, this.assistantProfile);
-        if (echoSim >= primarySim + this.echoDominanceMargin) continue;
+        if (echoSim >= primarySim + this.echoDominanceMargin) {
+          echoRejectedFrames += 1;
+          continue;
+        }
       }
       if (primarySim >= this.similarityThreshold) primaryHits += 1;
     }
 
     const required = Math.max(1, Math.ceil(this.bargeInFrames.length * 0.45));
-    return primaryHits >= required;
+    const accepted = primaryHits >= required;
+    const decision = { contextId, accepted, frameCount: this.bargeInFrames.length, primaryHits, echoRejectedFrames };
+    if (echoRejectedFrames > 0) this.onDecision?.({ signal: "echo_rejected", ...decision });
+    this.onDecision?.({ signal: "primary_speaker", ...decision });
+    return accepted;
   }
 
   resetBargeInWindow(): void {

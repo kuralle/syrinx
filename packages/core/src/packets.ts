@@ -354,6 +354,14 @@ export interface DelegateResultPacket extends VoicePacket {
   readonly grounded: boolean;
   readonly toolId?: string;
   readonly toolName?: string;
+  readonly control?: {
+    readonly name: string;
+    readonly payload: unknown;
+  };
+  readonly blocked?: {
+    readonly userFacingMessage: string;
+    readonly payload?: unknown;
+  };
 }
 
 export interface ReasoningResumePacket extends VoicePacket {
@@ -547,6 +555,29 @@ export interface ConversationMetricPacket extends VoicePacket {
   readonly value: string;
 }
 
+export type AcousticSignal =
+  | "prosody"
+  | "backchannel"
+  | "interruption"
+  | "primary_speaker"
+  | "echo_rejected"
+  | "cadence";
+
+export interface AcousticSignalPacket extends VoicePacket {
+  readonly kind: "acoustic.signal";
+  readonly signal: AcousticSignal;
+  readonly payload?: Readonly<Record<string, unknown>>;
+}
+
+export type TurnLocalizationVerdict = "infrastructure" | "conversation" | "none";
+
+export interface TurnLocalizationPacket extends VoicePacket {
+  readonly kind: "turn.localization";
+  readonly value: TurnLocalizationVerdict;
+  readonly infrastructureBreached: boolean;
+  readonly conversationFlagged: boolean;
+}
+
 /** The pipeline stage that consumed resources. Billing planes group cost by this. */
 export type UsageStage = "llm" | "stt" | "tts";
 
@@ -670,7 +701,9 @@ export type AnyErrorPacket =
 export type ObservabilityPacket =
   | ConversationMetricPacket
   | TurnBoundaryEventPacket
-  | UsageRecordedPacket;
+  | UsageRecordedPacket
+  | AcousticSignalPacket
+  | TurnLocalizationPacket;
 
 /** Delegate (Responder-Thinker) lifecycle packets (Background route). */
 export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;

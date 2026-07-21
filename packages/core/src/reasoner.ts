@@ -50,6 +50,8 @@ export type ReasoningPart =
   | { readonly type: "text-delta"; readonly text: string }
   | { readonly type: "tool-call"; readonly toolId: string; readonly toolName: string; readonly args: Record<string, unknown> }
   | { readonly type: "tool-result"; readonly toolId: string; readonly toolName: string; readonly result: string }
+  | { readonly type: "control"; readonly name: string; readonly payload: unknown }
+  | { readonly type: "blocked"; readonly userFacingMessage: string; readonly payload?: unknown }
   // Human-in-the-loop pause (step 3). ALWAYS the terminal part for the turn.
   | { readonly type: "suspended"; readonly runId: string; readonly toolId?: string; readonly prompt?: string; readonly payload: unknown }
   // (B1) Error/abort the backend surfaced. The bridge treats `error` like today's
@@ -80,4 +82,3 @@ export interface ReasonerUsage {
   readonly cachedInputTokens?: number;
   readonly reasoningTokens?: number;
 }
-

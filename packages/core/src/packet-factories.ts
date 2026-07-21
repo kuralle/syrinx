@@ -12,6 +12,9 @@ import { ErrorCategory } from "./packets.js";
 import type {
   UsageRecordedPacket,
   ConversationMetricPacket,
+  AcousticSignalPacket,
+  AcousticSignal,
+  TurnLocalizationPacket,
   TurnBoundaryKind,
   TurnBoundaryEventPacket,
   DtmfDigit,
@@ -73,6 +76,38 @@ export function metric(
   timestampMs: number = Date.now(),
 ): ConversationMetricPacket {
   return { kind: "metric.conversation", contextId, timestampMs, name, value };
+}
+
+export function acousticSignal(
+  contextId: string,
+  timestampMs: number,
+  signal: AcousticSignal,
+  payload?: Readonly<Record<string, unknown>>,
+): AcousticSignalPacket {
+  return {
+    kind: "acoustic.signal",
+    contextId,
+    timestampMs,
+    signal,
+    ...(payload ? { payload } : {}),
+  };
+}
+
+export function turnLocalization(
+  contextId: string,
+  timestampMs: number,
+  value: TurnLocalizationPacket["value"],
+  infrastructureBreached: boolean,
+  conversationFlagged: boolean,
+): TurnLocalizationPacket {
+  return {
+    kind: "turn.localization",
+    contextId,
+    timestampMs,
+    value,
+    infrastructureBreached,
+    conversationFlagged,
+  };
 }
 
 export function usageRecorded(

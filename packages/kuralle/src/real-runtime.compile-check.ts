@@ -40,7 +40,7 @@ export const reasonerFromRealRuntime = fromKuralleRuntime(asBridgeRuntime, {
 // switch cases can be pinned at compile time. Keep this list in sync with the `case`
 // arms in `streamFromKuralle`; if upstream renames or drops one, this stops compiling.
 
-/** Exactly the part types `streamFromKuralle` switches on. */
+/** Exactly the part types handled by explicit `streamFromKuralle` case arms. */
 type BridgedPartType =
   | "text-delta"
   | "tool-call"
@@ -48,6 +48,7 @@ type BridgedPartType =
   | "error"
   | "paused"
   | "interactive"
+  | "safety-blocked"
   | "done";
 
 type _AssertTrue<T extends true> = T;

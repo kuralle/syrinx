@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 import type { PluginConfig } from "@kuralle-syrinx/core";
-import type { InteractionDecision, InteractionObservation, InteractionPolicy } from "@kuralle-syrinx/core";
+import type {
+  AcousticSignalSink,
+  InteractionDecision,
+  InteractionObservation,
+  InteractionPolicy,
+} from "@kuralle-syrinx/core";
 import {
   DEFAULT_VAP_THRESHOLDS,
   RollingFeatureBuffer,
@@ -76,6 +81,7 @@ export class VapInteractionPolicy implements InteractionPolicy {
   private ttsContextId = "";
   private delegateInFlight = false;
   private initialized = false;
+  private acousticSignalSink: AcousticSignalSink | undefined;
 
   constructor(deps: VapInteractionPolicyDeps) {
     this.predictor = deps.predictor;
@@ -86,6 +92,10 @@ export class VapInteractionPolicy implements InteractionPolicy {
   async initialize(cfg: PluginConfig = {}): Promise<void> {
     await this.predictor.initialize(cfg);
     this.initialized = true;
+  }
+
+  setAcousticSignalSink(sink: AcousticSignalSink): void {
+    this.acousticSignalSink = sink;
   }
 
   observe(obs: InteractionObservation): readonly InteractionDecision[] {
@@ -136,6 +146,7 @@ export class VapInteractionPolicy implements InteractionPolicy {
     this.inferenceChains.clear();
     this.contextEpochs.clear();
     this.initialized = false;
+    this.acousticSignalSink = undefined;
   }
 
   private observeAudioFrame(
@@ -178,6 +189,19 @@ export class VapInteractionPolicy implements InteractionPolicy {
         const probs = await this.predictor.push(stableFrame);
         if ((this.contextEpochs.get(frame.contextId) ?? 0) === epoch) {
           this.cachedProbs.set(frame.contextId, probs);
+          if (this.initialized) {
+            this.acousticSignalSink?.({
+              contextId: frame.contextId,
+              timestampMs: frame.timestampMs,
+              signal: "prosody",
+              payload: {
+                channel: frame.channel,
+                pShift: probs.pShift,
+                pBackchannel: probs.pBackchannel,
+                pHold: probs.pHold,
+              },
+            });
+          }
         }
       });
     const settled = next.catch(() => undefined).finally(() => {

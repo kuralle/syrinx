@@ -187,6 +187,74 @@ describe("ReasoningBridge", () => {
     expect(result.packet).toMatchObject({ grounded: false, answer: "From memory." });
   });
 
+  it("forwards control parts and continues to the final answer", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const reasoner: Reasoner = {
+      stream: async function* () {
+        yield { type: "control", name: "handoff", payload: { targetAgent: "billing" } };
+        yield { type: "text-delta", text: "The billing team can help." };
+        yield { type: "finish", reason: "stop", text: "The billing team can help." };
+      },
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-control", "Please transfer me."));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+
+    expect(packets).toContainEqual({
+      route: Route.Background,
+      packet: expect.objectContaining({
+        kind: "delegate.result",
+        control: { name: "handoff", payload: { targetAgent: "billing" } },
+      }),
+    });
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({ kind: "llm.done", text: "The billing team can help." }),
+    });
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("speaks a blocked part and ends the turn without an LLM error", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const reasoner: Reasoner = {
+      stream: async function* () {
+        yield { type: "blocked", userFacingMessage: "I cannot help with that request.", payload: { moderator: "safety" } };
+      },
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-blocked", "Unsafe request"));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+
+    expect(packets).toContainEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({ kind: "llm.delta", text: "I cannot help with that request." }),
+    });
+    expect(packets).toContainEqual({
+      route: Route.Background,
+      packet: expect.objectContaining({
+        kind: "delegate.result",
+        answer: "I cannot help with that request.",
+        blocked: expect.objectContaining({ userFacingMessage: "I cannot help with that request." }),
+      }),
+    });
+    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.error")).toBe(false);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
   it("accepts the truncated reply on token-limit finish (fails the turn, never the call)", async () => {
     // A `length` finish means the model hit the token cap: the streamed reply is
     // truncated but usable. It must be spoken and the call kept up (L2) — never

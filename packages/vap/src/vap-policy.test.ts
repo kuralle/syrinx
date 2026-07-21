@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_VAP_THRESHOLDS,
@@ -73,6 +73,42 @@ describe("decideFromProbs", () => {
 });
 
 describe("VapInteractionPolicy", () => {
+  it("does not emit prosody while VAP is dormant", async () => {
+    const policy = new VapInteractionPolicy({ predictor: new StubVapPredictor() });
+    const sink = vi.fn();
+    policy.setAcousticSignalSink(sink);
+
+    expect(() => policy.observe(audioFrame())).not.toThrow();
+    await flushInference();
+
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("emits prosody only after initialized predictor output", async () => {
+    const predictor = new StubVapPredictor();
+    predictor.setFallback({ pShift: 0.4, pBackchannel: 0.2, pHold: 0.1 });
+    const policy = new VapInteractionPolicy({ predictor });
+    const sink = vi.fn();
+    policy.setAcousticSignalSink(sink);
+    await policy.initialize();
+
+    policy.observe(audioFrame("prosody-turn"));
+    await flushInference();
+
+    expect(sink).toHaveBeenCalledWith({
+      contextId: "prosody-turn",
+      timestampMs: expect.any(Number),
+      signal: "prosody",
+      payload: {
+        channel: "user",
+        pShift: 0.4,
+        pBackchannel: 0.2,
+        pHold: 0.1,
+      },
+    });
+    await policy.close();
+  });
+
   it("returns cached decisions synchronously from observe (test:vap-thresholds)", async () => {
     const predictor = new StubVapPredictor();
     predictor.script([

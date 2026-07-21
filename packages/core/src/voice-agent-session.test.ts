@@ -44,6 +44,8 @@ import type {
   LlmErrorPacket,
   TtsErrorPacket,
   PipelineErrorPacket,
+  AcousticSignalPacket,
+  TurnLocalizationPacket,
 } from "./packets.js";
 import {
   BYSTANDER_SPEAKER_TONE_HZ,
@@ -567,6 +569,48 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("surfaces control and blocked delegate metadata through the existing result event", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const results: Array<Record<string, unknown>> = [];
+    session.on("delegate_result", (event) => results.push(event));
+    await session.start();
+
+    session.bus.push(Route.Background, {
+      kind: "delegate.result",
+      contextId: "turn-control",
+      timestampMs: Date.now(),
+      query: "route me",
+      answer: "",
+      durationMs: 1,
+      grounded: false,
+      control: { name: "handoff", payload: { targetAgent: "billing" } },
+    });
+    session.bus.push(Route.Background, {
+      kind: "delegate.result",
+      contextId: "turn-blocked",
+      timestampMs: Date.now(),
+      query: "blocked request",
+      answer: "I cannot help with that.",
+      durationMs: 2,
+      grounded: false,
+      blocked: { userFacingMessage: "I cannot help with that." },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        turnId: "turn-control",
+        control: { name: "handoff", payload: { targetAgent: "billing" } },
+      }),
+      expect.objectContaining({
+        turnId: "turn-blocked",
+        blocked: { userFacingMessage: "I cannot help with that." },
+      }),
+    ]);
+
+    await closeSession(session);
+  });
+
   it("emits a decomposed turn_latency session event on first TTS audio", async () => {
     const exporter = new InMemoryMetricsExporter();
     const session = new VoiceAgentSession({
@@ -636,6 +680,7 @@ describe("VoiceAgentSession", () => {
         model: "model-1",
         region: "region-1",
         cancelled: "false",
+        layer: "infrastructure",
         anchor: "speech_end",
         filler_used: "false",
         backchannel_used: "false",
@@ -3763,6 +3808,115 @@ describe("VoiceAgentSession supersede + thinking-phase barge-in", () => {
   });
 });
 
+describe("VoiceAgentSession observability seams", () => {
+  it("localizes infrastructure, conversation, and clean turns independently", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const localizations: TurnLocalizationPacket[] = [];
+    session.bus.on("turn.localization", (pkt) => { localizations.push(pkt as TurnLocalizationPacket); });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "infra-turn",
+      timestampMs: 0,
+    } satisfies VadSpeechEndedPacket);
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "infra-turn",
+      timestampMs: 0,
+      text: "hello",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "infra-turn",
+      timestampMs: 1000,
+      audio: new Uint8Array([1, 2]),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "infra-turn",
+      timestampMs: 1001,
+    } satisfies TextToSpeechEndPacket);
+
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: "conversation-turn",
+      timestampMs: 2,
+      name: "outcome.failed",
+      value: "task_failure",
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "conversation-turn",
+      timestampMs: 3,
+    } satisfies TextToSpeechEndPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "clean-turn",
+      timestampMs: 4,
+    } satisfies TextToSpeechEndPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(localizations.map((event) => [event.contextId, event.value])).toEqual([
+      ["infra-turn", "infrastructure"],
+      ["conversation-turn", "conversation"],
+      ["clean-turn", "none"],
+    ]);
+    expect(localizations.find((event) => event.contextId === "conversation-turn")).toMatchObject({
+      infrastructureBreached: false,
+      conversationFlagged: true,
+    });
+
+    await closeSession(session);
+  });
+
+  it("emits distinct backchannel and interruption acoustic signals with conversation tags", async () => {
+    const exporter = new InMemoryMetricsExporter();
+    const session = new VoiceAgentSession({ plugins: {}, metricsExporter: exporter });
+    const signals: AcousticSignalPacket[] = [];
+    session.bus.on("acoustic.signal", (pkt) => { signals.push(pkt as AcousticSignalPacket); });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "assistant-turn",
+      timestampMs: 1,
+      audio: new Uint8Array(16000),
+      sampleRateHz: 16000,
+    } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "backchannel-turn",
+      timestampMs: 2,
+      text: "yeah",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "assistant-turn",
+      timestampMs: 3,
+      source: "vad",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(signals.map((signal) => signal.signal)).toEqual(["backchannel", "interruption"]);
+    expect(exporter.counters.filter((counter) => counter.name.startsWith("acoustic.")).map((counter) => counter.name)).toEqual([
+      "acoustic.backchannel",
+      "acoustic.interruption",
+    ]);
+    for (const counter of exporter.counters.filter((entry) => entry.name.startsWith("acoustic."))) {
+      expect(counter.tags).toMatchObject({ layer: "conversation" });
+      expect(counter.tags).not.toHaveProperty("contextId");
+    }
+
+    await closeSession(session);
+  });
+});
+
 describe("VoiceAgentSession usage metering", () => {
   it("accumulates usage.recorded across turns and emits a session.usage manifest at close", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
@@ -3803,7 +3957,12 @@ describe("VoiceAgentSession usage metering", () => {
     const usageCounters = exporter.counters.filter((c) => c.name.startsWith("usage."));
     expect(usageCounters.length).toBeGreaterThan(0);
     for (const c of usageCounters) {
-      expect(c.tags).toEqual({ stage: "llm", provider: "openai", model: "gpt-4.1-mini" });
+      expect(c.tags).toEqual({
+        stage: "llm",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        layer: "infrastructure",
+      });
       expect(c.tags).not.toHaveProperty("contextId");
       expect(Object.values(c.tags)).not.toContain("secret-session-42");
     }

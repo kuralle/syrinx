@@ -464,6 +464,54 @@ export class ReasoningBridge implements VoicePlugin {
                   value: "1",
                 });
                 break;
+              case "control":
+                push(Route.Background, {
+                  kind: "delegate.result",
+                  contextId,
+                  timestampMs: Date.now(),
+                  query: userText,
+                  answer: reply,
+                  durationMs: Date.now() - queryStartedMs,
+                  grounded,
+                  control: {
+                    name: part.name,
+                    payload: part.payload,
+                  },
+                });
+                break;
+              case "blocked": {
+                if (signal.aborted) return;
+                const safeMessage = part.userFacingMessage;
+                const blockedMs = Date.now();
+                push(Route.Main, {
+                  kind: "llm.delta",
+                  contextId,
+                  timestampMs: blockedMs,
+                  text: safeMessage,
+                });
+                push(Route.Main, {
+                  kind: "llm.done",
+                  contextId,
+                  timestampMs: blockedMs,
+                  text: safeMessage,
+                });
+                push(Route.Background, {
+                  kind: "delegate.result",
+                  contextId,
+                  timestampMs: blockedMs,
+                  query: userText,
+                  answer: safeMessage,
+                  durationMs: blockedMs - queryStartedMs,
+                  grounded,
+                  blocked: {
+                    userFacingMessage: safeMessage,
+                    payload: part.payload,
+                  },
+                });
+                defer(() => this.rememberTurn(userText, safeMessage, contextId));
+                committed = true;
+                return;
+              }
               case "error":
                 throw part.cause;
               case "finish":

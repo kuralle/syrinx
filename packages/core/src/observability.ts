@@ -7,6 +7,21 @@ export function monotonicNowMs(): number {
   return performance.timeOrigin + performance.now();
 }
 
+export type ObservabilityLayer = "infrastructure" | "conversation";
+
+export type TurnLocalizationVerdict = ObservabilityLayer | "none";
+
+export interface TurnLocalizationSignals {
+  readonly infrastructureBreached: boolean;
+  readonly conversationFlagged: boolean;
+}
+
+export function localizeTurn(signals: TurnLocalizationSignals): TurnLocalizationVerdict {
+  if (signals.infrastructureBreached) return "infrastructure";
+  if (signals.conversationFlagged) return "conversation";
+  return "none";
+}
+
 /** One step of a reconstructed turn timeline, with elapsed ms since the prior boundary. */
 export interface TurnTimelineStep {
   readonly boundary: TurnBoundaryEventPacket["boundary"];
@@ -46,7 +61,8 @@ export function reconstructTurnTimeline(
 }
 
 export interface MetricTags {
-  readonly [key: string]: string;
+  readonly [key: string]: string | undefined;
+  readonly layer?: ObservabilityLayer;
 }
 
 export interface SpanHandle {

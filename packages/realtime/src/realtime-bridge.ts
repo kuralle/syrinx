@@ -358,6 +358,8 @@ export class RealtimeBridge implements VoicePlugin {
     this.inflight = controller;
     let answer = "";
     let grounded = false;
+    let blockedMessage: string | undefined;
+    let blockedPayload: unknown;
     let passStartedMs = Date.now();
     let passTtftRecorded = false;
     const pushConversationMetric = (name: string, value: string, timestampMs: number): void => {
@@ -410,6 +412,26 @@ export class RealtimeBridge implements VoicePlugin {
             passTtftRecorded = false;
             pushConversationMetric("llm.call_started", "1", passStartedMs);
             break;
+          case "control": {
+            const controlMs = Date.now();
+            bus.push(Route.Background, {
+              kind: "delegate.result",
+              contextId,
+              timestampMs: controlMs,
+              query: userText,
+              answer,
+              durationMs: controlMs - queryStartedMs,
+              grounded,
+              toolId: ev.toolId,
+              toolName: ev.toolName,
+              control: { name: part.name, payload: part.payload },
+            });
+            break;
+          }
+          case "blocked":
+            blockedMessage = part.userFacingMessage;
+            blockedPayload = part.payload;
+            break;
           case "finish":
             if (!answer && part.text) answer = part.text;
             break;
@@ -426,6 +448,7 @@ export class RealtimeBridge implements VoicePlugin {
             this.onError(bus, part.cause, true);
             return;
         }
+        if (blockedMessage !== undefined) break;
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -434,6 +457,24 @@ export class RealtimeBridge implements VoicePlugin {
     } finally {
       // Only clear if still ours — a newer delegate may have replaced this.inflight.
       if (this.inflight === controller) this.inflight = undefined;
+    }
+
+    if (blockedMessage !== undefined) {
+      const blockedMs = Date.now();
+      bus.push(Route.Background, {
+        kind: "delegate.result",
+        contextId,
+        timestampMs: blockedMs,
+        query: userText,
+        answer: blockedMessage,
+        durationMs: blockedMs - queryStartedMs,
+        grounded,
+        toolId: ev.toolId,
+        toolName: ev.toolName,
+        blocked: { userFacingMessage: blockedMessage, payload: blockedPayload },
+      });
+      this.adapter.injectToolResult(ev.toolId, this.formatToolResult(blockedMessage));
+      return;
     }
 
     if (answer.length === 0) {

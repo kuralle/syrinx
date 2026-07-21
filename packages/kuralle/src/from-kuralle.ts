@@ -4,6 +4,7 @@ import type { Reasoner, ReasonerTurn, ReasoningPart } from "@kuralle-syrinx/core
 import { categorizeLlmError, isRecoverable } from "@kuralle-syrinx/core";
 
 export interface KuralleStreamPart {
+  readonly [key: string]: unknown;
   readonly type: string;
   readonly delta?: string;
   readonly toolName?: string;
@@ -16,6 +17,8 @@ export interface KuralleStreamPart {
   readonly options?: unknown;
   readonly prompt?: string;
   readonly sessionId?: string;
+  readonly userFacingMessage?: string;
+  readonly payload?: unknown;
 }
 
 export interface KuralleMessageLike {
@@ -280,10 +283,18 @@ export async function* streamFromKuralle(
             payload: part,
           };
           return;
+        case "safety-blocked":
+          yield {
+            type: "blocked",
+            userFacingMessage: String(part.userFacingMessage ?? "This request cannot be completed."),
+            payload: part,
+          };
+          return;
         case "done":
           yield { type: "finish", reason: "stop", text: acc };
           return;
         default:
+          yield { type: "control", name: part.type, payload: part };
           break;
       }
       if (aborted) break;

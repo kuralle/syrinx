@@ -127,6 +127,7 @@ describe("ObservabilityObserver", () => {
         model: "m1",
         region: "r1",
         cancelled: "false",
+        layer: "conversation",
       });
 
       const thinking = exporter.histograms.find((h) => h.name === "thinking_ms");
