@@ -1,7 +1,41 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
+
+describe("normalizeForSpeech", () => {
+  it("strips bold, italic, strikethrough, and code markers", () => {
+    expect(normalizeForSpeech("This is **bold** and *italic* and `code`.")).toBe(
+      "This is bold and italic and code.",
+    );
+    expect(normalizeForSpeech("__strong__ and _em_ and ~~gone~~")).toBe("strong and em and gone");
+  });
+
+  it("reduces a markdown link to its label", () => {
+    expect(normalizeForSpeech("See [the deadline](https://x.edu/deadline) today.")).toBe(
+      "See the deadline today.",
+    );
+  });
+
+  it("removes leading block markers: headings, bullets, quotes, numbered lists", () => {
+    expect(normalizeForSpeech("## Deadlines")).toBe("Deadlines");
+    expect(normalizeForSpeech("- upload the form")).toBe("upload the form");
+    expect(normalizeForSpeech("1. first step")).toBe("first step");
+    expect(normalizeForSpeech("> a quote")).toBe("a quote");
+  });
+
+  it("leaves ordinary prose untouched", () => {
+    const prose = "Your late add deadline was February 5th, and the fee is 40 dollars.";
+    expect(normalizeForSpeech(prose)).toBe(prose);
+  });
+
+  it("does not mangle a lone asterisk or hash inside prose", () => {
+    // Conservative: an isolated * or # that isn't a paired/leading marker stays.
+    expect(normalizeForSpeech("Use the * key or press # to continue.")).toBe(
+      "Use the * key or press # to continue.",
+    );
+  });
+});
 
 describe("isCompleteVoiceText", () => {
   it("treats terminal punctuation as complete", () => {

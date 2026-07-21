@@ -81,6 +81,44 @@ export function appendVoiceText(existing: string, next: string): string {
   return `${existing} ${normalizedNext}`;
 }
 
+/**
+ * Normalize a speakable segment so TTS does not read formatting aloud.
+ *
+ * LLM output is full of markdown — `**bold**`, `## heading`, `` `code` ``, `[text](url)` —
+ * and a TTS engine narrates the punctuation literally ("star star bold star star"). This is
+ * the single highest-frequency voice bug class and has no app-layer fix, because the text is
+ * generated inside the pipeline. Vapi ships a 14-step "voice formatting plan" on by default;
+ * this is the locale-free core of it: markdown removal.
+ *
+ * Deliberately conservative — it strips *formatting* markers, never content, so a sentence
+ * that legitimately contains an asterisk or a hash in prose is left intact where ambiguous.
+ * Number/currency/date verbalization is locale-sensitive and intentionally NOT done here yet;
+ * doing it wrong (wrong locale, wrong magnitude) speaks worse than leaving the digits. That is
+ * a separate stage, not a silent omission.
+ */
+export function normalizeForSpeech(text: string): string {
+  let out = text;
+  // Links/images: [label](url) -> label ; ![alt](url) -> alt
+  out = out.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Bold/italic/strikethrough: **x** __x__ *x* _x_ ~~x~~ -> x
+  out = out.replace(/(\*\*|__)(.+?)\1/g, "$2");
+  out = out.replace(/(\*|_)(?=\S)(.+?)(?<=\S)\1/g, "$2");
+  out = out.replace(/~~(.+?)~~/g, "$1");
+  // Inline + fenced code: `x` and ```x``` -> x
+  out = out.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, "$1");
+  out = out.replace(/`([^`]+)`/g, "$1");
+  // Leading block markers per line: headings (#), blockquotes (>), list bullets (-,*,+), numbered lists.
+  out = out.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+  out = out.replace(/^\s{0,3}>\s?/gm, "");
+  out = out.replace(/^\s{0,3}[-*+]\s+/gm, "");
+  out = out.replace(/^\s{0,3}\d+\.\s+/gm, "");
+  // Horizontal rules on their own line.
+  out = out.replace(/^\s{0,3}([-*_])\1{2,}\s*$/gm, "");
+  // Collapse whitespace the stripping may have opened up, preserving single spaces.
+  out = out.replace(/[ \t]{2,}/g, " ");
+  return out;
+}
+
 function isClosingPunctuation(char: string): boolean {
   return char === ")" || char === "]" || char === "}" || char === "\"" || char === "'" || char === "”" || char === "’";
 }

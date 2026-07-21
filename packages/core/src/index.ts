@@ -262,6 +262,9 @@ export {
   type LatencyFillerFixture,
 } from "./latency-filler-fixtures.js";
 
+// Voice text: markdown/formatting normalization before TTS
+export { normalizeForSpeech } from "./voice-text.js";
+
 // Reasoner seam (RFC §4.2)
 export {
   type Reasoner,

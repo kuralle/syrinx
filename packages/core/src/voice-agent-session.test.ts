@@ -3811,6 +3811,27 @@ describe("VoiceAgentSession usage metering", () => {
     expect(usageCounters.find((c) => c.name === "usage.totalTokens")?.value).toBe(15);
   });
 
+  it("strips markdown from LLM text before it reaches tts.text (wiring, not just the fn)", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const spoken: string[] = [];
+    session.bus.on("tts.text", (pkt) => spoken.push((pkt as { text: string }).text));
+    await session.start();
+
+    // A complete sentence full of markdown — must be spoken clean, not read literally.
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "md-turn",
+      timestampMs: Date.now(),
+      text: "Your **late add** deadline is on the [portal](https://x.edu).",
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    await closeSession(session);
+
+    expect(spoken.join(" ")).toContain("Your late add deadline is on the portal.");
+    expect(spoken.join(" ")).not.toContain("**");
+    expect(spoken.join(" ")).not.toContain("](http");
+  });
+
   it("emits no usage manifest when no usage was recorded", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const manifests: unknown[] = [];

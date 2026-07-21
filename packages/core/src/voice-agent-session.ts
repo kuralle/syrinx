@@ -66,7 +66,7 @@ import {
 } from "./packets.js";
 import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
-import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
@@ -1233,8 +1233,11 @@ export class VoiceAgentSession {
     if (complete.text) {
       const timing = this.turnTimings.get(contextId);
       if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
-      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), complete.text));
-      buffer.emitted = appendVoiceText(buffer.emitted, complete.text);
+      // Strip markdown before it reaches TTS, and track the SPOKEN form as the heard
+      // prefix so barge-in truncation reconciles against what was actually said.
+      const spoken = normalizeForSpeech(complete.text);
+      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), spoken));
+      buffer.emitted = appendVoiceText(buffer.emitted, spoken);
     }
     buffer.pending = complete.remaining;
     this.ttsTextBuffers.set(contextId, buffer);
@@ -1243,7 +1246,7 @@ export class VoiceAgentSession {
   private flushTtsText(contextId: string, tsMs?: number): string {
     const buffer = this.ttsTextBuffers.get(contextId);
     if (!buffer) return "";
-    const tail = buffer.pending.trim();
+    const tail = normalizeForSpeech(buffer.pending.trim());
     if (tail) {
       const timing = this.turnTimings.get(contextId);
       if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
