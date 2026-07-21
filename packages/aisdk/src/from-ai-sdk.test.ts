@@ -20,6 +20,10 @@ const ZERO_USAGE = {
   totalTokens: 0,
 };
 
+// What the finish ReasoningPart now carries, forwarded from totalUsage. Nested
+// detail fields (cache/reasoning) are not surfaced, so only the three top-level counts appear.
+const FINISH_USAGE = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
 function baseTurn(): ReasonerTurn {
   return {
     userText: "Hi",
@@ -131,7 +135,7 @@ describe("from-ai-sdk adapters", () => {
         toolName: "get_weather",
         result: JSON.stringify({ temp: 72 }),
       },
-      { type: "finish", reason: "stop", text: "Hello world." },
+      { type: "finish", reason: "stop", text: "Hello world.", usage: FINISH_USAGE },
     ]);
   });
 
@@ -213,7 +217,7 @@ describe("from-ai-sdk adapters", () => {
 
     expect(parts).toEqual([
       { type: "text-delta", text: "truncated" },
-      { type: "finish", reason: "length", text: "truncated" },
+      { type: "finish", reason: "length", text: "truncated", usage: FINISH_USAGE },
     ]);
   });
 
@@ -239,7 +243,7 @@ describe("from-ai-sdk adapters", () => {
 
     expect(parts).toEqual([
       { type: "text-delta", text: "answer" },
-      { type: "finish", reason: "stop", text: "answer" },
+      { type: "finish", reason: "stop", text: "answer", usage: FINISH_USAGE },
     ]);
   });
 
@@ -294,7 +298,7 @@ describe("from-ai-sdk adapters", () => {
     expect(parts).toEqual([
       { type: "text-delta", text: "From " },
       { type: "text-delta", text: "agent" },
-      { type: "finish", reason: "stop", text: "From agent" },
+      { type: "finish", reason: "stop", text: "From agent", usage: FINISH_USAGE },
     ]);
   });
 });

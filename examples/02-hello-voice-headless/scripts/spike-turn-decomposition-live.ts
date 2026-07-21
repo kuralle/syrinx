@@ -332,6 +332,9 @@ async function main(): Promise<void> {
     });
 
   const m = newMarks();
+  // The end-of-session usage manifest — the token counts the bridge used to drop.
+  const usageManifests: Array<{ stages: readonly { stage: string; totalTokens?: number; inputTokens?: number; outputTokens?: number }[] }> = [];
+  session.on("usage", (e: { stages: readonly { stage: string; totalTokens?: number; inputTokens?: number; outputTokens?: number }[] }) => usageManifests.push(e));
   const shipped: TurnLatencyEvent[] = [];
   const spoken = { text: "", firstAtMs: 0 };
   const spec = { started: 0, discarded: 0, promoted: 0 };
@@ -405,6 +408,16 @@ async function main(): Promise<void> {
     `speech duration: ${m.speechEndMs - m.speechStartMs}ms`,
     "",
     `v2v (last speech frame -> first assistant audio): ${v2v}ms`,
+    "",
+    "usage manifest (the token counts the bridge used to DROP):",
+    ...(usageManifests.length
+      ? usageManifests.flatMap((mn) =>
+          mn.stages.map(
+            (s) =>
+              `  ${s.stage}: input=${s.inputTokens ?? "?"} output=${s.outputTokens ?? "?"} total=${s.totalTokens ?? "?"}`,
+          ),
+        )
+      : ["  (no usage captured)"]),
     "",
     "stage attribution:",
     `  endpoint   (speechEnd -> eos.turn_complete)  ${String(endpoint).padStart(6)}ms  ${pct(endpoint)}`,

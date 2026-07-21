@@ -32,6 +32,8 @@ import type {
   DelegateQueryPacket,
   DelegateResultPacket,
   ConversationMetricPacket,
+  UsageStage,
+  UsageRecordedPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   LlmToolCallPacket,
@@ -244,9 +246,28 @@ export interface VoiceAgentSessionEvents {
   }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
   agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
+  /**
+   * End-of-session usage manifest — the total billable resource this session consumed,
+   * summed per stage. Emitted once at close. This is the metering seam a host reads to
+   * bill, cap spend, or attribute cost to a tenant; today only the LLM stage is populated
+   * (STT/TTS producers are not yet wired), so `stages` may hold a single entry.
+   */
+  usage: (event: { tsMs: number; stages: readonly SessionStageUsage[] }) => void;
   error: (event: { tsMs: number; stage: string; category: string; message: string }) => void;
   closed: (event: { tsMs: number; reason: string }) => void;
   state_changed: (event: { tsMs: number; from: SessionState; to: SessionState }) => void;
+}
+
+/** Per-stage usage totals for a session. Absent fields were never reported by that stage. */
+export interface SessionStageUsage {
+  readonly stage: UsageStage;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly audioSeconds?: number;
+  readonly characters?: number;
 }
 
 type EventHandler<T> = (event: T) => void;
@@ -326,6 +347,8 @@ export class VoiceAgentSession {
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
   private pendingTurnLatency = new Map<string, number>();
+  /** Running usage totals per stage, summed across the session; emitted at close. */
+  private readonly usageByStage = new Map<UsageStage, SessionStageUsage>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
   private readonly pendingInteractionPlayoutTimers = new Set<string>();
@@ -570,6 +593,9 @@ export class VoiceAgentSession {
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
 
+    // 2b. Emit the end-of-session usage manifest before the bus stops — the metering seam.
+    this.emitSessionUsage();
+
     // 3. Stop bus
     this.bus.stop();
     await this.busStartPromise;
@@ -672,6 +698,7 @@ export class VoiceAgentSession {
     this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
     this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
     this.bus.on("metric.conversation", this.handleConversationMetric.bind(this));
+    this.bus.on("usage.recorded", (pkt) => this.handleUsageRecorded(pkt as UsageRecordedPacket));
 
     // Delegate (Responder-Thinker) observability — G2, RFC bimodel-delegate-seam
     this.bus.on("delegate.query", this.handleDelegateQuery.bind(this));
@@ -1393,6 +1420,49 @@ export class VoiceAgentSession {
       const timing = this.timingFor(pkt.contextId);
       (timing.llmPassTtftMs ??= []).push(ttftMs);
     }
+  }
+
+  private static readonly USAGE_FIELDS = [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "reasoningTokens",
+    "audioSeconds",
+    "characters",
+  ] as const;
+
+  private handleUsageRecorded(pkt: UsageRecordedPacket): void {
+    // Accumulate into the per-stage running total. A missing field stays missing
+    // (never coerced to 0) so an un-reported dimension is distinguishable from a real 0.
+    const prev = this.usageByStage.get(pkt.stage) ?? { stage: pkt.stage };
+    const next: Record<string, unknown> = { ...prev };
+    for (const field of VoiceAgentSession.USAGE_FIELDS) {
+      const add = pkt[field];
+      if (typeof add === "number") next[field] = ((prev[field] as number | undefined) ?? 0) + add;
+    }
+    this.usageByStage.set(pkt.stage, next as unknown as SessionStageUsage);
+
+    // Export each recorded unit as a counter, tagged low-cardinality only — same
+    // discipline as turn_latency. provider/model are exemplar-safe; contextId is not,
+    // and must never become a metric dimension (LiveKit caps at model/provider).
+    const exporter = this.metricsExporter;
+    if (exporter.observeCounter) {
+      const tags = {
+        stage: pkt.stage,
+        provider: pkt.provider ?? "",
+        model: pkt.model ?? "",
+      };
+      for (const field of VoiceAgentSession.USAGE_FIELDS) {
+        const value = pkt[field];
+        if (typeof value === "number") exporter.observeCounter(`usage.${field}`, value, tags);
+      }
+    }
+  }
+
+  private emitSessionUsage(): void {
+    if (this.usageByStage.size === 0) return;
+    this.emit("usage", { tsMs: Date.now(), stages: [...this.usageByStage.values()] });
   }
 
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {

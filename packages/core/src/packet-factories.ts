@@ -10,6 +10,7 @@
 import type { WordTiming } from "./interaction-policy.js";
 import { ErrorCategory } from "./packets.js";
 import type {
+  UsageRecordedPacket,
   ConversationMetricPacket,
   TurnBoundaryKind,
   TurnBoundaryEventPacket,
@@ -72,6 +73,14 @@ export function metric(
   timestampMs: number = Date.now(),
 ): ConversationMetricPacket {
   return { kind: "metric.conversation", contextId, timestampMs, name, value };
+}
+
+export function usageRecorded(
+  contextId: string,
+  fields: Omit<UsageRecordedPacket, "kind" | "contextId" | "timestampMs">,
+  timestampMs: number = Date.now(),
+): UsageRecordedPacket {
+  return { kind: "usage.recorded", contextId, timestampMs, ...fields };
 }
 
 export function turnBoundary(

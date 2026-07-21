@@ -474,6 +474,18 @@ export class ReasoningBridge implements VoicePlugin {
                   name: "llm.finish_reason",
                   value: part.reason,
                 });
+                // Record billable token usage — the field the bridge used to drop.
+                // A turn with tool calls produces several finish parts; the session
+                // accumulator sums them, so emit per-finish rather than once per turn.
+                if (part.usage) {
+                  push(Route.Background, {
+                    kind: "usage.recorded",
+                    contextId,
+                    timestampMs: Date.now(),
+                    stage: "llm",
+                    ...part.usage,
+                  });
+                }
                 finishReason = part.reason;
                 break;
               case "suspended": {

@@ -547,6 +547,35 @@ export interface ConversationMetricPacket extends VoicePacket {
   readonly value: string;
 }
 
+/** The pipeline stage that consumed resources. Billing planes group cost by this. */
+export type UsageStage = "llm" | "stt" | "tts";
+
+/**
+ * One unit of billable resource consumption, recorded where it happens.
+ *
+ * The full shape is defined up front — LLM tokens, STT audio-seconds, TTS characters —
+ * so a producer added later needs no schema change; only the LLM producer is wired today
+ * (the AI SDK finish part carries usage the bridge had been dropping). `VoiceAgentSession`
+ * accumulates these into an end-of-session `session.usage` manifest and exports them as
+ * counters — the load-bearing seam for metering, spend caps, and eventual per-tenant billing.
+ * Fields not applicable to a stage are simply absent (tokens on STT/TTS, seconds on LLM).
+ */
+export interface UsageRecordedPacket extends VoicePacket {
+  readonly kind: "usage.recorded";
+  readonly stage: UsageStage;
+  readonly provider?: string;
+  readonly model?: string;
+  // LLM
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  // STT / TTS
+  readonly audioSeconds?: number;
+  readonly characters?: number;
+}
+
 export type TurnBoundaryKind =
   | "user_started_speaking"
   | "user_stopped_speaking"
@@ -638,7 +667,10 @@ export type AnyErrorPacket =
   | InitializationFailedPacket;
 
 /** Observability packets (Background route). */
-export type ObservabilityPacket = ConversationMetricPacket | TurnBoundaryEventPacket;
+export type ObservabilityPacket =
+  | ConversationMetricPacket
+  | TurnBoundaryEventPacket
+  | UsageRecordedPacket;
 
 /** Delegate (Responder-Thinker) lifecycle packets (Background route). */
 export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;

@@ -8,6 +8,7 @@
 import {
   streamText,
   type FinishReason,
+  type LanguageModelUsage,
   type ModelMessage,
   type TextStreamPart,
   type ToolChoice,
@@ -19,6 +20,7 @@ import {
   type Reasoner,
   type ReasonerMessage,
   type ReasonerTurn,
+  type ReasonerUsage,
   type ReasoningPart,
 } from "@kuralle-syrinx/core";
 import type { AISDKStreamFactory } from "./index.js";
@@ -176,6 +178,9 @@ async function* mapTextStreamParts(
             type: "finish",
             reason: mapFinishReason(part.finishReason),
             text: accumulatedText,
+            // The AI SDK finish part carries totalUsage; forward it so the bridge can
+            // record cost. Omit entirely when the provider reported nothing.
+            ...(part.totalUsage ? { usage: toReasonerUsage(part.totalUsage) } : {}),
           };
           return;
         }
@@ -201,6 +206,17 @@ async function* mapTextStreamParts(
   if (!sawFinish) {
     yield toErrorPart(new Error("AI SDK stream ended without a provider finish reason"));
   }
+}
+
+/** Copy only the token fields the SDK actually populated (all are `number | undefined`). */
+function toReasonerUsage(u: LanguageModelUsage): ReasonerUsage {
+  return {
+    ...(u.inputTokens !== undefined ? { inputTokens: u.inputTokens } : {}),
+    ...(u.outputTokens !== undefined ? { outputTokens: u.outputTokens } : {}),
+    ...(u.totalTokens !== undefined ? { totalTokens: u.totalTokens } : {}),
+    ...(u.cachedInputTokens !== undefined ? { cachedInputTokens: u.cachedInputTokens } : {}),
+    ...(u.reasoningTokens !== undefined ? { reasoningTokens: u.reasoningTokens } : {}),
+  };
 }
 
 function mapFinishReason(finishReason: FinishReason): "stop" | "tool" | "length" {

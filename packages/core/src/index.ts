@@ -126,6 +126,8 @@ export {
 export {
   type MessageCreatePacket,
   type ConversationMetricPacket,
+  type UsageStage,
+  type UsageRecordedPacket,
   type TurnBoundaryKind,
   type TurnBoundaryEventPacket,
   type ObservabilityPacket,
@@ -222,7 +224,12 @@ export {
 } from "./packets.js";
 
 // VoiceAgentSession
-export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";
+export {
+  VoiceAgentSession,
+  type VoiceAgentSessionConfig,
+  type VoiceAgentSessionEvents,
+  type SessionStageUsage,
+} from "./voice-agent-session.js";
 
 // Primary-speaker barge-in gate (VE-02)
 export {
@@ -260,6 +267,7 @@ export {
   type Reasoner,
   type ReasonerTurn,
   type ReasonerMessage,
+  type ReasonerUsage,
   type ReasoningPart,
 } from "./reasoner.js";
 

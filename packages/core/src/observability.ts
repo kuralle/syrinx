@@ -56,12 +56,20 @@ export interface SpanHandle {
 /** Export seam — implementations (Prometheus/OTel) live in optional packages, NOT here. */
 export interface MetricsExporter {
   observeHistogram(name: string, valueMs: number, tags: MetricTags): void;
+  /**
+   * A monotonic count (tokens, characters, audio-seconds). Counters, not histograms:
+   * usage sums to a bill, latency distributes to a percentile — different instruments.
+   * Optional so an existing exporter that predates it still satisfies the interface;
+   * producers call it as `exporter.observeCounter?.(...)`.
+   */
+  observeCounter?(name: string, value: number, tags: MetricTags): void;
   startSpan(name: string, tags: MetricTags): SpanHandle;
 }
 
 /** Default no-op exporter (core never depends on a backend). */
 export const noopMetricsExporter: MetricsExporter = {
   observeHistogram() {},
+  observeCounter() {},
   startSpan() {
     return { end() {} };
   },
@@ -70,10 +78,15 @@ export const noopMetricsExporter: MetricsExporter = {
 /** In-memory exporter for tests + incident reconstruction. */
 export class InMemoryMetricsExporter implements MetricsExporter {
   readonly histograms: Array<{ name: string; valueMs: number; tags: MetricTags }> = [];
+  readonly counters: Array<{ name: string; value: number; tags: MetricTags }> = [];
   readonly spans: Array<{ name: string; tags: MetricTags; durationMs?: number }> = [];
 
   observeHistogram(name: string, valueMs: number, tags: MetricTags): void {
     this.histograms.push({ name, valueMs, tags });
+  }
+
+  observeCounter(name: string, value: number, tags: MetricTags): void {
+    this.counters.push({ name, value, tags });
   }
 
   startSpan(name: string, tags: MetricTags): SpanHandle {

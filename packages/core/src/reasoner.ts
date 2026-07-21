@@ -56,5 +56,24 @@ export type ReasoningPart =
   // thrown TextStreamPart `error`/`tool-error`/`finish-step(error)`: it drives the
   // retry/`llm.error` path. `recoverable` mirrors `categorizeLlmError`. ALWAYS terminal.
   | { readonly type: "error"; readonly cause: Error; readonly recoverable: boolean }
-  | { readonly type: "finish"; readonly reason: "stop" | "tool" | "length"; readonly text: string };
+  | {
+      readonly type: "finish";
+      readonly reason: "stop" | "tool" | "length";
+      readonly text: string;
+      /**
+       * Billable token usage for this turn, when the backend reports it. Optional —
+       * a reasoner that cannot report usage omits it, and the metering path treats a
+       * missing field as "unknown", never zero. Consumed into `usage.recorded`.
+       */
+      readonly usage?: ReasonerUsage;
+    };
+
+/** Token usage a reasoner may attach to its terminal `finish` part. */
+export interface ReasonerUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+}
 

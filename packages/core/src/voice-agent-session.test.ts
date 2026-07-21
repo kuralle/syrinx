@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi } from "vitest";
-import { VoiceAgentSession } from "./voice-agent-session.js";
+import { VoiceAgentSession, type SessionStageUsage } from "./voice-agent-session.js";
 import {
   Route,
   type InteractionDecision,
@@ -3760,5 +3760,63 @@ describe("VoiceAgentSession supersede + thinking-phase barge-in", () => {
     expect(userInputs.some((p) => p.contextId === "turn-2")).toBe(false);
 
     await closeSession(session);
+  });
+});
+
+describe("VoiceAgentSession usage metering", () => {
+  it("accumulates usage.recorded across turns and emits a session.usage manifest at close", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const manifests: Array<{ stages: readonly SessionStageUsage[] }> = [];
+    session.on("usage", (e) => manifests.push(e));
+    await session.start();
+
+    // Two LLM turns' worth of usage — the accumulator must SUM them, not overwrite.
+    session.bus.push(Route.Background, {
+      kind: "usage.recorded", contextId: "t1", timestampMs: Date.now(),
+      stage: "llm", inputTokens: 100, outputTokens: 40, totalTokens: 140,
+    });
+    session.bus.push(Route.Background, {
+      kind: "usage.recorded", contextId: "t2", timestampMs: Date.now(),
+      stage: "llm", inputTokens: 60, outputTokens: 20, totalTokens: 80,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    await closeSession(session);
+
+    expect(manifests).toHaveLength(1);
+    const llm = manifests[0]?.stages.find((s) => s.stage === "llm");
+    expect(llm).toEqual({ stage: "llm", inputTokens: 160, outputTokens: 60, totalTokens: 220 });
+  });
+
+  it("exports usage as counters with only low-cardinality tags (never contextId)", async () => {
+    const exporter = new InMemoryMetricsExporter();
+    const session = new VoiceAgentSession({ plugins: {}, metricsExporter: exporter });
+    await session.start();
+
+    session.bus.push(Route.Background, {
+      kind: "usage.recorded", contextId: "secret-session-42", timestampMs: Date.now(),
+      stage: "llm", provider: "openai", model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 5, totalTokens: 15,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    await closeSession(session);
+
+    const usageCounters = exporter.counters.filter((c) => c.name.startsWith("usage."));
+    expect(usageCounters.length).toBeGreaterThan(0);
+    for (const c of usageCounters) {
+      expect(c.tags).toEqual({ stage: "llm", provider: "openai", model: "gpt-4.1-mini" });
+      expect(c.tags).not.toHaveProperty("contextId");
+      expect(Object.values(c.tags)).not.toContain("secret-session-42");
+    }
+    // The actual counts made it through.
+    expect(usageCounters.find((c) => c.name === "usage.totalTokens")?.value).toBe(15);
+  });
+
+  it("emits no usage manifest when no usage was recorded", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const manifests: unknown[] = [];
+    session.on("usage", (e) => manifests.push(e));
+    await session.start();
+    await closeSession(session);
+    expect(manifests).toHaveLength(0);
   });
 });
