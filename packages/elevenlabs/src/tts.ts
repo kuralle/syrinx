@@ -29,7 +29,9 @@ import {
 import type { SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 
 const KEEP_ALIVE_INTERVAL_MS = 10_000;
-const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+// A premade voice in the default set — accessible to free API accounts. (Library voices like
+// Rachel 21m00Tcm4TlvDq8ikWAM require a paid plan: "cannot use library voices via the API".)
+const DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
 const DEFAULT_MODEL_ID = "eleven_flash_v2_5";
 const DEFAULT_VOICE_SETTINGS: Record<string, unknown> = { stability: 0.5, similarity_boost: 0.75 };
 
@@ -37,12 +39,14 @@ interface ElevenLabsWireConfig {
   readonly modelId: string;
   readonly audioFormat: AudioFormat;
   readonly voiceSettings: Record<string, unknown>;
+  readonly generationConfig?: Record<string, unknown>;
 }
 
 /** Exported for unit tests that exercise encode/decode without a live socket. */
 export class ElevenLabsWireProtocol implements WireProtocol {
   private readonly charactersByKey = new Map<AttributionKey, number>();
   private readonly initializedKeys = new Set<AttributionKey>();
+  private readonly billedKeys = new Set<AttributionKey>();
 
   constructor(private readonly cfg: ElevenLabsWireConfig) {}
 
@@ -57,7 +61,9 @@ export class ElevenLabsWireProtocol implements WireProtocol {
     // without it ElevenLabs accepts the text but generates NO audio (a final with no audio frames).
     if (!this.initializedKeys.has(key)) {
       this.initializedKeys.add(key);
-      frames.push(JSON.stringify({ text: " ", context_id: key, voice_settings: this.cfg.voiceSettings }));
+      const init: Record<string, unknown> = { text: " ", context_id: key, voice_settings: this.cfg.voiceSettings };
+      if (this.cfg.generationConfig) init["generation_config"] = this.cfg.generationConfig;
+      frames.push(JSON.stringify(init));
     }
     frames.push(JSON.stringify({ text, context_id: key }));
     return frames;
@@ -70,6 +76,7 @@ export class ElevenLabsWireProtocol implements WireProtocol {
   encodeCancel(key: AttributionKey, _contextId: string): SocketData[] {
     this.charactersByKey.delete(key);
     this.initializedKeys.delete(key);
+    this.billedKeys.delete(key);
     return [JSON.stringify({ context_id: key, close_context: true })];
   }
 
@@ -97,6 +104,29 @@ export class ElevenLabsWireProtocol implements WireProtocol {
           const bytes = new Uint8Array(decodeStrictBase64(audioB64, "ElevenLabs TTS provider audio"));
           assertAudioPayload(this.cfg.audioFormat, bytes);
           events.push({ type: "audio", key, pcm: bytes });
+          // Bill on real audio, once per context — NOT on isFinal. EL streams audio with
+          // isFinal:null and may not send a separate isFinal:true final (the socket close is the
+          // real end), and a rejected generation returns an empty final with no audio that must
+          // NOT be billed. Audio-received is the correct "synthesis happened" signal.
+          const characters = this.charactersByKey.get(key) ?? 0;
+          if (!this.billedKeys.has(key) && characters > 0) {
+            this.billedKeys.add(key);
+            const modelId = this.cfg.modelId;
+            events.push({
+              type: "sideband",
+              key,
+              route: Route.Background,
+              build: (ctxId, timestampMs) => ({
+                kind: "usage.recorded",
+                contextId: ctxId,
+                timestampMs,
+                stage: "tts" as const,
+                provider: "elevenlabs",
+                model: modelId,
+                characters,
+              }),
+            });
+          }
         } catch (err) {
           events.push({ type: "error", key, error: err instanceof Error ? err : new Error(String(err)) });
         }
@@ -104,26 +134,9 @@ export class ElevenLabsWireProtocol implements WireProtocol {
     }
 
     if (isFinalFlag(msg) && contextId) {
-      const characters = this.charactersByKey.get(key) ?? 0;
-      this.charactersByKey.delete(key);
-      if (characters > 0) {
-        const modelId = this.cfg.modelId;
-        events.push({
-          type: "sideband",
-          key,
-          route: Route.Background,
-          build: (ctxId, timestampMs) => ({
-            kind: "usage.recorded",
-            contextId: ctxId,
-            timestampMs,
-            stage: "tts" as const,
-            provider: "elevenlabs",
-            model: modelId,
-            characters,
-          }),
-        });
-      }
       events.push({ type: "context_end", key });
+      this.charactersByKey.delete(key);
+      this.billedKeys.delete(key);
       this.initializedKeys.delete(key);
     }
     return events;
@@ -147,10 +160,14 @@ export class ElevenLabsTTSPlugin implements VoicePlugin {
       `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/multi-stream-input`;
     const audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: sampleRate, channels: 1 };
     assertAudioFormat(audioFormat);
-    const outputFormat = pcmOutputFormat(sampleRate);
+    // Derive a sensible default from sample_rate, but let the dev override (mp3, ulaw_8000 for
+    // telephony, etc.) — never hard-pin the provider's own format knob.
+    const outputFormat = optionalStringConfig(config, "output_format") ?? pcmOutputFormat(sampleRate);
+    // Optional provider-specific passthrough for the multi-stream context-init frame.
+    const generationConfig = config["generation_config"] as Record<string, unknown> | undefined;
 
     this.session = await startStreamingTtsSession(bus, {
-      protocol: new ElevenLabsWireProtocol({ modelId, audioFormat, voiceSettings }),
+      protocol: new ElevenLabsWireProtocol({ modelId, audioFormat, voiceSettings, generationConfig }),
       provider: { name: "elevenlabs", model: modelId, region: "global" },
       format: audioFormat,
       sampleRateHz: sampleRate,

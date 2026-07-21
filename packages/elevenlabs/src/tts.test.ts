@@ -84,27 +84,21 @@ describe("ElevenLabsWireProtocol", () => {
     expect(JSON.parse(String(protocol.encodeClose()[0]))).toEqual({ close_socket: true });
   });
 
-  it("decodes base64 audio and final into audio + usage + context_end", () => {
+  it("bills usage on the audio frame (once), and emits context_end on final", () => {
     const key = attributionKey("turn-a");
     protocol.encodeText(key, "Hi");
     const pcm = new Uint8Array([1, 2, 3, 4]);
+    // EL streams audio with isFinal:null and may send no isFinal:true final — so usage rides the
+    // audio frame (real synthesis), not the final. A rejected empty final must not be billed.
     const events = protocol.decode(
-      JSON.stringify({
-        audio: Buffer.from(pcm).toString("base64"),
-        contextId: "turn-a",
-      }),
+      JSON.stringify({ audio: Buffer.from(pcm).toString("base64"), contextId: "turn-a" }),
       false,
     );
     expect(events).toEqual([
       expect.objectContaining({ type: "audio", key, pcm }),
-    ]);
-
-    const done = protocol.decode(JSON.stringify({ isFinal: true, contextId: "turn-a" }), false);
-    expect(done).toEqual([
       expect.objectContaining({ type: "sideband", key }),
-      expect.objectContaining({ type: "context_end", key }),
     ]);
-    const sideband = done[0] as Extract<(typeof done)[number], { type: "sideband" }>;
+    const sideband = events[1] as Extract<(typeof events)[number], { type: "sideband" }>;
     expect(sideband.build("turn-a", 1)).toEqual(
       expect.objectContaining({
         kind: "usage.recorded",
@@ -114,6 +108,21 @@ describe("ElevenLabsWireProtocol", () => {
         characters: 2,
       }),
     );
+
+    // A second audio frame does NOT double-bill.
+    const again = protocol.decode(JSON.stringify({ audio: Buffer.from(pcm).toString("base64"), contextId: "turn-a" }), false);
+    expect(again).toEqual([expect.objectContaining({ type: "audio", key, pcm })]);
+
+    // The final frame emits context_end only (no second sideband).
+    const done = protocol.decode(JSON.stringify({ isFinal: true, contextId: "turn-a" }), false);
+    expect(done).toEqual([expect.objectContaining({ type: "context_end", key })]);
+  });
+
+  it("does not bill a rejected empty final (audio:null, no synthesis)", () => {
+    const key = attributionKey("turn-reject");
+    protocol.encodeText(key, "rejected");
+    const done = protocol.decode(JSON.stringify({ audio: null, isFinal: true, contextId: "turn-reject" }), false);
+    expect(done).toEqual([expect.objectContaining({ type: "context_end", key })]); // NO sideband
   });
 
   it("does not bill cancelled contexts", () => {

@@ -39,7 +39,10 @@ async function main(): Promise<void> {
 
   // ---- TTS ----
   const tts = new ElevenLabsTTSPlugin(createNodeWsSocket);
-  await tts.initialize(bus, { api_key: apiKey, sample_rate: 16000 });
+  // Rachel (21m00…) is a library voice free accounts can't use via API; EXAVITQu4vr4xnSDxMaL (Sarah)
+  // is a premade voice in the account's own list. Override with EL_VOICE_ID for other accounts.
+  const voiceId = process.env["EL_VOICE_ID"] ?? "EXAVITQu4vr4xnSDxMaL";
+  await tts.initialize(bus, { api_key: apiKey, sample_rate: 16000, voice_id: voiceId });
   const ttsCtx = "el-tts";
   const text = "The application deadline is May first.";
   bus.push(Route.Main, { kind: "tts.text", contextId: ttsCtx, timestampMs: Date.now(), text });
