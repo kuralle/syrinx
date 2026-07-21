@@ -152,6 +152,47 @@ describe("OpenAICompatibleTTSPlugin", () => {
     await started;
   });
 
+  it("honors response_format override and keeps stream true by default", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      return new Response(streamFromChunks([pcmSilence(8)]), {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new OpenAICompatibleTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      base_url: "https://openai.test/v1",
+      response_format: "wav",
+      sample_rate: 16000,
+    });
+
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-fmt",
+      timestampMs: Date.now(),
+      text: "format",
+    });
+    await waitForCondition(() => ends.length >= 1);
+
+    const [_url, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.response_format).toBe("wav");
+    expect(body.stream).toBe(true);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("includes voice in body only when configured", async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       return new Response(streamFromChunks([pcmSilence(8)]), {

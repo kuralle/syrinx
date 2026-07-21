@@ -32,20 +32,6 @@ import {
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@kuralle-syrinx/ws";
 
 // =============================================================================
-// Types
-// =============================================================================
-
-interface GCPConfig {
-  recognizer: string;
-  encoding: string;
-  sampleRateHertz: number;
-  languageCodes: string[];
-  model: string;
-  enableAutomaticPunctuation: boolean;
-  interimResults: boolean;
-}
-
-// =============================================================================
 // Plugin
 // =============================================================================
 
@@ -64,12 +50,22 @@ export class GoogleSTTPlugin implements VoicePlugin {
   private apiKey: string = "";
   private projectId: string = "";
   private languageCode: string = "en-US";
+  private languageCodes: string[] = ["en-US"];
   private model: string = "latest_long";
   private endpointUrl: string | undefined;
   private currentContextId = "";
   private disposers: Array<() => void> = [];
   private recognizerPath = "";
+  private location = "global";
+  private recognizerId = "_";
   private sampleRate = 16000;
+  private encoding = "LINEAR16";
+  private audioChannelCount = 1;
+  private enableAutomaticPunctuation = true;
+  private enableWordConfidence = true;
+  private interimResults = true;
+  private recognitionFeatures: Record<string, unknown> | undefined;
+  private streamingFeatures: Record<string, unknown> | undefined;
   private confidenceThreshold = 0;
   private emitEosOnFinal = true;
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
@@ -84,13 +80,27 @@ export class GoogleSTTPlugin implements VoicePlugin {
     this.apiKey = requireStringConfig(config, "api_key");
     this.projectId = requireStringConfig(config, "project_id");
     this.languageCode = optionalStringConfig(config, "language") ?? "en-US";
+    this.languageCodes = readStringList(config["language_codes"]) ?? [this.languageCode];
     this.model = optionalStringConfig(config, "model") ?? "latest_long";
     this.endpointUrl = optionalStringConfig(config, "endpoint_url");
+    this.location = optionalStringConfig(config, "location") ?? "global";
+    this.recognizerId = optionalStringConfig(config, "recognizer") ?? "_";
     this.sampleRate = (config["sample_rate"] as number) ?? 16000;
+    this.encoding = optionalStringConfig(config, "encoding") ?? "LINEAR16";
+    this.audioChannelCount =
+      typeof config["channels"] === "number" && Number.isFinite(config["channels"])
+        ? Math.max(1, Math.floor(config["channels"] as number))
+        : 1;
+    this.enableAutomaticPunctuation = (config["enable_automatic_punctuation"] as boolean) ?? true;
+    this.enableWordConfidence = (config["enable_word_confidence"] as boolean) ?? true;
+    this.interimResults = (config["interim_results"] as boolean) ?? true;
+    this.recognitionFeatures = readPlainObject(config["recognition_features"]);
+    this.streamingFeatures = readPlainObject(config["streaming_features"]);
     this.confidenceThreshold = (config["confidence_threshold"] as number) ?? 0;
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
 
-    this.recognizerPath = `projects/${this.projectId}/locations/global/recognizers/_`;
+    this.recognizerPath =
+      `projects/${this.projectId}/locations/${this.location}/recognizers/${this.recognizerId}`;
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
     this.conn = new WebSocketConnection({
@@ -159,19 +169,21 @@ export class GoogleSTTPlugin implements VoicePlugin {
       streamingConfig: {
         config: {
           explicitDecodingConfig: {
-            encoding: "LINEAR16",
+            encoding: this.encoding,
             sampleRateHertz: this.sampleRate,
-            audioChannelCount: 1,
+            audioChannelCount: this.audioChannelCount,
           },
-          languageCodes: [this.languageCode],
+          languageCodes: this.languageCodes,
           model: this.model,
           features: {
-            enableAutomaticPunctuation: true,
-            enableWordConfidence: true,
+            enableAutomaticPunctuation: this.enableAutomaticPunctuation,
+            enableWordConfidence: this.enableWordConfidence,
+            ...this.recognitionFeatures,
           },
         },
         streamingFeatures: {
-          interimResults: true,
+          interimResults: this.interimResults,
+          ...this.streamingFeatures,
         },
       },
     };
@@ -348,4 +360,17 @@ function parseDurationSeconds(value: unknown): number | null {
 async function defaultSocketFactory(): Promise<SocketFactory> {
   const mod = await import("@kuralle-syrinx/ws/node");
   return mod.createNodeWsSocket;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function readStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((item): item is string => typeof item === "string" && item.length > 0);
+  return list.length > 0 ? list : undefined;
 }

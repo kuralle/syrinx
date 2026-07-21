@@ -65,6 +65,8 @@ export class DeepgramTTSPlugin implements VoicePlugin {
   private model = "aura-2-thalia-en";
   private endpointUrl = "wss://api.deepgram.com/v1/speak";
   private sampleRate = 24000;
+  private encoding = "linear16";
+  private container = "none";
   private retryConfig: RetryConfig = readProviderRetryConfig({});
   // Deepgram's speak socket has no per-message context id, but the engine
   // synthesizes one turn at a time, so the audio streaming back belongs to the
@@ -90,6 +92,8 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     this.model = optionalStringConfig(config, "model") ?? this.model;
     this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
     this.sampleRate = readPositiveInteger(config["sample_rate"], this.sampleRate);
+    this.encoding = optionalStringConfig(config, "encoding") ?? this.encoding;
+    this.container = optionalStringConfig(config, "container") ?? this.container;
     this.retryConfig = readProviderRetryConfig(config);
     const finishTimeoutMs = readNonNegativeInteger(config["finish_timeout_ms"], 2000);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
@@ -99,9 +103,9 @@ export class DeepgramTTSPlugin implements VoicePlugin {
       url: () => {
         const params = new URLSearchParams({
           model: this.model,
-          encoding: "linear16",
+          encoding: this.encoding,
           sample_rate: String(this.sampleRate),
-          container: "none",
+          container: this.container,
         });
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;

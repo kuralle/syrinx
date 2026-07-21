@@ -104,6 +104,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   // nova-3 keyterm prompting: bias recognition toward domain terms (names, products,
   // codes) — the #1 production voice failure is mishearing exactly these.
   private keyterms: readonly string[] = [];
+  private encoding = "linear16";
+  private channels = 1;
+  private noDelay = true;
+  /** Open-ended Deepgram listen query knobs (punctuate, diarize, numerals, …). */
+  private queryParams: Record<string, unknown> | undefined;
 
   // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
   private conn: WebSocketConnection | null = null;
@@ -166,6 +171,12 @@ export class DeepgramSTTPlugin implements VoicePlugin {
           ? [raw]
           : [];
     }
+    this.encoding = optionalStringConfig(config, "encoding") ?? "linear16";
+    this.channels = typeof config["channels"] === "number" && Number.isFinite(config["channels"])
+      ? Math.max(1, Math.floor(config["channels"] as number))
+      : 1;
+    this.noDelay = (config["no_delay"] as boolean) ?? true;
+    this.queryParams = readPlainObject(config["query_params"]);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
@@ -173,19 +184,20 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.conn = new WebSocketConnection({
       url: () => {
         const params = new URLSearchParams({
-          encoding: "linear16",
+          encoding: this.encoding,
           sample_rate: String(this.sampleRate),
           interim_results: String(this.interimResults),
           endpointing: String(this.endpointing),
           smart_format: String(this.smartFormat),
           model: this.model,
           language: this.language,
-          channels: "1",
-          no_delay: "true",
+          channels: String(this.channels),
+          no_delay: String(this.noDelay),
           vad_events: String(this.vadEvents),
           ...(this.utteranceEndMs > 0 ? { utterance_end_ms: String(this.utteranceEndMs) } : {}),
         });
         for (const term of this.keyterms) params.append("keyterm", term);
+        applyQueryParams(params, this.queryParams);
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
@@ -876,4 +888,27 @@ function firstString(...values: unknown[]): string {
     if (typeof value === "string" && value.length > 0) return value;
   }
   return "";
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/** Merge open-ended provider query knobs. Arrays append; scalars set (override). */
+function applyQueryParams(params: URLSearchParams, extra: Record<string, unknown> | undefined): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null) continue;
+        params.append(key, String(item));
+      }
+      continue;
+    }
+    params.set(key, String(value));
+  }
 }

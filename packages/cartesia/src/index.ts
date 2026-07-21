@@ -41,9 +41,14 @@ interface CartesiaWireConfig {
   readonly sampleRate: number;
   readonly language: string;
   readonly audioFormat: AudioFormat;
+  readonly addTimestamps: boolean;
+  readonly outputContainer: string;
+  readonly outputEncoding: string;
+  readonly generationConfig?: Record<string, unknown>;
 }
 
-class CartesiaWireProtocol implements WireProtocol {
+/** Exported for unit tests that exercise encode without a live socket. */
+export class CartesiaWireProtocol implements WireProtocol {
   private readonly charactersByKey = new Map<AttributionKey, number>();
 
   constructor(private readonly cfg: CartesiaWireConfig) {}
@@ -54,18 +59,22 @@ class CartesiaWireProtocol implements WireProtocol {
 
   encodeText(key: AttributionKey, text: string): SocketData[] {
     this.charactersByKey.set(key, (this.charactersByKey.get(key) ?? 0) + text.length);
-    return [
-      JSON.stringify({
-        model_id: this.cfg.modelId,
-        transcript: text,
-        voice: { mode: "id", id: this.cfg.voiceId },
-        output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: this.cfg.sampleRate },
-        language: this.cfg.language,
-        context_id: key || crypto.randomUUID(),
-        continue: true,
-        add_timestamps: true,
-      }),
-    ];
+    const frame: Record<string, unknown> = {
+      model_id: this.cfg.modelId,
+      transcript: text,
+      voice: { mode: "id", id: this.cfg.voiceId },
+      output_format: {
+        container: this.cfg.outputContainer,
+        encoding: this.cfg.outputEncoding,
+        sample_rate: this.cfg.sampleRate,
+      },
+      language: this.cfg.language,
+      context_id: key || crypto.randomUUID(),
+      continue: true,
+      add_timestamps: this.cfg.addTimestamps,
+      ...this.cfg.generationConfig,
+    };
+    return [JSON.stringify(frame)];
   }
 
   encodeFinish(contextId: string, activeKeys: readonly AttributionKey[]): SocketData[] {
@@ -75,7 +84,11 @@ class CartesiaWireProtocol implements WireProtocol {
         model_id: this.cfg.modelId,
         transcript: "",
         voice: { mode: "id", id: this.cfg.voiceId },
-        output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: this.cfg.sampleRate },
+        output_format: {
+          container: this.cfg.outputContainer,
+          encoding: this.cfg.outputEncoding,
+          sample_rate: this.cfg.sampleRate,
+        },
         language: this.cfg.language,
         context_id: contextId,
         continue: false,
@@ -170,11 +183,26 @@ export class CartesiaTTSPlugin implements VoicePlugin {
     const apiVersion = optionalStringConfig(config, "cartesia_version") ?? "2024-06-10";
     const sampleRate = (config["sample_rate"] as number) ?? 16000;
     const language = optionalStringConfig(config, "language") ?? "en";
+    const addTimestamps = config["add_timestamps"] === undefined ? true : config["add_timestamps"] === true;
+    const outputContainer = optionalStringConfig(config, "output_container") ?? "raw";
+    const outputEncoding = optionalStringConfig(config, "output_encoding") ?? "pcm_s16le";
+    // Optional provider-specific passthrough merged into generation frames (speed, volume, etc.).
+    const generationConfig = readPlainObject(config["generation_config"]);
     const audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: sampleRate, channels: 1 };
     assertAudioFormat(audioFormat);
 
     this.session = await startStreamingTtsSession(bus, {
-      protocol: new CartesiaWireProtocol({ modelId, voiceId, sampleRate, language, audioFormat }),
+      protocol: new CartesiaWireProtocol({
+        modelId,
+        voiceId,
+        sampleRate,
+        language,
+        audioFormat,
+        addTimestamps,
+        outputContainer,
+        outputEncoding,
+        generationConfig,
+      }),
       provider: { name: "cartesia", model: modelId, region: "global" },
       format: audioFormat,
       sampleRateHz: sampleRate,
@@ -247,4 +275,11 @@ function readNonNegativeInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer >= 0 ? integer : fallback;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
 }

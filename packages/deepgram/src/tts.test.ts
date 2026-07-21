@@ -361,6 +361,51 @@ describe("DeepgramTTSPlugin", () => {
     await started;
   });
 
+  it("honors encoding and container overrides on the speak websocket URL", async () => {
+    let requestUrl = "";
+    const endpointUrl = await createLocalServer((socket, url) => {
+      requestUrl = url;
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "Speak") {
+          socket.send(Buffer.from([1, 2, 3, 4]), { binary: true });
+        }
+        if (msg["type"] === "Flush") {
+          socket.send(JSON.stringify({ type: "Flushed", sequence_id: 0 }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-deepgram-key",
+      endpoint_url: endpointUrl,
+      model: "aura-2-asteria-en",
+      encoding: "mulaw",
+      container: "none",
+      sample_rate: 8000,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-cfg", timestampMs: Date.now(), text: "Hello." });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-cfg", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1 || requestUrl.length > 0);
+
+    expect(requestUrl).toContain("model=aura-2-asteria-en");
+    expect(requestUrl).toContain("encoding=mulaw");
+    expect(requestUrl).toContain("container=none");
+    expect(requestUrl).toContain("sample_rate=8000");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits tts.error when received PCM fails structural validation", async () => {
     const payloadSpy = vi.spyOn(voice, "assertAudioPayload").mockImplementationOnce(() => {
       throw new Error("PCM16 payload must contain an even number of bytes");

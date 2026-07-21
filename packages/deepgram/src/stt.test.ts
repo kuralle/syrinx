@@ -1555,4 +1555,98 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
     expect(url).not.toContain("eot_threshold");
     expect(url).not.toContain("eager_eot");
   });
+
+  it("defaults encoding/channels/no_delay and lets them be overridden on the listen URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const busDefault = new PipelineBusImpl();
+    const startedDefault = startBus(busDefault);
+    const pluginDefault = new DeepgramSTTPlugin();
+    await pluginDefault.initialize(busDefault, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    await waitFor(connectionUrls, 1);
+    await pluginDefault.close();
+    busDefault.stop();
+    await startedDefault;
+
+    expect(connectionUrls[0]!).toContain("encoding=linear16");
+    expect(connectionUrls[0]!).toContain("channels=1");
+    expect(connectionUrls[0]!).toContain("no_delay=true");
+
+    const busOverride = new PipelineBusImpl();
+    const startedOverride = startBus(busOverride);
+    const pluginOverride = new DeepgramSTTPlugin();
+    await pluginOverride.initialize(busOverride, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 8000,
+      encoding: "mulaw",
+      channels: 2,
+      no_delay: false,
+    });
+    await waitFor(connectionUrls, 2);
+    await pluginOverride.close();
+    busOverride.stop();
+    await startedOverride;
+
+    const overridden = connectionUrls[1]!;
+    expect(overridden).toContain("encoding=mulaw");
+    expect(overridden).toContain("channels=2");
+    expect(overridden).toContain("no_delay=false");
+  });
+
+  it("merges query_params into the Deepgram listen URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      query_params: {
+        punctuate: true,
+        diarize: "true",
+        numerals: false,
+        tag: ["voice", "prod"],
+      },
+    });
+    await waitFor(connectionUrls);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = connectionUrls[0]!;
+    expect(url).toContain("punctuate=true");
+    expect(url).toContain("diarize=true");
+    expect(url).toContain("numerals=false");
+    expect(url).toContain("tag=voice");
+    expect(url).toContain("tag=prod");
+  });
 });

@@ -71,6 +71,9 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
   private languageHints: readonly string[] = [];
   private speechStartedEvents = true;
   private emitEosOnFinal = true;
+  private encoding = "linear16";
+  /** Open-ended Flux listen query knobs (profanity_filter, tag, mip_opt_out, …). */
+  private queryParams: Record<string, unknown> | undefined;
 
   private conn: WebSocketConnection | null = null;
   private currentContextId = "";
@@ -106,13 +109,15 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
           ? [raw]
           : [];
     }
+    this.encoding = optionalStringConfig(config, "encoding") ?? "linear16";
+    this.queryParams = readPlainObject(config["query_params"]);
 
     const socketFactory = this.socketFactory ?? (await defaultSocketFactory());
     this.conn = new WebSocketConnection({
       url: () => {
         const params = new URLSearchParams({
           model: this.model,
-          encoding: "linear16",
+          encoding: this.encoding,
           sample_rate: String(this.sampleRate),
           eot_threshold: String(this.eotThreshold),
           eot_timeout_ms: String(this.eotTimeoutMs),
@@ -122,6 +127,7 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
         });
         for (const term of this.keyterms) params.append("keyterm", term);
         for (const hint of this.languageHints) params.append("language_hint", hint);
+        applyQueryParams(params, this.queryParams);
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
@@ -367,4 +373,26 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
 async function defaultSocketFactory(): Promise<SocketFactory> {
   const mod = await import("@kuralle-syrinx/ws/node");
   return mod.createNodeWsSocket;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function applyQueryParams(params: URLSearchParams, extra: Record<string, unknown> | undefined): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null) continue;
+        params.append(key, String(item));
+      }
+      continue;
+    }
+    params.set(key, String(value));
+  }
 }

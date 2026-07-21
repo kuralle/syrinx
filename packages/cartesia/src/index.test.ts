@@ -11,8 +11,9 @@ import {
   type TtsErrorPacket,
   type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
+import { attributionKey } from "@kuralle-syrinx/tts-core";
 
-import { CartesiaTTSPlugin } from "./index.js";
+import { CartesiaTTSPlugin, CartesiaWireProtocol } from "./index.js";
 
 let servers: WebSocketServer[] = [];
 
@@ -763,6 +764,89 @@ describe("CartesiaTTSPlugin", () => {
         }),
       }),
     ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("honors add_timestamps, output encoding/container overrides, and generation_config passthrough on speak frames", async () => {
+    const protocol = new CartesiaWireProtocol({
+      modelId: "sonic-3",
+      voiceId: "voice-x",
+      sampleRate: 16000,
+      language: "en",
+      audioFormat: { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 },
+      addTimestamps: false,
+      outputContainer: "raw",
+      outputEncoding: "pcm_f32le",
+      generationConfig: { speed: 1.2, volume: 0.9 },
+    });
+    const key = attributionKey("turn-cfg");
+    const frames = protocol.encodeText(key, "Hello.").map((f) => JSON.parse(String(f)));
+    expect(frames).toEqual([
+      expect.objectContaining({
+        model_id: "sonic-3",
+        transcript: "Hello.",
+        context_id: key,
+        continue: true,
+        add_timestamps: false,
+        speed: 1.2,
+        volume: 0.9,
+        output_format: {
+          container: "raw",
+          encoding: "pcm_f32le",
+          sample_rate: 16000,
+        },
+      }),
+    ]);
+  });
+
+  it("defaults add_timestamps true and pcm_s16le/raw on speak frames when unset", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        received.push(msg);
+        if (msg["transcript"] === "Hi.") {
+          socket.send(JSON.stringify({
+            type: "chunk",
+            context_id: msg["context_id"],
+            data: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString("base64"),
+            done: false,
+            status_code: 206,
+          }));
+        }
+        if (msg["continue"] === false) {
+          socket.send(JSON.stringify({ type: "done", context_id: msg["context_id"], done: true, status_code: 200 }));
+        }
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new CartesiaTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-cartesia-key",
+      endpoint_url: endpointUrl,
+      voice_id: "voice-test",
+      model_id: "sonic-test",
+      sample_rate: 16000,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-default-cfg", timestampMs: Date.now(), text: "Hi." });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-default-cfg", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1);
+
+    expect(received[0]).toEqual(
+      expect.objectContaining({
+        add_timestamps: true,
+        output_format: { container: "raw", encoding: "pcm_s16le", sample_rate: 16000 },
+      }),
+    );
 
     await plugin.close();
     bus.stop();

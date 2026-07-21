@@ -304,4 +304,52 @@ describe("DeepgramFluxSTTPlugin", () => {
       }),
     ]);
   });
+
+  it("defaults encoding=linear16 and allows encoding override", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      encoding: "mulaw",
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(local.connectionUrls[0]!).toContain("encoding=mulaw");
+  });
+
+  it("merges query_params into the Flux listen URL", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      query_params: {
+        profanity_filter: true,
+        tag: "flux-prod",
+      },
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = local.connectionUrls[0]!;
+    expect(url).toContain("encoding=linear16");
+    expect(url).toContain("eot_threshold=0.7");
+    expect(url).toContain("profanity_filter=true");
+    expect(url).toContain("tag=flux-prod");
+  });
+
+  it("forwards language_hint as a repeatable query param", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      language_hint: ["en", "es"],
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = local.connectionUrls[0]!;
+    expect(url).toContain("language_hint=en");
+    expect(url).toContain("language_hint=es");
+  });
 });

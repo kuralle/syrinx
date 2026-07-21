@@ -33,6 +33,19 @@ export interface OpenAIRealtimeOptions {
   readonly toolChoice?: string | Record<string, unknown>;
   readonly inputRateHz?: number;
   readonly outputRateHz?: number;
+  /** Input audio format object. Defaults to `{ type: "audio/pcm", rate: inputRateHz }`. */
+  readonly inputAudioFormat?: Record<string, unknown>;
+  /** Output audio format object. Defaults to `{ type: "audio/pcm", rate: outputRateHz }`. */
+  readonly outputAudioFormat?: Record<string, unknown>;
+  /** OpenAI Realtime `audio.input.noise_reduction` (e.g. `{ type: "near_field" }`). */
+  readonly noiseReduction?: Record<string, unknown> | null;
+  /** OpenAI Realtime `max_output_tokens` session field. */
+  readonly maxOutputTokens?: number | "inf";
+  /**
+   * Merged last into `session.update.session` for any provider field the adapter does not enumerate
+   * (speed, tracing, prompt, include, …). Overrides same-key defaults when both set.
+   */
+  readonly sessionConfig?: Record<string, unknown>;
   /**
    * G4 resume-by-replay: returns the prior conversation to replay as
    * `conversation.item.create` items on every (re)connect — OpenAI Realtime has no
@@ -64,7 +77,7 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
     },
     buildSessionUpdate: () => {
       const inputAudio: Record<string, unknown> = {
-        format: { type: "audio/pcm", rate: inputRateHz },
+        format: opts.inputAudioFormat ?? { type: "audio/pcm", rate: inputRateHz },
         turn_detection:
           "turnDetection" in opts ? opts.turnDetection : { type: "semantic_vad" },
       };
@@ -72,6 +85,14 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
         inputAudio["transcription"] =
           opts.inputTranscription === true ? { model: "whisper-1" } : opts.inputTranscription;
       }
+      if (opts.noiseReduction !== undefined) {
+        inputAudio["noise_reduction"] = opts.noiseReduction;
+      }
+
+      const outputAudio: Record<string, unknown> = {
+        format: opts.outputAudioFormat ?? { type: "audio/pcm", rate: outputRateHz },
+        voice,
+      };
 
       const session: Record<string, unknown> = {
         type: "realtime",
@@ -79,10 +100,7 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
         output_modalities: opts.modalities ?? ["audio"],
         audio: {
           input: inputAudio,
-          output: {
-            format: { type: "audio/pcm", rate: outputRateHz },
-            voice,
-          },
+          output: outputAudio,
         },
         tools: (opts.tools ?? []).map((t) => ({
           type: "function" as const,
@@ -98,6 +116,12 @@ export function fromOpenAIRealtime(opts: OpenAIRealtimeOptions): RealtimeAdapter
       }
       if (opts.temperature !== undefined) {
         session["temperature"] = opts.temperature;
+      }
+      if (opts.maxOutputTokens !== undefined) {
+        session["max_output_tokens"] = opts.maxOutputTokens;
+      }
+      if (opts.sessionConfig) {
+        Object.assign(session, opts.sessionConfig);
       }
 
       return session;

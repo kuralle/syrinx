@@ -425,4 +425,104 @@ describe("GoogleSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("defaults recognition config knobs and allows overrides + feature passthrough", async () => {
+    const configs: any[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) configs.push(JSON.parse(data.toString()));
+      });
+    });
+
+    const busDefault = new PipelineBusImpl();
+    const startedDefault = startBus(busDefault);
+    const pluginDefault = new GoogleSTTPlugin();
+    await pluginDefault.initialize(busDefault, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pluginDefault.close();
+    busDefault.stop();
+    await startedDefault;
+
+    expect(configs[0]).toEqual({
+      recognizer: "projects/test-project/locations/global/recognizers/_",
+      streamingConfig: {
+        config: {
+          explicitDecodingConfig: {
+            encoding: "LINEAR16",
+            sampleRateHertz: 16000,
+            audioChannelCount: 1,
+          },
+          languageCodes: ["en-US"],
+          model: "latest_long",
+          features: {
+            enableAutomaticPunctuation: true,
+            enableWordConfidence: true,
+          },
+        },
+        streamingFeatures: {
+          interimResults: true,
+        },
+      },
+    });
+
+    const busOverride = new PipelineBusImpl();
+    const startedOverride = startBus(busOverride);
+    const pluginOverride = new GoogleSTTPlugin();
+    await pluginOverride.initialize(busOverride, {
+      api_key: "test",
+      project_id: "my-proj",
+      endpoint_url: endpointUrl,
+      location: "us-central1",
+      recognizer: "phone",
+      model: "chirp_2",
+      language: "es-ES",
+      language_codes: ["es-ES", "en-US"],
+      sample_rate: 8000,
+      encoding: "MULAW",
+      channels: 1,
+      enable_automatic_punctuation: false,
+      enable_word_confidence: false,
+      interim_results: false,
+      recognition_features: {
+        profanityFilter: true,
+        enableWordTimeOffsets: true,
+      },
+      streaming_features: {
+        enableVoiceActivityEvents: true,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pluginOverride.close();
+    busOverride.stop();
+    await startedOverride;
+
+    expect(configs[1]).toEqual({
+      recognizer: "projects/my-proj/locations/us-central1/recognizers/phone",
+      streamingConfig: {
+        config: {
+          explicitDecodingConfig: {
+            encoding: "MULAW",
+            sampleRateHertz: 8000,
+            audioChannelCount: 1,
+          },
+          languageCodes: ["es-ES", "en-US"],
+          model: "chirp_2",
+          features: {
+            enableAutomaticPunctuation: false,
+            enableWordConfidence: false,
+            profanityFilter: true,
+            enableWordTimeOffsets: true,
+          },
+        },
+        streamingFeatures: {
+          interimResults: false,
+          enableVoiceActivityEvents: true,
+        },
+      },
+    });
+  });
 });

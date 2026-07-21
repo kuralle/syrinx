@@ -48,7 +48,7 @@ export type GeminiTTSModel =
 
 const DEFAULT_MODEL: GeminiTTSModel = "gemini-3.1-flash-tts-preview";
 const DEFAULT_VOICE: GeminiVoice = "Kore";
-const SAMPLE_RATE = 24000;
+const DEFAULT_SAMPLE_RATE = 24000;
 
 // =============================================================================
 // Plugin
@@ -60,7 +60,10 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private model: string = DEFAULT_MODEL;
   private voiceName: string = DEFAULT_VOICE;
   private instruction = "";
+  private languageCode: string | undefined;
   private timeoutMs = 45_000;
+  private sampleRate = DEFAULT_SAMPLE_RATE;
+  private generationConfig: Record<string, unknown> | undefined;
   // One controller per in-flight turn. A single shared field let a second turn's
   // synthesize() overwrite the first's controller, so a barge-in on turn N aborted
   // only turn N+1 and turn N's stale audio could still stream after the interrupt.
@@ -70,7 +73,11 @@ export class GeminiTTSPlugin implements VoicePlugin {
   private charactersByContextId = new Map<string, number>();
   private retryConfig: RetryConfig = readRetryConfig({});
   private disposers: Array<() => void> = [];
-  private readonly audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: SAMPLE_RATE, channels: 1 };
+  private audioFormat: AudioFormat = {
+    encoding: "pcm_s16le",
+    sampleRateHz: DEFAULT_SAMPLE_RATE,
+    channels: 1,
+  };
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -78,8 +85,13 @@ export class GeminiTTSPlugin implements VoicePlugin {
     this.model = optionalStringConfig(config, "model") ?? DEFAULT_MODEL;
     this.voiceName = optionalStringConfig(config, "voice_name") ?? DEFAULT_VOICE;
     this.instruction = optionalStringConfig(config, "instruction") ?? "";
+    this.languageCode =
+      optionalStringConfig(config, "language_code") ?? optionalStringConfig(config, "language");
     this.timeoutMs = readPositiveInteger(config["timeout_ms"], 45_000);
+    this.sampleRate = readPositiveInteger(config["sample_rate"], DEFAULT_SAMPLE_RATE);
+    this.generationConfig = readPlainObject(config["generation_config"]);
     this.retryConfig = readRetryConfig(config);
+    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
     // Accumulate streaming text deltas; Gemini TTS returns chunked audio for
@@ -209,19 +221,23 @@ export class GeminiTTSPlugin implements VoicePlugin {
 
     const client = new GoogleGenAI({ apiKey: this.apiKey });
 
+    const speechConfig: Record<string, unknown> = {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: this.voiceName,
+        },
+      },
+    };
+    if (this.languageCode) speechConfig["languageCode"] = this.languageCode;
+
     const response = await withTimeout(
       client.models.generateContent({
         model: this.model,
         contents: [{ parts: [{ text: this.instruction ? `${this.instruction}: ${text}` : text }] }],
         config: {
           responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: this.voiceName,
-              },
-            },
-          },
+          speechConfig,
+          ...this.generationConfig,
           abortSignal: signal,
         },
       }),
@@ -246,7 +262,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
           contextId,
           timestampMs: Date.now(),
           audio: audioUint8,
-          sampleRateHz: SAMPLE_RATE,
+          sampleRateHz: this.sampleRate,
         });
         audioChunks++;
       }
@@ -306,4 +322,11 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
 }

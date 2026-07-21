@@ -360,4 +360,59 @@ describe("GrokSTTPlugin", () => {
     bus.stop();
     await started;
   });
+
+  it("puts named knobs and query_params on the STT websocket URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (socket, req) => {
+      connectionUrls.push(req.url ?? "");
+      socket.send(JSON.stringify({ type: "transcript.created" }));
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/stt`;
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new GrokSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 8000,
+      encoding: "mulaw",
+      language: "es",
+      endpointing: 25,
+      interim_results: false,
+      diarize: true,
+      keyterm: "Syrinx",
+      smart_turn: 0.8,
+      smart_turn_timeout: 1500,
+      query_params: {
+        custom_flag: "on",
+        tag: ["a", "b"],
+      },
+    });
+    await waitFor(connectionUrls);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = connectionUrls[0]!;
+    expect(url).toContain("sample_rate=8000");
+    expect(url).toContain("encoding=mulaw");
+    expect(url).toContain("language=es");
+    expect(url).toContain("endpointing=25");
+    expect(url).toContain("interim_results=false");
+    expect(url).toContain("diarize=true");
+    expect(url).toContain("keyterm=Syrinx");
+    expect(url).toContain("smart_turn=0.8");
+    expect(url).toContain("smart_turn_timeout=1500");
+    expect(url).toContain("custom_flag=on");
+    expect(url).toContain("tag=a");
+    expect(url).toContain("tag=b");
+  });
 });

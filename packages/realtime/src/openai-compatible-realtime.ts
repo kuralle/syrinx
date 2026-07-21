@@ -19,6 +19,11 @@ export interface OpenAiCompatibleRealtimeConfig {
   readonly caps: RealtimeAdapter["caps"];
   readonly buildSessionUpdate: () => Record<string, unknown>;
   /**
+   * Optional fields merged into `session.update.session` after `buildSessionUpdate()`.
+   * Use for provider-specific knobs the adapter does not enumerate (mirrors TTS `extra_body`).
+   */
+  readonly sessionExtra?: Record<string, unknown> | (() => Record<string, unknown>);
+  /**
    * G4 resume-by-replay: returns the prior conversation to re-create as
    * `conversation.item.create` items after each (re)connect's `session.update` —
    * these providers have no native resume, so the transcript is replayed. Item
@@ -117,9 +122,14 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
   private applySessionConfig(): void {
     const reconnected = this.opened;
     this.opened = true;
+    const session = this.config.buildSessionUpdate();
+    const extra =
+      typeof this.config.sessionExtra === "function"
+        ? this.config.sessionExtra()
+        : this.config.sessionExtra;
     this.socket?.send({
       type: "session.update",
-      session: this.config.buildSessionUpdate(),
+      session: extra ? { ...session, ...extra } : session,
     });
     // G4 resume-by-replay: re-create the prior conversation as items. Providers
     // without native resume start every (re)connection amnesiac; replaying the

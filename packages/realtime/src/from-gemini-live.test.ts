@@ -220,6 +220,69 @@ describe("fromGeminiLive", () => {
     await adapter.close();
   });
 
+  it("cfg-flex: responseModalities, generationConfig, safety, sessionResumption, and connectConfig reach live.connect", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      responseModalities: ["AUDIO", "TEXT"],
+      temperature: 0.4,
+      topP: 0.9,
+      topK: 32,
+      maxOutputTokens: 1024,
+      mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
+      seed: 7,
+      generationConfig: { candidateCount: 1 },
+      safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }],
+      thinkingConfig: { includeThoughts: false },
+      enableAffectiveDialog: true,
+      realtimeInputConfig: { turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" },
+      contextWindowCompression: { slidingWindow: {} },
+      proactivity: { proactiveAudio: true },
+      explicitVadSignal: true,
+      sessionResumption: { transparent: true },
+      sessionResumptionHandle: "handle-prev",
+      connectConfig: { avatarConfig: { enabled: false } },
+    });
+
+    await adapter.open(new AbortController().signal);
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["responseModalities"]).toEqual(["AUDIO", "TEXT"]);
+    expect(connectArg.config["temperature"]).toBe(0.4);
+    expect(connectArg.config["topP"]).toBe(0.9);
+    expect(connectArg.config["topK"]).toBe(32);
+    expect(connectArg.config["maxOutputTokens"]).toBe(1024);
+    expect(connectArg.config["mediaResolution"]).toBe("MEDIA_RESOLUTION_MEDIUM");
+    expect(connectArg.config["seed"]).toBe(7);
+    expect(connectArg.config["generationConfig"]).toEqual({ candidateCount: 1 });
+    expect(connectArg.config["safetySettings"]).toEqual([
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    ]);
+    expect(connectArg.config["thinkingConfig"]).toEqual({ includeThoughts: false });
+    expect(connectArg.config["enableAffectiveDialog"]).toBe(true);
+    expect(connectArg.config["realtimeInputConfig"]).toEqual({
+      turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+    });
+    expect(connectArg.config["contextWindowCompression"]).toEqual({ slidingWindow: {} });
+    expect(connectArg.config["proactivity"]).toEqual({ proactiveAudio: true });
+    expect(connectArg.config["explicitVadSignal"]).toBe(true);
+    expect(connectArg.config["sessionResumption"]).toEqual({
+      transparent: true,
+      handle: "handle-prev",
+    });
+    expect(connectArg.config["avatarConfig"]).toEqual({ enabled: false });
+    // Defaults still on.
+    expect(connectArg.config["inputAudioTranscription"]).toEqual({});
+    expect(connectArg.config["outputAudioTranscription"]).toEqual({});
+    await adapter.close();
+  });
+
+  it("cfg-flex: sessionResumption false omits the field entirely", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key", sessionResumption: false });
+    await adapter.open(new AbortController().signal);
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["sessionResumption"]).toBeUndefined();
+    await adapter.close();
+  });
+
   it("sends a typed user turn via sendClientContent with turnComplete", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key" });
     await adapter.open(new AbortController().signal);

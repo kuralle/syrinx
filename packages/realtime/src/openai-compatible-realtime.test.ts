@@ -211,6 +211,50 @@ describe("createOpenAiCompatibleRealtimeAdapter usage metering", () => {
   });
 });
 
+describe("createOpenAiCompatibleRealtimeAdapter sessionExtra", () => {
+  it("merges sessionExtra into session.update after buildSessionUpdate", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createOpenAiCompatibleRealtimeAdapter({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      defaultModel: "gpt-realtime-2",
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      caps: {
+        inputSampleRateHz: 24_000,
+        outputSampleRateHz: 24_000,
+        supportsConcurrentToolAudio: true,
+        supportsTruncate: true,
+        emitsServerSpeechStarted: true,
+        supportsTextOnlyModality: true,
+      },
+      buildSessionUpdate: () => ({
+        type: "realtime",
+        model: "gpt-realtime-2",
+        output_modalities: ["text"],
+      }),
+      sessionExtra: { tracing: { workflow_name: "extra" }, temperature: 0.2 },
+      supportsTruncate: true,
+      defaultErrorMessage: "OpenAI Realtime error",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    expect(JSON.parse(mock.sent[0]!)).toEqual({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        model: "gpt-realtime-2",
+        output_modalities: ["text"],
+        tracing: { workflow_name: "extra" },
+        temperature: 0.2,
+      },
+    });
+  });
+});
+
 describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned turns)", () => {
   it("sends input_audio_buffer.commit then response.create", async () => {
     const mock = createMockSocketHarness();

@@ -134,6 +134,8 @@ export class GrokTTSPlugin implements VoicePlugin {
     const language = optionalStringConfig(config, "language") ?? "en";
     const endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.x.ai/v1/tts";
     const sampleRate = readPositiveInteger(config["sample_rate"], 16000);
+    const codec = optionalStringConfig(config, "codec") ?? "pcm";
+    const bitRate = readPositiveIntegerOrUndefined(config["bit_rate"]);
     const audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: sampleRate, channels: 1 };
     assertAudioFormat(audioFormat);
 
@@ -146,9 +148,10 @@ export class GrokTTSPlugin implements VoicePlugin {
         const params = new URLSearchParams({
           language,
           voice: voiceId,
-          codec: "pcm",
+          codec,
           sample_rate: String(sampleRate),
         });
+        if (bitRate !== undefined) params.set("bit_rate", String(bitRate));
         const separator = endpointUrl.includes("?") ? "&" : "?";
         return `${endpointUrl}${separator}${params.toString()}`;
       },
@@ -180,6 +183,12 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+function readPositiveIntegerOrUndefined(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : undefined;
 }
 
 function readNonNegativeInteger(value: unknown, fallback: number): number {

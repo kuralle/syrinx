@@ -126,6 +126,61 @@ describe("GrokTTSPlugin", () => {
     await started;
   });
 
+  it("honors codec and bit_rate overrides on the TTS websocket URL", async () => {
+    let requestUrl = "";
+    const endpointUrl = await createLocalServer((socket, url) => {
+      requestUrl = url;
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "text.delta") {
+          socket.send(JSON.stringify({
+            type: "audio.delta",
+            delta: bytesToBase64(new Uint8Array([1, 2, 3, 4])),
+          }));
+        }
+        if (msg["type"] === "text.done") {
+          socket.send(JSON.stringify({ type: "audio.done" }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new GrokTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-xai-key",
+      endpoint_url: endpointUrl,
+      voice_id: "ara",
+      language: "es",
+      codec: "mp3",
+      bit_rate: 128000,
+      sample_rate: 24000,
+    });
+    bus.push(Route.Main, {
+      kind: "tts.text",
+      contextId: "turn-cfg",
+      timestampMs: Date.now(),
+      text: "Hola.",
+    });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-cfg", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1 || requestUrl.length > 0);
+
+    expect(requestUrl).toContain("voice=ara");
+    expect(requestUrl).toContain("language=es");
+    expect(requestUrl).toContain("codec=mp3");
+    expect(requestUrl).toContain("sample_rate=24000");
+    expect(requestUrl).toContain("bit_rate=128000");
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("sends text.clear on interrupt", async () => {
     const received: Array<Record<string, unknown>> = [];
     const endpointUrl = await createLocalServer((socket) => {

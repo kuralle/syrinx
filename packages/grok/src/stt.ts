@@ -44,6 +44,8 @@ export class GrokSTTPlugin implements VoicePlugin {
   private diarize = false;
   private keyterm: string | undefined;
   private emitEosOnFinal = true;
+  /** Open-ended xAI STT query knobs not enumerated by the adapter. */
+  private queryParams: Record<string, unknown> | undefined;
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
   private currentContextId = "";
   private transcriptReady = false;
@@ -66,6 +68,7 @@ export class GrokSTTPlugin implements VoicePlugin {
     this.diarize = (config["diarize"] as boolean) ?? false;
     this.keyterm = optionalStringConfig(config, "keyterm");
     this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
+    this.queryParams = readPlainObject(config["query_params"]);
     this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
     assertAudioFormat(this.audioFormat);
 
@@ -84,6 +87,7 @@ export class GrokSTTPlugin implements VoicePlugin {
         }
         if (this.diarize) params.set("diarize", "true");
         if (this.keyterm) params.set("keyterm", this.keyterm);
+        applyQueryParams(params, this.queryParams);
         const separator = this.endpointUrl.includes("?") ? "&" : "?";
         return `${this.endpointUrl}${separator}${params.toString()}`;
       },
@@ -289,4 +293,26 @@ export class GrokSTTPlugin implements VoicePlugin {
 async function defaultSocketFactory(): Promise<SocketFactory> {
   const mod = await import("@kuralle-syrinx/ws/node");
   return mod.createNodeWsSocket;
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function applyQueryParams(params: URLSearchParams, extra: Record<string, unknown> | undefined): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null) continue;
+        params.append(key, String(item));
+      }
+      continue;
+    }
+    params.set(key, String(value));
+  }
 }
