@@ -2,6 +2,48 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## Unreleased
+
+**Metering — usage → dollars → cap.** The load-bearing "fitting" that keeps Syrinx an embeddable
+engine while making it straightforward to later wrap as a billed hosted API (AssemblyAI-style):
+per-stage resource consumption is recorded where it happens, priced by a versioned catalog, and
+bounded by a spend guard. Additive and opt-in; no breaking changes. The engine emits the signals —
+billing, dashboards, and quotas are downstream consumers.
+
+### Added — usage seam
+- **`core`**: `UsageRecordedPacket` — one billable unit recorded at its source, `stage: "llm" | "stt" | "tts"`
+  with `provider`/`model` and the stage-appropriate quantity (LLM tokens incl. cached/reasoning; STT
+  `audioSeconds`; TTS `characters`). `VoiceAgentSession` accumulates these into an end-of-session `usage`
+  manifest and exports each as a counter through `MetricsExporter.observeCounter`, tagged
+  **low-cardinality only** (provider/model/stage — never sessionId/speechId, matching LiveKit's cap).
+- **`core` / `aisdk` / `realtime`**: `ReasonerUsage` on `ReasoningPart.finish`; the LLM producer wired on
+  both fronts — cascade (AI SDK `finish.totalUsage`, per-pass) and native realtime (OpenAI
+  `response.done` usage).
+
+### Added — usage producers (STT + TTS)
+- **`deepgram` / `cartesia` / `openai-tts`**: the STT (audio-seconds) and TTS (characters) producers,
+  completing the three-stage manifest (only the LLM stage was wired before). STT emits at the
+  **final-transcript funnel** (`pushResult`), so usage is recorded under **both** Deepgram-owned
+  endpointing (`emit_eos_on_final: true`) **and** smart-turn endpointing (`emit_eos_on_final: false`,
+  where Deepgram never signals turn-complete); billing is **incremental per is_final segment**, so a
+  multi-segment turn sums to its true audio duration without double-counting. TTS bills the synthesized
+  character count and does **not** charge cancelled/failed (barged) turns. Cartesia routes its usage
+  through the existing `tts-core` `sideband` event, not a new channel.
+- Live-verified: a single cascade turn (smart-turn endpointing) exports all three stages —
+  `usage.audioSeconds` (deepgram/nova-3), `usage.inputTokens`/`outputTokens` (openai/gpt-4.1-mini),
+  `usage.characters` (cartesia/sonic-3).
+
+### Added — pricing + spend cap
+- **`core`**: `pricing.ts` — a versioned, per-modality `PriceCatalog` (`source` + `version` stamp;
+  STT `$/audio-second`, LLM `$/1M` input/output/cached tokens, TTS `$/1M` characters) with a
+  `DEFAULT_PRICE_CATALOG` of current public list prices; local/self-hosted models are explicitly
+  zero-cost. `costOf(usage, catalog)` returns a typed **`unpriced`** result for an unknown
+  provider/model rather than a silent `$0`.
+- **`core`**: `spend-cap.ts` — `SpendCapGuard` accumulates priced usage with **observe (`record`) and
+  control (`check`) separated** so the same usage is never double-counted; the cap latches once on breach
+  for the session/provider layer to refuse or fall back. Standalone and fully unit-tested — the session
+  wires it in a later change.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
