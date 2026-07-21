@@ -44,15 +44,17 @@ function catalogKey(provider: string | undefined, model: string | undefined): st
  */
 export const DEFAULT_PRICE_CATALOG: PriceCatalog = {
   source:
-    "voice-prices@2 | deepgram.com/pricing PAYG Nova-3 streaming monolingual $0.0077/min → $0.000128333/s; " +
+    "voice-prices@3 | deepgram.com/pricing PAYG Nova-3 streaming monolingual $0.0077/min → $0.000128333/s; " +
     "deepgram.com/pricing Aura-2 TTS $0.030/1k chars → $30/1M; " +
     "cartesia.ai/pricing + docs.cartesia.ai/pricing ~1 credit/char, PAYG ~$50/1M chars (cloudtalk.io cartesia-pricing 2026); " +
     "openai tts-1 $15/1M chars (openai.com api pricing); gpt-4o-mini-tts text $0.60/1M (community/azure listed text input rate); " +
     "openai GPT-4.1-mini $0.40/$1.60 per 1M in/out (developers.openai.com/api/docs/pricing; Azure GPT-4.1-mini-2025-04-14 Global); " +
     "cloud.google.com/speech-to-text/pricing V2 standard recognition $0.016/min → $0.000266667/s (latest_long); " +
     "ai.google.dev/pricing Gemini 2.5 Flash TTS preview text $0.50/1M chars (Gemini API TTS text input rate, 2026); " +
+    "elevenlabs.io/pricing/api Flash/Turbo TTS $0.05/1k chars → $50/1M; Multilingual v2/v3 $0.10/1k → $100/1M; " +
+    "Scribe v2 Realtime $0.39/hour → $0.000108333/s; " +
     "grok/stt + grok/* TTS + epsilon/epsilon-tts intentionally ABSENT (no public list price → costOf unpriced, never silent $0)",
-  version: "2",
+  version: "3",
   stt: {
     "deepgram/nova-3": { usdPerAudioSecond: 0.0077 / 60 },
     "deepgram/nova-2": { usdPerAudioSecond: 0.0077 / 60 },
@@ -61,6 +63,8 @@ export const DEFAULT_PRICE_CATALOG: PriceCatalog = {
     "google/latest_long": { usdPerAudioSecond: 0.016 / 60 },
     "google/latest_short": { usdPerAudioSecond: 0.016 / 60 },
     "google/chirp_2": { usdPerAudioSecond: 0.016 / 60 },
+    // ElevenLabs Scribe v2 Realtime — public list $0.39/hour.
+    "elevenlabs/scribe_v2_realtime": { usdPerAudioSecond: 0.39 / 3600 },
     "local/whisper": { usdPerAudioSecond: 0 },
     // grok/stt: no public list price — omit so costOf → unpriced
   },
@@ -84,6 +88,12 @@ export const DEFAULT_PRICE_CATALOG: PriceCatalog = {
     "gemini/gemini-3.1-flash-tts-preview": { usdPer1MCharacters: 0.5 },
     "gemini/gemini-2.5-flash-preview-tts": { usdPer1MCharacters: 0.5 },
     "gemini/gemini-2.5-pro-preview-tts": { usdPer1MCharacters: 0.5 },
+    // ElevenLabs public list — Flash/Turbo $0.05/1k, Multilingual $0.10/1k.
+    "elevenlabs/eleven_flash_v2_5": { usdPer1MCharacters: 50 },
+    "elevenlabs/eleven_flash_v2": { usdPer1MCharacters: 50 },
+    "elevenlabs/eleven_turbo_v2_5": { usdPer1MCharacters: 50 },
+    "elevenlabs/eleven_turbo_v2": { usdPer1MCharacters: 50 },
+    "elevenlabs/eleven_multilingual_v2": { usdPer1MCharacters: 100 },
     "local/tts": { usdPer1MCharacters: 0 },
     // grok/* voice keys + epsilon/epsilon-tts: no public list — omit → unpriced
   },

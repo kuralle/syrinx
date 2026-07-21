@@ -59,7 +59,7 @@ describe("costOf", () => {
     expect(costOf(packet, DEFAULT_PRICE_CATALOG)).toEqual({ usd: null, unpriced: true });
   });
 
-  it("prices new catalog providers (google STT, gemini TTS)", () => {
+  it("prices new catalog providers (google STT, gemini TTS, elevenlabs)", () => {
     const stt = costOf(
       usage({
         contextId: "t1",
@@ -85,6 +85,32 @@ describe("costOf", () => {
     );
     expect(tts.unpriced).toBeUndefined();
     expect(tts.usd).toBe(0.5);
+
+    const elTts = costOf(
+      usage({
+        contextId: "t1",
+        stage: "tts",
+        provider: "elevenlabs",
+        model: "eleven_flash_v2_5",
+        characters: 1_000_000,
+      }),
+      DEFAULT_PRICE_CATALOG,
+    );
+    expect(elTts.unpriced).toBeUndefined();
+    expect(elTts.usd).toBe(50);
+
+    const elStt = costOf(
+      usage({
+        contextId: "t1",
+        stage: "stt",
+        provider: "elevenlabs",
+        model: "scribe_v2_realtime",
+        audioSeconds: 3600,
+      }),
+      DEFAULT_PRICE_CATALOG,
+    );
+    expect(elStt.unpriced).toBeUndefined();
+    expect(elStt.usd).toBeCloseTo(0.39, 10);
   });
 
   it("returns unpriced for grok/epsilon providers with no public list price", () => {
