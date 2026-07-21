@@ -32,6 +32,12 @@ billing, dashboards, and quotas are downstream consumers.
 - Live-verified: a single cascade turn (smart-turn endpointing) exports all three stages —
   `usage.audioSeconds` (deepgram/nova-3), `usage.inputTokens`/`outputTokens` (openai/gpt-4.1-mini),
   `usage.characters` (cartesia/sonic-3).
+- **Full provider coverage:** producers now also wired for **Grok STT/TTS, Gemini TTS, Google STT, and
+  Epsilon TTS** — every STT/TTS provider emits `usage.recorded`, so metering is complete regardless of
+  provider. STT producers use the same incremental-delta funnel (Grok from provider `duration`; Google
+  from `resultEndOffset`/`resultEndTime` with a byte fallback); the tts-core providers (Grok, Epsilon)
+  route through the `sideband` event, Gemini via its `emitEnd`. Live-verified on Grok (STT
+  `audioSeconds` + TTS `characters`); Epsilon is unit-only (endpoint offline).
 
 ### Added — pricing + spend cap
 - **`core`**: `pricing.ts` — a versioned, per-modality `PriceCatalog` (`source` + `version` stamp;
