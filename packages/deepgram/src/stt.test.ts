@@ -334,6 +334,105 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
+  it("emits usage.recorded even under smart-turn endpointing (emit_eos_on_final=false, no speech_final)", async () => {
+    // Regression: the flagship cascade sets endpointingOwner=smart_turn / emit_eos_on_final=false,
+    // so Deepgram never calls pushTurnComplete/pushFinal — the final goes out via pushResult alone.
+    // Billing hooked only on the turn-complete methods silently no-ops in this (production) mode.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: "account number please", confidence: 0.95 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const audio = new Uint8Array(640); // 0.02s @ 16kHz pcm_s16le
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-smartturn",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await waitFor(usage);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-smartturn",
+        stage: "stt",
+        provider: "deepgram",
+        model: "nova-3",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("bills each is_final segment's audio delta once (multi-segment turn sums, no double-count)", async () => {
+    // Two is_final segments in one turn: usage must sum the per-segment audio deltas, not
+    // re-bill the running total each time.
+    let sent = 0;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        sent += 1;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: sent === 1 ? "one" : "one two", confidence: 0.9 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+      emit_eos_on_final: false,
+    });
+    // 320 bytes then another 320 bytes = 0.01s + 0.01s = 0.02s total.
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    await waitFor(usage);
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    await waitFor(usage, 2);
+
+    const total = usage.reduce((sum, u) => sum + (u.audioSeconds ?? 0), 0);
+    expect(total).toBeCloseTo(0.02, 6);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits trailing provider-final segments after Pipecat requests finalize", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.on("message", (data, isBinary) => {

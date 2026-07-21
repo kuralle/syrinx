@@ -124,6 +124,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     chunks: number;
     firstSentAtMs: number;
     lastSentAtMs: number;
+    billedBytes?: number;
   }>();
   private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
 
@@ -462,7 +463,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     boundedAdd(this.finalizedContextIds, ctxId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
-    this.emitSttUsage(ctxId);
     this.pushResult(transcript, confidence, ctxId);
 
     if (this.emitEosOnFinal) {
@@ -484,7 +484,6 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
     this.consecutiveFinalizeTimeouts = 0;
     this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
-    this.emitSttUsage(contextId);
     this.bus.push(Route.Main, {
       kind: "eos.turn_complete",
       contextId,
@@ -496,10 +495,20 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.resetPendingTranscript(contextId);
   }
 
+  // Bill only the audio-seconds not yet billed for this turn. Emitted from pushResult,
+  // the single funnel every final transcript flows through — so STT usage is recorded
+  // regardless of who owns endpointing (Deepgram `emit_eos_on_final` OR smart-turn, which
+  // never calls pushTurnComplete/pushFinal). Multiple is_final segments each bill their
+  // delta, summing to the turn's total; the marker rides on the per-context stats record
+  // so it is cleared automatically when the turn is retired.
   private emitSttUsage(contextId: string): void {
     const stats = this.audioStatsByContextId.get(contextId);
-    const bytes = stats?.bytes ?? 0;
-    const audioSeconds = bytes / 2 / this.sampleRate;
+    if (!stats) return;
+    const billed = stats.billedBytes ?? 0;
+    const newBytes = stats.bytes - billed;
+    if (newBytes <= 0) return;
+    stats.billedBytes = stats.bytes;
+    const audioSeconds = newBytes / 2 / this.sampleRate;
     this.bus?.push(Route.Background, {
       kind: "usage.recorded",
       contextId,
@@ -526,6 +535,7 @@ export class DeepgramSTTPlugin implements VoicePlugin {
       language: this.language,
       provider,
     });
+    this.emitSttUsage(contextId);
   }
 
   /** Emit interim transcript for real-time display. */
