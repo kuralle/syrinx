@@ -3814,7 +3814,9 @@ describe("VoiceAgentSession usage metering", () => {
   it("strips markdown from LLM text before it reaches tts.text (wiring, not just the fn)", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const spoken: string[] = [];
-    session.bus.on("tts.text", (pkt) => spoken.push((pkt as { text: string }).text));
+    session.bus.on("tts.text", (pkt) => {
+      spoken.push((pkt as unknown as { text: string }).text);
+    });
     await session.start();
 
     // A complete sentence full of markdown — must be spoken clean, not read literally.

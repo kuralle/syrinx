@@ -5,7 +5,7 @@ import { RealtimeSocket } from "@kuralle-syrinx/ws/realtime";
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
-import type { RealtimeAdapter, RealtimeEvent, RealtimeResumeMessage } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeResumeMessage, RealtimeUsage } from "./realtime-adapter.js";
 
 export interface OpenAiCompatibleRealtimeConfig {
   readonly apiKey: string;
@@ -377,7 +377,10 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
         if (toolCall) {
           this.stream.push(toolCall);
         }
-        this.stream.push({ type: "response_done" });
+        // response.usage is snake_case token counts; forward so the bridge can meter
+        // the native front (previously native turns produced NO usage at all).
+        const usage = extractRealtimeUsage(msg["response"]);
+        this.stream.push(usage ? { type: "response_done", usage } : { type: "response_done" });
         break;
       }
       case "error": {
@@ -408,6 +411,21 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
         break;
     }
   }
+}
+
+/** Pull snake_case token counts off a realtime response.usage object, when present. */
+function extractRealtimeUsage(response: unknown): RealtimeUsage | undefined {
+  if (!response || typeof response !== "object") return undefined;
+  const usage = (response as Record<string, unknown>)["usage"];
+  if (!usage || typeof usage !== "object") return undefined;
+  const u = usage as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+  const out: RealtimeUsage = {
+    ...(num(u["input_tokens"]) !== undefined ? { inputTokens: num(u["input_tokens"]) } : {}),
+    ...(num(u["output_tokens"]) !== undefined ? { outputTokens: num(u["output_tokens"]) } : {}),
+    ...(num(u["total_tokens"]) !== undefined ? { totalTokens: num(u["total_tokens"]) } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function extractFunctionCall(response: unknown): RealtimeEvent | null {

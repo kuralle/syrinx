@@ -169,6 +169,48 @@ describe("createOpenAiCompatibleRealtimeAdapter text-only output", () => {
   });
 });
 
+describe("createOpenAiCompatibleRealtimeAdapter usage metering", () => {
+  it("surfaces response.usage token counts on response_done so the native front can be metered", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+
+    const eventsTask = collectEvents(adapter.events, 1);
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({
+      type: "response.done",
+      response: {
+        output: [],
+        usage: { input_tokens: 320, output_tokens: 45, total_tokens: 365 },
+      },
+    });
+
+    const events = await eventsTask;
+    expect(events).toEqual([
+      { type: "response_done", usage: { inputTokens: 320, outputTokens: 45, totalTokens: 365 } },
+    ]);
+  });
+
+  it("emits a plain response_done when the provider reports no usage", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+
+    const eventsTask = collectEvents(adapter.events, 1);
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({ type: "response.done", response: { output: [] } });
+
+    const events = await eventsTask;
+    expect(events).toEqual([{ type: "response_done" }]);
+  });
+});
+
 describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned turns)", () => {
   it("sends input_audio_buffer.commit then response.create", async () => {
     const mock = createMockSocketHarness();

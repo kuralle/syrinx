@@ -64,6 +64,13 @@ export interface RealtimeResumeMessage {
   readonly content: string;
 }
 
+/** Token usage a realtime provider reports on response completion (e.g. OpenAI response.done). */
+export interface RealtimeUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
+
 export type RealtimeEvent =
   | { type: "audio"; pcm16: Uint8Array; sampleRateHz: number }
   | { type: "speech_started" }
@@ -71,7 +78,7 @@ export type RealtimeEvent =
   | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
   | { type: "tool_call"; toolId: string; toolName: string; args: Record<string, unknown> }
   | { type: "response_started" }
-  | { type: "response_done" }
+  | { type: "response_done"; usage?: RealtimeUsage }
   // G4: a native-resume provider issued a fresh resumption handle — persist the
   // latest one and pass it back on reconnect (Gemini `sessionResumption`).
   | { type: "resumption_handle"; handle: string }

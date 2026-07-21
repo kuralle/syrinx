@@ -230,6 +230,16 @@ export class RealtimeBridge implements VoicePlugin {
         break;
       case "response_done":
         this.onResponseDone(bus);
+        // Meter the native front — previously native turns produced no usage at all.
+        if (ev.usage && this.contextId) {
+          bus.push(Route.Background, {
+            kind: "usage.recorded",
+            contextId: this.contextId,
+            timestampMs: Date.now(),
+            stage: "llm",
+            ...ev.usage,
+          });
+        }
         break;
       case "speech_started":
         this.onSpeechStarted(bus);
