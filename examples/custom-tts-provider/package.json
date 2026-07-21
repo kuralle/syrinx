@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/epsilon",
   "version": "4.2.0",
-  "private": false,
-  "description": "Epsilon multiplexed-WebSocket TTS adapter for Syrinx",
+  "private": true,
+  "description": "EXAMPLE: how to build a custom WebSocket TTS provider on tts-core + ws (was the Epsilon adapter; endpoint offline). Not published — see README.",
   "keywords": [
     "voice",
     "voice-agent",
