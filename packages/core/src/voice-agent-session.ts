@@ -54,6 +54,7 @@ import type {
   EndOfSpeechPacket,
   InterimEndOfSpeechPacket,
   InjectMessagePacket,
+  SttReconfigurePacket,
   DisconnectRequestedPacket,
   InitializationFailedPacket,
   ModeSwitchRequestedPacket,
@@ -805,6 +806,9 @@ export class VoiceAgentSession {
 
     // Injected messages — push through LLM path for natural TTS
     this.bus.on("inject.message", this.handleInjectMessage.bind(this));
+
+    // Per-turn STT reconfigure (keyterms / endpointing / EOT thresholds)
+    this.bus.on("stt.reconfigure", this.handleSttReconfigure.bind(this));
 
     // Disconnect
     this.bus.on("session.disconnect", this.handleDisconnect.bind(this));
@@ -1921,6 +1925,17 @@ export class VoiceAgentSession {
     // Inject as synthetic LLM output — goes through normal TTS path
     this.bus.push(Route.Main, make.llmDelta(pkt.contextId, Date.now(), pkt.text));
     this.bus.push(Route.Main, make.llmDone(pkt.contextId, Date.now(), pkt.text));
+  }
+
+  private handleSttReconfigure(pkt: SttReconfigurePacket): void {
+    const stt = this.plugins.get("stt");
+    if (stt?.sttReconfigure) {
+      stt.sttReconfigure.reconfigure(pkt.partial);
+      return;
+    }
+    console.warn(
+      "VoiceAgentSession: stt.reconfigure requested but the STT plugin does not support sttReconfigure",
+    );
   }
 
   private handleDisconnect(pkt: DisconnectRequestedPacket): void {

@@ -39,6 +39,7 @@ import type {
   InterruptLlmPacket,
   InterruptSttPacket,
   InjectMessagePacket,
+  SttReconfigurePacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   ReasoningSuspendedPacket,
@@ -50,6 +51,7 @@ import type {
   InteractionDuckPacket,
   InteractionResumePacket,
 } from "./packets.js";
+import type { SttReconfigurePartial } from "./plugin-contract.js";
 
 const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
 
@@ -263,6 +265,14 @@ export function injectMessage(
   mode?: InjectMessagePacket["mode"],
 ): InjectMessagePacket {
   return { kind: "inject.message", contextId, timestampMs, text, ...(mode ? { mode } : {}) };
+}
+
+export function sttReconfigure(
+  contextId: string,
+  timestampMs: number,
+  partial: SttReconfigurePartial,
+): SttReconfigurePacket {
+  return { kind: "stt.reconfigure", contextId, timestampMs, partial };
 }
 
 export function llmDelta(contextId: string, timestampMs: number, text: string): LlmDeltaPacket {

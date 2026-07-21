@@ -1838,6 +1838,50 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  it("routes stt.reconfigure bus packets to the STT plugin's sttReconfigure seam", async () => {
+    const reconfigure = vi.fn();
+    const stt: VoicePlugin = {
+      sttReconfigure: { reconfigure },
+      async initialize() {},
+      async close() {},
+    };
+    const session = new VoiceAgentSession({ plugins: { stt: {} } });
+    session.registerPlugin("stt", stt);
+    await session.start();
+
+    const partial = { keyterms: ["account number"] as const, endpointingMs: 120 };
+    session.bus.push(Route.Main, {
+      kind: "stt.reconfigure",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      partial,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(reconfigure).toHaveBeenCalledTimes(1);
+    expect(reconfigure).toHaveBeenCalledWith(partial);
+
+    await closeSession(session);
+  });
+
+  it("stt.reconfigure with no STT plugin does not throw", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    await session.start();
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    session.bus.push(Route.Main, {
+      kind: "stt.reconfigure",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      partial: { keyterms: ["otp"] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    await closeSession(session);
+  });
+
   it("keeps omitted or speak injections on the synthetic TTS path and starts idle timeout", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const deltas: LlmDeltaPacket[] = [];

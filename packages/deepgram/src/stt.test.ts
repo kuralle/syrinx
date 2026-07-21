@@ -1471,4 +1471,88 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
 
     expect(connectionUrls[0]!).not.toContain("keyterm=");
   });
+
+  it("reconfigure replaces keyterms + endpointing and reconnects with the new URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      keyterm: ["Syrinx"],
+      endpointing: 300,
+    });
+    await waitFor(connectionUrls, 1);
+    expect(connectionUrls[0]!).toContain("keyterm=Syrinx");
+    expect(connectionUrls[0]!).toContain("endpointing=300");
+
+    expect(plugin.sttReconfigure).toBe(plugin);
+    plugin.reconfigure({ keyterms: ["account number"], endpointingMs: 120 });
+    await waitFor(connectionUrls, 2);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const reconnected = connectionUrls[1]!;
+    expect(reconnected).toContain("keyterm=account+number");
+    expect(reconnected).toContain("endpointing=120");
+    expect(reconnected).not.toContain("keyterm=Syrinx");
+  });
+
+  it("reconfigure ignores Flux-only fields and does not reconnect or corrupt the Nova URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      keyterm: ["Syrinx"],
+      endpointing: 300,
+    });
+    await waitFor(connectionUrls, 1);
+
+    plugin.reconfigure({ eotThreshold: 0.95, eagerEotThreshold: 0.4, eotTimeoutMs: 2000, contextText: "noop" });
+    // Give reconnect a chance if it incorrectly fired.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(connectionUrls).toHaveLength(1);
+    const url = connectionUrls[0]!;
+    expect(url).toContain("keyterm=Syrinx");
+    expect(url).toContain("endpointing=300");
+    expect(url).not.toContain("eot_threshold");
+    expect(url).not.toContain("eager_eot");
+  });
 });

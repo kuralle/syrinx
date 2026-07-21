@@ -24,6 +24,8 @@ import {
   type VoicePlugin,
   type PluginConfig,
   type SttErrorPacket,
+  type SttReconfigure,
+  type SttReconfigurePartial,
   type VadSpeechStartedPacket,
   assertAudioFormat,
   assertAudioPayload,
@@ -239,6 +241,33 @@ export class DeepgramSTTPlugin implements VoicePlugin {
         this.forceFinalize(request.contextId);
       }),
     );
+  }
+
+  /**
+   * Per-turn reconfigure of keyterms / silence endpointing. Nova has no in-band
+   * Configure message — updates instance state then reconnects via `conn.reset()`
+   * so the re-evaluated `url()` carries the new params (LiveKit Nova-3 pattern).
+   * Call only at a turn boundary (between utterances); reconnect is not free and
+   * would drop mid-utterance audio. keyterms REPLACE the list (Flux semantics).
+   * Flux-only fields (eotThreshold, eagerEotThreshold, eotTimeoutMs, contextText)
+   * are ignored.
+   */
+  get sttReconfigure(): SttReconfigure {
+    return this;
+  }
+
+  reconfigure(partial: SttReconfigurePartial): void {
+    let changed = false;
+    if (partial.keyterms !== undefined) {
+      this.keyterms = partial.keyterms;
+      changed = true;
+    }
+    if (partial.endpointingMs !== undefined) {
+      this.endpointing = partial.endpointingMs;
+      changed = true;
+    }
+    // Reconnect only when Nova-supported fields changed — steady-state path is free.
+    if (changed) this.conn?.reset();
   }
 
   private handleProviderMessage(data: string): void {

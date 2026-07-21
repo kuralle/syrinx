@@ -33,6 +33,7 @@ export {
   type SttPartialPacket,
   type SttResultPacket,
   type FinalizeSttPacket,
+  type SttReconfigurePacket,
   type SttErrorPacket,
   type EndOfSpeechAudioPacket,
   type EndOfSpeechPacket,

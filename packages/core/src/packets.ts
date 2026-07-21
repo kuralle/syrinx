@@ -10,6 +10,7 @@
 //   Lifecycle:              InitStepCompleted, InitFailed, InitCompleted
 
 import type { WordTiming } from "./interaction-policy.js";
+import type { SttReconfigurePartial } from "./plugin-contract.js";
 
 // =============================================================================
 // Base Types
@@ -197,6 +198,16 @@ export interface SttResultPacket extends VoicePacket {
 /** Requests that a streaming STT plugin publish its accumulated final transcript. */
 export interface FinalizeSttPacket extends VoicePacket {
   readonly kind: "stt.finalize";
+}
+
+/**
+ * Per-turn STT reconfigure actuation. Session routes to the stt plugin's
+ * `sttReconfigure` seam when present (warn-and-no-op otherwise).
+ * Call at a turn boundary so reconnect-based STTs do not drop mid-utterance audio.
+ */
+export interface SttReconfigurePacket extends VoicePacket {
+  readonly kind: "stt.reconfigure";
+  readonly partial: SttReconfigurePartial;
 }
 
 export interface SttErrorPacket extends VoicePacket, VoiceErrorPacket {
@@ -655,6 +666,7 @@ export type InputPacket =
   | SttPartialPacket
   | SttResultPacket
   | FinalizeSttPacket
+  | SttReconfigurePacket
   | SttErrorPacket
   | EndOfSpeechAudioPacket
   | EndOfSpeechPacket

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { injectMessage, reasoningResume, reasoningSuspended, sttPartial } from "./packet-factories.js";
+import { injectMessage, reasoningResume, reasoningSuspended, sttPartial, sttReconfigure } from "./packet-factories.js";
 
 describe("sttPartial", () => {
   it("returns a stt.partial packet with optional wordTimings", () => {
@@ -66,6 +66,18 @@ describe("injectMessage", () => {
       timestampMs: 1000,
       text: "remember this",
       mode: "context",
+    });
+  });
+});
+
+describe("sttReconfigure", () => {
+  it("returns an stt.reconfigure packet with the partial", () => {
+    const partial = { keyterms: ["account number"], endpointingMs: 120 };
+    expect(sttReconfigure("ctx-1", 1000, partial)).toEqual({
+      kind: "stt.reconfigure",
+      contextId: "ctx-1",
+      timestampMs: 1000,
+      partial,
     });
   });
 });

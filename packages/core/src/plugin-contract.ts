@@ -34,6 +34,8 @@ export interface SttReconfigurePartial {
   readonly eotThreshold?: number;
   readonly eagerEotThreshold?: number;
   readonly eotTimeoutMs?: number;
+  /** Silence-based endpointing (ms). Nova-style; Flux may ignore (it uses eotTimeoutMs). */
+  readonly endpointingMs?: number;
   readonly vadThreshold?: number;
   readonly languageHints?: readonly string[];
   /** AssemblyAI-style agent-context biasing (the agent's own prior reply). Ignored where unsupported. */
