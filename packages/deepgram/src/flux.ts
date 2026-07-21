@@ -25,6 +25,8 @@ import {
   Route,
   type PluginConfig,
   type SttErrorPacket,
+  type SttReconfigure,
+  type SttReconfigurePartial,
   type VoicePlugin,
   categorizeSttError,
   isRecoverable,
@@ -165,6 +167,47 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
     );
   }
 
+  /**
+   * Mid-stream reconfigure of keyterms / end-of-turn thresholds via the Flux v2 `Configure`
+   * control message — no socket restart (Deepgram "on-the-fly configuration"). Instance state is
+   * updated too, so a reconnect replays the current config (single source of truth with `url()`).
+   * `keyterms` REPLACES the list (Flux semantics), not merges. The provider acks with
+   * ConfigureSuccess / ConfigureFailure (surfaced as metrics in handleProviderMessage).
+   *
+   * NOTE (honest framing): per-turn STT reconfigure is a commodity capability — Deepgram Flux
+   * Configure and AssemblyAI UpdateConfiguration both expose it publicly. The value Syrinx adds is
+   * the vendor-agnostic seam + policy actuation, not the raw ability.
+   */
+  // Present the vendor-agnostic capability; Flux applies keyterms/thresholds/language_hints and
+  // ignores fields it has no wire for (vadThreshold, contextText).
+  get sttReconfigure(): SttReconfigure {
+    return this;
+  }
+
+  reconfigure(partial: SttReconfigurePartial): void {
+    if (partial.keyterms !== undefined) this.keyterms = partial.keyterms;
+    if (partial.eotThreshold !== undefined) this.eotThreshold = partial.eotThreshold;
+    if (partial.eagerEotThreshold !== undefined) this.eagerEotThreshold = partial.eagerEotThreshold;
+    if (partial.eotTimeoutMs !== undefined) this.eotTimeoutMs = partial.eotTimeoutMs;
+    if (partial.languageHints !== undefined) this.languageHints = partial.languageHints;
+
+    const thresholds: Record<string, number> = {};
+    if (partial.eotThreshold !== undefined) thresholds["eot_threshold"] = partial.eotThreshold;
+    if (partial.eagerEotThreshold !== undefined) thresholds["eager_eot_threshold"] = partial.eagerEotThreshold;
+    if (partial.eotTimeoutMs !== undefined) thresholds["eot_timeout_ms"] = partial.eotTimeoutMs;
+
+    const configure: Record<string, unknown> = { type: "Configure" };
+    if (Object.keys(thresholds).length > 0) configure["thresholds"] = thresholds;
+    if (partial.keyterms !== undefined) configure["keyterms"] = partial.keyterms;
+    if (partial.languageHints !== undefined) configure["language_hints"] = partial.languageHints;
+
+    try {
+      this.conn?.send(JSON.stringify(configure));
+    } catch (err) {
+      this.emitError(this.currentContextId, err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
   private handleProviderMessage(data: string): void {
     let msg: Record<string, unknown>;
     try {
@@ -180,6 +223,17 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
     if (msg["type"] === "Error") {
       const description = typeof msg["description"] === "string" ? msg["description"] : JSON.stringify(msg);
       this.emitError(this.currentContextId, new Error(`Deepgram Flux provider error: ${description}`));
+      return;
+    }
+    // Ack/nack for a mid-stream Configure (dynamic reconfigure). Surface as metrics so the
+    // conversation-state biasing that actuates reconfigure can observe that it took effect.
+    if (msg["type"] === "ConfigureSuccess") {
+      this.pushMetric(this.currentContextId, "stt.flux.configure_success", "1");
+      return;
+    }
+    if (msg["type"] === "ConfigureFailure") {
+      const description = typeof msg["description"] === "string" ? msg["description"] : JSON.stringify(msg);
+      this.pushMetric(this.currentContextId, "stt.flux.configure_failure", description);
       return;
     }
     if (msg["type"] !== "TurnInfo") return;

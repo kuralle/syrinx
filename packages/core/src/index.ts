@@ -187,6 +187,8 @@ export {
   type PluginConfig,
   type EndpointingOwner,
   type EndpointingCapability,
+  type SttReconfigure,
+  type SttReconfigurePartial,
   requireStringConfig,
   optionalStringConfig,
 } from "./plugin-contract.js";

@@ -122,6 +122,50 @@ describe("DeepgramFluxSTTPlugin", () => {
     expect(url).toContain("keyterm=Syrinx");
   });
 
+  it("reconfigure sends a Flux Configure control message with only the supplied fields", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, { keyterm: ["Syrinx"] });
+    const received: string[] = [];
+    local.sockets[0]!.on("message", (data, isBinary) => {
+      if (!isBinary) received.push(data.toString());
+    });
+
+    plugin.reconfigure({ keyterms: ["account number", "Syrinx"], eotThreshold: 0.85, eotTimeoutMs: 3000 });
+    await waitFor(received);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!)).toEqual({
+      type: "Configure",
+      thresholds: { eot_threshold: 0.85, eot_timeout_ms: 3000 },
+      keyterms: ["account number", "Syrinx"],
+    });
+  });
+
+  it("surfaces ConfigureSuccess / ConfigureFailure acks as metrics", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local);
+    const metrics: string[] = [];
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    local.sockets[0]!.send(JSON.stringify({ type: "ConfigureSuccess", keyterms: ["account number"] }));
+    await waitFor(metrics);
+    local.sockets[0]!.send(JSON.stringify({ type: "ConfigureFailure", code: "INVALID_THRESHOLD", description: "bad" }));
+    await waitFor(metrics, 2);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(metrics).toContain("stt.flux.configure_success");
+    expect(metrics).toContain("stt.flux.configure_failure");
+  });
+
   it("omits eager_eot_threshold by default (eager mode is opt-in)", async () => {
     const local = await createLocalServer();
     const { bus, plugin, started } = await startPlugin(local);

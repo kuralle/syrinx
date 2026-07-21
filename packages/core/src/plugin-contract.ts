@@ -22,8 +22,33 @@ export interface EndpointingCapability {
   readonly disableConfig?: PluginConfig;
 }
 
+/**
+ * Vendor-agnostic mid-stream STT reconfiguration. Per-turn reconfigure is a COMMODITY STT capability
+ * (Deepgram Flux `Configure`, AssemblyAI `UpdateConfiguration`, Speechmatics `SetRecognitionConfig`) —
+ * the value of THIS seam is normalizing those differing wire shapes behind one interface so an
+ * InteractionPolicy can actuate any STT without vendor-specific plumbing. All fields optional; a plugin
+ * applies what it supports and ignores the rest (best-effort — e.g. Deepgram ignores `contextText`).
+ */
+export interface SttReconfigurePartial {
+  readonly keyterms?: readonly string[];
+  readonly eotThreshold?: number;
+  readonly eagerEotThreshold?: number;
+  readonly eotTimeoutMs?: number;
+  readonly vadThreshold?: number;
+  readonly languageHints?: readonly string[];
+  /** AssemblyAI-style agent-context biasing (the agent's own prior reply). Ignored where unsupported. */
+  readonly contextText?: string;
+}
+
+export interface SttReconfigure {
+  reconfigure(partial: SttReconfigurePartial): void;
+}
+
 export interface VoicePlugin {
   readonly endpointingCapability?: EndpointingCapability;
+
+  /** Present when the STT supports mid-stream reconfiguration (see {@link SttReconfigure}). */
+  readonly sttReconfigure?: SttReconfigure;
 
   /**
    * Initialize the plugin. Called during the init chain.
