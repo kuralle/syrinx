@@ -103,9 +103,21 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   Speechmatics `SetRecognitionConfig`) behind one interface an `InteractionPolicy` can actuate.
   `DeepgramFluxSTTPlugin.reconfigure()` implements it via the Flux in-band `Configure` control message —
   no reconnect, live-verified (`ConfigureSuccess` ~234 ms) — surfacing `ConfigureSuccess`/`ConfigureFailure`
-  as metrics. **Scope note:** per-turn STT reconfigure is a commodity capability (LiveKit `stt.update_options`,
+  as metrics.
+- **`deepgram` / `core`**: `DeepgramSTTPlugin` (Nova — the STT every flagship path uses) implements the
+  same seam via **reconnect-at-turn-boundary** (Nova has no in-band `Configure`; the LiveKit Nova-3
+  pattern): `reconfigure()` updates keyterms + `endpointing` and reconnects through the existing
+  `WebSocketConnection.reset()` so the rebuilt URL carries the new params, with replay-on-reconnect
+  preserving in-flight audio. Reconnect fires only when a Nova-supported field changed. A `stt.reconfigure`
+  bus packet routes through `VoiceAgentSession` to the plugin's `sttReconfigure` — the Syrinx-native
+  equivalent of LiveKit's `stt.update_options()` lever. Live-verified (mid-session reconfigure reconnects,
+  replays 12 buffered frames, recognition continues). This reaches **functional parity** with
+  LiveKit/Pipecat on the flagship STT.
+- **Scope note:** per-turn STT reconfigure is a commodity capability (LiveKit `stt.update_options`,
   Pipecat `STTUpdateSettingsFrame`, AssemblyAI `agent_context` all ship it), **not a differentiator** —
-  this lands the seam + one implementation; the actuating policy layer is intentionally deferred.
+  this lands the vendor-agnostic seam + Flux (in-band) and Nova (reconnect) implementations + the actuation
+  lever. The *auto-policy* (inferring what to bias / when from the dialogue act) is intentionally deferred —
+  nobody ships that either, so deferring it stays at parity.
 
 ## 4.2.0 — 2026-07-11
 
