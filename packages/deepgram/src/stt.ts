@@ -94,8 +94,16 @@ class DeepgramSttWireProtocol implements SttWireProtocol {
     }
   >();
   private consecutiveFinalizeTimeouts = 0;
+  /** Mutable so a hard-language reconfigure re-stamps stt.result to the new language. */
+  private currentLanguage: string;
 
-  constructor(private readonly cfg: DeepgramNovaProtocolConfig) {}
+  constructor(private readonly cfg: DeepgramNovaProtocolConfig) {
+    this.currentLanguage = cfg.language;
+  }
+
+  setLanguage(language: string): void {
+    this.currentLanguage = language;
+  }
 
   attach(host: SttProtocolHost): void {
     this.host = host;
@@ -263,7 +271,7 @@ class DeepgramSttWireProtocol implements SttWireProtocol {
         contextId: providerContextId,
         text: transcript,
         confidence,
-        language: this.cfg.language,
+        language: this.currentLanguage,
         // No speechFinal: base emits stt.result + bills, but NOT eos (eos comes via turn_complete).
         provider: {
           name: "deepgram",
@@ -376,7 +384,7 @@ class DeepgramSttWireProtocol implements SttWireProtocol {
       contextId,
       text: transcript,
       confidence,
-      language: this.cfg.language,
+      language: this.currentLanguage,
       speechFinal: true,
       provider: { name: "deepgram", model: this.cfg.model, region: "global" },
     });
@@ -734,8 +742,9 @@ export class DeepgramSTTPlugin implements VoicePlugin {
    * so the re-evaluated `url()` carries the new params (LiveKit Nova-3 pattern).
    * Call only at a turn boundary (between utterances); reconnect is not free and
    * would drop mid-utterance audio. keyterms REPLACE the list (Flux semantics).
-   * Flux-only fields (eotThreshold, eagerEotThreshold, eotTimeoutMs, contextText)
-   * are ignored.
+   * `language` hard-switches recognition (e.g. "es-ES" or Nova-3 "multi") — applied on
+   * reconnect via the rebuilt `url()`, and re-stamped onto stt.result. Flux-only fields
+   * (eotThreshold, eagerEotThreshold, eotTimeoutMs, contextText) are ignored.
    */
   get sttReconfigure(): SttReconfigure {
     return this;
@@ -749,6 +758,11 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     }
     if (partial.endpointingMs !== undefined) {
       this.endpointing = partial.endpointingMs;
+      changed = true;
+    }
+    if (partial.language !== undefined) {
+      this.language = partial.language;
+      this.protocol?.setLanguage(partial.language);
       changed = true;
     }
     if (changed) this.session?.reset();

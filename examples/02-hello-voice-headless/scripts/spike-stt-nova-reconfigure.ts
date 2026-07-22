@@ -90,10 +90,11 @@ async function main(): Promise<void> {
     });
     chunk += 1;
     if (chunk === reconfigureAtChunk) {
-      console.log(`${t()} RECONFIGURE →      keyterms=[account number, Syrinx], endpointingMs=120`);
+      console.log(`${t()} RECONFIGURE →      keyterms=[account number, Syrinx], endpointingMs=120, language=multi`);
       nova.reconfigure({
         keyterms: ["account number", "Syrinx"],
         endpointingMs: 120,
+        language: "multi", // hard language switch (Nova-3 code-switch) — applied on reconnect
       });
       reconfigured = true;
     }

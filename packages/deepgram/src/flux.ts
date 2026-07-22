@@ -272,6 +272,8 @@ export class DeepgramFluxSTTPlugin implements VoicePlugin {
    * updated too, so a reconnect replays the current config (single source of truth with `url()`).
    * `keyterms` REPLACES the list (Flux semantics), not merges. The provider acks with
    * ConfigureSuccess / ConfigureFailure (surfaced as metrics in the wire protocol).
+   * `language` (hard switch) is ignored: Flux's model is language-specific (flux-general-en) —
+   * use `languageHints` to bias.
    */
   get sttReconfigure(): SttReconfigure {
     return this;

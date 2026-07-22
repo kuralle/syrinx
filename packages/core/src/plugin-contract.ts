@@ -38,6 +38,13 @@ export interface SttReconfigurePartial {
   readonly endpointingMs?: number;
   readonly vadThreshold?: number;
   readonly languageHints?: readonly string[];
+  /**
+   * Hard recognition-language switch (e.g. "en-US" → "es-ES", or Nova-3 "multi" for code-switch).
+   * Distinct from `languageHints` (soft bias): this changes the recognizer's language. Providers
+   * that carry language in the connection URL (Nova) reconnect to apply it; model-fixed providers
+   * (Flux, `flux-general-en`) ignore it and rely on `languageHints`.
+   */
+  readonly language?: string;
   /** AssemblyAI-style agent-context biasing (the agent's own prior reply). Ignored where unsupported. */
   readonly contextText?: string;
 }

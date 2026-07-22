@@ -1599,7 +1599,7 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
     expect(connectionUrls[0]!).not.toContain("keyterm=");
   });
 
-  it("reconfigure replaces keyterms + endpointing and reconnects with the new URL", async () => {
+  it("reconfigure replaces keyterms + endpointing + hard language and reconnects with the new URL", async () => {
     const connectionUrls: string[] = [];
     const server = await new Promise<WebSocketServer>((resolve) => {
       let nextServer: WebSocketServer;
@@ -1620,15 +1620,18 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
       api_key: "test",
       endpoint_url: endpointUrl,
       sample_rate: 16000,
+      language: "en-US",
       keyterm: ["Syrinx"],
       endpointing: 300,
     });
     await waitFor(connectionUrls, 1);
     expect(connectionUrls[0]!).toContain("keyterm=Syrinx");
     expect(connectionUrls[0]!).toContain("endpointing=300");
+    expect(connectionUrls[0]!).toContain("language=en-US");
 
     expect(plugin.sttReconfigure).toBe(plugin);
-    plugin.reconfigure({ keyterms: ["account number"], endpointingMs: 120 });
+    // Hard language switch (e.g. code-switch to Spanish, or Nova-3 "multi") + keyterms + endpointing.
+    plugin.reconfigure({ keyterms: ["account number"], endpointingMs: 120, language: "es-ES" });
     await waitFor(connectionUrls, 2);
 
     await plugin.close();
@@ -1638,7 +1641,9 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
     const reconnected = connectionUrls[1]!;
     expect(reconnected).toContain("keyterm=account+number");
     expect(reconnected).toContain("endpointing=120");
+    expect(reconnected).toContain("language=es-ES");
     expect(reconnected).not.toContain("keyterm=Syrinx");
+    expect(reconnected).not.toContain("language=en-US");
   });
 
   it("reconfigure ignores Flux-only fields and does not reconnect or corrupt the Nova URL", async () => {

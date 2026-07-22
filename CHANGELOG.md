@@ -119,6 +119,12 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   equivalent of LiveKit's `stt.update_options()` lever. Live-verified (mid-session reconfigure reconnects,
   replays 12 buffered frames, recognition continues). This reaches **functional parity** with
   LiveKit/Pipecat on the flagship STT.
+- **`core` / `deepgram`**: `SttReconfigurePartial.language` — a **hard recognition-language switch**
+  (distinct from soft `languageHints`), e.g. `"en-US" → "es-ES"` or Nova-3 `"multi"` for code-switch.
+  Nova applies it on reconnect (rebuilt URL) and re-stamps `stt.result.language`; Flux (model-fixed
+  `flux-general-en`) ignores it and relies on `languageHints`. The enabler for conversation-state-driven
+  language biasing (bias the recognizer to the language the dialog expects next). Live-verified
+  (mid-session switch to `language=multi` reconnects, recognition continues).
 - **Scope note:** per-turn STT reconfigure is a commodity capability (LiveKit `stt.update_options`,
   Pipecat `STTUpdateSettingsFrame`, AssemblyAI `agent_context` all ship it), **not a differentiator** —
   this lands the vendor-agnostic seam + Flux (in-band) and Nova (reconnect) implementations + the actuation
