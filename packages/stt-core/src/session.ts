@@ -2,9 +2,9 @@
 //
 // Ergonomic factory: wires a provider `SttWireProtocol` into a running streaming-STT
 // session over a `WebSocketConnection`-backed transport, with standard PipelineBus wiring
-// (stt.audio / user.audio_received → send, stt.finalize → encodeFinalize, turn.change /
-// interrupt.stt context bookkeeping). A provider's published `*STTPlugin` class delegates
-// `initialize`/`close` to this — its public surface is unchanged.
+// (stt.audio → send, stt.finalize → encodeFinalize, turn.change / interrupt.stt context
+// bookkeeping). A provider's published `*STTPlugin` class delegates `initialize`/`close`
+// to this — its public surface is unchanged.
 
 import {
   Route,
@@ -58,6 +58,9 @@ export async function startStreamingSttSession(
       close: () => conn.close(),
       get isReady() {
         return conn.isReady;
+      },
+      reset: () => {
+        conn.reset();
       },
     },
     sink: { push: (route, packet) => bus.push(route, packet as Parameters<PipelineBus["push"]>[1]) },

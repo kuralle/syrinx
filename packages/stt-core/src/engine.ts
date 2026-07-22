@@ -65,6 +65,12 @@ class SttEngineImpl implements SttEngine {
 
   constructor(private readonly deps: SttEngineDeps) {
     this.now = deps.now ?? (() => Date.now());
+    this.deps.protocol.attach?.({
+      emit: (event) => this.dispatch(event),
+      reset: () => {
+        this.deps.transport.reset?.();
+      },
+    });
   }
 
   get currentContextId(): string {
@@ -104,19 +110,22 @@ class SttEngineImpl implements SttEngine {
       for (const frame of this.deps.protocol.encodeFinalize(ctx)) {
         this.deps.transport.send(frame);
       }
+      this.deps.protocol.onFinalizeSent?.(ctx);
     } catch (err) {
       this.emitError(ctx, err instanceof Error ? err : new Error(String(err)));
     }
   }
 
   onTurnChange(nextContextId: string): void {
-    if (this.contextId && this.contextId !== nextContextId) {
-      this.clearContextBilling(this.contextId);
-    }
+    // Do NOT retire the prior context's billing here: a provider's finalize tail (e.g. nova's
+    // `from_finalize` final under smart-turn) can arrive AFTER turn.change rotates the context.
+    // Clearing on rotation would bill that trailing audio against a wiped counter (0s = under-bill).
+    // Billing is retired on true turn completion instead (speechFinal final / turn_complete / interrupt).
     this.contextId = nextContextId;
   }
 
   onInterrupt(): void {
+    // Barge-in abandons the current turn — retire its billing (no trailing final will be billed).
     if (this.contextId) this.clearContextBilling(this.contextId);
     this.contextId = "";
   }
@@ -204,12 +213,31 @@ class SttEngineImpl implements SttEngine {
       case "eos_retracted":
         this.handleEosRetracted(event);
         return;
+      case "turn_complete":
+        this.handleTurnComplete(event);
+        return;
       case "error":
         this.emitError(event.contextId || this.contextId, event.error);
         return;
       case "ignore":
         return;
     }
+  }
+
+  /** Eos-only: result + usage already emitted on per-segment `final` events. */
+  private handleTurnComplete(event: Extract<SttEvent, { type: "turn_complete" }>): void {
+    const text = event.text.trim();
+    if (!text) return;
+    const contextId = event.contextId || this.contextId;
+    this.deps.sink.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId,
+      timestampMs: this.now(),
+      text,
+      transcripts: [],
+    });
+    // Turn committed (per-segment results already billed) — retire billing.
+    this.clearContextBilling(contextId);
   }
 
   private handleInterim(event: Extract<SttEvent, { type: "interim" }>): void {
@@ -291,14 +319,18 @@ class SttEngineImpl implements SttEngine {
     this.deps.sink.push(Route.Main, packet);
     // Bill at the final-result funnel so usage fires under smart-turn endpointing too.
     this.emitSttUsage(contextId, event.audioSeconds);
-    if (this.deps.emitEosOnFinal && event.speechFinal) {
-      this.deps.sink.push(Route.Main, {
-        kind: "eos.turn_complete",
-        contextId,
-        timestampMs: this.now(),
-        text,
-        transcripts: [],
-      });
+    if (event.speechFinal) {
+      if (this.deps.emitEosOnFinal) {
+        this.deps.sink.push(Route.Main, {
+          kind: "eos.turn_complete",
+          contextId,
+          timestampMs: this.now(),
+          text,
+          transcripts: [],
+        });
+      }
+      // Turn completed via a speech-final result (usage already billed above) — retire billing.
+      this.clearContextBilling(contextId);
     }
   }
 

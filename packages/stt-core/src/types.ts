@@ -59,7 +59,21 @@ export type SttEvent =
       readonly contextId?: string;
       readonly error: Error;
     }
+  | {
+      /** Eos-only commit after per-segment `final` results (e.g. Deepgram nova turn complete). */
+      readonly type: "turn_complete";
+      readonly contextId?: string;
+      readonly text: string;
+    }
   | { readonly type: "ignore" };
+
+/** Host the engine injects so a protocol can emit events or force reconnect outside decode. */
+export interface SttProtocolHost {
+  /** Routes through engine.dispatch (same funnel as a decoded event: billing/eos/etc.). */
+  emit(event: SttEvent): void;
+  /** Force a transport reconnect (e.g. after repeated finalize timeouts). */
+  reset(): void;
+}
 
 /**
  * DRIVEN PORT — provider wire protocol. Pure of sockets and the bus. This is the only
@@ -88,6 +102,16 @@ export interface SttWireProtocol {
   isReady?(): boolean;
   /** Optional: provider handshake state that must reset on socket drop (e.g. clear ready). */
   onConnectionLost?(): void;
+  /**
+   * Optional host injection at engine construction. Protocols with async timers (e.g. nova
+   * Finalize timeout → fallback final / reconnect) use `host.emit` / `host.reset`.
+   */
+  attach?(host: SttProtocolHost): void;
+  /**
+   * Optional: called after encodeFinalize frames were sent (transport ready). Nova starts
+   * its provider-finalize timeout here.
+   */
+  onFinalizeSent?(contextId: string): void;
 }
 
 /** DRIVEN PORT — transport. Production wraps a `WebSocketConnection`; tests pass a fake. */
@@ -96,6 +120,8 @@ export interface Transport {
   send(frame: SocketData): void;
   close(): Promise<void>;
   readonly isReady?: boolean;
+  /** Optional force-reconnect (session wires `conn.reset`). */
+  reset?(): void;
 }
 
 /** The bus, narrowed to the one method the engine needs. Injectable for socket-free tests. */

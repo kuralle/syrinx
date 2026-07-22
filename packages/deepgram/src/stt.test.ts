@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   PipelineBusImpl,
@@ -723,15 +723,21 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
-  it("does not record STT audio bytes when the Deepgram websocket cannot accept the frame", async () => {
-    const endpointUrl = await createLocalServer(() => {});
+  it("does not bill usage when no audio was successfully sent before finalize", async () => {
+    // No audio frames are delivered; finalize should still request provider Finalize with
+    // zero recorded audio-stats bytes (metrics), and no usage.recorded.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", () => {
+        // swallow Finalize — no provider confirmation needed for this metric assertion
+      });
+    });
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
     const plugin = new DeepgramSTTPlugin();
-    const errors: SttErrorPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
     const metrics: ConversationMetricPacket[] = [];
-    bus.on("stt.error", (pkt) => {
-      errors.push(pkt as SttErrorPacket);
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
     });
     bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
@@ -741,36 +747,19 @@ describe("DeepgramSTTPlugin", () => {
       api_key: "test",
       endpoint_url: endpointUrl,
       sample_rate: 16000,
+      provider_finalize_timeout_ms: 0,
+      emit_eos_on_final: false,
     });
-    // Simulate a closed socket: the managed connection's send throws.
-    const send = vi.fn(() => {
-      throw new Error("WebSocket is not open");
-    });
-    Object.assign(plugin as unknown as { conn: { ensureReady: () => Promise<void>; send: typeof send; isReady: boolean; close: () => Promise<void> } }, {
-      conn: { ensureReady: async () => undefined, send, isReady: false, close: async () => undefined },
-    });
+    // Establish context without audio (turn.change only).
     bus.push(Route.Main, {
-      kind: "stt.audio",
+      kind: "turn.change",
       contextId: "turn-unsent",
       timestampMs: Date.now(),
-      audio: new Uint8Array(640),
     });
-
-    await waitFor(errors);
-    expect(send).toHaveBeenCalled();
-    expect(errors).toEqual([
-      expect.objectContaining({
-        kind: "stt.error",
-        contextId: "turn-unsent",
-        component: "stt",
-        cause: expect.objectContaining({
-          message: "WebSocket is not open",
-        }),
-      }),
-    ]);
-
     plugin.forceFinalize("turn-unsent");
     await waitFor(metrics);
+
+    expect(usage).toHaveLength(0);
     expect(metrics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: "stt_provider_finalize_requested",
@@ -939,9 +928,11 @@ describe("DeepgramSTTPlugin", () => {
     const finals: SttResultPacket[] = [];
     const errors: SttErrorPacket[] = [];
     const metrics: ConversationMetricPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
     bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
     bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
     bus.on("metric.conversation", (pkt) => { metrics.push(pkt as ConversationMetricPacket); });
+    bus.on("usage.recorded", (pkt) => { usage.push(pkt as UsageRecordedPacket); });
 
     await plugin.initialize(bus, {
       api_key: "test",
@@ -981,6 +972,12 @@ describe("DeepgramSTTPlugin", () => {
     expect(metrics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "stt_provider_finalize_timeout", contextId: "turn-old" }),
     ]));
+    // The trailing audio of turn-old (640B = 0.02s @ 16kHz) must be billed even though the
+    // from_finalize final arrives AFTER turn.change rotated the context. (Regression guard:
+    // retiring billing on turn.change would bill this as 0s.)
+    expect(usage).toEqual([
+      expect.objectContaining({ stage: "stt", contextId: "turn-old", audioSeconds: 0.02 }),
+    ]);
 
     await plugin.close();
     bus.stop();
@@ -1303,6 +1300,136 @@ describe("DeepgramSTTPlugin", () => {
     expect(
       errors.filter((e) => String((e.cause as Error | undefined)?.message ?? "").includes("Finalize timed out")),
     ).toHaveLength(0);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("ignores the next late provider final after timeout-fallback promotion (ignoreNext dedupe)", async () => {
+    // Interim-only buffer so the finalize timeout path runs (not correlation-expiry).
+    // After fallback promotes, a late is_final must not double-emit (ignoreNext).
+    let finalizeSeen = false;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          socket.send(JSON.stringify({
+            is_final: false,
+            speech_final: false,
+            channel: { alternatives: [{ transcript: "interim only buffer", confidence: 0.8 }] },
+          }));
+          return;
+        }
+        const msg = JSON.parse(data.toString()) as { type?: string };
+        if (msg.type !== "Finalize") return;
+        finalizeSeen = true;
+        setTimeout(() => {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            from_finalize: true,
+            channel: { alternatives: [{ transcript: "late provider final", confidence: 0.99 }] },
+          }));
+        }, 50);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      // true → timeout timer (not correlation-expiry-only when a final segment exists)
+      emit_eos_on_final: true,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 15,
+      finalize_timeout_fallback: true,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-ignore-next",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-ignore-next");
+    await waitFor(finals);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(finalizeSeen).toBe(true);
+    expect(finals).toEqual([
+      expect.objectContaining({
+        kind: "stt.result",
+        contextId: "turn-ignore-next",
+        text: "interim only buffer",
+      }),
+    ]);
+    expect(finals.some((f) => f.text === "late provider final")).toBe(false);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("discards a silence-only timed-out turn when finalize_timeout_fallback has no buffered text", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", () => {
+        // No transcripts at all — empty discard path.
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 10,
+      finalize_timeout_fallback: true,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-empty-discard",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    plugin.forceFinalize("turn-empty-discard");
+    await waitFor(metrics, 2);
+
+    expect(finals).toHaveLength(0);
+    expect(
+      errors.filter((e) => String((e.cause as Error | undefined)?.message ?? "").includes("Finalize timed out")),
+    ).toHaveLength(0);
+    expect(metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "stt_provider_finalize_timeout_empty_discard",
+        contextId: "turn-empty-discard",
+      }),
+    ]));
 
     await plugin.close();
     bus.stop();

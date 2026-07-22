@@ -13,9 +13,21 @@ class FakeProtocol implements SttWireProtocol {
   encodeAudioImpl?: (audio: Uint8Array) => SocketData[];
   onOpenFrames: SocketData[] = [];
   reconfigureFrames: SocketData[] = [];
+  host: { emit: (e: SttEvent) => void; reset: () => void } | null = null;
+  finalizeSent: string[] = [];
+  attached = false;
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  attach(host: { emit: (e: SttEvent) => void; reset: () => void }): void {
+    this.attached = true;
+    this.host = host;
+  }
+
+  onFinalizeSent(contextId: string): void {
+    this.finalizeSent.push(contextId);
   }
 
   encodeFinalize(contextId: string): SocketData[] {
@@ -88,6 +100,14 @@ class FakeProtocol implements SttWireProtocol {
         return [{ type: "eos_interim", contextId: m.contextId, text: m.text ?? "" }];
       case "eos_retracted":
         return [{ type: "eos_retracted", contextId: m.contextId }];
+      case "turn_complete":
+        return [
+          {
+            type: "turn_complete",
+            contextId: m.contextId,
+            text: m.text ?? "",
+          },
+        ];
       case "err":
         return [{ type: "error", contextId: m.contextId, error: new Error(m.msg ?? "err") }];
       case "boom":
@@ -108,6 +128,7 @@ function harness(
   const sent: SocketData[] = [];
   const pushed: Array<{ route: Route; packet: Record<string, unknown> }> = [];
   let transportReady = true;
+  let resetCount = 0;
   const protocol = opts.protocol ?? new FakeProtocol();
   const transport: Transport = {
     ensureReady: async () => {},
@@ -117,6 +138,9 @@ function harness(
     close: async () => {},
     get isReady() {
       return transportReady;
+    },
+    reset: () => {
+      resetCount += 1;
     },
   };
   const engine = createSttEngine({
@@ -137,6 +161,7 @@ function harness(
     engine,
     sent,
     protocol,
+    resetCount: () => resetCount,
     setTransportReady: (v: boolean) => {
       transportReady = v;
     },
@@ -433,17 +458,101 @@ describe("SttEngine", () => {
     ]);
   });
 
-  it("resets byte + duration billing markers on turn.change and interrupt", async () => {
+  it("retires billing on turn completion/interrupt, not on turn.change (bills the finalize tail after rotation)", async () => {
     const h = harness({ emitEosOnFinal: false, sampleRateHz: 16000 });
-    await h.engine.onAudio(new Uint8Array(640), "ctx-a");
+    // Smart-turn path: ctx-a streams audio, then the turn rotates BEFORE ctx-a's finalize tail
+    // arrives. turn.change must NOT drop ctx-a's unbilled bytes.
+    await h.engine.onAudio(new Uint8Array(640), "ctx-a"); // 0.02s @ 16kHz PCM16 mono
     h.engine.onTurnChange("ctx-b");
-    // Old context retired — its unbilled bytes must not appear under the new context.
+    // The late (from_finalize) final for ctx-a must still bill its trailing audio.
+    h.engine.onMessage(JSON.stringify({ t: "final", text: "a tail", contextId: "ctx-a" }), false);
+    expect(h.usage()).toEqual([expect.objectContaining({ contextId: "ctx-a", audioSeconds: 0.02 })]);
+    // ctx-b received no audio of its own — no cross-context leak.
     h.engine.onMessage(JSON.stringify({ t: "final", text: "b", contextId: "ctx-b" }), false);
-    expect(h.usage()).toHaveLength(0);
+    expect(h.usage()).toHaveLength(1);
 
-    await h.engine.onAudio(new Uint8Array(320), "ctx-b");
+    // A speech-final result retires that context's billing.
+    await h.engine.onAudio(new Uint8Array(320), "ctx-c"); // 0.01s
+    h.engine.onMessage(JSON.stringify({ t: "final", text: "c", contextId: "ctx-c", speechFinal: true }), false);
+    expect(h.usage()).toHaveLength(2);
+
+    // Interrupt (barge-in) abandons the current turn's billing.
+    await h.engine.onAudio(new Uint8Array(320), "ctx-d");
     h.engine.onInterrupt();
-    h.engine.onMessage(JSON.stringify({ t: "final", text: "gone", contextId: "ctx-b" }), false);
-    expect(h.usage()).toHaveLength(0);
+    h.engine.onMessage(JSON.stringify({ t: "final", text: "gone", contextId: "ctx-d" }), false);
+    expect(h.usage()).toHaveLength(2);
+  });
+
+  it("maps turn_complete to eos.turn_complete without stt.result or usage", async () => {
+    const h = harness({ emitEosOnFinal: true, sampleRateHz: 16000 });
+    await h.engine.onAudio(new Uint8Array(640), "ctx-tc");
+    // Prior segment final bills usage once.
+    h.engine.onMessage(
+      JSON.stringify({ t: "final", text: "seg", contextId: "ctx-tc" }),
+      false,
+    );
+    expect(h.results()).toHaveLength(1);
+    expect(h.usage()).toHaveLength(1);
+    expect(h.eos()).toHaveLength(0);
+
+    h.engine.onMessage(
+      JSON.stringify({ t: "turn_complete", text: "seg combined", contextId: "ctx-tc" }),
+      false,
+    );
+    expect(h.results()).toHaveLength(1);
+    expect(h.usage()).toHaveLength(1);
+    expect(h.eos()).toEqual([
+      expect.objectContaining({
+        kind: "eos.turn_complete",
+        contextId: "ctx-tc",
+        text: "seg combined",
+        transcripts: [],
+      }),
+    ]);
+  });
+
+  it("attach injects host.emit through the same funnel as decode", () => {
+    const h = harness({ emitEosOnFinal: true });
+    expect(h.protocol.attached).toBe(true);
+    expect(h.protocol.host).not.toBeNull();
+    h.engine.onTurnChange("ctx-host");
+    h.protocol.host!.emit({
+      type: "final",
+      contextId: "ctx-host",
+      text: "fallback final",
+      confidence: 0.5,
+      speechFinal: true,
+    });
+    expect(h.results()).toEqual([
+      expect.objectContaining({ kind: "stt.result", contextId: "ctx-host", text: "fallback final" }),
+    ]);
+    expect(h.eos()).toEqual([
+      expect.objectContaining({ kind: "eos.turn_complete", contextId: "ctx-host", text: "fallback final" }),
+    ]);
+  });
+
+  it("attach host.reset calls transport.reset", () => {
+    const h = harness();
+    expect(h.resetCount()).toBe(0);
+    h.protocol.host!.reset();
+    expect(h.resetCount()).toBe(1);
+  });
+
+  it("onFinalize calls onFinalizeSent after encodeFinalize frames are sent", async () => {
+    const h = harness();
+    await h.engine.onAudio(new Uint8Array(2), "ctx-ofs");
+    await h.engine.onFinalize("ctx-ofs");
+    expect(h.protocol.finalized).toEqual(["ctx-ofs"]);
+    expect(h.protocol.finalizeSent).toEqual(["ctx-ofs"]);
+    expect(h.sent).toContainEqual(JSON.stringify({ op: "finalize", contextId: "ctx-ofs" }));
+  });
+
+  it("onFinalize does not call onFinalizeSent when transport is not ready", async () => {
+    const h = harness();
+    h.setTransportReady(false);
+    await h.engine.onFinalize("ctx-skip");
+    expect(h.protocol.finalized).toEqual([]);
+    expect(h.protocol.finalizeSent).toEqual([]);
+    expect(h.sent).toHaveLength(0);
   });
 });

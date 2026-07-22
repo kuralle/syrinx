@@ -168,6 +168,12 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   no-duration final cannot double-bill); `StreamingSttSession.reconfigure` / `reset`. **ElevenLabs STT**,
   **Google STT**, and **Deepgram Flux STT** migrated onto it (behavior-preserving). Deepgram nova Finalize
   state machine remains a separate wave.
+- **`stt-core` / `deepgram` (wave 2 — nova):** optional async-emit seams — `SttProtocolHost` (`attach` /
+  `emit` / `reset`), `onFinalizeSent`, `Transport.reset`, and `SttEvent.turn_complete` (eos-only, no
+  result/usage). **Deepgram Nova STT** migrated onto the base (behavior-preserving): Finalize
+  timeout/fallback/reset, multi-segment accumulation, `speech_final`/`from_finalize` gating, UtteranceEnd
+  backstop, and provider-boundary metrics stay in the wire protocol; socket/reconnect/billing/buffer funnel
+  is shared.
 
 ## 4.2.0 — 2026-07-11
 

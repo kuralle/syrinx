@@ -9,6 +9,7 @@ export {
 } from "./session.js";
 export type {
   SttEvent,
+  SttProtocolHost,
   SttWireProtocol,
   Transport,
   PacketSink,
