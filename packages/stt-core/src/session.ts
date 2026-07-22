@@ -11,6 +11,7 @@ import {
   type AudioFormat,
   type PipelineBus,
   type RetryConfig,
+  type SttReconfigurePartial,
 } from "@kuralle-syrinx/core";
 import { WebSocketConnection, type SocketData, type SocketFactory } from "@kuralle-syrinx/ws";
 
@@ -37,6 +38,8 @@ export interface StreamingSttSpec {
 
 export interface StreamingSttSession {
   dispose(): Promise<void>;
+  reconfigure(partial: SttReconfigurePartial): void;
+  reset(): void;
 }
 
 /** Open the provider socket, wire the bus, and return a handle whose `dispose()` tears it all down. */
@@ -46,8 +49,9 @@ export async function startStreamingSttSession(
 ): Promise<StreamingSttSession> {
   let conn: WebSocketConnection;
   const metricPrefix = spec.metricPrefix ?? "stt";
+  const protocol = spec.protocol;
   const engine = createSttEngine({
-    protocol: spec.protocol,
+    protocol,
     transport: {
       ensureReady: () => conn.ensureReady(),
       send: (frame) => conn.send(frame),
@@ -76,6 +80,9 @@ export async function startStreamingSttSession(
     onMessage: (data, isBinary) => engine.onMessage(data, isBinary),
     onConnectionLost: (err) => engine.onConnectionLost(err),
     onUnrecoverable: (err) => engine.onConnectionLost(err),
+    onReadyBeforeReplay: () => {
+      for (const frame of protocol.onOpen?.() ?? []) conn.send(frame);
+    },
     onReplay: (event, count) =>
       bus.push(Route.Background, {
         kind: "metric.conversation",
@@ -88,11 +95,10 @@ export async function startStreamingSttSession(
   await conn.connect();
 
   const disposers: Array<() => void> = [
+    // STT plugins consume `stt.audio` only — the canonical STT ingress. VoiceAgentSession
+    // fans `user.audio_received` out to `stt.audio` (handleUserAudio), so subscribing to both
+    // would double-send + double-bill every frame in a real session.
     bus.on("stt.audio", (pkt: unknown) => {
-      const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
-      void engine.onAudio(audioPkt.audio, audioPkt.contextId);
-    }),
-    bus.on("user.audio_received", (pkt: unknown) => {
       const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
       void engine.onAudio(audioPkt.audio, audioPkt.contextId);
     }),
@@ -112,6 +118,14 @@ export async function startStreamingSttSession(
     dispose: async () => {
       for (const dispose of disposers.splice(0)) dispose();
       await engine.close();
+    },
+    reconfigure: (partial: SttReconfigurePartial) => {
+      const frames = protocol.encodeReconfigure?.(partial) ?? [];
+      if (frames.length === 0) return;
+      for (const frame of frames) conn.send(frame);
+    },
+    reset: () => {
+      conn.reset();
     },
   };
 }

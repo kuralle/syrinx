@@ -3,7 +3,7 @@
 // Minimal Epsilon TTS usage example (not wired into a full voice session).
 
 import { PipelineBusImpl, Route } from "@kuralle-syrinx/core";
-import { EpsilonTTSPlugin } from "@kuralle-syrinx/epsilon";
+import { EpsilonTTSPlugin } from "../src/custom-tts-provider/index.js";
 
 const EPSILON_BASE_URL = process.env["EPSILON_BASE_URL"];
 const EPSILON_API_KEY = process.env["EPSILON_API_KEY"];
@@ -18,7 +18,7 @@ async function main(): Promise<void> {
 
   let pcmBytes = 0;
   bus.on("tts.audio", (pkt) => {
-    const audioPkt = pkt as { audio: Uint8Array };
+    const audioPkt = pkt as unknown as { audio: Uint8Array };
     pcmBytes += audioPkt.audio.byteLength;
   });
   bus.on("tts.end", () => {

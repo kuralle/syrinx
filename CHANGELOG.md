@@ -161,7 +161,13 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   so a new STT adapter is just a `SttWireProtocol`. **Grok STT migrated** onto it (behavior-preserving;
   live-verified). It also **buffers pre-handshake audio and flushes it on the ready transition** (rather than
   dropping audio that races ahead of a provider handshake like Grok's `transcript.created`) — no start-of-speech
-  loss. Deepgram/Google/ElevenLabs STT migrations are follow-ups.
+  loss.
+- **`stt-core` extensible base (wave 1):** optional `encodeAudio` / `onOpen` / `encodeReconfigure` seams;
+  richer `SttEvent` vocab (`speech_started`, `partial`, `eos_interim`, `eos_retracted`); sent-bytes billing
+  fallback when a final has no provider duration (and duration finals advance the byte marker so a later
+  no-duration final cannot double-bill); `StreamingSttSession.reconfigure` / `reset`. **ElevenLabs STT**,
+  **Google STT**, and **Deepgram Flux STT** migrated onto it (behavior-preserving). Deepgram nova Finalize
+  state machine remains a separate wave.
 
 ## 4.2.0 — 2026-07-11
 

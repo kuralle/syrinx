@@ -3,7 +3,7 @@
 // Ports for the shared streaming-STT deep module. Provider adapters implement only
 // `SttWireProtocol`; the session owns the socket, bus wiring, and usage delta-billing.
 
-import type { Route } from "@kuralle-syrinx/core";
+import type { Route, SttReconfigurePartial } from "@kuralle-syrinx/core";
 import type { SocketData } from "@kuralle-syrinx/ws";
 
 /**
@@ -36,6 +36,25 @@ export type SttEvent =
       readonly provider?: Record<string, unknown>;
     }
   | {
+      readonly type: "speech_started";
+      readonly contextId?: string;
+    }
+  | {
+      readonly type: "partial";
+      readonly contextId?: string;
+      readonly text: string;
+      readonly wordTimings?: unknown;
+    }
+  | {
+      readonly type: "eos_interim";
+      readonly contextId?: string;
+      readonly text: string;
+    }
+  | {
+      readonly type: "eos_retracted";
+      readonly contextId?: string;
+    }
+  | {
       readonly type: "error";
       readonly contextId?: string;
       readonly error: Error;
@@ -51,6 +70,15 @@ export interface SttWireProtocol {
   encodeFinalize(contextId: string): readonly SocketData[];
   /** Optional session-teardown frame(s) sent best-effort on dispose. */
   encodeClose?(): readonly SocketData[];
+  /**
+   * Optional wire encoding for outbound PCM. Default when unset: send raw `[audio]`
+   * (Grok / Deepgram / Google / Flux). ElevenLabs JSON-wraps each chunk.
+   */
+  encodeAudio?(audio: Uint8Array): readonly SocketData[];
+  /** Optional config/handshake frame(s) sent on every (re)connect before replay. */
+  onOpen?(): readonly SocketData[];
+  /** Optional mid-stream reconfigure frame(s) (e.g. Flux Configure). */
+  encodeReconfigure?(partial: SttReconfigurePartial): readonly SocketData[];
   /** Decode one inbound socket frame into domain events (0+). Throwing is treated as fatal. */
   decode(data: SocketData, isBinary: boolean): readonly SttEvent[];
   /**

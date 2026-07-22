@@ -82,7 +82,7 @@
     "@kuralle-syrinx/deepgram": "workspace:*",
     "@kuralle-syrinx/test": "workspace:*",
     "@kuralle-syrinx/cartesia": "workspace:*",
-    "@kuralle-syrinx/epsilon": "workspace:*",
+    "@kuralle-syrinx/tts-core": "workspace:*",
     "@kuralle-syrinx/gemini": "workspace:*",
     "@kuralle-agents/core": "^0.8.5",
     "@kuralle-agents/rag": "^0.8.5",

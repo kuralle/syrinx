@@ -55,6 +55,10 @@ class SttEngineImpl implements SttEngine {
   private contextId = "";
   /** Cumulative billed audio-seconds per context (provider duration is often cumulative). */
   private readonly billedDurationByContextId = new Map<string, number>();
+  /** Sent PCM byte totals per context (for providers without a duration signal). */
+  private readonly sentBytesByContextId = new Map<string, number>();
+  /** Already-billed PCM byte totals per context (kept in sync with duration billing). */
+  private readonly billedBytesByContextId = new Map<string, number>();
   /** Audio that arrived before the provider handshake (isReady()) — flushed on the ready transition. */
   private readonly pendingAudio: Uint8Array[] = [];
   private readonly now: () => number;
@@ -79,10 +83,12 @@ class SttEngineImpl implements SttEngine {
       if (this.deps.protocol.isReady && !this.deps.protocol.isReady()) {
         this.pendingAudio.push(audio);
         if (this.pendingAudio.length > MAX_PENDING_AUDIO_FRAMES) this.pendingAudio.shift();
+        this.recordSentBytes(this.contextId, audio.byteLength);
         return true;
       }
       this.flushPendingAudioIfReady(); // drain anything buffered before the handshake, in order
-      this.deps.transport.send(audio);
+      this.sendEncodedAudio(audio);
+      this.recordSentBytes(this.contextId, audio.byteLength);
       return true;
     } catch (err) {
       this.emitError(this.contextId, err instanceof Error ? err : new Error(String(err)));
@@ -105,13 +111,13 @@ class SttEngineImpl implements SttEngine {
 
   onTurnChange(nextContextId: string): void {
     if (this.contextId && this.contextId !== nextContextId) {
-      this.billedDurationByContextId.delete(this.contextId);
+      this.clearContextBilling(this.contextId);
     }
     this.contextId = nextContextId;
   }
 
   onInterrupt(): void {
-    if (this.contextId) this.billedDurationByContextId.delete(this.contextId);
+    if (this.contextId) this.clearContextBilling(this.contextId);
     this.contextId = "";
   }
 
@@ -132,10 +138,26 @@ class SttEngineImpl implements SttEngine {
     if (this.deps.protocol.isReady && !this.deps.protocol.isReady()) return;
     const frames = this.pendingAudio.splice(0);
     try {
-      for (const audio of frames) this.deps.transport.send(audio);
+      for (const audio of frames) this.sendEncodedAudio(audio);
     } catch (err) {
       this.emitError(this.contextId, err instanceof Error ? err : new Error(String(err)));
     }
+  }
+
+  private sendEncodedAudio(audio: Uint8Array): void {
+    const frames = this.deps.protocol.encodeAudio?.(audio) ?? [audio];
+    for (const frame of frames) this.deps.transport.send(frame);
+  }
+
+  private recordSentBytes(contextId: string, byteLength: number): void {
+    if (!contextId || byteLength <= 0) return;
+    this.sentBytesByContextId.set(contextId, (this.sentBytesByContextId.get(contextId) ?? 0) + byteLength);
+  }
+
+  private clearContextBilling(contextId: string): void {
+    this.billedDurationByContextId.delete(contextId);
+    this.sentBytesByContextId.delete(contextId);
+    this.billedBytesByContextId.delete(contextId);
   }
 
   onConnectionLost(error: Error): void {
@@ -145,6 +167,8 @@ class SttEngineImpl implements SttEngine {
 
   async close(): Promise<void> {
     this.billedDurationByContextId.clear();
+    this.sentBytesByContextId.clear();
+    this.billedBytesByContextId.clear();
     this.pendingAudio.length = 0;
     try {
       const frames = this.deps.protocol.encodeClose?.() ?? [];
@@ -168,6 +192,18 @@ class SttEngineImpl implements SttEngine {
       case "final":
         this.handleFinal(event);
         return;
+      case "speech_started":
+        this.handleSpeechStarted(event);
+        return;
+      case "partial":
+        this.handlePartial(event);
+        return;
+      case "eos_interim":
+        this.handleEosInterim(event);
+        return;
+      case "eos_retracted":
+        this.handleEosRetracted(event);
+        return;
       case "error":
         this.emitError(event.contextId || this.contextId, event.error);
         return;
@@ -187,6 +223,51 @@ class SttEngineImpl implements SttEngine {
       text,
     };
     this.deps.sink.push(Route.Main, packet);
+  }
+
+  private handlePartial(event: Extract<SttEvent, { type: "partial" }>): void {
+    const text = event.text.trim();
+    if (!text) return;
+    const contextId = event.contextId || this.contextId;
+    const packet: Record<string, unknown> = {
+      kind: "stt.partial",
+      contextId,
+      timestampMs: this.now(),
+      text,
+    };
+    if (event.wordTimings !== undefined) packet["wordTimings"] = event.wordTimings;
+    this.deps.sink.push(Route.Main, packet);
+  }
+
+  private handleSpeechStarted(event: Extract<SttEvent, { type: "speech_started" }>): void {
+    const contextId = event.contextId || this.contextId;
+    this.deps.sink.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId,
+      timestampMs: this.now(),
+      confidence: 1,
+    });
+  }
+
+  private handleEosInterim(event: Extract<SttEvent, { type: "eos_interim" }>): void {
+    const text = event.text.trim();
+    if (!text) return;
+    const contextId = event.contextId || this.contextId;
+    this.deps.sink.push(Route.Main, {
+      kind: "eos.interim",
+      contextId,
+      timestampMs: this.now(),
+      text,
+    });
+  }
+
+  private handleEosRetracted(event: Extract<SttEvent, { type: "eos_retracted" }>): void {
+    const contextId = event.contextId || this.contextId;
+    this.deps.sink.push(Route.Main, {
+      kind: "eos.retracted",
+      contextId,
+      timestampMs: this.now(),
+    });
   }
 
   private handleFinal(event: Extract<SttEvent, { type: "final" }>): void {
@@ -222,15 +303,38 @@ class SttEngineImpl implements SttEngine {
   }
 
   /**
-   * Bill only the unbilled audio-seconds delta per context (smart-turn-safe). Provider
-   * `audioSeconds` is treated as cumulative-from-stream-start when it grows across finals.
+   * Prefer provider duration when present (Grok duration / Google resultEndOffset); otherwise
+   * bill unbilled PCM bytes as audio-seconds. Duration path also advances the byte marker so a
+   * later no-duration final cannot double-bill the same audio.
    */
   private emitSttUsage(contextId: string, duration: number | undefined): void {
-    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return;
-    const billed = this.billedDurationByContextId.get(contextId) ?? 0;
-    const audioSeconds = duration - billed;
-    if (audioSeconds <= 0) return;
-    this.billedDurationByContextId.set(contextId, duration);
+    if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+      const billed = this.billedDurationByContextId.get(contextId) ?? 0;
+      const audioSeconds = duration - billed;
+      if (audioSeconds <= 0) return;
+      this.billedDurationByContextId.set(contextId, duration);
+      // Keep byte marker in sync so a later final without offset does not double-bill.
+      this.billedBytesByContextId.set(contextId, this.sentBytesByContextId.get(contextId) ?? 0);
+      this.deps.sink.push(Route.Background, {
+        kind: "usage.recorded",
+        contextId,
+        timestampMs: this.now(),
+        stage: "stt",
+        provider: this.deps.provider.name,
+        model: this.deps.provider.model,
+        audioSeconds,
+      });
+      return;
+    }
+
+    const sampleRate = this.deps.format?.sampleRateHz;
+    if (!sampleRate || sampleRate <= 0) return;
+    const sent = this.sentBytesByContextId.get(contextId) ?? 0;
+    const billedBytes = this.billedBytesByContextId.get(contextId) ?? 0;
+    const newBytes = sent - billedBytes;
+    if (newBytes <= 0) return;
+    this.billedBytesByContextId.set(contextId, sent);
+    const audioSeconds = newBytes / 2 / sampleRate;
     this.deps.sink.push(Route.Background, {
       kind: "usage.recorded",
       contextId,
