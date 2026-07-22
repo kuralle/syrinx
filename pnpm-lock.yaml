@@ -243,9 +243,6 @@ importers:
       '@kuralle-syrinx/elevenlabs':
         specifier: workspace:*
         version: link:../../packages/elevenlabs
-      '@kuralle-syrinx/epsilon':
-        specifier: workspace:*
-        version: link:../custom-tts-provider
       '@kuralle-syrinx/gemini':
         specifier: workspace:*
         version: link:../../packages/gemini
@@ -279,6 +276,9 @@ importers:
       '@kuralle-syrinx/test':
         specifier: workspace:*
         version: link:../../packages/test
+      '@kuralle-syrinx/tts-core':
+        specifier: workspace:*
+        version: link:../../packages/tts-core
       '@kuralle-syrinx/ws':
         specifier: workspace:*
         version: link:../../packages/ws
@@ -365,31 +365,6 @@ importers:
       wrangler:
         specifier: ^4.19.0
         version: 4.97.0(@cloudflare/workers-types@4.20260603.1)
-
-  examples/custom-tts-provider:
-    dependencies:
-      '@kuralle-syrinx/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@kuralle-syrinx/tts-core':
-        specifier: workspace:*
-        version: link:../../packages/tts-core
-      '@kuralle-syrinx/ws':
-        specifier: workspace:*
-        version: link:../../packages/ws
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.5.0
-        version: 8.18.1
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vitest:
-        specifier: ^3.2.6
-        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.19)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0)
-      ws:
-        specifier: '>=8.21.0'
-        version: 8.21.0
 
   packages/aisdk:
     dependencies:
@@ -596,6 +571,9 @@ importers:
       '@kuralle-syrinx/realtime':
         specifier: workspace:*
         version: link:../realtime
+      '@kuralle-syrinx/stt-core':
+        specifier: workspace:*
+        version: link:../stt-core
       '@kuralle-syrinx/tts-core':
         specifier: workspace:*
         version: link:../tts-core
@@ -873,6 +851,22 @@ importers:
       onnxruntime-web:
         specifier: 1.24.3
         version: 1.24.3
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@22.19.19)(jiti@2.7.0)(jsdom@26.1.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0)
+
+  packages/stt-core:
+    dependencies:
+      '@kuralle-syrinx/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kuralle-syrinx/ws':
+        specifier: workspace:*
+        version: link:../ws
     devDependencies:
       typescript:
         specifier: ^5.7.0

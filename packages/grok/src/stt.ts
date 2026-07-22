@@ -1,23 +1,121 @@
 // SPDX-License-Identifier: MIT
+//
+// Grok (xAI) STT Plugin. The streaming lifecycle lives in @kuralle-syrinx/stt-core. This
+// file is the Grok wire protocol: connect URL + query knobs, audio.done finalize, and
+// decode of transcript.created / transcript.partial (is_final / duration / speech_final).
 
-import type { PipelineBus } from "@kuralle-syrinx/core";
 import {
-  Route,
-  type AudioFormat,
-  type PluginConfig,
-  type SttErrorPacket,
-  type VoicePlugin,
   assertAudioFormat,
-  assertAudioPayload,
-  categorizeSttError,
-  isRecoverable,
   optionalStringConfig,
   readProviderRetryConfig,
   requireStringConfig,
+  type AudioFormat,
+  type PipelineBus,
+  type PluginConfig,
+  type VoicePlugin,
 } from "@kuralle-syrinx/core";
-import { WebSocketConnection, type SocketFactory } from "@kuralle-syrinx/ws";
+import {
+  defaultNodeSocketFactory,
+  startStreamingSttSession,
+  type SttEvent,
+  type SttWireProtocol,
+  type StreamingSttSession,
+} from "@kuralle-syrinx/stt-core";
+import type { SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 
 const AUDIO_DONE = JSON.stringify({ type: "audio.done" });
+
+class GrokSttWireProtocol implements SttWireProtocol {
+  private ready = false;
+
+  isReady(): boolean {
+    return this.ready;
+  }
+
+  onConnectionLost(): void {
+    this.ready = false;
+  }
+
+  encodeFinalize(): SocketData[] {
+    return [AUDIO_DONE];
+  }
+
+  encodeClose(): SocketData[] {
+    return [AUDIO_DONE];
+  }
+
+  decode(data: SocketData, _isBinary: boolean): readonly SttEvent[] {
+    if (typeof data !== "string") return [];
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(data) as Record<string, unknown>;
+    } catch (err) {
+      return [
+        {
+          type: "error",
+          error: new Error(
+            `Grok STT provider sent malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        },
+      ];
+    }
+
+    const type = typeof msg["type"] === "string" ? msg["type"] : "";
+    switch (type) {
+      case "transcript.created":
+        this.ready = true;
+        return [];
+      case "transcript.partial":
+        return this.decodePartial(msg);
+      case "transcript.done":
+        return [];
+      case "error":
+        return [
+          {
+            type: "error",
+            error: new Error(
+              typeof msg["message"] === "string" ? msg["message"] : "Grok STT provider error",
+            ),
+          },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  private decodePartial(msg: Record<string, unknown>): readonly SttEvent[] {
+    const text = typeof msg["text"] === "string" ? msg["text"].trim() : "";
+    if (!text) return [];
+
+    const isFinal = msg["is_final"] === true;
+    const speechFinal = msg["speech_final"] === true;
+    const confidence =
+      typeof msg["end_of_turn_confidence"] === "number" ? msg["end_of_turn_confidence"] : 0;
+    // contextId is stamped by the session from the audio/turn context.
+    const contextId = "";
+
+    if (!isFinal) {
+      return [{ type: "interim", contextId, text }];
+    }
+
+    return [
+      {
+        type: "final",
+        contextId,
+        text,
+        confidence,
+        speechFinal,
+        audioSeconds: typeof msg["duration"] === "number" ? msg["duration"] : undefined,
+        provider: {
+          speechFinal,
+          words: msg["words"],
+          start: msg["start"],
+          duration: msg["duration"],
+        },
+      },
+    ];
+  }
+}
 
 export class GrokSTTPlugin implements VoicePlugin {
   readonly endpointingCapability = {
@@ -30,269 +128,62 @@ export class GrokSTTPlugin implements VoicePlugin {
 
   constructor(private readonly socketFactory?: SocketFactory) {}
 
-  private bus: PipelineBus | null = null;
-  private conn: WebSocketConnection | null = null;
-  private apiKey = "";
-  private sampleRate = 16000;
-  private language = "en";
-  private endpointUrl = "wss://api.x.ai/v1/stt";
-  private encoding = "pcm";
-  private interimResults = true;
-  private endpointing = 10;
-  private smartTurn: number | undefined;
-  private smartTurnTimeoutMs: number | undefined;
-  private diarize = false;
-  private keyterm: string | undefined;
-  private emitEosOnFinal = true;
-  /** Open-ended xAI STT query knobs not enumerated by the adapter. */
-  private queryParams: Record<string, unknown> | undefined;
-  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
-  private currentContextId = "";
-  private transcriptReady = false;
-  private disposers: Array<() => void> = [];
-  /** Cumulative billed audio-seconds per context (provider duration is cumulative from stream start). */
-  private billedDurationByContextId = new Map<string, number>();
+  private session: StreamingSttSession | null = null;
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
-    this.bus = bus;
-    this.apiKey = requireStringConfig(config, "api_key");
-    this.sampleRate = (config["sample_rate"] as number) ?? 16000;
-    this.language = optionalStringConfig(config, "language") ?? "en";
-    this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? this.endpointUrl;
-    this.encoding = optionalStringConfig(config, "encoding") ?? this.encoding;
-    this.interimResults = (config["interim_results"] as boolean) ?? true;
-    this.endpointing = (config["endpointing"] as number) ?? 10;
-    this.smartTurn = typeof config["smart_turn"] === "number" ? config["smart_turn"] : undefined;
-    this.smartTurnTimeoutMs =
+    const apiKey = requireStringConfig(config, "api_key");
+    const sampleRate = (config["sample_rate"] as number) ?? 16000;
+    const language = optionalStringConfig(config, "language") ?? "en";
+    const endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.x.ai/v1/stt";
+    const encoding = optionalStringConfig(config, "encoding") ?? "pcm";
+    const interimResults = (config["interim_results"] as boolean) ?? true;
+    const endpointing = (config["endpointing"] as number) ?? 10;
+    const smartTurn = typeof config["smart_turn"] === "number" ? config["smart_turn"] : undefined;
+    const smartTurnTimeoutMs =
       typeof config["smart_turn_timeout"] === "number" ? config["smart_turn_timeout"] : undefined;
-    this.diarize = (config["diarize"] as boolean) ?? false;
-    this.keyterm = optionalStringConfig(config, "keyterm");
-    this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
-    this.queryParams = readPlainObject(config["query_params"]);
-    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
-    assertAudioFormat(this.audioFormat);
+    const diarize = (config["diarize"] as boolean) ?? false;
+    const keyterm = optionalStringConfig(config, "keyterm");
+    const emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
+    const queryParams = readPlainObject(config["query_params"]);
+    const audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: sampleRate, channels: 1 };
+    assertAudioFormat(audioFormat);
 
-    this.conn = new WebSocketConnection({
+    this.session = await startStreamingSttSession(bus, {
+      protocol: new GrokSttWireProtocol(),
+      provider: { name: "grok", model: "stt", region: "global" },
+      format: audioFormat,
+      language,
+      emitEosOnFinal,
       url: () => {
         const params = new URLSearchParams({
-          sample_rate: String(this.sampleRate),
-          encoding: this.encoding,
-          interim_results: String(this.interimResults),
-          language: this.language,
-          endpointing: String(this.endpointing),
+          sample_rate: String(sampleRate),
+          encoding,
+          interim_results: String(interimResults),
+          language,
+          endpointing: String(endpointing),
         });
-        if (this.smartTurn !== undefined) params.set("smart_turn", String(this.smartTurn));
-        if (this.smartTurnTimeoutMs !== undefined) {
-          params.set("smart_turn_timeout", String(this.smartTurnTimeoutMs));
+        if (smartTurn !== undefined) params.set("smart_turn", String(smartTurn));
+        if (smartTurnTimeoutMs !== undefined) {
+          params.set("smart_turn_timeout", String(smartTurnTimeoutMs));
         }
-        if (this.diarize) params.set("diarize", "true");
-        if (this.keyterm) params.set("keyterm", this.keyterm);
-        applyQueryParams(params, this.queryParams);
-        const separator = this.endpointUrl.includes("?") ? "&" : "?";
-        return `${this.endpointUrl}${separator}${params.toString()}`;
+        if (diarize) params.set("diarize", "true");
+        if (keyterm) params.set("keyterm", keyterm);
+        applyQueryParams(params, queryParams);
+        const separator = endpointUrl.includes("?") ? "&" : "?";
+        return `${endpointUrl}${separator}${params.toString()}`;
       },
-      headers: { Authorization: `Bearer ${this.apiKey}` },
-      socketFactory: this.socketFactory ?? (await defaultSocketFactory()),
+      headers: { Authorization: `Bearer ${apiKey}` },
+      socketFactory: this.socketFactory ?? (await defaultNodeSocketFactory()),
       retry: readProviderRetryConfig(config),
       replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
-      onMessage: (data) => {
-        if (typeof data === "string") this.handleProviderMessage(data);
-      },
-      onConnectionLost: (err) => {
-        this.transcriptReady = false;
-        this.emitError(this.currentContextId, err);
-      },
+      metricPrefix: "stt.grok",
     });
-    await this.conn.connect();
-
-    this.disposers.push(
-      bus.on("stt.audio", (pkt: unknown) => {
-        void this.handleAudioPacket(pkt as { audio: Uint8Array; contextId?: string });
-      }),
-      bus.on("user.audio_received", (pkt: unknown) => {
-        void this.handleAudioPacket(pkt as { audio: Uint8Array; contextId?: string });
-      }),
-      bus.on("turn.change", (pkt: unknown) => {
-        const next = (pkt as { contextId: string }).contextId;
-        if (this.currentContextId && this.currentContextId !== next) {
-          this.billedDurationByContextId.delete(this.currentContextId);
-        }
-        this.currentContextId = next;
-      }),
-      bus.on("interrupt.stt", () => {
-        if (this.currentContextId) this.billedDurationByContextId.delete(this.currentContextId);
-        this.currentContextId = "";
-      }),
-      bus.on("stt.finalize", () => {
-        void this.sendAudioDone();
-      }),
-    );
-  }
-
-  private async handleAudioPacket(pkt: { audio: Uint8Array; contextId?: string }): Promise<void> {
-    if (pkt.contextId) this.currentContextId = pkt.contextId;
-    await this.sendAudio(pkt.audio, this.currentContextId);
-  }
-
-  async sendAudio(audio: Uint8Array, contextId = this.currentContextId): Promise<boolean> {
-    if (audio.byteLength === 0) return true;
-    try {
-      assertAudioPayload(this.audioFormat, audio);
-      if (!this.conn) throw new Error("Grok STT is not connected");
-      await this.conn.ensureReady();
-      if (!this.transcriptReady) return false;
-      this.conn.send(audio);
-      return true;
-    } catch (err) {
-      this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
-      return false;
-    }
-  }
-
-  private async sendAudioDone(): Promise<void> {
-    try {
-      await this.conn?.ensureReady();
-      if (this.conn?.isReady) this.conn.send(AUDIO_DONE);
-    } catch (err) {
-      this.emitError(this.currentContextId, err instanceof Error ? err : new Error(String(err)));
-    }
-  }
-
-  private handleProviderMessage(data: string): void {
-    let msg: Record<string, unknown>;
-    try {
-      msg = JSON.parse(data) as Record<string, unknown>;
-    } catch (err) {
-      this.emitError(
-        this.currentContextId,
-        new Error(`Grok STT provider sent malformed JSON: ${err instanceof Error ? err.message : String(err)}`),
-      );
-      return;
-    }
-
-    const type = typeof msg["type"] === "string" ? msg["type"] : "";
-    switch (type) {
-      case "transcript.created":
-        this.transcriptReady = true;
-        return;
-      case "transcript.partial":
-        this.handleTranscriptPartial(msg);
-        return;
-      case "transcript.done":
-        return;
-      case "error":
-        this.emitError(
-          this.currentContextId,
-          new Error(typeof msg["message"] === "string" ? msg["message"] : "Grok STT provider error"),
-        );
-        return;
-      default:
-        return;
-    }
-  }
-
-  private handleTranscriptPartial(msg: Record<string, unknown>): void {
-    const text = typeof msg["text"] === "string" ? msg["text"].trim() : "";
-    if (!text) return;
-
-    const isFinal = msg["is_final"] === true;
-    const speechFinal = msg["speech_final"] === true;
-    const confidence =
-      typeof msg["end_of_turn_confidence"] === "number" ? msg["end_of_turn_confidence"] : 0;
-    const provider: Record<string, unknown> = {
-      name: "grok",
-      model: "stt",
-      region: "global",
-      speechFinal,
-      words: msg["words"],
-      start: msg["start"],
-      duration: msg["duration"],
-    };
-
-    if (isFinal) {
-      const contextId = this.currentContextId;
-      this.bus?.push(Route.Main, {
-        kind: "stt.result",
-        contextId,
-        timestampMs: Date.now(),
-        text,
-        confidence,
-        language: this.language,
-        provider,
-      });
-      // Bill at the final-result funnel so usage fires under smart-turn endpointing too.
-      this.emitSttUsage(contextId, typeof msg["duration"] === "number" ? msg["duration"] : undefined);
-      if (this.emitEosOnFinal && speechFinal) {
-        this.bus?.push(Route.Main, {
-          kind: "eos.turn_complete",
-          contextId,
-          timestampMs: Date.now(),
-          text,
-          transcripts: [],
-        });
-      }
-      return;
-    }
-
-    this.bus?.push(Route.Main, {
-      kind: "stt.interim",
-      contextId: this.currentContextId,
-      timestampMs: Date.now(),
-      text,
-    });
-  }
-
-  private emitSttUsage(contextId: string, duration: number | undefined): void {
-    if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) return;
-    const billed = this.billedDurationByContextId.get(contextId) ?? 0;
-    const audioSeconds = duration - billed;
-    if (audioSeconds <= 0) return;
-    this.billedDurationByContextId.set(contextId, duration);
-    this.bus?.push(Route.Background, {
-      kind: "usage.recorded",
-      contextId,
-      timestampMs: Date.now(),
-      stage: "stt",
-      provider: "grok",
-      model: "stt",
-      audioSeconds,
-    });
-  }
-
-  private emitError(contextId: string, err: Error): void {
-    const category = categorizeSttError(err);
-    const packet: SttErrorPacket = {
-      kind: "stt.error",
-      contextId,
-      timestampMs: Date.now(),
-      component: "stt",
-      category,
-      cause: err,
-      isRecoverable: isRecoverable(category),
-    };
-    this.bus?.push(Route.Critical, packet);
   }
 
   async close(): Promise<void> {
-    for (const dispose of this.disposers.splice(0)) dispose();
-    if (this.conn?.isReady) {
-      try {
-        this.conn.send(AUDIO_DONE);
-      } catch {
-        // best effort
-      }
-    }
-    await this.conn?.close();
-    this.conn = null;
-    this.bus = null;
-    this.transcriptReady = false;
-    this.billedDurationByContextId.clear();
+    await this.session?.dispose();
+    this.session = null;
   }
-}
-
-async function defaultSocketFactory(): Promise<SocketFactory> {
-  const mod = await import("@kuralle-syrinx/ws/node");
-  return mod.createNodeWsSocket;
 }
 
 function readPlainObject(value: unknown): Record<string, unknown> | undefined {
