@@ -33,6 +33,8 @@ import {
   positiveInteger,
   rawDataToText,
 } from "./transport-helpers.js";
+import type { FetchLike, TwilioRestCredentials, WarmTransferSummarizer } from "./carrier-commands.js";
+import { wireCarrierControl } from "./wire-carrier-control.js";
 
 export interface TwilioMediaStreamServerOptions {
   readonly server?: HttpServer;
@@ -56,6 +58,15 @@ export interface TwilioMediaStreamServerOptions {
   readonly maxConcurrentSessions?: number;
   readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
+  /**
+   * Injected REST credentials for dtmf.send / call.transfer dispatch.
+   * Workers: pass secrets from `env`. Never read from process.env here.
+   * Live dispatch unverified without credentials.
+   */
+  readonly restCredentials?: TwilioRestCredentials;
+  readonly restFetch?: FetchLike;
+  readonly transferRedirectUrl?: string;
+  readonly warmTransferSummarizer?: WarmTransferSummarizer;
 }
 
 export interface TwilioMediaStreamServer {
@@ -92,6 +103,7 @@ interface TwilioMediaMessage {
 
 interface TwilioConnectionState {
   streamSid: string;
+  callSid: string;
   contextId: string;
   contextBase: string;
   turnCounter: number;
@@ -152,6 +164,7 @@ export async function createTwilioMediaStreamServer(
   const adapter: TransportAdapter<TwilioConnectionState> = {
     createState: () => ({
       streamSid: "",
+      callSid: "",
       contextId: "",
       contextBase: "",
       turnCounter: 0,
@@ -196,6 +209,15 @@ export async function createTwilioMediaStreamServer(
         if (sent) state.pendingEndMarkName = "";
       };
       state.onPlaybackMarkReceived = sendPendingEndMark;
+
+      wireCarrierControl(session, disposers, {
+        carrier: "twilio",
+        getCallSid: () => state.callSid || undefined,
+        credentials: options.restCredentials,
+        fetchImpl: options.restFetch,
+        redirectUrl: options.transferRedirectUrl,
+        warmSummarizer: options.warmTransferSummarizer,
+      });
 
       const outbound = wireTelephonyOutboundPipeline({
         session,
@@ -304,6 +326,7 @@ export async function createTwilioMediaStreamServer(
         validateTwilioStart(start, twilioSampleRateHz);
         state.streamSid = start.streamSid ?? message.streamSid ?? "";
         if (!state.streamSid) throw new Error("Twilio start event is missing streamSid");
+        state.callSid = start.callSid?.trim() ?? "";
         state.contextId = contextIdFn(start);
         state.contextBase = state.contextId;
         state.started = true;

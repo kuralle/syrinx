@@ -4,6 +4,34 @@ All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
 ## Unreleased
 
+### Added — telephony (Slice F): G.722/PCMA codecs, DTMF-send, call transfer
+
+**Honesty label (non-negotiable):** all three deliverables are **unit-verified only**. There are **no live
+carrier credentials** in this build. Do **not** treat green unit tests as certification that DTMF is
+decoded by a real IVR, that a trunk negotiates G.722/PCMA, or that a transfer bridges live.
+**Carrier-gated / unverified:** real IVR DTMF decode, trunk G.722 negotiation, live transfer bridge.
+
+- **`core/audio`**: `alaw.ts` — ITU-T G.711 A-law (PCMA) encode/decode (`decodeALawToPcm16` /
+  `encodePcm16ToALaw`), pure TypedArray, Workers-safe. Unit-tested against known A-law values +
+  round-trip fidelity.
+- **`core/audio`**: `g722.ts` — stateful G.722 64 kbit/s sub-band ADPCM (16 kHz PCM16 ↔ G.722).
+  **Spec-implemented, round-trip-tested, NOT ITU-vector-certified** (authoritative ITU G.722 test
+  vectors were not embedded). Pure TypedArray, Workers-safe.
+- **`core` packets**: `dtmf.send` (digits `[0-9*#wW]`, pause `w`/`W`) and `call.transfer`
+  (`warm` | `cold` | `sip_refer`, optional warm `summary`). Factories: `dtmfSend`, `callTransfer`.
+- **`server-websocket`**: Telnyx `validateTelnyxStart` accepts `PCMA`@8k and `G722`@16k; inbound
+  decode / outbound encode wired (G.722 keeps 16 kHz for STT — no 8 kHz downsample pitfall).
+- **`server-websocket`**: pure carrier command constructors + injectable `fetch()` dispatch
+  (`carrier-commands.ts`) for Twilio/Telnyx DTMF-send and transfer. Prefer Call-Control transfer over
+  SIP REFER (STIR/SHAKEN attestation B). Warm-handoff summary seam (`WarmTransferSummarizer`). Bus
+  wiring for `dtmf.send` / `call.transfer` on Twilio + Telnyx transports. Live HTTP dispatch is
+  mockable and **unverified against a live carrier**.
+- **CF Workers**: codecs + constructors use only TypedArray / global `fetch` / injected creds (no
+  `process.env`, no Node `Buffer` in shared codec/command paths). Telnyx media path lives in
+  `server-websocket` (shared with the Node host); the Workers edge currently binds Twilio Media
+  Streams via `edge-twilio` (PCMU) — Telnyx G.722/PCMA on Workers requires a Telnyx DO binding that
+  is not first-party yet (flagged).
+
 **Metering — usage → dollars → cap.** The load-bearing "fitting" that keeps Syrinx an embeddable
 engine while making it straightforward to later wrap as a billed hosted API (AssemblyAI-style):
 per-stage resource consumption is recorded where it happens, priced by a versioned catalog, and

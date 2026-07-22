@@ -291,6 +291,32 @@ export interface DtmfReceivedPacket extends VoicePacket {
   readonly rawDigit: string;
 }
 
+/**
+ * Outbound DTMF request (IVR navigation). Digits may include pause syntax
+ * `w` (0.5s) / `W` (1s). Mechanism unit-tested; live carrier decode unverified.
+ */
+export interface DtmfSendPacket extends VoicePacket {
+  readonly kind: "dtmf.send";
+  /** Digits in `[0-9*#wW]+`. */
+  readonly digits: string;
+}
+
+export type CallTransferMode = "warm" | "cold" | "sip_refer";
+
+/**
+ * Outbound call transfer. Prefer Call-Control transfer over SIP REFER where
+ * answer-rate matters (REFER drops STIR/SHAKEN attestation). Mechanism
+ * unit-tested; live transfer bridge unverified against a carrier.
+ */
+export interface CallTransferPacket extends VoicePacket {
+  readonly kind: "call.transfer";
+  readonly mode: CallTransferMode;
+  /** E.164 number or SIP URI. */
+  readonly target: string;
+  /** Warm-handoff context for the receiving agent/human (mode `"warm"`). */
+  readonly summary?: string;
+}
+
 // =============================================================================
 // LLM Pipeline Packets
 // =============================================================================

@@ -19,6 +19,9 @@ import type {
   TurnBoundaryEventPacket,
   DtmfDigit,
   DtmfReceivedPacket,
+  DtmfSendPacket,
+  CallTransferPacket,
+  CallTransferMode,
   RecordUserAudioPacket,
   RecordAssistantAudioDataPacket,
   RecordAssistantAudioTruncatePacket,
@@ -69,6 +72,36 @@ export function dtmfReceived(
   rawDigit: string,
 ): DtmfReceivedPacket {
   return { kind: "dtmf.received", contextId, timestampMs, digit, provider, rawDigit };
+}
+
+const DTMF_SEND_CHARS = /^[0-9*#wW]+$/;
+
+/** Validate + build a `dtmf.send` packet. Throws on empty/invalid digit strings. */
+export function dtmfSend(contextId: string, timestampMs: number, digits: string): DtmfSendPacket {
+  if (!digits || !DTMF_SEND_CHARS.test(digits)) {
+    throw new Error(`Invalid dtmf.send digits: ${JSON.stringify(digits)} (expected [0-9*#wW]+)`);
+  }
+  return { kind: "dtmf.send", contextId, timestampMs, digits };
+}
+
+/** Build a `call.transfer` packet. */
+export function callTransfer(
+  contextId: string,
+  timestampMs: number,
+  mode: CallTransferMode,
+  target: string,
+  summary?: string,
+): CallTransferPacket {
+  const trimmed = target.trim();
+  if (!trimmed) throw new Error("call.transfer target must be a non-empty E.164 / SIP URI");
+  return {
+    kind: "call.transfer",
+    contextId,
+    timestampMs,
+    mode,
+    target: trimmed,
+    ...(summary !== undefined ? { summary } : {}),
+  };
 }
 
 export function metric(

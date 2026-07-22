@@ -51,6 +51,16 @@ export {
   type TurnChangePacket,
 } from "./packets.js";
 
+// Telephony control packets (DTMF / transfer)
+export {
+  type DtmfDigit,
+  type DtmfReceivedPacket,
+  type DtmfSendPacket,
+  type CallTransferMode,
+  type CallTransferPacket,
+} from "./packets.js";
+export { parseDtmfDigit, dtmfReceived, dtmfSend, callTransfer } from "./packet-factories.js";
+
 // Pipeline packets — LLM
 export {
   type LlmDeltaPacket,

@@ -61,6 +61,24 @@ export * from "./smartpbx.js";
 export * from "./session-store.js";
 export { validateTwilioSignature } from "./twilio-auth.js";
 export {
+  buildTwilioSendDigits,
+  buildTelnyxSendDtmf,
+  buildTwilioTransfer,
+  buildTelnyxTransfer,
+  dispatchTwilioCommand,
+  dispatchTelnyxCommand,
+  resolveTransferSummary,
+  type TwilioSendDigitsCommand,
+  type TelnyxSendDtmfCommand,
+  type TwilioTransferCommand,
+  type TelnyxTransferCommand,
+  type TwilioRestCredentials,
+  type TelnyxRestCredentials,
+  type WarmTransferSummarizer,
+  type FetchLike,
+} from "./carrier-commands.js";
+export { wireCarrierControl, type CarrierControlOptions } from "./wire-carrier-control.js";
+export {
   BackgroundAudioMixer,
   wireBackgroundThinking,
   wireBackgroundBackchannel,

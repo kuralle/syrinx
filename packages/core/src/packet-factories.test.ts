@@ -2,7 +2,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { injectMessage, reasoningResume, reasoningSuspended, sttPartial, sttReconfigure } from "./packet-factories.js";
+import {
+  callTransfer,
+  dtmfSend,
+  injectMessage,
+  reasoningResume,
+  reasoningSuspended,
+  sttPartial,
+  sttReconfigure,
+} from "./packet-factories.js";
 
 describe("sttPartial", () => {
   it("returns a stt.partial packet with optional wordTimings", () => {
@@ -79,5 +87,40 @@ describe("sttReconfigure", () => {
       timestampMs: 1000,
       partial,
     });
+  });
+});
+
+describe("dtmfSend", () => {
+  it("accepts digits with pause syntax", () => {
+    expect(dtmfSend("ctx", 1, "1w2W9*#")).toEqual({
+      kind: "dtmf.send",
+      contextId: "ctx",
+      timestampMs: 1,
+      digits: "1w2W9*#",
+    });
+  });
+
+  it("rejects invalid digit characters", () => {
+    expect(() => dtmfSend("ctx", 1, "12a")).toThrow(/Invalid dtmf.send/);
+    expect(() => dtmfSend("ctx", 1, "")).toThrow(/Invalid dtmf.send/);
+  });
+});
+
+describe("callTransfer", () => {
+  it("builds warm/cold/sip_refer packets", () => {
+    expect(callTransfer("ctx", 2, "warm", "+15551234567", "billing")).toEqual({
+      kind: "call.transfer",
+      contextId: "ctx",
+      timestampMs: 2,
+      mode: "warm",
+      target: "+15551234567",
+      summary: "billing",
+    });
+    expect(callTransfer("ctx", 2, "cold", "sip:x@y").summary).toBeUndefined();
+    expect(callTransfer("ctx", 2, "sip_refer", "sip:agent@pbx").mode).toBe("sip_refer");
+  });
+
+  it("rejects empty target", () => {
+    expect(() => callTransfer("ctx", 1, "cold", "  ")).toThrow(/target/);
   });
 });
