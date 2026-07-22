@@ -142,7 +142,7 @@ describe("GrokSTTPlugin", () => {
       sample_rate: 16000,
     });
     bus.push(Route.Main, {
-      kind: "user.audio_received",
+      kind: "stt.audio",
       contextId: "turn-2",
       timestampMs: Date.now(),
       audio: new Uint8Array(320),
