@@ -153,6 +153,16 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   reference (WireProtocol on `tts-core` + `ws`). No package, no dependency edge. Real multi-context WS
   TTS/STT now lives in `@kuralle-syrinx/elevenlabs`.
 
+### Added — package `@kuralle-syrinx/stt-core` (shared STT streaming lifecycle)
+- **`stt-core`** (new): the STT counterpart of `tts-core`. `SttWireProtocol` (provider-specific only:
+  `encodeFinalize`, `decode(data,isBinary) → SttEvent[]`, optional `isReady()`) + `startStreamingSttSession`,
+  which owns the `@kuralle-syrinx/ws` `WebSocketConnection`, `stt.interim`/`stt.result` emit, the
+  smart-turn-safe final-transcript funnel, `usage.recorded{stt, audioSeconds}` delta-billing, and finalize —
+  so a new STT adapter is just a `SttWireProtocol`. **Grok STT migrated** onto it (behavior-preserving;
+  live-verified). It also **buffers pre-handshake audio and flushes it on the ready transition** (rather than
+  dropping audio that races ahead of a provider handshake like Grok's `transcript.created`) — no start-of-speech
+  loss. Deepgram/Google/ElevenLabs STT migrations are follow-ups.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade
