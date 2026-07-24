@@ -8,7 +8,7 @@ Syrinx is a TypeScript-native voice engine for building real-time voice agents. 
 Point it at your STT, LLM, and TTS providers (or a single speech-to-speech model), plug in your reasoner, and you have a phone- or browser-facing voice agent with barge-in, reconnect, and usage metering built in.
 
 ```bash
-pnpm add @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia
+npm install @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia
 ```
 
 :::tip

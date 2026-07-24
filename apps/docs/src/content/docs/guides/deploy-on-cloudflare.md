@@ -44,11 +44,11 @@ A complete, deployable Worker — one cascaded agent and one realtime agent, wit
 ## Deploy
 
 ```bash
-pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy
+npx wrangler deploy
 
-wrangler secret put DEEPGRAM_API_KEY
-wrangler secret put OPENAI_API_KEY
-wrangler secret put CARTESIA_API_KEY
+npx wrangler secret put DEEPGRAM_API_KEY
+npx wrangler secret put OPENAI_API_KEY
+npx wrangler secret put CARTESIA_API_KEY
 ```
 
 ## One Durable Object per transport
