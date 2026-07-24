@@ -753,8 +753,8 @@ wrangler secret put OPENAI_API_KEY
 ```
 
 - Config: `packages/server-workers/wrangler.jsonc` — `VECTORIZE` binding, optional `RECORDINGS` R2.
-- Entry: `packages/server-workers/src/worker.ts` — `wss://<your-worker>/ws?sessionId=<id>`.
-- Session: `createLiveVoiceAgentSession` — Deepgram STT + `ReasoningBridge(createRealtimeKuralleReasoner(…))` + Deepgram TTS (`packages/server-workers/src/live-session.ts`).
+- Entry: `packages/server-workers/src/worker.ts` — one `withVoice(Agent, {...})` Durable Object per transport: `VoiceConversation` (`wss://<worker>/ws`, browser/edge), `TwilioVoiceConversation` (`/twilio`), and `TelnyxVoiceConversation` (`/telnyx` — unit-verified only, **unverified against a live carrier or a live Workers deploy**).
+- Pipeline/brain: `liveCascadedPipeline` + `createLiveReasoner` — Deepgram STT + kuralle reasoner + Deepgram TTS (`packages/server-workers/src/live-session.ts`).
 
 Health: `GET /health`. Recordings: `GET /recordings?sessionId=<id>` when R2 is bound.
 
@@ -765,8 +765,8 @@ pnpm --filter @kuralle-syrinx/server-workers run deploy:realtime
 # uses wrangler.realtime.jsonc
 ```
 
-- Entry: `packages/server-workers/src/worker-realtime.ts`.
-- Session: `createRealtimeVoiceAgentSession` — `fromOpenAIRealtime` or `fromGeminiLive` + `RealtimeBridge` + kuralle Vectorize reasoner (`packages/server-workers/src/live-realtime-session.ts`).
+- Entry: `packages/server-workers/src/worker-realtime.ts` — `RealtimeVoiceConversation` via `withVoice(Agent, {...})`.
+- Pipeline/brain: `realtimeVoicePipeline` + `createRealtimeReasoner` — `fromOpenAIRealtime` or `fromGeminiLive` + `RealtimeBridge` + kuralle Vectorize reasoner (`packages/server-workers/src/live-realtime-session.ts`).
 - Set `REALTIME_FRONT=gemini` and `GEMINI_API_KEY` for Gemini Live front.
 
 Use `wss://<your-worker>/ws?sessionId=<id>` — never paste live playground hostnames into your own deployments.
