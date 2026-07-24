@@ -7,11 +7,17 @@ A realtime provider is a single speech-to-speech model that takes audio in and s
 
 ```ts
 import { RealtimeBridge, fromOpenAIRealtime } from '@kuralle-syrinx/realtime';
+import { createNodeWsSocket } from '@kuralle-syrinx/ws/node';
 
-session.registerPlugin('realtime', new RealtimeBridge(fromOpenAIRealtime({ apiKey, socketFactory })));
+const adapter = fromOpenAIRealtime({ apiKey: process.env.OPENAI_API_KEY!, socketFactory: createNodeWsSocket });
+session.registerPlugin('realtime', new RealtimeBridge(adapter));
 ```
 
 Run the session with `endpointingOwner: "timer"` — a realtime model owns its own turn detection, so you don't register STT/VAD/TTS plugins.
+
+:::note
+`socketFactory` is the WebSocket dialer these adapters use — `createNodeWsSocket` on Node, `createWorkersSocket` on Cloudflare Workers. See [Socket factories](/providers/overview/#socket-factories).
+:::
 
 ## OpenAI Realtime
 
@@ -62,7 +68,7 @@ Grok's realtime API is OpenAI-compatible, so it uses the same adapter shape:
 ```ts
 import { fromGrokRealtime } from '@kuralle-syrinx/grok';
 
-const adapter = fromGrokRealtime({ apiKey: process.env.XAI_API_KEY!, socketFactory });
+const adapter = fromGrokRealtime({ apiKey: process.env.XAI_API_KEY!, socketFactory: createNodeWsSocket });
 ```
 
 ## Half-cascade: realtime reasoning, your own TTS voice

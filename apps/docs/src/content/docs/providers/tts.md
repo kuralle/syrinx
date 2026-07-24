@@ -5,12 +5,16 @@ description: Config reference for every streaming text-to-speech provider Syrinx
 
 Every TTS plugin here is a wire protocol over the shared `@kuralle-syrinx/tts-core` lifecycle — multi-context streaming and usage billing work identically regardless of which one you pick.
 
+:::note
+The examples below construct plugins with `new …Plugin()`, which uses the default Node socket factory. On Cloudflare Workers, pass `createWorkersSocket` — e.g. `new CartesiaTTSPlugin(createWorkersSocket)`. See [Socket factories](/providers/overview/#socket-factories).
+:::
+
 ## Cartesia
 
 ```ts
 import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
 
-const tts = new CartesiaTTSPlugin(socketFactory);
+const tts = new CartesiaTTSPlugin();
 await tts.initialize(bus, {
   api_key: process.env.CARTESIA_API_KEY!,
   voice_id: process.env.CARTESIA_VOICE_ID,
@@ -35,7 +39,7 @@ Multi-context WebSocket streaming — several concurrent TTS contexts on one con
 ```ts
 import { ElevenLabsTTSPlugin } from '@kuralle-syrinx/elevenlabs';
 
-const tts = new ElevenLabsTTSPlugin(socketFactory);
+const tts = new ElevenLabsTTSPlugin();
 await tts.initialize(bus, {
   api_key: process.env.ELEVENLABS_API_KEY!,
   voice_id: process.env.ELEVENLABS_VOICE_ID,
@@ -58,7 +62,7 @@ Usage is billed on audio received, not on the provider's `isFinal` flag — a re
 ```ts
 import { DeepgramTTSPlugin } from '@kuralle-syrinx/deepgram';
 
-const tts = new DeepgramTTSPlugin(socketFactory);
+const tts = new DeepgramTTSPlugin();
 await tts.initialize(bus, {
   api_key: process.env.DEEPGRAM_API_KEY!,
   model: 'aura-2-thalia-en',
@@ -100,7 +104,7 @@ await tts.initialize(bus, {
 ```ts
 import { GrokTTSPlugin } from '@kuralle-syrinx/grok/tts';
 
-const tts = new GrokTTSPlugin(socketFactory);
+const tts = new GrokTTSPlugin();
 await tts.initialize(bus, {
   api_key: process.env.XAI_API_KEY!,
   voice_id: 'eve',

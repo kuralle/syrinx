@@ -19,12 +19,15 @@ One packet is emitted per billable unit, tagged with the stage and the provider/
 
 ## Turning usage into dollars
 
-`@kuralle-syrinx/core` ships a versioned price catalog and a `costOf` helper:
+`@kuralle-syrinx/core` ships a versioned price catalog and a `costOf` helper. Subscribe to `usage.recorded` on the session's bus and price each packet as it arrives:
 
 ```ts
-import { DEFAULT_PRICE_CATALOG, costOf } from '@kuralle-syrinx/core';
+import { DEFAULT_PRICE_CATALOG, costOf, type UsageRecordedPacket } from '@kuralle-syrinx/core';
 
-const cost = costOf(usage, DEFAULT_PRICE_CATALOG);
+session.bus.on('usage.recorded', (usage: UsageRecordedPacket) => {
+  const cost = costOf(usage, DEFAULT_PRICE_CATALOG);
+  // record or log `cost`
+});
 ```
 
 `DEFAULT_PRICE_CATALOG` carries current public list prices per modality — STT per audio-second, LLM per input/output/cached token, TTS per character — with a `source` and `version` stamp so you can see exactly which rates you're using. Local or self-hosted models are priced at zero. If a provider/model isn't in the catalog, `costOf` returns a typed `unpriced` result rather than a silent `$0`, so an unknown model never quietly reads as free. Pass your own catalog to override the defaults with negotiated rates.
@@ -37,8 +40,11 @@ const cost = costOf(usage, DEFAULT_PRICE_CATALOG);
 import { SpendCapGuard } from '@kuralle-syrinx/core';
 
 const guard = new SpendCapGuard({ /* limits */ });
-guard.record(usage);              // observe
-if (guard.check().exceeded) { /* refuse or downgrade */ }
+
+session.bus.on('usage.recorded', (usage) => {
+  guard.record(usage);              // observe
+  if (guard.check().exceeded) { /* refuse or downgrade */ }
+});
 ```
 
 Recording (observe) and checking (control) are separate calls, so the same usage is never double-counted.

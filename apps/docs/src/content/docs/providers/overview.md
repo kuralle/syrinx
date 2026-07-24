@@ -17,7 +17,20 @@ Every provider Syrinx ships is a **thin adapter** over one of three shared strea
 - **[TTS providers](/providers/tts/)** — Cartesia, ElevenLabs, Deepgram Aura, Gemini, Grok, and any OpenAI-compatible endpoint.
 - **[Realtime providers](/providers/realtime/)** — OpenAI Realtime, Gemini Live, and Grok's realtime API.
 
-All of them run on Node and on the Cloudflare Workers edge — every socket connection is injectable, so you swap `createNodeWsSocket` for `createWorkersSocket` and nothing else changes.
+## Socket factories
+
+Every provider plugin opens its own WebSocket to the vendor through an injectable **socket factory** — that's what lets the same plugin run on Node and on the Cloudflare Workers edge. The plugin constructor takes it as an **optional** argument:
+
+```ts
+import { createNodeWsSocket } from '@kuralle-syrinx/ws/node';       // Node
+import { createWorkersSocket } from '@kuralle-syrinx/ws/workers';   // Cloudflare Workers
+
+new DeepgramSTTPlugin();                     // Node — uses the default Node socket factory
+new DeepgramSTTPlugin(createNodeWsSocket);   // Node — the same thing, explicit
+new DeepgramSTTPlugin(createWorkersSocket);  // Cloudflare Workers
+```
+
+On **Node** you can omit it — the plugin defaults to a Node WebSocket. On **Cloudflare Workers**, pass `createWorkersSocket` (from `@kuralle-syrinx/ws/workers`), which dials out over the Workers fetch-upgrade path. Nothing else in your code changes. This applies to every STT, TTS, and realtime provider.
 
 ## Mid-call reconfigure
 

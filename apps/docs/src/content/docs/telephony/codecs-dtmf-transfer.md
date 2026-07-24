@@ -32,6 +32,10 @@ import { Route, dtmfSend } from '@kuralle-syrinx/core';
 bus.push(Route.Main, dtmfSend(contextId, Date.now(), '1w234#'));
 ```
 
+:::note
+`bus` is your session's packet bus (`session.bus`), and `contextId` is the active turn (`session.currentContextId`). The same two apply to the `call.transfer` example below.
+:::
+
 Syrinx builds the carrier command for you — Twilio's `<Play digits>` (or the Calls API `sendDigits`), or Telnyx Call Control `send_dtmf`. Inbound DTMF arrives as `dtmf.received`.
 
 ## Transferring a call

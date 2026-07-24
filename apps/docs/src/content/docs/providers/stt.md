@@ -5,6 +5,10 @@ description: Config reference for every streaming speech-to-text provider Syrinx
 
 Every STT plugin here is a wire protocol over the shared `@kuralle-syrinx/stt-core` lifecycle — reconnect, the interim/final funnel, and usage billing all work identically regardless of which one you pick.
 
+:::note
+The examples below construct plugins with `new …Plugin()`, which uses the default Node socket factory. On Cloudflare Workers, pass `createWorkersSocket` — e.g. `new DeepgramSTTPlugin(createWorkersSocket)`. See [Socket factories](/providers/overview/#socket-factories).
+:::
+
 ## Deepgram Nova
 
 The flagship cascade STT. Silence-based endpointing with a Finalize handshake state machine for accurate turn boundaries.
@@ -12,7 +16,7 @@ The flagship cascade STT. Silence-based endpointing with a Finalize handshake st
 ```ts
 import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
 
-const stt = new DeepgramSTTPlugin(socketFactory);
+const stt = new DeepgramSTTPlugin();
 await stt.initialize(bus, {
   api_key: process.env.DEEPGRAM_API_KEY!,
   model: 'nova-3',
@@ -42,7 +46,7 @@ A turn-aware model — one API call handles transcription **and** semantic end-o
 ```ts
 import { DeepgramFluxSTTPlugin } from '@kuralle-syrinx/deepgram';
 
-const stt = new DeepgramFluxSTTPlugin(socketFactory);
+const stt = new DeepgramFluxSTTPlugin();
 await stt.initialize(bus, {
   api_key: process.env.DEEPGRAM_API_KEY!,
   eot_threshold: 0.7,
@@ -68,7 +72,7 @@ Supports mid-call reconfigure (keyterms, EOT thresholds, language hints) **in-ba
 ```ts
 import { ElevenLabsSTTPlugin } from '@kuralle-syrinx/elevenlabs';
 
-const stt = new ElevenLabsSTTPlugin(socketFactory);
+const stt = new ElevenLabsSTTPlugin();
 await stt.initialize(bus, {
   api_key: process.env.ELEVENLABS_API_KEY!,
   sample_rate: 16000,
@@ -87,7 +91,7 @@ Owns its own endpointing (`provider_stt`) — you don't need a separate VAD or e
 ```ts
 import { GoogleSTTPlugin } from '@kuralle-syrinx/google';
 
-const stt = new GoogleSTTPlugin(socketFactory);
+const stt = new GoogleSTTPlugin();
 await stt.initialize(bus, {
   api_key: process.env.GOOGLE_API_KEY!,
   project_id: process.env.GOOGLE_PROJECT_ID!,
@@ -113,7 +117,7 @@ await stt.initialize(bus, {
 ```ts
 import { GrokSTTPlugin } from '@kuralle-syrinx/grok/stt';
 
-const stt = new GrokSTTPlugin(socketFactory);
+const stt = new GrokSTTPlugin();
 await stt.initialize(bus, {
   api_key: process.env.XAI_API_KEY!,
   language: 'en',
