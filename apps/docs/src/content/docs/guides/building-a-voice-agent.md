@@ -7,30 +7,37 @@ A Syrinx voice agent is a `VoiceAgentSession` — the runtime — fed by a trans
 
 ## Cascade: STT → reasoner → TTS
 
-Register an STT plugin, a reasoner bridge, and a TTS plugin on the session:
+Per-slot config (API keys, model, voice) goes in the `VoiceAgentSession` constructor; the plugin instances are registered by slot — `stt`, the reasoner `bridge`, and `tts`:
 
 ```ts
 import { VoiceAgentSession } from '@kuralle-syrinx/core';
 import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
 import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
 import { ReasoningBridge, fromStreamText } from '@kuralle-syrinx/aisdk';
-import { createNodeWsSocket } from '@kuralle-syrinx/ws/node';
 import { createOpenAI } from '@ai-sdk/openai';
 
-const session = new VoiceAgentSession({ plugins: { stt: {}, tts: {} } });
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-session.registerPlugin('stt', new DeepgramSTTPlugin(createNodeWsSocket));
-session.registerPlugin(
-  'bridge',
-  new ReasoningBridge(
-    fromStreamText({
-      model: createOpenAI({ apiKey: process.env.OPENAI_API_KEY })('gpt-4.1-mini'),
-      system: 'You are a helpful voice assistant. Keep replies short.',
-    }),
-  ),
-);
-session.registerPlugin('tts', new CartesiaTTSPlugin(createNodeWsSocket));
+const session = new VoiceAgentSession({
+  plugins: {
+    stt: { api_key: process.env.DEEPGRAM_API_KEY!, model: 'nova-3', sample_rate: 16000, emit_eos_on_final: true },
+    bridge: {},
+    tts: { api_key: process.env.CARTESIA_API_KEY!, voice_id: process.env.CARTESIA_VOICE_ID! },
+  },
+  endpointingOwner: 'provider_stt',
+});
+
+session.registerPlugin('stt', new DeepgramSTTPlugin());
+session.registerPlugin('bridge', new ReasoningBridge(fromStreamText({
+  model: openai('gpt-4.1-mini'),
+  system: 'You are a helpful voice assistant. Keep your replies short.',
+})));
+session.registerPlugin('tts', new CartesiaTTSPlugin());
 ```
+
+:::tip
+This is a runnable example — see [`hello-voice-agent.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/hello-voice-agent.ts) on GitHub, or the full headless demo in [`examples/02-hello-voice-headless`](https://github.com/kuralle/syrinx/tree/main/examples/02-hello-voice-headless).
+:::
 
 Each plugin only cares about the packets it consumes and produces:
 

@@ -40,7 +40,7 @@ Only the STT/LLM/TTS keys for the providers you're using are required. See [Prov
 pnpm -C examples/02-hello-voice-headless exec tsx scripts/run-kuralle-cascade-clean.ts
 ```
 
-This streams a fixture recording through Deepgram STT → your reasoner → Cartesia TTS, and prints the per-stage timings: STT finalize, LLM time-to-first-token, TTS time-to-first-byte, and total voice-to-voice latency.
+This streams a fixture recording through Deepgram STT → your reasoner → Cartesia TTS, and prints the per-stage timings: STT finalize, LLM time-to-first-token, TTS time-to-first-byte, and total voice-to-voice latency. The script is [`run-kuralle-cascade-clean.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/scripts/run-kuralle-cascade-clean.ts) — one of many runnable examples in [`examples/02-hello-voice-headless`](https://github.com/kuralle/syrinx/tree/main/examples/02-hello-voice-headless).
 
 ```
 stt.finalize     124ms

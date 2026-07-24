@@ -37,6 +37,10 @@ export default {
 
 `agents` is a peer dependency — install it alongside `@kuralle-syrinx/cf-agents`. `withVoice` also accepts a realtime pipeline (`kind: "realtime"`); see [Realtime providers](/providers/realtime/).
 
+:::tip
+A complete, deployable Worker — one cascaded agent and one realtime agent, with `wrangler.jsonc` and bindings — is in [`examples/03-cf-agent-voice`](https://github.com/kuralle/syrinx/tree/main/examples/03-cf-agent-voice) on GitHub.
+:::
+
 ## Deploy
 
 ```bash
