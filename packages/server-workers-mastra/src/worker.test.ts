@@ -4,7 +4,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+// Import Node's URL explicitly: this file's tsconfig loads @cloudflare/workers-types,
+// whose global URL (as of 4.20260603) dropped the Node-style `new URL(path, base)` overload.
+// This is a Node-side test (spawns wrangler `unstable_dev`), so it uses Node's URL.
+import { fileURLToPath, URL } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { unstable_dev, type Unstable_DevWorker } from "wrangler";
