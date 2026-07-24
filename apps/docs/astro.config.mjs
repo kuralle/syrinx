@@ -10,6 +10,13 @@ export default defineConfig({
       description:
         'A TypeScript-native voice engine: transport edge (browser + telephony), a swappable STT/LLM/TTS + native-realtime pipeline, and a hibernatable runtime that runs on Node and Cloudflare Workers.',
       customCss: ['./src/styles/docs-theme.css'],
+      head: [
+        {
+          tag: 'script',
+          content:
+            "document.documentElement.setAttribute('data-theme','light');try{localStorage.setItem('starlight-theme','light')}catch(e){}",
+        },
+      ],
       plugins: [
         starlightLlmsTxt({
           projectName: 'Syrinx',
