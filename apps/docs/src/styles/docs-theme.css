@@ -1,0 +1,31 @@
+/*
+ * Syrinx docs theme — dark-first, teal accent, tight typography.
+ * Overrides Starlight's default accent + gray ramp. Theme-aware (light + dark).
+ */
+
+:root {
+  /* Teal accent */
+  --sl-color-accent-low: #032726;
+  --sl-color-accent: #14b8a6;
+  --sl-color-accent-high: #99f6e4;
+  --sl-color-text-accent: #2dd4bf;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #cffafe;
+  --sl-color-accent: #0d9488;
+  --sl-color-accent-high: #134e4a;
+  --sl-color-text-accent: #0d9488;
+}
+
+/* Tighter, bolder headings — the plan-desk feel. */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content h2 {
+  margin-top: 2rem;
+}

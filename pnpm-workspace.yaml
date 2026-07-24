@@ -11,6 +11,10 @@ overrides:
   js-yaml: "3.15.0"
   esbuild: ">=0.28.1"
   vite: "6.4.3"
+  # Astro 6 (apps/docs) requires vite 7; the rest of the monorepo pins vite 6.4.3
+  # (vitest/studio/browser-client). Scope astro's vite to 7 so only the docs build
+  # gets it — everything else stays on 6.4.3.
+  "astro>vite": "^7.3.2"
   ws: ">=8.21.0"
 
 packageExtensions:
