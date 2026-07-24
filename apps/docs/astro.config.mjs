@@ -49,6 +49,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { slug: 'guides/building-a-voice-agent' },
+            { slug: 'guides/talking-thinking' },
             { slug: 'guides/background-observer' },
             { slug: 'guides/deploy-on-cloudflare' },
           ],

@@ -36,7 +36,7 @@ const adapter = fromOpenAIRealtime({
 | `apiKey` | Required. |
 | `model` | The OpenAI Realtime model id. |
 | `socketFactory` | `createNodeWsSocket` on Node, `createWorkersSocket` on the edge. |
-| `tools` | Function tools the model can call — see [delegating to a reasoner](/guides/building-a-voice-agent/#delegating-to-a-reasoner-from-a-realtime-front). |
+| `tools` | Function tools the model can call — see [the talking–thinking model](/guides/talking-thinking/) for delegating deep questions to a background reasoner. |
 
 On resume, OpenAI replays the transcript into the model (`conversation.item.create`) so a hibernated call picks back up with full context.
 
@@ -57,7 +57,7 @@ const adapter = fromGeminiLive({
 | `apiKey` | Required. |
 | `model` | The Gemini Live model id. |
 | `systemInstruction` | System prompt. |
-| `tools` | Function tools. |
+| `tools` | Function tools — see [the talking–thinking model](/guides/talking-thinking/). |
 
 Gemini Live resumes natively from its own session handle — Syrinx passes the handle through rather than replaying the transcript, so there's no double-applied history.
 
