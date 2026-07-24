@@ -37,8 +37,8 @@ const cost = costOf(usage, DEFAULT_PRICE_CATALOG);
 import { SpendCapGuard } from '@kuralle-syrinx/core';
 
 const guard = new SpendCapGuard({ /* limits */ });
-guard.record(usage);          // observe
-if (guard.check().breached) { /* refuse or downgrade */ }
+guard.record(usage);              // observe
+if (guard.check().exceeded) { /* refuse or downgrade */ }
 ```
 
 Recording (observe) and checking (control) are separate calls, so the same usage is never double-counted.

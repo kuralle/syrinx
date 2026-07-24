@@ -27,7 +27,9 @@ The A-law and G.722 codecs are implemented and unit-tested, but codec negotiatio
 Send touch-tones — to navigate an IVR you called into, for example — with a `dtmf.send` packet. Digits are `0-9`, `*`, `#`, plus pause markers `w` (0.5 s) and `W` (1 s):
 
 ```ts
-bus.push({ kind: 'dtmf.send', digits: '1w234#' });
+import { Route, dtmfSend } from '@kuralle-syrinx/core';
+
+bus.push(Route.Main, dtmfSend(contextId, Date.now(), '1w234#'));
 ```
 
 Syrinx builds the carrier command for you — Twilio's `<Play digits>` (or the Calls API `sendDigits`), or Telnyx Call Control `send_dtmf`. Inbound DTMF arrives as `dtmf.received`.
@@ -37,12 +39,15 @@ Syrinx builds the carrier command for you — Twilio's `<Play digits>` (or the C
 Hand the caller off with a `call.transfer` packet:
 
 ```ts
-bus.push({
-  kind: 'call.transfer',
-  mode: 'warm',
-  target: '+15551234567',
-  summary: 'Caller wants a refund on order 4821; verified identity.',
-});
+import { Route, callTransfer } from '@kuralle-syrinx/core';
+
+bus.push(Route.Main, callTransfer(
+  contextId,
+  Date.now(),
+  'warm',
+  '+15551234567',
+  'Caller wants a refund on order 4821; verified identity.',
+));
 ```
 
 | Mode | Behavior |
