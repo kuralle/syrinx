@@ -12,19 +12,38 @@ Syrinx emits structured, low-cardinality signals as a call runs — usage, laten
 
 ## Metrics exporter
 
-`MetricsExporter` is the export seam. Implement it to forward to your backend:
+`MetricsExporter` is the export seam. Implement it to forward every metric to your backend — Prometheus, OpenTelemetry, or Datadog. This one prints Prometheus-style lines; swap the bodies for a real client:
 
 ```ts
 import { VoiceAgentSession, type MetricsExporter, type MetricTags } from '@kuralle-syrinx/core';
 
-const exporter: MetricsExporter = {
-  observeCounter(name, value, tags) { /* usage.audioSeconds, usage.outputTokens, acoustic.interruption, error.stage … */ },
-  observeHistogram(name, valueMs, tags) { /* stage latencies */ },
-  startSpan(name, tags) { return { end() {} }; },
+const fmt = (tags: MetricTags) =>
+  Object.entries(tags).filter(([, v]) => v != null).map(([k, v]) => `${k}="${v}"`).join(',');
+
+const dashboardExporter: MetricsExporter = {
+  observeCounter(name, value, tags) { console.log(`counter ${name} ${value} {${fmt(tags)}}`); },
+  observeHistogram(name, valueMs, tags) { console.log(`histogram ${name} ${valueMs}ms {${fmt(tags)}}`); },
+  startSpan(name, tags) {
+    const startMs = Date.now();
+    return { end: () => console.log(`span ${name} ${Date.now() - startMs}ms {${fmt(tags)}}`) };
+  },
 };
 
-const session = new VoiceAgentSession({ plugins, metricsExporter: exporter });
+const session = new VoiceAgentSession({ plugins, metricsExporter: dashboardExporter });
 ```
+
+A live call then streams metrics like:
+
+```
+counter usage.audioSeconds 8.98 {provider="deepgram",model="nova-3",stage="stt",layer="infrastructure"}
+counter usage.outputTokens 121 {provider="openai",model="gpt-4.1-mini",stage="llm",layer="infrastructure"}
+counter usage.characters 38 {provider="cartesia",model="sonic-3",stage="tts",layer="infrastructure"}
+counter acoustic.interruption 1 {layer="conversation"}
+```
+
+:::tip
+This exporter is a runnable file — [`observability-dashboard.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/observability-dashboard.ts) on GitHub.
+:::
 
 For local development or incident reconstruction, `InMemoryMetricsExporter` captures everything in arrays:
 

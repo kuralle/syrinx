@@ -53,6 +53,7 @@ const features = [
   { t: 'Node and Cloudflare Workers', d: 'The same session runs on a Node server or as a hibernatable Durable Object on the edge — no rewrite to ship.' },
   { t: 'Turn-taking that isn’t a stopwatch', d: 'An interaction policy owns endpointing and barge-in, from a silence timer up to semantic end-of-turn and voice-activity projection.' },
   { t: 'Usage → dollars → cap', d: 'Every stage emits a usage packet; a versioned price catalog turns it into cost, and a spend cap bounds it.' },
+  { t: 'Observability & dashboards', d: 'Low-cardinality metrics, usage, and acoustic signals stream to a MetricsExporter — point them at Prometheus, OpenTelemetry, or your own dashboard, with no per-provider instrumentation.' },
 ];
 
 const steps = [
