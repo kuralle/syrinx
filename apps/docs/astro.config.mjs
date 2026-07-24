@@ -49,6 +49,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             { slug: 'guides/building-a-voice-agent' },
+            { slug: 'guides/background-observer' },
             { slug: 'guides/deploy-on-cloudflare' },
           ],
         },
@@ -76,6 +77,7 @@ export default defineConfig({
             { slug: 'reference/architecture' },
             { slug: 'reference/packets' },
             { slug: 'reference/stt-reconfigure' },
+            { slug: 'reference/observability' },
             { slug: 'reference/usage-and-pricing' },
           ],
         },
