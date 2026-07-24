@@ -217,12 +217,19 @@ Telnyx remains provider-specific at the adapter boundary:
 
 - Accept JSON text frames only, with provider event envelopes validated as JSON objects before nested media/start/mark fields are read.
 - Validate top-level Telnyx `sequence_number` when present. Forward gaps emit `telnyx.sequence_gap`; duplicate or regressing sequence numbers emit `telnyx.sequence_regression` because Telnyx does not guarantee websocket event order.
-- Validate `start.media_format` as PCMU/8 kHz/mono or L16/16 kHz/mono.
-- Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16.
+- Validate `start.media_format` as PCMU/8 kHz/mono, PCMA/8 kHz/mono, L16/16 kHz/mono, or
+  G.722/16 kHz/mono (`validateTelnyxStart`, `packages/server-websocket/src/telnyx-codec.ts`).
+  **G.722 is spec-implemented and round-trip-tested, not ITU-vector-certified** (no authoritative
+  ITU G.722 test vectors embedded); PCMA is ITU-T G.711 A-law. Both codecs, and Telnyx trunk
+  negotiation of them, are **unit-verified only — unverified against a live carrier**.
+- Decode inbound `media.payload` from strict base64 raw RTP payload into engine PCM16 (per-codec
+  decode: PCMU/PCMA mu-law/A-law tables, G.722 stateful sub-band ADPCM, L16 passthrough).
 - Reorder inbound `media.chunk` within a bounded four-frame default window before audio reaches the engine. Out-of-order media is emitted to STT in chunk order; duplicate or already-emitted chunks are rejected; missing chunks emit `telnyx.media_chunk_gap` only when the reorder window is exceeded, the stream stops, or the websocket disconnects.
 - Validate optional inbound `media.timestamp` as a non-negative integer when present. Timestamp gaps and regressions emit `telnyx.media_timestamp_gap` and `telnyx.media_timestamp_regression` metrics for transport observability, but timestamp drift is not a transcript-quality gate and does not by itself drop media.
 - Resample inbound audio into the engine input sample rate.
-- Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default or `L16`), then resample and encode assistant PCM16 accordingly for paced outbound `media` frames.
+- Configure `bidirectionalCodec` to match Telnyx `stream_bidirectional_codec` (`PCMU` by default, or
+  `PCMA`/`L16`/`G722`), then resample and encode assistant PCM16 accordingly for paced outbound
+  `media` frames. G.722 stays at 16 kHz on the wire (no 8 kHz downsample pitfall for STT).
 - Send Telnyx `mark` after paced outbound audio batches drain and record carrier mark acknowledgements.
 - Clear unsent local playout frames and send Telnyx `clear` when the engine emits TTS interruption.
 - Treat provider `stop`, abrupt websocket disconnect, queued-output overflow, and outbound send-buffer refusal as terminal discard boundaries: late inbound `media` and late carrier `mark` callbacks are ignored, pending marks and locally queued playout are cleared, recorder output is truncated, and no queued or newly generated outbound `media`/`mark`/`clear` messages are emitted after teardown. Discarded playout duration is exposed as `telnyx.stop_playout_cleared_ms`, `telnyx.disconnect_playout_cleared_ms`, `telnyx.overflow_playout_cleared_ms`, or `telnyx.send_buffer_playout_cleared_ms`.

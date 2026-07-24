@@ -96,10 +96,10 @@ the bigger sentence.
 >   what the caller actually heard.
 
 **Messaging rules:**
-- Never publish a claim ahead of shipped reality. Current violations to purge: the
-  ElevenLabs env key (no package exists), "each package has its own README" (13 of 22
-  don't), any implication that ≤1s v2v is achieved (it is the target; P50 is 2.1–3.6s on
-  the default cascade as of 2026-06).
+- Never publish a claim ahead of shipped reality. Current violations to purge: "each package
+  has its own README" (12 of 25 don't as of 2026-07), any implication that ≤1s v2v is achieved
+  (it is the target; P50 is 2.1–3.6s on the default cascade as of 2026-06). (The ElevenLabs env
+  key is no longer a violation — `@kuralle-syrinx/elevenlabs` shipped `Unreleased`.)
 - Numbers over adjectives. "Speculative generation saved min(LLM TTFT, eager lead) in a
   live A/B" beats "blazing fast."
 - Credit prior art loudly (Pipecat's SmartTurn, LiveKit's preemptive generation pattern).

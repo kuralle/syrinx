@@ -1,9 +1,13 @@
 # RFC: First-party Cloudflare deployment (browser + telephony)
 
 > **Status:** Implemented in **3.0.0** (2026-06-14) — W1–W6 + W8 shipped; live deploy verified
-> (browser `/ws` + Twilio `/twilio`). Remaining: telnyx-on-edge runner, an optional budgeted CI
-> latency gate, and `/ws` shared-secret auth. See `CHANGELOG.md` and issue #10. Deviations from
-> this plan (W2 mastra, W5 template, W6 reconnect) are recorded in the merged PRs.
+> (browser `/ws` + Twilio `/twilio`). The telnyx-on-edge runner (W3's remaining half) has since
+> landed on `Unreleased` (CHANGELOG) — `edge-telnyx.ts` + `telnyx-codec.ts` (Workers-safe, shared
+> with the Node host) + `TelnyxVoiceConversation` DO + `/telnyx` route + `TELNYX_VOICE_CONVERSATIONS`
+> binding — but it is **unverified against a live carrier or a live Workers deploy** (unit-verified
+> only: server-websocket, cf-agents, server-workers suites + typecheck). Remaining: an optional
+> budgeted CI latency gate and `/ws` shared-secret auth. See `CHANGELOG.md` and issue #10. Deviations
+> from this plan (W2 mastra, W5 template, W6 reconnect) are recorded in the merged PRs.
 > **Owner:** octalpixel · **Date:** 2026-06-13
 > **Scope:** BOTH browser/edge voice AND telephony parity.
 > **Builds on:** `@kuralle-syrinx/cf-agents` (`withVoice(Agent)`, shipped on `feat/agents-with-voice`),
@@ -193,7 +197,7 @@ Breaking, multi-package → ships in **3.0.0**. Gate every WBS row behind the ex
 |---|---|---|
 | W1 | `server-workers` browser/edge → `withVoice(Agent)`; delete alarm-scheduler #1 + durable-session-store + manual lifecycle + 1012 branch | typecheck+tests green; websocket-university + latency smokes pass |
 | W2 | Fold `server-workers-mastra` voice host into `withVoice` (`reasoner: fromMastraAgent`); delete alarm-scheduler #2; move run-store onto Agent SQL | mastra suspend/resume smoke passes on Agent SQL |
-| W3 | Telephony front in `cf-agents` (`transport: "twilio"|"telnyx"`) wrapping `edge-twilio` over `Connection` | twilio + telnyx emulator smokes pass via the mixin |
+| W3 | Telephony front in `cf-agents` (`transport: "twilio"|"telnyx"`) wrapping `edge-twilio` over `Connection` | twilio emulator smoke passes via the mixin (shipped 3.0.0); telnyx (`transport: "telnyx"`, `edge-telnyx.ts`, `/telnyx` route) shipped `Unreleased` — unit-verified only, **not yet verified against a live carrier or a live Workers deploy** |
 | W4 | R2 recorder as a `cf-agents` subexport; resume-by-sessionId/callSid verified | recorder-coherence smoke passes |
 | W5 | `examples/cloudflare/` template (wrangler, DO/R2/Vectorize bindings, secrets, `<Stream>` handler) | `wrangler deploy --dry-run` + a real deploy serve a browser + phone call |
 | W6 | `browser-client` transport → partysocket | forced-drop reconnect smoke passes |

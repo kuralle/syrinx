@@ -10,7 +10,14 @@ transport edge and hands the agent runtime a clean stream of mono PCM16 audio.
 
 - Resumable WebSocket audio protocol (mono PCM16, turn and session management,
   sequence and sample-rate locks, reconnect within a retention window).
-- Telephony adapters: SIP, Twilio, LiveKit.
+- Streaming STT and TTS provider adapters (Deepgram incl. Flux semantic end-of-turn, Cartesia,
+  ElevenLabs — multi-context WS TTS + Scribe v2 realtime STT, Google, Grok, Gemini, OpenAI-compatible
+  TTS), built on shared `tts-core` / `stt-core` streaming lifecycle modules — a provider is just a
+  wire protocol.
+- Telephony adapters: Twilio, Telnyx, SmartPBX, including G.722/PCMA codecs, DTMF-send, and call
+  transfer. **Unit-verified only** — no live carrier credentials in this build; treat green unit
+  tests as protocol-correctness, not carrier certification (real IVR DTMF decode, trunk G.722
+  negotiation, and a live transfer bridge are unverified).
 - A provider-testing suite for realtime audio backends.
 - Runs on Node **and** Cloudflare Workers — one hibernatable Durable Object per
   conversation (`WebSocketPair` inbound, timers→DO alarms, SQLite session store,
@@ -31,6 +38,8 @@ pnpm --filter @kuralle-syrinx/server-workers exec wrangler deploy
 
 Endpoints: `wss://<worker>/ws?sessionId=<id>` (browser/edge voice),
 `wss://<worker>/twilio?sessionId=<callSid>` (Twilio Media Streams phone leg),
+`wss://<worker>/telnyx?sessionId=<callId>` (Telnyx Media Streaming phone leg — **unverified
+against a live carrier or a live Workers deploy**; unit-verified only),
 `POST /incoming-call` (Twilio Voice webhook → `<Connect><Stream>` TwiML),
 `GET /health`, `GET /recordings?sessionId=<id>` (lists R2 recordings). Bind an R2
 bucket as `RECORDINGS` to capture, per call, a stereo `conversation.wav` (user left /

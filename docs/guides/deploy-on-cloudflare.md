@@ -82,7 +82,13 @@ client.connect();
 Point your Twilio number's **"A call comes in"** webhook at
 `https://<worker>/incoming-call`. The handler returns TwiML that connects the PSTN leg
 to `/twilio` over a bidirectional `<Stream>`; the Twilio `CallSid` becomes the session id.
-(telnyx Media Streaming on the edge is not yet wired — see the #10 tracking issue.)
+
+Telnyx Media Streaming on the edge is now wired (`TelnyxVoiceConversation` DO, `/telnyx` route,
+`TELNYX_VOICE_CONVERSATIONS` binding) — point a Telnyx Call Control app's webhook at
+`/telnyx-stream-start` to build the `streaming_start` payload. **Unverified against a live
+carrier or a live Workers deploy**: this path is unit-verified only (server-websocket, cf-agents,
+server-workers suites + typecheck); a real number's `streaming_start` reaching `/telnyx` and codec
+negotiation on a trunk have not been confirmed live.
 
 ## 8. Verify locally first
 
