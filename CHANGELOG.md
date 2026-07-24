@@ -4,6 +4,28 @@ All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
 ## Unreleased
 
+### Added — Telnyx transport on the Cloudflare Workers edge
+
+Closes the Slice F CF gap: G.722/PCMA (and the whole Telnyx media-stream path) now run on the
+Workers edge, not only the Node host. Mirrors the existing Twilio-on-Workers wiring.
+
+- **`server-websocket`**: `edge-telnyx.ts` — a Workers-native Telnyx media-stream runner
+  (`runTelnyxEdgeWebSocketConnection` / `createTelnyxEdgeWebSocketUpgrade`) on `ManagedSocket`
+  (`@kuralle-syrinx/ws/workers`), mirroring `edge-twilio.ts` including its session-lease leak-safety
+  (connection-count decrement before `release`, hangup-vs-transient retain, pre-lease buffering).
+  New `./edge-telnyx` export.
+- **`server-websocket`**: `telnyx-codec.ts` — the per-codec transcode (PCMU/PCMA/G722/L16 select +
+  stateful G.722 state + `validateTelnyxStart`) factored out of the Node `telnyx.ts` into a
+  **Workers-safe shared module** both the Node host and the Workers runner import (no duplication).
+- **`cf-agents`**: `withVoice` gains `transport: "telnyx"`.
+- **`server-workers`**: `TelnyxVoiceConversation` Durable Object (`withVoice(Agent,{transport:"telnyx"})`),
+  `/telnyx` route + `TELNYX_VOICE_CONVERSATIONS` binding + wrangler migration, and a
+  `/telnyx-stream-start` helper that constructs a TeXML `<Stream>` or a Call-Control `streaming_start`
+  payload (pure; live POST to the trunk is carrier-gated).
+- **Unverified against a live carrier / live Workers deploy:** a real number's `streaming_start`
+  reaching `/telnyx` and codec negotiation on a trunk. Unit-verified (server-websocket 273,
+  cf-agents 40, server-workers 26; `-r typecheck` 0); the runner + codecs are Workers-safe.
+
 ### Added — telephony (Slice F): G.722/PCMA codecs, DTMF-send, call transfer
 
 **Honesty label (non-negotiable):** all three deliverables are **unit-verified only**. There are **no live

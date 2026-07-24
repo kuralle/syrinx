@@ -359,6 +359,48 @@ describe("withVoice(Agent)", () => {
     expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
   });
 
+  it("transport:\"telnyx\" speaks Media Streaming — a PCMU media frame reaches the engine", async () => {
+    const captured: UserAudioReceivedPacket[] = [];
+    const capturingStt = (): VoicePlugin => ({
+      initialize: async (bus: PipelineBus) => {
+        bus.on<UserAudioReceivedPacket>("user.audio_received", (pkt) => { captured.push(pkt); });
+      },
+      close: async () => {},
+    });
+    const telnyxPipeline: VoicePipeline<Record<string, unknown>> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: capturingStt(), config: { model: "nova-3" } }),
+      tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
+    };
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      { transport: "telnyx", pipeline: telnyxPipeline, reasoner: () => stubReasoner() },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+
+    const tone = Int16Array.from({ length: 160 }, (_, i) => Math.round(8000 * Math.sin(i / 4)));
+    const payload = Buffer.from(encodePcm16ToMuLaw(tone)).toString("base64");
+    agent.onMessage(conn, JSON.stringify({ event: "connected", version: "1.0.0" }));
+    agent.onMessage(conn, JSON.stringify({
+      event: "start",
+      stream_id: "stream-1",
+      start: {
+        stream_id: "stream-1",
+        call_control_id: "v3:cc1",
+        media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
+      },
+    }));
+    agent.onMessage(conn, JSON.stringify({ event: "media", stream_id: "stream-1", media: { payload } }));
+
+    await vi.waitFor(() => expect(captured.length).toBeGreaterThan(0));
+    expect(captured[0]!.audio.byteLength).toBeGreaterThan(0);
+    expect(captured[0]!.contextId).toBe("telnyx-v3:cc1");
+    expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
+  });
+
   it("fires onToolCallStart with the tool + the live connection when the delegate tool is invoked", async () => {
     const front = new FakeFront();
     const calls: ToolCallStartContext[] = [];

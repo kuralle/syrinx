@@ -29,6 +29,7 @@
     ".": "./src/index.ts",
     "./edge": "./src/edge.ts",
     "./edge-twilio": "./src/edge-twilio.ts",
+    "./edge-telnyx": "./src/edge-telnyx.ts",
     "./session-store": "./src/session-store.ts"
   },
   "scripts": {

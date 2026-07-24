@@ -23,6 +23,7 @@ import {
   type EdgeRecorder,
 } from "@kuralle-syrinx/server-websocket/edge";
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
+import { runTelnyxEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-telnyx";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
 import type { IdleTimeoutConfig, Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
@@ -108,10 +109,12 @@ export interface WithVoiceOptions<Env> {
    * The connection wire protocol this host speaks. `"edge"` (default) is the Syrinx
    * browser/edge JSON+envelope protocol (`runVoiceEdgeWebSocketConnection`). `"twilio"`
    * speaks the Twilio Media Streams protocol (μ-law 8 kHz both ways,
-   * `runTwilioEdgeWebSocketConnection`) for a PSTN leg. One transport per Agent class —
-   * route `/ws` to an `"edge"` agent and `/twilio` to a `"twilio"` agent.
+   * `runTwilioEdgeWebSocketConnection`) for a PSTN leg. `"telnyx"` speaks the Telnyx
+   * Media Streaming protocol (PCMU/PCMA/G722/L16, `runTelnyxEdgeWebSocketConnection`).
+   * One transport per Agent class — route `/ws` to an `"edge"` agent, `/twilio` to a
+   * `"twilio"` agent, and `/telnyx` to a `"telnyx"` agent.
    */
-  readonly transport?: "edge" | "twilio";
+  readonly transport?: "edge" | "twilio" | "telnyx";
   /** The voice pipeline: `{ kind: "realtime", ... }` or `{ kind: "cascaded", ... }`. */
   readonly pipeline: VoicePipeline<Env>;
   /**
@@ -435,6 +438,22 @@ export function withVoice<Env, TBase extends AgentLike>(
         // id from the `?sessionId=` query (the callSid), resamples to the engine rate,
         // and manages its own lease/heartbeat. Recorder is edge-only.
         void runTwilioEdgeWebSocketConnection(socket, request, {
+          sessionStore: this.#store,
+          createSession,
+          ...(options.inputSampleRateHz !== undefined
+            ? { engineSampleRateHz: options.inputSampleRateHz }
+            : {}),
+          ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
+          ...(options.backgroundAudio ? { backgroundAudio: options.backgroundAudio } : {}),
+        }).catch(onRunnerSettled);
+        return;
+      }
+
+      if (options.transport === "telnyx") {
+        // Telnyx Media Streaming: PCMU/PCMA/G722/L16 per negotiated start.media_format.
+        // Same lease/heartbeat pattern as Twilio; recorder is edge-only.
+        // Live streaming_start → /telnyx is carrier-gated / unit-tested only.
+        void runTelnyxEdgeWebSocketConnection(socket, request, {
           sessionStore: this.#store,
           createSession,
           ...(options.inputSampleRateHz !== undefined
