@@ -1,31 +1,52 @@
 ---
 title: Introduction
-description: What Syrinx is, the three architectures, and how the pieces fit.
+description: What Syrinx is, the three architectures it ships, and where to go next.
 ---
 
-**Syrinx** is a TypeScript-native voice engine and SDK. It owns the **transport edge** — a resumable WebSocket audio protocol plus telephony carriers (Twilio, Telnyx, SmartPBX) — and hands the agent runtime a clean stream of mono PCM16 audio. On top of that it wires a **swappable voice pipeline**.
+Syrinx is a TypeScript-native voice engine for building real-time voice agents. It owns the hard infrastructure — a resumable audio transport, telephony carriers, streaming provider lifecycles, turn-taking — so you can focus on the conversation, not the plumbing.
 
-Packages are published under `@kuralle-syrinx/*`.
+Point it at your STT, LLM, and TTS providers (or a single speech-to-speech model), plug in your reasoner, and you have a phone- or browser-facing voice agent with barge-in, reconnect, and usage metering built in.
 
-## Three architectures
+```bash
+pnpm add @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia
+```
 
-- **Cascade** — STT → LLM → TTS. The classic pipeline: a streaming STT provider transcribes, a reasoner (LLM/agent) responds, a streaming TTS provider speaks. Turn-taking is owned by an endpointer (smart-turn ONNX, or provider endpointing).
-- **Native realtime (S2S)** — a speech-to-speech front model (OpenAI Realtime, Gemini Live) handles audio in and out directly, wrapped by a `RealtimeBridge` so the rest of the engine (tools, resume, observability) still applies.
-- **Half-cascade** — a realtime front runs text-only (`modalities:["text"]`) and Syrinx TTS drives speech from the assistant transcript.
+:::tip
+New to Syrinx? Start with the [Quickstart](/getting-started/quickstart/) — it runs a live voice turn in a few minutes.
+:::
 
-One `VoiceAgentSession` shell and one interaction policy sit above all three.
+## What you get
 
-## The layers
+- **A transport layer that's already solved.** A resumable WebSocket protocol for browsers, plus PSTN termination for Twilio, Telnyx, and SmartPBX. Reconnect, mid-call resume, and jitter buffering are handled for you.
+- **A vendor-agnostic pipeline.** Swap STT, LLM, and TTS providers without touching your application code — every provider is a thin adapter over the same streaming lifecycle.
+- **Turn-taking that isn't a stopwatch.** An interaction policy owns endpointing and barge-in, from a simple silence timer up to semantic end-of-turn and full-duplex voice-activity projection.
+- **One engine, two runtimes.** The same session runs on a Node server or as a hibernatable Cloudflare Durable Object — no rewrite to go to the edge.
 
-| Layer | What it is |
-|---|---|
-| **Transport** | `@kuralle-syrinx/ws` (resumable WebSocket), `server-websocket` (Node host + Twilio/Telnyx/SmartPBX), `server-workers` (Cloudflare Workers edge) |
-| **Streaming lifecycle** | `stt-core`, `tts-core`, `realtime` — a provider is just a wire protocol over a shared socket/reconnect/funnel/billing engine |
-| **Providers** | Deepgram (incl. Flux + nova), Cartesia, ElevenLabs, Google, Grok, Gemini, OpenAI-compatible TTS |
-| **Runtime** | `@kuralle-syrinx/core` (`VoiceAgentSession`, packets, pricing, usage), `cf-agents` (`withVoice(Agent)`) |
+## Pick your architecture
 
-## Runs on Node and Cloudflare Workers
+Syrinx supports three ways to wire the conversation loop. All three run inside the same `VoiceAgentSession` and share the same tool, resume, and observability surface.
 
-The engine is socket-free at its core: inject a Node `ws` socket factory or the Workers fetch-upgrade factory. On the edge, each conversation is one hibernatable Durable Object (browser `/ws`, Twilio `/twilio`, Telnyx `/telnyx`).
+| Architecture | How it works | Reach for it when |
+|---|---|---|
+| **Cascade** | STT → your reasoner → TTS. A streaming STT provider transcribes, your LLM/agent responds, a streaming TTS provider speaks. | You want full control over each stage and best-in-class provider choice per stage. |
+| **Native realtime (S2S)** | A speech-to-speech model (OpenAI Realtime, Gemini Live) handles audio in and audio out directly. | You want the lowest-latency, most natural-sounding voice with minimal wiring. |
+| **Half-cascade** | A realtime front runs text-only and a Syrinx TTS provider speaks the transcript. | You want a realtime front's reasoning with a specific TTS voice or language it doesn't natively support well. |
 
-Continue to the [Quickstart](/getting-started/quickstart/).
+Read more in [How Syrinx works](/concepts/overview/).
+
+## The building blocks
+
+| Layer | Packages | What it does |
+|---|---|---|
+| **Transport** | `@kuralle-syrinx/ws`, `server-websocket`, `server-workers` | Resumable WebSocket audio; Twilio/Telnyx/SmartPBX carriers; the Cloudflare Workers edge. |
+| **Streaming lifecycle** | `stt-core`, `tts-core`, `realtime` | The socket, reconnect, funnel, and billing logic shared by every provider — a provider only implements its wire protocol. |
+| **Providers** | `deepgram`, `cartesia`, `elevenlabs`, `google`, `grok`, `gemini`, `openai-tts` | STT, TTS, and realtime adapters. See [Providers](/providers/overview/). |
+| **Runtime** | `core`, `cf-agents` | `VoiceAgentSession`, the packet bus, pricing/usage, and `withVoice(Agent)` for Cloudflare. |
+
+Packages are published under `@kuralle-syrinx/*` on npm.
+
+## Next steps
+
+- [Quickstart](/getting-started/quickstart/) — install and run a live voice turn.
+- [Build a voice agent](/guides/building-a-voice-agent/) — wire your own pipeline and reasoner.
+- [Deploy on Cloudflare](/guides/deploy-on-cloudflare/) — ship on the Workers edge.

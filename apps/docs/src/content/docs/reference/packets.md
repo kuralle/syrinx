@@ -32,8 +32,8 @@ Syrinx is packet-driven: components communicate over a `PipelineBus`. Factories 
 | `dtmf.send` | outbound digits (`[0-9*#wW]`, pause `w`/`W`) → Twilio `<Play digits>` / Telnyx `send_dtmf` |
 | `call.transfer` | `mode: "warm" \| "cold" \| "sip_refer"`, `target`, optional warm `summary` |
 
-:::caution
-`dtmf.send` and `call.transfer` are **unit-verified only** — the carrier command payloads are tested, but live IVR decode / trunk / transfer-bridge behavior is unverified against a live carrier.
+:::caution[Preview]
+`dtmf.send` and `call.transfer` build the correct carrier command payloads today, but sending to a live IVR and bridging a live transfer are not yet certified against a real carrier.
 :::
 
 ## Reconfigure

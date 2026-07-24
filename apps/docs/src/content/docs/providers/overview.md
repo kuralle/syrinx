@@ -1,36 +1,28 @@
 ---
 title: Providers overview
-description: How STT, TTS, and realtime providers plug in — and the shared lifecycle modules behind them.
+description: How STT, TTS, and realtime providers plug in, and the shared lifecycle modules behind every adapter.
 ---
 
-A provider in Syrinx is a **thin adapter** over a shared streaming lifecycle module. The module owns the socket, reconnect/replay, the interim/final funnel, usage billing, and buffering; the provider implements only its wire protocol.
+Every provider Syrinx ships is a **thin adapter** over one of three shared streaming-lifecycle modules. The module owns the socket, reconnect, the interim/final funnel, and usage billing; the provider implements only its wire protocol. That's what makes swapping a vendor a one-line change instead of a rewrite.
 
-## Shared lifecycle modules
-
-- **`@kuralle-syrinx/stt-core`** — streaming STT. A provider implements `SttWireProtocol` (`encodeFinalize`, `decode`, optional `encodeAudio` / `onOpen` / `encodeReconfigure` / `attach` / `onFinalizeSent`). The engine owns context tracking, the smart-turn-safe transcript funnel, `usage.recorded{stage:"stt"}` delta-billing, pre-handshake audio buffering, and `reconfigure`/`reset`.
-- **`@kuralle-syrinx/tts-core`** — streaming TTS. A provider implements a `WireProtocol` (attribution + encode text/finish/cancel + decode); the engine owns the multi-context streaming lifecycle and sideband usage.
-- **`@kuralle-syrinx/realtime`** — native S2S. A provider implements a `RealtimeAdapter` (capability-negotiated: `sendAudio`/`sendText`/`requestResponse`/`cancelResponse`/tools/events); the `RealtimeBridge` runs it as a `VoicePlugin`.
-
-## STT providers
-
-| Provider | Package | Notes |
+| Module | Owns | A provider implements |
 |---|---|---|
-| Deepgram nova | `@kuralle-syrinx/deepgram` | Flagship cascade STT; Finalize timeout/fallback state machine on the `stt-core` async-emit seam |
-| Deepgram Flux | `@kuralle-syrinx/deepgram` | Semantic end-of-turn (eager EOT / retract) for speculative generation; edge cascade |
-| ElevenLabs | `@kuralle-syrinx/elevenlabs` | Scribe v2 Realtime |
-| Google | `@kuralle-syrinx/google` | GCP Speech-to-Text v2 |
-| Grok | `@kuralle-syrinx/grok` | xAI STT |
+| `@kuralle-syrinx/stt-core` | Socket, reconnect, the interim/final transcript funnel, `usage.recorded` audio-second billing, pre-handshake audio buffering, reconfigure/reset | An `SttWireProtocol`: `encodeFinalize`, `decode`, and optional `encodeAudio` / `onOpen` / `encodeReconfigure` |
+| `@kuralle-syrinx/tts-core` | The multi-context streaming lifecycle, attribution, `usage.recorded` character billing | A `WireProtocol`: attribution plus encode text/finish/cancel and decode |
+| `@kuralle-syrinx/realtime` | The `RealtimeBridge` plugin, capability negotiation, resume | A `RealtimeAdapter`: `sendAudio` / `sendText` / `requestResponse` / `cancelResponse`, tools, events |
 
-All five run on `stt-core`. See [STT reconfigure](/reference/stt-reconfigure/) for mid-call keyterm/endpointing/language biasing.
+## Pick a provider
 
-## TTS providers
+- **[STT providers](/providers/stt/)** — Deepgram (Nova and Flux), ElevenLabs, Google, Grok.
+- **[TTS providers](/providers/tts/)** — Cartesia, ElevenLabs, Deepgram Aura, Gemini, Grok, and any OpenAI-compatible endpoint.
+- **[Realtime providers](/providers/realtime/)** — OpenAI Realtime, Gemini Live, and Grok's realtime API.
 
-Cartesia (`@kuralle-syrinx/cartesia`), ElevenLabs (multi-context WS), Grok, Gemini, and an OpenAI-compatible TTS (`@kuralle-syrinx/openai-tts`) — all on `tts-core`.
+All of them run on Node and on the Cloudflare Workers edge — every socket connection is injectable, so you swap `createNodeWsSocket` for `createWorkersSocket` and nothing else changes.
 
-## Realtime (S2S) providers
+## Mid-call reconfigure
 
-OpenAI Realtime (`fromOpenAIRealtime`) and Gemini Live (`fromGeminiLive`), both in `@kuralle-syrinx/realtime`; Grok realtime via the OpenAI-compatible adapter.
+Some STT providers let you bias recognition — keyterms, end-of-turn thresholds, language — without tearing down the session. See [STT reconfigure](/reference/stt-reconfigure/).
 
-## Usage & pricing
+## Usage and pricing
 
-Every STT/TTS/LLM provider emits `usage.recorded` (STT `audioSeconds`, TTS `characters`, LLM tokens). `@kuralle-syrinx/core`'s `DEFAULT_PRICE_CATALOG` turns those into dollars, and a `SpendCapGuard` bounds them.
+Every STT, TTS, and LLM provider emits a `usage.recorded` packet (STT audio-seconds, TTS characters, LLM tokens). Turn that into a running dollar cost, or bound it with a spend cap — see [Usage & pricing](/reference/usage-and-pricing/).

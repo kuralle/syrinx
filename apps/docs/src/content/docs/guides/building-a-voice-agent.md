@@ -1,39 +1,104 @@
 ---
 title: Building a voice agent
-description: Wire a cascade or realtime pipeline and plug in your reasoner.
+description: Wire a cascade or realtime pipeline, plug in your reasoner, and add tools.
 ---
 
-A Syrinx voice agent is a `VoiceAgentSession` (the runtime) fed by a transport, with a **pipeline** (STT/TTS or a realtime front) and a **reasoner** (your LLM/agent).
+A Syrinx voice agent is a `VoiceAgentSession` — the runtime — fed by a transport, with a **pipeline** (STT + TTS, or a realtime front) and a **reasoner** (your LLM or agent). This guide wires each piece.
 
-## Cascade
+## Cascade: STT → reasoner → TTS
 
-Compose an STT plugin, a reasoner, and a TTS plugin onto the bus:
+Register an STT plugin, a reasoner bridge, and a TTS plugin on the session:
 
 ```ts
 import { VoiceAgentSession } from '@kuralle-syrinx/core';
-import { DeepgramSTTPlugin, DeepgramTTSPlugin } from '@kuralle-syrinx/deepgram';
+import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
+import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
+import { ReasoningBridge, fromStreamText } from '@kuralle-syrinx/aisdk';
+import { createNodeWsSocket } from '@kuralle-syrinx/ws/node';
+import { createOpenAI } from '@ai-sdk/openai';
 
-// STT plugin  -> stt.result -> your reasoner -> tts.text -> TTS plugin -> audio out
+const session = new VoiceAgentSession({ plugins: { stt: {}, tts: {} } });
+
+session.registerPlugin('stt', new DeepgramSTTPlugin(createNodeWsSocket));
+session.registerPlugin(
+  'bridge',
+  new ReasoningBridge(
+    fromStreamText({
+      model: createOpenAI({ apiKey: process.env.OPENAI_API_KEY })('gpt-4.1-mini'),
+      system: 'You are a helpful voice assistant. Keep replies short.',
+    }),
+  ),
+);
+session.registerPlugin('tts', new CartesiaTTSPlugin(createNodeWsSocket));
 ```
 
-STT plugins consume `stt.audio` (the canonical ingress) and emit `stt.interim` / `stt.result`; the reasoner consumes `stt.result` / `eos.turn_complete` and emits `llm.delta` / `llm.done`; the TTS plugin consumes `tts.text` and emits `tts.audio`. Turn-taking (endpointing, barge-in) is owned by the interaction policy.
+Each plugin only cares about the packets it consumes and produces:
 
-## Realtime (S2S)
+- The **STT plugin** consumes `stt.audio` (the canonical audio ingress) and emits `stt.interim` / `stt.result`.
+- The **reasoner bridge** consumes `stt.result` and `eos.turn_complete`, and emits `llm.delta` / `llm.done` (or a recoverable `llm.error`).
+- The **TTS plugin** consumes `tts.text` and emits `tts.audio`.
 
-Wrap a realtime adapter in a `RealtimeBridge`:
+Turn-taking — deciding when the user is done talking, and handling barge-in — is owned by the session's [interaction policy](/concepts/overview/#the-interaction-policy-owns-turn-taking), not by the STT or TTS plugin.
+
+## Realtime: speech-to-speech
+
+For the lowest-latency path, wrap a realtime adapter in a `RealtimeBridge` instead of a cascade:
 
 ```ts
-import { fromOpenAIRealtime, RealtimeBridge } from '@kuralle-syrinx/realtime';
+import { RealtimeBridge, fromOpenAIRealtime } from '@kuralle-syrinx/realtime';
+import { createNodeWsSocket } from '@kuralle-syrinx/ws/node';
 
-const bridge = new RealtimeBridge({ adapter: fromOpenAIRealtime({ apiKey, model }) /* + tools, resume */ });
+const adapter = fromOpenAIRealtime({
+  apiKey: process.env.OPENAI_API_KEY!,
+  socketFactory: createNodeWsSocket,
+});
+
+session.registerPlugin('realtime', new RealtimeBridge(adapter));
 ```
 
-The bridge exposes the same tool, resume, and observability surface as the cascade, so a delegate/reasoner still applies.
+Run the session with `endpointingOwner: "timer"` — the realtime model owns its own turn detection, so no STT/VAD/TTS plugins are registered. See [Realtime providers](/providers/realtime/) for OpenAI, Gemini, and Grok.
 
-## Reasoner
+### Delegating to a reasoner from a realtime front
 
-The reasoner is the `reasoner` param — any function producing a `Reasoner`. Syrinx ships a kuralle (RAG + flows) reasoner and AI-SDK / Mastra bridges; delegate runs emit `delegate.query` → `delegate.result` bus packets.
+A realtime model is a great conversational surface but a shallow reasoner — it doesn't run your tools or RAG well on its own. Pass a `Reasoner` as the bridge's second argument and a tool name as its third, and the realtime front delegates to it as a tool call while staying the voice the user hears:
+
+```ts
+import { fromStreamText } from '@kuralle-syrinx/aisdk';
+
+const reasoner = fromStreamText({ model, system, tools: { lookupOrder } });
+const adapterWithTool = fromOpenAIRealtime({
+  ...opts,
+  tools: [{ name: 'ask_backend', description: '...', parameters: { /* JSON Schema */ } }],
+});
+
+session.registerPlugin('realtime', new RealtimeBridge(adapterWithTool, reasoner, 'ask_backend'));
+```
+
+The bridge feeds the reasoner's answer back to the front model as a structured result so it repeats facts faithfully instead of paraphrasing, and the session emits `tool_call_cue` events (`started` / `delayed` / `complete` / `failed`) your client can use to show a "thinking" indicator while the reasoner runs.
+
+## Half-cascade: a realtime front with Syrinx TTS
+
+If you want a realtime front's reasoning but a specific TTS voice or language, run the front text-only and let a Syrinx TTS plugin speak the transcript — see the `modalities: ["text"]` option on realtime adapters in [Realtime providers](/providers/realtime/).
+
+## Adding tools to a cascade reasoner
+
+Tools are just part of your reasoner backend's config — the AI SDK and Mastra adapters pass them straight through:
+
+```ts
+import { tool } from 'ai';
+import { z } from 'zod';
+
+const lookupOrder = tool({
+  description: 'Look up an order by id',
+  parameters: z.object({ orderId: z.string() }),
+  execute: async ({ orderId }) => ({ status: 'shipped' }),
+});
+
+const reasoner = fromStreamText({ model, system, tools: { lookupOrder } });
+```
+
+The bridge emits `llm.tool_call` / `llm.tool_result` on the bus as the reasoner invokes tools, so you can observe or log tool use without touching the reasoner itself.
 
 ## On Cloudflare Workers
 
-The same pipeline + reasoner run under `withVoice(Agent, { pipeline, reasoner })`. See [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).
+The same pipeline and reasoner run under `withVoice(Agent, { pipeline, reasoner })` on the Workers edge — see [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).

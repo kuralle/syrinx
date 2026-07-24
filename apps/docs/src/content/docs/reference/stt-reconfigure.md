@@ -34,6 +34,6 @@ A `stt.reconfigure` bus packet routes through `VoiceAgentSession` to the plugin'
 
 The seam is provider-agnostic, but only **Deepgram Nova** (reconnect) and **Deepgram Flux** (in-band `Configure`) implement `sttReconfigure` today. Grok, Google, and ElevenLabs STT don't yet — a reconfigure is a no-op there (warned). Adding it to another provider is the Nova reconnect pattern via `stt-core`'s `StreamingSttSession.reset()`.
 
-:::note
-This is the **mechanism** (parity with LiveKit `stt.update_options` / Pipecat). The differentiator is the **actuation policy** — driving `reconfigure()` from dialog state (agent asked for an ID → bias digits; detected a code-switch → re-bias language + swap keyterm script). That policy is scoped, not yet built.
+:::tip
+A common pattern is to drive `reconfigure()` from your conversation state. When the agent asks for an account number, bias keyterms toward digits and tighten endpointing; when you detect a code-switch in `stt.result.language`, re-bias the language and swap in that language's keyterms for the next turn.
 :::

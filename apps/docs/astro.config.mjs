@@ -16,7 +16,7 @@ export default defineConfig({
           description:
             'Syrinx is a TypeScript voice engine/SDK. It owns the transport edge (resumable WebSocket audio, Twilio/Telnyx/SmartPBX telephony) and hands the agent runtime a clean mono-PCM16 stream, wiring a swappable STT/LLM/TTS cascade OR a native-realtime (S2S) front. Providers are thin adapters over shared streaming lifecycle modules (stt-core, tts-core, realtime). Runs on Node and Cloudflare Workers (one hibernatable Durable Object per conversation).',
           details:
-            'Packages are published under @kuralle-syrinx/*. Three architectures: cascade (STT->LLM->TTS), native realtime (S2S), and half-cascade. Telephony codecs (mu-law/PCMA/G.722), DTMF-send, and call transfer are unit-verified only — not yet certified against a live carrier.',
+            'Packages are published under @kuralle-syrinx/*. Three architectures: cascade (STT->LLM->TTS), native realtime (S2S), and half-cascade. Telephony (Twilio, Telnyx codecs, DTMF, call transfer) is in preview and not yet certified against a live carrier.',
         }),
       ],
       social: [
@@ -35,6 +35,10 @@ export default defineConfig({
           items: [{ slug: 'introduction' }, { slug: 'getting-started/quickstart' }],
         },
         {
+          label: 'Concepts',
+          items: [{ slug: 'concepts/overview' }],
+        },
+        {
           label: 'Guides',
           items: [
             { slug: 'guides/building-a-voice-agent' },
@@ -43,18 +47,29 @@ export default defineConfig({
         },
         {
           label: 'Providers',
-          items: [{ slug: 'providers/overview' }],
+          items: [
+            { slug: 'providers/overview' },
+            { slug: 'providers/stt' },
+            { slug: 'providers/tts' },
+            { slug: 'providers/realtime' },
+          ],
         },
         {
           label: 'Telephony',
-          items: [{ slug: 'telephony/overview' }],
+          items: [
+            { slug: 'telephony/overview' },
+            { slug: 'telephony/twilio' },
+            { slug: 'telephony/telnyx' },
+            { slug: 'telephony/codecs-dtmf-transfer' },
+          ],
         },
         {
           label: 'Reference',
           items: [
             { slug: 'reference/architecture' },
-            { slug: 'reference/stt-reconfigure' },
             { slug: 'reference/packets' },
+            { slug: 'reference/stt-reconfigure' },
+            { slug: 'reference/usage-and-pricing' },
           ],
         },
       ],
