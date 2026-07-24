@@ -195,6 +195,9 @@ const cascadedPipeline = (): VoicePipeline<Record<string, unknown>> => ({
 const asBase = (cls: unknown): any => cls;
 
 const ctx = () => ({ request: new Request("https://agent.test/agents/voice/inst-1?sessionId=test-session") });
+const ctxForSession = (sessionId: string) => ({
+  request: new Request(`https://agent.test/agents/voice/inst-1?sessionId=${encodeURIComponent(sessionId)}`),
+});
 
 // --- Tests ---------------------------------------------------------------
 
@@ -356,6 +359,48 @@ describe("withVoice(Agent)", () => {
     expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
   });
 
+  it("transport:\"telnyx\" speaks Media Streaming — a PCMU media frame reaches the engine", async () => {
+    const captured: UserAudioReceivedPacket[] = [];
+    const capturingStt = (): VoicePlugin => ({
+      initialize: async (bus: PipelineBus) => {
+        bus.on<UserAudioReceivedPacket>("user.audio_received", (pkt) => { captured.push(pkt); });
+      },
+      close: async () => {},
+    });
+    const telnyxPipeline: VoicePipeline<Record<string, unknown>> = {
+      kind: "cascaded",
+      stt: () => ({ plugin: capturingStt(), config: { model: "nova-3" } }),
+      tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
+    };
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      { transport: "telnyx", pipeline: telnyxPipeline, reasoner: () => stubReasoner() },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+
+    const tone = Int16Array.from({ length: 160 }, (_, i) => Math.round(8000 * Math.sin(i / 4)));
+    const payload = Buffer.from(encodePcm16ToMuLaw(tone)).toString("base64");
+    agent.onMessage(conn, JSON.stringify({ event: "connected", version: "1.0.0" }));
+    agent.onMessage(conn, JSON.stringify({
+      event: "start",
+      stream_id: "stream-1",
+      start: {
+        stream_id: "stream-1",
+        call_control_id: "v3:cc1",
+        media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
+      },
+    }));
+    agent.onMessage(conn, JSON.stringify({ event: "media", stream_id: "stream-1", media: { payload } }));
+
+    await vi.waitFor(() => expect(captured.length).toBeGreaterThan(0));
+    expect(captured[0]!.audio.byteLength).toBeGreaterThan(0);
+    expect(captured[0]!.contextId).toBe("telnyx-v3:cc1");
+    expect(jsonFrames(conn).some((f) => f["type"] === "error")).toBe(false);
+  });
+
   it("fires onToolCallStart with the tool + the live connection when the delegate tool is invoked", async () => {
     const front = new FakeFront();
     const calls: ToolCallStartContext[] = [];
@@ -436,6 +481,64 @@ describe("withVoice(Agent)", () => {
     });
     expect(results[0]!.durationMs).toBeGreaterThanOrEqual(0);
     expect(results[0]!.connection).toBe(conn);
+  });
+
+  it("routes post-result messages through the originating connection and resolved session", async () => {
+    const fronts = new Map<string, FakeFront>();
+    const results: DelegateResultContext[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: {
+          kind: "realtime",
+          front: (_env, pipelineCtx) => {
+            const front = new FakeFront();
+            fronts.set(pipelineCtx.sessionId, front);
+            return front;
+          },
+          delegateToolName: "consult_knowledge",
+        },
+        reasoner: () => ({
+          stream: async function* () {
+            yield { type: "finish", reason: "stop", text: "Answer" } as const;
+          },
+        }),
+        sessionId: (request) => `resolved-${new URL(request.url).searchParams.get("sessionId") ?? "missing"}`,
+        onDelegateResult: (result) => {
+          results.push(result);
+          result.connection.send(JSON.stringify({
+            type: "app.delegate_result",
+            sessionId: result.sessionId,
+            answer: result.answer,
+          }));
+        },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const connectionA = fakeConnection("connection-a");
+    const connectionB = fakeConnection("connection-b");
+
+    agent.onConnect(connectionA, ctxForSession("wire-a"));
+    agent.onConnect(connectionB, ctxForSession("wire-b"));
+    await vi.waitFor(() => {
+      expect(jsonFrames(connectionA).some((frame) => frame["type"] === "ready")).toBe(true);
+      expect(jsonFrames(connectionB).some((frame) => frame["type"] === "ready")).toBe(true);
+    });
+    expect(jsonFrames(connectionA).find((frame) => frame["type"] === "ready")?.["sessionId"]).toBe("resolved-wire-a");
+    expect(jsonFrames(connectionB).find((frame) => frame["type"] === "ready")?.["sessionId"]).toBe("resolved-wire-b");
+
+    fronts.get("resolved-wire-a")!.emit({ type: "response_started" });
+    fronts.get("resolved-wire-a")!.emit({ type: "tool_call", toolId: "tool-a", toolName: "consult_knowledge", args: { query: "a" } });
+    fronts.get("resolved-wire-b")!.emit({ type: "response_started" });
+    fronts.get("resolved-wire-b")!.emit({ type: "tool_call", toolId: "tool-b", toolName: "consult_knowledge", args: { query: "b" } });
+
+    await vi.waitFor(() => expect(results).toHaveLength(2));
+    expect(results.map((result) => ({ sessionId: result.sessionId, connection: result.connection.id }))).toEqual([
+      { sessionId: "resolved-wire-a", connection: "connection-a" },
+      { sessionId: "resolved-wire-b", connection: "connection-b" },
+    ]);
+    expect(jsonFrames(connectionA)).toContainEqual({ type: "app.delegate_result", sessionId: "resolved-wire-a", answer: "Answer" });
+    expect(jsonFrames(connectionB)).toContainEqual({ type: "app.delegate_result", sessionId: "resolved-wire-b", answer: "Answer" });
   });
 
   it("G2/WBS-1: throwing onDelegateQuery/onDelegateResult never break the call", async () => {

@@ -71,9 +71,11 @@ comes with —
   `{ response_text, require_repeat_verbatim: true, render? }` so it repeats facts faithfully
   instead of paraphrasing. Configure per pipeline: `toolResultFormat: "envelope" | "string"`,
   `renderDirective: "translate_faithfully"`.
-- **Delegate observability (G2).** `onDelegateQuery` / `onDelegateResult` hooks fire around every
-  reasoner run with the query, answer, `durationMs`, and `grounded` — log or persist the Q&A pair
-  without wrapping the `Reasoner`.
+- **Delegate observability and client messaging (G2).** `onDelegateQuery` / `onDelegateResult` hooks
+  fire around every reasoner run with the query, answer, `durationMs`, and `grounded` — log or persist
+  the Q&A pair without wrapping the `Reasoner`. `onDelegateResult` also carries the originating live
+  `connection`, so a consumer can call `connection.send(...)` for a post-result app message without a
+  session-to-connection registry.
 - **Typed "thinking" cues (G3).** Clients automatically receive `tool_call_started` /
   `tool_call_delayed` (after `delayCueAfterMs`) / `tool_call_complete` / `tool_call_failed` wire
   messages around the reasoner-latency window — key earcons/indicators on these instead of
@@ -94,7 +96,7 @@ comes with —
 | `reasoner` | `(env, ctx) => Reasoner` (ctx: `{ sessionId, resume? }`). Defaults to `fromKuralleRuntime(this.runtime)` when the Agent exposes a kuralle `runtime`. Required for cascaded agents without one. |
 | `recorder` | `(env, { sessionId }) => EdgeRecorder \| undefined` — optional per-call recorder (e.g. the R2 recorder at `@kuralle-syrinx/cf-agents/r2-recorder`). Edge transport. |
 | `onToolCallStart` | `(ctx: { toolName, args, sessionId, connection }) => void \| Promise<void>` — fired the instant the front model invokes the delegate tool, **before** the reasoner runs — for app-specific cues beyond the standard `tool_call_*` wire messages. A throwing callback never affects the call. |
-| `onDelegateQuery` / `onDelegateResult` | G2 observability hooks around the reasoner run. `onDelegateResult` is self-contained (`{ query, answer, durationMs, grounded, toolId?, toolName?, turnId, sessionId, connection }`) — the one hook for logging/persisting grounded Q&A pairs. Throwing never affects the call. |
+| `onDelegateQuery` / `onDelegateResult` | G2 hooks around the reasoner run. `onDelegateResult` is self-contained (`{ query, answer, durationMs, grounded, toolId?, toolName?, turnId, sessionId, connection }`) — log/persist the grounded Q&A pair or use `connection.send(...)` to message the originating client. Throwing never affects the call. |
 | `durableHistory` | G4 durable session state over the Agent's SQLite (default `true`). Set `false` for ephemeral pre-G4 behavior. |
 | `delayCueAfterMs` | G3: ms before a pending tool call fires the `tool_call_delayed` ("still working") cue. 0 disables. Default 2000. |
 | `backgroundAudio` | `{ ambient?, thinking?, duckWhileSpeaking? }` — looped ambient bed + thinking loop (raw mono PCM16 sources), mixed (ducked) under assistant speech; on the `"twilio"` transport the bed also fills between-turn gaps as comfort noise. Thinking follows the G3 cues. |

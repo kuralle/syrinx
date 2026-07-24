@@ -1,0 +1,8 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+Error: bridge.error/internal_fault: This operation was aborted
+    at waitForAgentResponse (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:668:30)
+    at runFullduplexExaminer (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:819:15)
+    at async main (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:973:18)
+/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @kuralle-syrinx-example/02-hello-voice-headless@0.0.0 smoke:fullduplex-examiner: `tsx scripts/run-fullduplex-examiner.ts`
+Exit status 1

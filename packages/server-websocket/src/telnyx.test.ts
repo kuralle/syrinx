@@ -2,9 +2,17 @@
 
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAssistantAudioPacket, type TextToSpeechPlayoutProgressPacket, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
-import { createTelnyxMediaStreamServer } from "./telnyx.js";
-import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16SamplesToBytes, resamplePcm16 } from "@kuralle-syrinx/core/audio";
+import { Route, VoiceAgentSession, dtmfSend, callTransfer, type ConversationMetricPacket, type RecordAssistantAudioPacket, type TextToSpeechPlayoutProgressPacket, type UserAudioReceivedPacket } from "@kuralle-syrinx/core";
+import { createTelnyxMediaStreamServer, validateTelnyxStart } from "./telnyx.js";
+import {
+  createG722EncoderState,
+  decodeMuLawToPcm16,
+  encodeG722,
+  encodePcm16ToALaw,
+  encodePcm16ToMuLaw,
+  pcm16SamplesToBytes,
+  resamplePcm16,
+} from "@kuralle-syrinx/core/audio";
 import {
   openSocket,
   readJsonMatching,
@@ -1450,6 +1458,174 @@ describe("createTelnyxMediaStreamServer", () => {
       contextId: "telnyx-call-control-test",
     }));
     expect(dtmfReceived).toEqual([]);
+
+    client.close();
+    await server.close();
+  });
+});
+
+
+describe("validateTelnyxStart — PCMA + G722", () => {
+  it("accepts PCMA @ 8 kHz and G722 @ 16 kHz", () => {
+    expect(validateTelnyxStart({
+      media_format: { encoding: "PCMA", sample_rate: 8000, channels: 1 },
+    })).toEqual({ codec: "PCMA", sampleRateHz: 8000 });
+    expect(validateTelnyxStart({
+      media_format: { encoding: "G722", sample_rate: 16000, channels: 1 },
+    })).toEqual({ codec: "G722", sampleRateHz: 16000 });
+  });
+
+  it("rejects G722 at 8 kHz and PCMA at 16 kHz", () => {
+    expect(() => validateTelnyxStart({
+      media_format: { encoding: "G722", sample_rate: 8000, channels: 1 },
+    })).toThrow(/G722 sample rate/);
+    expect(() => validateTelnyxStart({
+      media_format: { encoding: "PCMA", sample_rate: 16000, channels: 1 },
+    })).toThrow(/PCMA sample rate/);
+  });
+});
+
+describe("Telnyx PCMA / G722 media transcode", () => {
+  it("decodes Telnyx PCMA media frames into engine PCM16", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart("PCMA", 8000)));
+
+    const samples8k = new Int16Array(160);
+    for (let i = 0; i < samples8k.length; i += 1) {
+      samples8k[i] = Math.round(4000 * Math.sin((2 * Math.PI * 400 * i) / 8000));
+    }
+    const payload = Buffer.from(encodePcm16ToALaw(samples8k)).toString("base64");
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { payload, chunk: "1", timestamp: "0" },
+    }));
+
+    await waitForCondition(() => received.length >= 1);
+    expect(received[0]!.audio.byteLength).toBeGreaterThan(0);
+    // 8 kHz → 16 kHz engine: roughly 2× samples
+    expect(received[0]!.sampleRateHz).toBe(16000);
+
+    client.close();
+    await server.close();
+  });
+
+  it("decodes Telnyx G722 media at 16 kHz without downsampling to 8 kHz", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const received: UserAudioReceivedPacket[] = [];
+    session.bus.on("user.audio_received", (pkt) => {
+      received.push(pkt as UserAudioReceivedPacket);
+    });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      inputSampleRateHz: 16000,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart("G722", 16000)));
+
+    const samples16k = new Int16Array(320); // 20 ms @ 16 kHz
+    for (let i = 0; i < samples16k.length; i += 1) {
+      samples16k[i] = Math.round(5000 * Math.sin((2 * Math.PI * 1000 * i) / 16000));
+    }
+    const enc = createG722EncoderState();
+    const g722 = encodeG722(enc, samples16k);
+    const payload = Buffer.from(g722).toString("base64");
+    client.send(JSON.stringify({
+      event: "media",
+      stream_id: "telnyx-stream",
+      media: { payload, chunk: "1", timestamp: "0" },
+    }));
+
+    await waitForCondition(() => received.length >= 1);
+    // Engine stays at 16 kHz — G.722 wideband quality preserved for STT.
+    expect(received[0]!.sampleRateHz).toBe(16000);
+    // ~320 samples * 2 bytes
+    expect(received[0]!.audio.byteLength).toBeGreaterThanOrEqual(600);
+
+    client.close();
+    await server.close();
+  });
+});
+
+describe("Telnyx dtmf.send / call.transfer bus wiring", () => {
+  it("dtmf.send builds Telnyx send_dtmf command metric without live HTTP", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart("PCMU", 8000)));
+    // allow start to process
+    await new Promise((r) => setTimeout(r, 50));
+
+    session.bus.push(Route.Critical, dtmfSend("telnyx-call-control-test", Date.now(), "1w2"));
+
+    await waitForCondition(() => metrics.some((m) => m.name === "carrier.dtmf_send.built"));
+    const built = metrics.find((m) => m.name === "carrier.dtmf_send.built");
+    expect(built?.value).toContain("telnyx");
+    expect(built?.value).toContain("1w2");
+    expect(metrics.some((m) => m.name === "carrier.dtmf_send.no_credentials")).toBe(true);
+
+    client.close();
+    await server.close();
+  });
+
+  it("call.transfer warm summary flows into built command metric", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    const server = registerServer(await createTelnyxMediaStreamServer({
+      port: 0,
+      createSession: () => session,
+      warmTransferSummarizer: async () => "from summarizer seam",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const client = await openSocket(telnyxUrl(address.port));
+    client.send(JSON.stringify(telnyxStart("PCMU", 8000)));
+    await new Promise((r) => setTimeout(r, 50));
+
+    session.bus.push(
+      Route.Critical,
+      callTransfer("telnyx-call-control-test", Date.now(), "warm", "+15551234567"),
+    );
+
+    await waitForCondition(() => metrics.some((m) => m.name === "carrier.transfer.built"));
+    const built = metrics.find((m) => m.name === "carrier.transfer.built");
+    expect(built?.value).toContain("from summarizer seam");
+    expect(built?.value).toContain("+15551234567");
 
     client.close();
     await server.close();

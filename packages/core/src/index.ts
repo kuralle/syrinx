@@ -33,6 +33,7 @@ export {
   type SttPartialPacket,
   type SttResultPacket,
   type FinalizeSttPacket,
+  type SttReconfigurePacket,
   type SttErrorPacket,
   type EndOfSpeechAudioPacket,
   type EndOfSpeechPacket,
@@ -49,6 +50,16 @@ export {
   type InterruptSttPacket,
   type TurnChangePacket,
 } from "./packets.js";
+
+// Telephony control packets (DTMF / transfer)
+export {
+  type DtmfDigit,
+  type DtmfReceivedPacket,
+  type DtmfSendPacket,
+  type CallTransferMode,
+  type CallTransferPacket,
+} from "./packets.js";
+export { parseDtmfDigit, dtmfReceived, dtmfSend, callTransfer } from "./packet-factories.js";
 
 // Pipeline packets — LLM
 export {
@@ -126,16 +137,41 @@ export {
 export {
   type MessageCreatePacket,
   type ConversationMetricPacket,
+  type AcousticSignalPacket,
+  type AcousticSignal,
+  type TurnLocalizationPacket,
+  type UsageStage,
+  type UsageRecordedPacket,
   type TurnBoundaryKind,
   type TurnBoundaryEventPacket,
   type ObservabilityPacket,
   type PipelineErrorPacket,
 } from "./packets.js";
 
+// Metering: price catalog + spend-cap guard (standalone; session wires later)
+export {
+  type SttPrice,
+  type LlmPrice,
+  type TtsPrice,
+  type PriceCatalog,
+  type CostResult,
+  DEFAULT_PRICE_CATALOG,
+  costOf,
+} from "./pricing.js";
+export {
+  SpendCapGuard,
+  type SpendCapConfig,
+  type SpendCapCheck,
+} from "./spend-cap.js";
+
 // Observability backbone (VE-07)
 export {
   monotonicNowMs,
   type MetricTags,
+  type ObservabilityLayer,
+  type TurnLocalizationVerdict,
+  type TurnLocalizationSignals,
+  localizeTurn,
   type SpanHandle,
   type MetricsExporter,
   noopMetricsExporter,
@@ -162,6 +198,8 @@ export {
   type PluginConfig,
   type EndpointingOwner,
   type EndpointingCapability,
+  type SttReconfigure,
+  type SttReconfigurePartial,
   requireStringConfig,
   optionalStringConfig,
 } from "./plugin-contract.js";
@@ -200,7 +238,13 @@ export {
   type SyrinxAudioEnvelopeHeader,
 } from "./audio-envelope.js";
 
-export { StreamingPcm16Resampler } from "./audio/index.js";
+export {
+  StreamingPcm16Resampler,
+  createLoudnessState,
+  normalizeLoudness,
+  type LoudnessConfig,
+  type LoudnessState,
+} from "./audio/index.js";
 
 // Interaction policy seam (IP-C1)
 export {
@@ -209,6 +253,8 @@ export {
   isLifecycleInteractionPolicy,
   type InteractionObservation,
   type InteractionDecision,
+  type AcousticSignalObservation,
+  type AcousticSignalSink,
   type WordTiming,
 } from "./interaction-policy.js";
 export { confidenceToWaitMs, type ConfidenceToWaitConfig } from "./confidence-to-wait.js";
@@ -222,7 +268,12 @@ export {
 } from "./packets.js";
 
 // VoiceAgentSession
-export { VoiceAgentSession, type VoiceAgentSessionConfig, type VoiceAgentSessionEvents } from "./voice-agent-session.js";
+export {
+  VoiceAgentSession,
+  type VoiceAgentSessionConfig,
+  type VoiceAgentSessionEvents,
+  type SessionStageUsage,
+} from "./voice-agent-session.js";
 
 // Primary-speaker barge-in gate (VE-02)
 export {
@@ -230,6 +281,7 @@ export {
   extractSpeakerFingerprint,
   fingerprintSimilarity,
   type SpeakerFingerprint,
+  type PrimarySpeakerGateDecision,
   type PrimarySpeakerGateConfig,
 } from "./primary-speaker-gate.js";
 export {
@@ -255,11 +307,15 @@ export {
   type LatencyFillerFixture,
 } from "./latency-filler-fixtures.js";
 
+// Voice text: markdown/formatting normalization + leaked-tool-call guard before TTS
+export { normalizeForSpeech, stripLeakedToolCalls } from "./voice-text.js";
+
 // Reasoner seam (RFC §4.2)
 export {
   type Reasoner,
   type ReasonerTurn,
   type ReasonerMessage,
+  type ReasonerUsage,
   type ReasoningPart,
 } from "./reasoner.js";
 

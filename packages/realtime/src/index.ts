@@ -12,7 +12,12 @@ export {
   type OpenAiCompatibleRealtimeConfig,
 } from "./openai-compatible-realtime.js";
 export { fromOpenAIRealtime, type OpenAIRealtimeOptions } from "./from-openai-realtime.js";
-export { fromGeminiLive, type GeminiLiveOptions } from "./from-gemini-live.js";
+export {
+  fromGeminiLive,
+  type GeminiLiveOptions,
+  type GeminiLiveSpeechConfig,
+  type GeminiLiveTranscriptionOptions,
+} from "./from-gemini-live.js";
 export {
   createGeminiTranslateSession,
   GEMINI_TRANSLATE_MODEL,

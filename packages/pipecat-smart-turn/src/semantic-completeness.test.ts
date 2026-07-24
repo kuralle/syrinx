@@ -54,6 +54,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       true,
       scoreSemanticCompleteness("What are your office hours?"),
+      0,
       fusionConfig,
     );
     expect(decision).toEqual({
@@ -67,6 +68,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       true,
       scoreSemanticCompleteness("I need to know"),
+      0,
       fusionConfig,
     );
     expect(decision).toEqual({
@@ -81,6 +83,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       false,
       scoreSemanticCompleteness("What are your office hours?"),
+      0,
       fusionConfig,
     );
     expect(decision).toEqual({
@@ -95,6 +98,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       false,
       scoreSemanticCompleteness("I was wondering if I can still add biology"),
+      0,
       fusionConfig,
     );
     expect(decision).toEqual({
@@ -108,6 +112,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       false,
       scoreSemanticCompleteness("I need to know"),
+      0,
       fusionConfig,
     );
     expect(decision).toEqual({
@@ -121,6 +126,7 @@ describe("fuseEndpointDecision", () => {
     const decision = fuseEndpointDecision(
       true,
       scoreSemanticCompleteness("I need to know"),
+      0,
       { ...fusionConfig, enabled: false },
     );
     expect(decision).toEqual({
@@ -129,16 +135,52 @@ describe("fuseEndpointDecision", () => {
       finalizeDelayMs: 250,
     });
   });
+
+  it("holds a complete endpoint below the configured minimum speech duration", () => {
+    const decision = fuseEndpointDecision(
+      true,
+      scoreSemanticCompleteness("What are your office hours?"),
+      99,
+      { ...fusionConfig, minSpeechMs: 100 },
+    );
+    expect(decision).toEqual({
+      release: false,
+      requestFinalize: false,
+      finalizeDelayMs: 2000,
+    });
+  });
+
+  it("releases a complete endpoint at the configured minimum speech duration", () => {
+    const decision = fuseEndpointDecision(
+      true,
+      scoreSemanticCompleteness("What are your office hours?"),
+      100,
+      { ...fusionConfig, minSpeechMs: 100 },
+    );
+    expect(decision).toEqual({
+      release: true,
+      requestFinalize: true,
+      finalizeDelayMs: 250,
+    });
+  });
+
+  it("keeps an unset minimum and an explicit zero minimum behavior-identical", () => {
+    const semantic = scoreSemanticCompleteness("What are your office hours?");
+    expect(fuseEndpointDecision(true, semantic, 0, fusionConfig)).toEqual(
+      fuseEndpointDecision(true, semantic, 0, { ...fusionConfig, minSpeechMs: 0 }),
+    );
+  });
 });
 
 describe("labeled fusion outcomes vs Smart-Turn-only", () => {
   it("releases complete utterances earlier than Smart-Turn-only when acoustics are uncertain", () => {
     const complete = SEMANTIC_LABELED_UTTERANCES.filter((item) => item.category === "complete");
     for (const fixture of complete) {
-      const fused = fuseEndpointDecision(false, scoreSemanticCompleteness(fixture.text), fusionConfig);
+      const fused = fuseEndpointDecision(false, scoreSemanticCompleteness(fixture.text), 0, fusionConfig);
       const smartTurnOnly = fuseEndpointDecision(
         false,
         scoreSemanticCompleteness(fixture.text),
+        0,
         { ...fusionConfig, enabled: false },
       );
       expect(fused.release, fixture.id).toBe(true);
@@ -150,10 +192,11 @@ describe("labeled fusion outcomes vs Smart-Turn-only", () => {
   it("defers mid-thought pauses when Smart Turn would have released", () => {
     const midThought = SEMANTIC_LABELED_UTTERANCES.filter((item) => item.category === "mid_thought_pause");
     for (const fixture of midThought) {
-      const fused = fuseEndpointDecision(true, scoreSemanticCompleteness(fixture.text), fusionConfig);
+      const fused = fuseEndpointDecision(true, scoreSemanticCompleteness(fixture.text), 0, fusionConfig);
       const smartTurnOnly = fuseEndpointDecision(
         true,
         scoreSemanticCompleteness(fixture.text),
+        0,
         { ...fusionConfig, enabled: false },
       );
       expect(fused.release, fixture.id).toBe(false);

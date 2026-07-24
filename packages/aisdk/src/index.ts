@@ -70,6 +70,10 @@ export class ReasoningBridge implements VoicePlugin {
   private timeoutMs: number = 30_000;
   private maxHistoryTurns: number = 12;
   private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
+  private readonly transientContextMessages = new Set<{
+    role: "system";
+    content: string;
+  }>();
   private activeGeneration: { contextId: string; controller: AbortController } | null = null;
   // At most one speculative draft at a time; `hold` gates its side effects.
   private speculativeDraft: {
@@ -127,6 +131,21 @@ export class ReasoningBridge implements VoicePlugin {
        * unconfirmed endpoints cost extra LLM calls (Deepgram measures +50–70% at
        * eager thresholds 0.3–0.5). Drafts never consume a suspended-run pointer —
        * `runStore` resume stays confirmed-turn-only.
+       *
+       * **Only enable this with a confidence-gated eager endpointer (Deepgram Flux).**
+       * Promotion requires `draft.userText === eos.text` — exact equality. Flux
+       * guarantees the EndOfTurn transcript matches the preceding EagerEndOfTurn when
+       * no TurnResumed intervened, so drafts promote. `PipecatEOSPlugin` instead pushes
+       * `eos.interim` on EVERY non-empty STT interim, and each interim discards the prior
+       * draft and starts a new call, so the surviving draft is built on an interim
+       * transcript that rarely matches the final one.
+       *
+       * Measured live on smart-turn, one turn, university fixture:
+       *   ON  — started 13, discarded 13, promoted 0; ttfa 1724ms, llmTtft 1269ms
+       *   OFF — started  0, discarded  0, promoted 0; ttfa 1302ms, llmTtft 1025ms
+       *
+       * Thirteen wasted LLM calls, zero promotions, and latency got *worse*. The lever
+       * is Flux-specific; on a per-interim endpointer it is pure cost.
        */
       speculative?: boolean;
     } = {},
@@ -134,6 +153,12 @@ export class ReasoningBridge implements VoicePlugin {
     if (this.opts.onResumeConflict === "replay") {
       throw new Error("onResumeConflict 'replay' not yet supported — use 'restart'");
     }
+  }
+
+  injectContext(text: string): void {
+    const message = { role: "system" as const, content: text };
+    this.history.push(message);
+    this.transientContextMessages.add(message);
   }
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -188,6 +213,7 @@ export class ReasoningBridge implements VoicePlugin {
         ) {
           this.iuLedger.commit(draft.id);
           this.speculativeDraft = null;
+          this.metric(eos.contextId, "speculative.draft_promoted");
           for (const flush of draft.hold.buffered.splice(0)) flush();
           return;
         }
@@ -259,6 +285,7 @@ export class ReasoningBridge implements VoicePlugin {
   /** Start (or restart, if a newer eager endpoint supersedes) the speculative draft. */
   private async runDraft(userText: string, contextId: string): Promise<void> {
     this.discardDraft();
+    this.metric(contextId, "speculative.draft_started");
     const id = this.iuIdFor(contextId);
     this.iuLedger.add({ id, kind: "user_turn", state: "hypothesized" });
     const controller = new AbortController();
@@ -291,9 +318,20 @@ export class ReasoningBridge implements VoicePlugin {
     this.speculativeDraft = null;
     const committed = this.iuLedger.get(draft.id)?.state === "committed";
     if (!committed) {
+      this.metric(draft.contextId, "speculative.draft_discarded");
       this.iuLedger.revoke(draft.id);
       draft.controller.abort();
     }
+  }
+
+  private metric(contextId: string, name: string, value = "1"): void {
+    this.bus?.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId,
+      timestampMs: Date.now(),
+      name,
+      value,
+    });
   }
 
   private async processTurn(
@@ -340,6 +378,20 @@ export class ReasoningBridge implements VoicePlugin {
     let emittedDelta = false;
     let committed = false;
     let grounded = false;
+    let passStartedMs = 0;
+    let passTtftRecorded = false;
+    const recordPassTtft = (): void => {
+      if (passTtftRecorded) return;
+      passTtftRecorded = true;
+      const firstOutputMs = Date.now();
+      push(Route.Main, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs: firstOutputMs,
+        name: "llm.pass_ttft_ms",
+        value: String(firstOutputMs - passStartedMs),
+      });
+    };
 
     // G2 observability: the turn's query is on its way to the reasoner (Background
     // route, droppable — RFC bimodel-delegate-seam R4). Cascade turns have no
@@ -355,6 +407,15 @@ export class ReasoningBridge implements VoicePlugin {
     try {
       for (let attempt = 1; attempt <= this.retryConfig.maxAttempts; attempt += 1) {
         grounded = false;
+        passStartedMs = Date.now();
+        passTtftRecorded = false;
+        push(Route.Main, {
+          kind: "metric.conversation",
+          contextId,
+          timestampMs: passStartedMs,
+          name: "llm.call_started",
+          value: "1",
+        });
         try {
           // Drafts never consume a suspended-run pointer: takePending mutates the
           // store, and a retracted draft would silently lose the resume.
@@ -374,6 +435,7 @@ export class ReasoningBridge implements VoicePlugin {
               case "text-delta":
                 reply += part.text;
                 emittedDelta = true;
+                recordPassTtft();
                 push(Route.Main, {
                   kind: "llm.delta",
                   contextId,
@@ -382,6 +444,7 @@ export class ReasoningBridge implements VoicePlugin {
                 });
                 break;
               case "tool-call":
+                recordPassTtft();
                 push(Route.Main, {
                   kind: "llm.tool_call",
                   contextId,
@@ -401,7 +464,64 @@ export class ReasoningBridge implements VoicePlugin {
                   toolName: part.toolName,
                   result: part.result,
                 });
+                passStartedMs = Date.now();
+                passTtftRecorded = false;
+                push(Route.Main, {
+                  kind: "metric.conversation",
+                  contextId,
+                  timestampMs: passStartedMs,
+                  name: "llm.call_started",
+                  value: "1",
+                });
                 break;
+              case "control":
+                push(Route.Background, {
+                  kind: "delegate.result",
+                  contextId,
+                  timestampMs: Date.now(),
+                  query: userText,
+                  answer: reply,
+                  durationMs: Date.now() - queryStartedMs,
+                  grounded,
+                  control: {
+                    name: part.name,
+                    payload: part.payload,
+                  },
+                });
+                break;
+              case "blocked": {
+                if (signal.aborted) return;
+                const safeMessage = part.userFacingMessage;
+                const blockedMs = Date.now();
+                push(Route.Main, {
+                  kind: "llm.delta",
+                  contextId,
+                  timestampMs: blockedMs,
+                  text: safeMessage,
+                });
+                push(Route.Main, {
+                  kind: "llm.done",
+                  contextId,
+                  timestampMs: blockedMs,
+                  text: safeMessage,
+                });
+                push(Route.Background, {
+                  kind: "delegate.result",
+                  contextId,
+                  timestampMs: blockedMs,
+                  query: userText,
+                  answer: safeMessage,
+                  durationMs: blockedMs - queryStartedMs,
+                  grounded,
+                  blocked: {
+                    userFacingMessage: safeMessage,
+                    payload: part.payload,
+                  },
+                });
+                defer(() => this.rememberTurn(userText, safeMessage, contextId));
+                committed = true;
+                return;
+              }
               case "error":
                 throw part.cause;
               case "finish":
@@ -412,6 +532,18 @@ export class ReasoningBridge implements VoicePlugin {
                   name: "llm.finish_reason",
                   value: part.reason,
                 });
+                // Record billable token usage — the field the bridge used to drop.
+                // A turn with tool calls produces several finish parts; the session
+                // accumulator sums them, so emit per-finish rather than once per turn.
+                if (part.usage) {
+                  push(Route.Background, {
+                    kind: "usage.recorded",
+                    contextId,
+                    timestampMs: Date.now(),
+                    stage: "llm",
+                    ...part.usage,
+                  });
+                }
                 finishReason = part.reason;
                 break;
               case "suspended": {
@@ -556,6 +688,7 @@ export class ReasoningBridge implements VoicePlugin {
     this.assistantMsgByContext.clear();
     this.wordTimestampsByContext.clear();
     this.playedOutMsByContext.clear();
+    this.transientContextMessages.clear();
     this.bus = null;
   }
 
@@ -574,7 +707,14 @@ export class ReasoningBridge implements VoicePlugin {
     const sessionId = this.opts.sessionId;
     if (!store || !sessionId) return;
     try {
-      void Promise.resolve(store.save(sessionId, this.history.map((message) => ({ ...message })))).catch(
+      void Promise.resolve(
+        store.save(
+          sessionId,
+          this.history
+            .filter((message) => !this.transientContextMessages.has(message as { role: "system"; content: string }))
+            .map((message) => ({ ...message })),
+        ),
+      ).catch(
         () => undefined,
       );
     } catch {
@@ -653,6 +793,9 @@ export class ReasoningBridge implements VoicePlugin {
     // Drop tracked per-turn state that has aged out of the history window.
     for (const [ctx, msg] of this.assistantMsgByContext) {
       if (!this.history.includes(msg)) this.clearTurnState(ctx);
+    }
+    for (const message of this.transientContextMessages) {
+      if (!this.history.includes(message)) this.transientContextMessages.delete(message);
     }
   }
 

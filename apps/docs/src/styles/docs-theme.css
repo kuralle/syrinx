@@ -1,0 +1,30 @@
+/*
+ * Syrinx docs theme — light, teal accent, tight typography.
+ * Coherent with the landing page (src/pages/index.astro). The site forces the
+ * light Starlight theme (see the head script in astro.config.mjs), so the brand
+ * tokens are applied to every theme state.
+ */
+
+:root,
+:root[data-theme='light'],
+:root[data-theme='dark'] {
+  color-scheme: light;
+
+  /* Teal accent */
+  --sl-color-accent-low: #ccfbf1;
+  --sl-color-accent: #0d9488;
+  --sl-color-accent-high: #134e4a;
+  --sl-color-text-accent: #0d9488;
+}
+
+/* Tighter, bolder headings — coherent with the landing. */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.sl-markdown-content h2 {
+  margin-top: 2rem;
+}

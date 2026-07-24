@@ -3,6 +3,7 @@
 ## Guides
 
 - **[Building a voice agent](guides/building-a-voice-agent.md)** — kuralle-agents + Syrinx: primitives, bridges, Node and Cloudflare.
+- **[Migrate a KV-backed Durable Object to `withVoice(Agent)`](guides/migrate-kv-durable-object-to-withvoice.md)** — rename the existing namespace, create the SQLite-backed Agent namespace, and retire the legacy class safely.
 
 ## Reference
 

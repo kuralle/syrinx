@@ -19,6 +19,7 @@ import {
 export interface Env extends LiveSessionEnv {
   VOICE_CONVERSATIONS: DurableObjectNamespace;
   TWILIO_VOICE_CONVERSATIONS: DurableObjectNamespace;
+  TELNYX_VOICE_CONVERSATIONS: DurableObjectNamespace;
   /** Optional: when bound, full call audio is recorded to this bucket. */
   RECORDINGS?: R2Bucket;
   /** Optional: Cloudflare Workers AI binding for hosted Smart Turn endpointing. */
@@ -55,6 +56,19 @@ export class TwilioVoiceConversation extends withVoice<Env, typeof Agent<Env>>(A
   resumeWindowMs: 15_000,
 }) {}
 
+/**
+ * Telephony cascaded host (Telnyx Media Streaming over /telnyx). Same pipeline/brain;
+ * idle timeout keeps the telephony re-engagement default. Live streaming_start →
+ * /telnyx is carrier-gated / unit-tested only.
+ */
+export class TelnyxVoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
+  transport: "telnyx",
+  pipeline: liveCascadedPipeline,
+  reasoner: (env, ctx) => createLiveReasoner(env, ctx),
+  inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
+  resumeWindowMs: 15_000,
+}) {}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -64,6 +78,9 @@ export default {
     // worker's own /twilio Media Streams endpoint over a bidirectional <Stream>. Point a
     // Twilio number's "A call comes in" webhook at https://<host>/incoming-call.
     if (url.pathname === "/incoming-call") return await twilioIncomingCallResponse(request, url);
+    // Telnyx TeXML / Call Control stream-start helper: pure payload construction.
+    // Live dispatch of streaming_start to a real trunk is carrier-gated.
+    if (url.pathname === "/telnyx-stream-start") return await telnyxStreamStartResponse(request, url);
     // Name-addressed routing: one DO per sessionId (callSid for telephony). The Agent
     // (partyserver) resolves its name from ctx.id.name, so a direct stub.fetch() upgrade
     // is valid for both transports.
@@ -71,6 +88,10 @@ export default {
     if (url.pathname === "/twilio") {
       const id = env.TWILIO_VOICE_CONVERSATIONS.idFromName(sessionId);
       return await env.TWILIO_VOICE_CONVERSATIONS.get(id).fetch(request);
+    }
+    if (url.pathname === "/telnyx") {
+      const id = env.TELNYX_VOICE_CONVERSATIONS.idFromName(sessionId);
+      return await env.TELNYX_VOICE_CONVERSATIONS.get(id).fetch(request);
     }
     if (url.pathname !== "/ws") return new Response("not found", { status: 404 });
     const id = env.VOICE_CONVERSATIONS.idFromName(sessionId);
@@ -102,6 +123,56 @@ async function twilioIncomingCallResponse(request: Request, url: URL): Promise<R
     "</Response>",
   ].join("\n");
   return new Response(twiml, { headers: { "content-type": "text/xml; charset=utf-8" } });
+}
+
+/**
+ * Telnyx stream-start helper — pure payload construction (no live carrier dispatch).
+ *
+ * - Default (`format=texml` or omitted): TeXML `<Stream url="wss://…/telnyx?sessionId=…">`
+ *   for TeXML applications that start bidirectional media via the Stream verb.
+ * - `format=streaming_start`: JSON body matching Call Control `streaming_start`
+ *   (`stream_url`, `stream_bidirectional_mode`, `stream_bidirectional_codec`, …).
+ *   Live POST to `/v2/calls/{call_control_id}/actions/streaming_start` is carrier-gated.
+ *
+ * Query: `sessionId` (optional), `codec` (PCMU|PCMA|G722|L16, default PCMU),
+ * `sampleRate` (default from codec), `format` (texml|streaming_start).
+ */
+async function telnyxStreamStartResponse(request: Request, url: URL): Promise<Response> {
+  let sessionId = url.searchParams.get("sessionId")?.trim() ?? "";
+  if (!sessionId && request.method === "POST") {
+    const form = await request.formData().catch(() => null);
+    const value = form?.get("sessionId") ?? form?.get("CallControlId") ?? form?.get("call_control_id");
+    if (typeof value === "string") sessionId = value.trim();
+  }
+  if (!sessionId) sessionId = crypto.randomUUID();
+
+  const codec = (url.searchParams.get("codec")?.trim().toUpperCase() || "PCMU");
+  const defaultRate = codec === "L16" || codec === "G722" ? "16000" : "8000";
+  const sampleRate = url.searchParams.get("sampleRate")?.trim() || defaultRate;
+  const format = url.searchParams.get("format")?.trim().toLowerCase() || "texml";
+
+  const wsScheme = url.protocol === "https:" ? "wss" : "ws";
+  const streamUrl = `${wsScheme}://${url.host}/telnyx?sessionId=${encodeURIComponent(sessionId)}`;
+
+  if (format === "streaming_start") {
+    // Call Control streaming_start body — pure; live dispatch carrier-gated.
+    return Response.json({
+      stream_url: streamUrl,
+      stream_track: "inbound_track",
+      stream_bidirectional_mode: "rtp",
+      stream_bidirectional_codec: codec,
+      stream_bidirectional_sampling_rate: Number(sampleRate),
+      send_silence_when_idle: true,
+    });
+  }
+
+  const texml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    "<Response>",
+    `  <Stream url="${xmlEscape(streamUrl)}" bidirectionalMode="rtp" bidirectionalCodec="${xmlEscape(codec)}" bidirectionalSamplingRate="${xmlEscape(sampleRate)}" />`,
+    "</Response>",
+  ].join("\n");
+  return new Response(texml, { headers: { "content-type": "text/xml; charset=utf-8" } });
 }
 
 function xmlEscape(value: string): string {

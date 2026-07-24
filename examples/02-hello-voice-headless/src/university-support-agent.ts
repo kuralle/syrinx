@@ -4,7 +4,14 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { tool, stepCountIs } from "ai";
 import { z } from "zod";
 
-import { VoiceAgentSession, type PluginConfig, type VoicePlugin } from "@kuralle-syrinx/core";
+import {
+  HedgedReasoner,
+  VoiceAgentSession,
+  type MetricsExporter,
+  type PluginConfig,
+  type Reasoner,
+  type VoicePlugin,
+} from "@kuralle-syrinx/core";
 import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
 import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn";
@@ -14,13 +21,33 @@ import { DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
 import { DEFAULT_MODEL } from "./run-one-turn.js";
+import { evaluateUniversitySupportTurn, UniversitySupportObserver } from "./university-support-observer.js";
 
+/**
+ * The tool-preamble line is load-bearing for latency, not style.
+ *
+ * A tool-calling turn cannot answer before the tool returns, so the grounded answer is gated
+ * behind at least two sequential inference passes. But a model CAN stream text before the tool
+ * call — OpenAI documents this as a "tool preamble", and the AI SDK surfaces it as ordinary
+ * `text-delta` parts ahead of the tool-call part, so Syrinx's existing llm.delta -> tts.text path
+ * speaks it with no code change.
+ *
+ * Measured on this agent (live, n=2 per arm, same fixture/tools/model):
+ *   without the preamble line   ttfaMs 3813 / 4114   (first audio IS the grounded answer)
+ *   with it                     ttfaMs 1404 / 1732   (first audio is the preamble)
+ *
+ * ~2400ms off time-to-first-audio. Note honestly what this does and does not do: time-to-ANSWER
+ * is unchanged. It converts ~4s of silence into ~1.5s to first *truthful, grounded* speech —
+ * unlike a generic filler ("So,") or an impatience probe ("Are you still there?"), which buy the
+ * same number while telling the user nothing. Evidence: runs/phase0-spike-implementation-notes.md (A8).
+ */
 export const UNIVERSITY_SUPPORT_SYSTEM_PROMPT = [
   "You are Syrinx University's Student Relations voice agent.",
   "This is one ongoing phone conversation. Use the previous turns for references like it, that, the case, or the petition.",
-  "Call studentRelationsLookup before answering student-services requests when the answer depends on student records, deadlines, holds, offices, fees, appointments, or case status.",
+  "Before calling a tool, first say ONE short spoken sentence naming what you are about to check (for example: \"Let me pull up your registration record.\"). Then call the tool.",
+  "Use studentRelationsLookup whenever the answer depends on student records, deadlines, holds, offices, fees, appointments, or case status.",
   "Never invent deadlines, approvals, holds, fees, visa guidance, accommodations, appointments, or case status.",
-  "For voice, answer in two concise complete sentences. Confirm the action first, then mention the constraint or next owner.",
+  "After the tool result, answer in two concise complete sentences. Confirm the action first, then mention the constraint or next owner.",
   "Never end with an incomplete sentence or phrase. Every answer must end with punctuation.",
 ].join("\n");
 
@@ -89,6 +116,55 @@ export interface UniversitySupportSessionOptions {
   readonly profile: UniversitySupportProfile;
   readonly ttsProvider?: UniversitySupportTtsProvider;
   readonly latencyFillerEnabled?: boolean;
+  /** Override the system prompt. Used by latency spikes to A/B prompt phrasing. */
+  readonly systemPrompt?: string;
+  /** Inject a metrics exporter so a live run can prove the usage/latency export path. */
+  readonly metricsExporter?: MetricsExporter;
+  /** Override the reasoner's step cap. Default 3. */
+  readonly maxSteps?: number;
+  /**
+   * Start a speculative draft on each interim endpoint (Lever D). Off by default.
+   *
+   * Cost is endpointer-dependent and unmeasured on this path: smart-turn pushes
+   * `eos.interim` on EVERY non-empty interim, while Deepgram Flux gates on
+   * `eager_eot_threshold` — and the repo's "zero wasted calls" result was measured on
+   * Flux. Each interim discards the prior draft and starts a new LLM call, so the
+   * `speculative.draft_*` counters are the thing to watch when enabling this.
+   */
+  readonly speculative?: boolean;
+  /**
+   * Wrap the reasoner in `HedgedReasoner` — race a threshold-delayed backup and commit
+   * on whichever produces the first ReasoningPart. Built and live-gated for the
+   * reasoner-latency RFC (tail -59% at n=9) but never composed on this path. Off by default.
+   */
+  readonly hedgeAfterMs?: number;
+}
+
+function buildReasoner(
+  options: UniversitySupportSessionOptions,
+  interactive: boolean,
+): Reasoner {
+  const make = (): Reasoner =>
+    fromStreamText({
+      model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(
+        process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL,
+      ),
+      system: options.systemPrompt ?? UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
+      tools: studentRelationsTools,
+      temperature: 0.2,
+      maxOutputTokens: interactive ? 1024 : 1400,
+      maxRetries: 0,
+      timeout: interactive ? 30_000 : 60_000,
+      stopWhen: stepCountIs(options.maxSteps ?? 3),
+    });
+
+  if (options.hedgeAfterMs === undefined) return make();
+  // Two independent backends — the hedge races them and aborts the loser.
+  return new HedgedReasoner({
+    primary: make(),
+    backup: make(),
+    hedgeAfterMs: options.hedgeAfterMs,
+  });
 }
 
 export function createUniversitySupportSession(options: UniversitySupportSessionOptions): VoiceAgentSession {
@@ -105,22 +181,17 @@ export function createUniversitySupportSession(options: UniversitySupportSession
     sttForceFinalizeTimeoutMs: options.profile === "longform" ? 15_000 : 4_500,
     endpointingOwner: "smart_turn",
     latencyFillerEnabled: options.latencyFillerEnabled === true,
+    ...(options.metricsExporter ? { metricsExporter: options.metricsExporter } : {}),
   });
 
   const plugins: Record<string, VoicePlugin> = {
     stt: new DeepgramSTTPlugin(),
     vad: new SileroVADPlugin(),
     eos: new PipecatEOSPlugin(),
-    bridge: new ReasoningBridge(fromStreamText({
-      model: createOpenAI({ apiKey: requireEnv("OPENAI_API_KEY") })(process.env["SYRINX_LLM_MODEL"]?.trim() || DEFAULT_MODEL),
-      system: UNIVERSITY_SUPPORT_SYSTEM_PROMPT,
-      tools: studentRelationsTools,
-      temperature: 0.2,
-      maxOutputTokens: interactive ? 1024 : 1400,
-      maxRetries: 0,
-      timeout: interactive ? 30_000 : 60_000,
-      stopWhen: stepCountIs(3),
-    })),
+    bridge: new ReasoningBridge(buildReasoner(options, interactive), {
+      speculative: options.speculative === true,
+    }),
+    observer: new UniversitySupportObserver(evaluateUniversitySupportTurn),
     tts: createTtsPlugin(ttsProvider),
   };
   for (const [name, plugin] of Object.entries(plugins)) {

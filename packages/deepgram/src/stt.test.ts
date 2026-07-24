@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   PipelineBusImpl,
@@ -10,6 +10,7 @@ import {
   type SttInterimPacket,
   type SttPartialPacket,
   type SttResultPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { DeepgramSTTPlugin } from "./stt.js";
@@ -276,6 +277,156 @@ describe("DeepgramSTTPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(turnCompletes).toEqual([{ text: "book a room", contextId: "turn-1" }]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage stt and audioSeconds when a turn completes", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: true,
+          channel: { alternatives: [{ transcript: "hello", confidence: 0.95 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    // 640 bytes pcm_s16le @ 16kHz = 640 / 2 / 16000 = 0.02 s
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await waitFor(usage);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "stt",
+        provider: "deepgram",
+        model: "nova-3",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded even under smart-turn endpointing (emit_eos_on_final=false, no speech_final)", async () => {
+    // Regression: the flagship cascade sets endpointingOwner=smart_turn / emit_eos_on_final=false,
+    // so Deepgram never calls pushTurnComplete/pushFinal — the final goes out via pushResult alone.
+    // Billing hooked only on the turn-complete methods silently no-ops in this (production) mode.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: "account number please", confidence: 0.95 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const audio = new Uint8Array(640); // 0.02s @ 16kHz pcm_s16le
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-smartturn",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await waitFor(usage);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-smartturn",
+        stage: "stt",
+        provider: "deepgram",
+        model: "nova-3",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("bills each is_final segment's audio delta once (multi-segment turn sums, no double-count)", async () => {
+    // Two is_final segments in one turn: usage must sum the per-segment audio deltas, not
+    // re-bill the running total each time.
+    let sent = 0;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) return;
+        sent += 1;
+        socket.send(JSON.stringify({
+          is_final: true,
+          speech_final: false,
+          channel: { alternatives: [{ transcript: sent === 1 ? "one" : "one two", confidence: 0.9 }] },
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "nova-3",
+      emit_eos_on_final: false,
+    });
+    // 320 bytes then another 320 bytes = 0.01s + 0.01s = 0.02s total.
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    await waitFor(usage);
+    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    await waitFor(usage, 2);
+
+    const total = usage.reduce((sum, u) => sum + (u.audioSeconds ?? 0), 0);
+    expect(total).toBeCloseTo(0.02, 6);
 
     await plugin.close();
     bus.stop();
@@ -572,15 +723,21 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
-  it("does not record STT audio bytes when the Deepgram websocket cannot accept the frame", async () => {
-    const endpointUrl = await createLocalServer(() => {});
+  it("does not bill usage when no audio was successfully sent before finalize", async () => {
+    // No audio frames are delivered; finalize should still request provider Finalize with
+    // zero recorded audio-stats bytes (metrics), and no usage.recorded.
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", () => {
+        // swallow Finalize — no provider confirmation needed for this metric assertion
+      });
+    });
     const bus = new PipelineBusImpl();
     const started = startBus(bus);
     const plugin = new DeepgramSTTPlugin();
-    const errors: SttErrorPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
     const metrics: ConversationMetricPacket[] = [];
-    bus.on("stt.error", (pkt) => {
-      errors.push(pkt as SttErrorPacket);
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
     });
     bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
@@ -590,36 +747,19 @@ describe("DeepgramSTTPlugin", () => {
       api_key: "test",
       endpoint_url: endpointUrl,
       sample_rate: 16000,
+      provider_finalize_timeout_ms: 0,
+      emit_eos_on_final: false,
     });
-    // Simulate a closed socket: the managed connection's send throws.
-    const send = vi.fn(() => {
-      throw new Error("WebSocket is not open");
-    });
-    Object.assign(plugin as unknown as { conn: { ensureReady: () => Promise<void>; send: typeof send; isReady: boolean; close: () => Promise<void> } }, {
-      conn: { ensureReady: async () => undefined, send, isReady: false, close: async () => undefined },
-    });
+    // Establish context without audio (turn.change only).
     bus.push(Route.Main, {
-      kind: "stt.audio",
+      kind: "turn.change",
       contextId: "turn-unsent",
       timestampMs: Date.now(),
-      audio: new Uint8Array(640),
     });
-
-    await waitFor(errors);
-    expect(send).toHaveBeenCalled();
-    expect(errors).toEqual([
-      expect.objectContaining({
-        kind: "stt.error",
-        contextId: "turn-unsent",
-        component: "stt",
-        cause: expect.objectContaining({
-          message: "WebSocket is not open",
-        }),
-      }),
-    ]);
-
     plugin.forceFinalize("turn-unsent");
     await waitFor(metrics);
+
+    expect(usage).toHaveLength(0);
     expect(metrics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: "stt_provider_finalize_requested",
@@ -788,9 +928,11 @@ describe("DeepgramSTTPlugin", () => {
     const finals: SttResultPacket[] = [];
     const errors: SttErrorPacket[] = [];
     const metrics: ConversationMetricPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
     bus.on("stt.result", (pkt) => { finals.push(pkt as SttResultPacket); });
     bus.on("stt.error", (pkt) => { errors.push(pkt as SttErrorPacket); });
     bus.on("metric.conversation", (pkt) => { metrics.push(pkt as ConversationMetricPacket); });
+    bus.on("usage.recorded", (pkt) => { usage.push(pkt as UsageRecordedPacket); });
 
     await plugin.initialize(bus, {
       api_key: "test",
@@ -830,6 +972,12 @@ describe("DeepgramSTTPlugin", () => {
     expect(metrics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "stt_provider_finalize_timeout", contextId: "turn-old" }),
     ]));
+    // The trailing audio of turn-old (640B = 0.02s @ 16kHz) must be billed even though the
+    // from_finalize final arrives AFTER turn.change rotated the context. (Regression guard:
+    // retiring billing on turn.change would bill this as 0s.)
+    expect(usage).toEqual([
+      expect.objectContaining({ stage: "stt", contextId: "turn-old", audioSeconds: 0.02 }),
+    ]);
 
     await plugin.close();
     bus.stop();
@@ -1158,6 +1306,136 @@ describe("DeepgramSTTPlugin", () => {
     await started;
   });
 
+  it("ignores the next late provider final after timeout-fallback promotion (ignoreNext dedupe)", async () => {
+    // Interim-only buffer so the finalize timeout path runs (not correlation-expiry).
+    // After fallback promotes, a late is_final must not double-emit (ignoreNext).
+    let finalizeSeen = false;
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          socket.send(JSON.stringify({
+            is_final: false,
+            speech_final: false,
+            channel: { alternatives: [{ transcript: "interim only buffer", confidence: 0.8 }] },
+          }));
+          return;
+        }
+        const msg = JSON.parse(data.toString()) as { type?: string };
+        if (msg.type !== "Finalize") return;
+        finalizeSeen = true;
+        setTimeout(() => {
+          socket.send(JSON.stringify({
+            is_final: true,
+            speech_final: false,
+            from_finalize: true,
+            channel: { alternatives: [{ transcript: "late provider final", confidence: 0.99 }] },
+          }));
+        }, 50);
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      // true → timeout timer (not correlation-expiry-only when a final segment exists)
+      emit_eos_on_final: true,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 15,
+      finalize_timeout_fallback: true,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-ignore-next",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    plugin.forceFinalize("turn-ignore-next");
+    await waitFor(finals);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(finalizeSeen).toBe(true);
+    expect(finals).toEqual([
+      expect.objectContaining({
+        kind: "stt.result",
+        contextId: "turn-ignore-next",
+        text: "interim only buffer",
+      }),
+    ]);
+    expect(finals.some((f) => f.text === "late provider final")).toBe(false);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("discards a silence-only timed-out turn when finalize_timeout_fallback has no buffered text", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", () => {
+        // No transcripts at all — empty discard path.
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    const finals: SttResultPacket[] = [];
+    const errors: SttErrorPacket[] = [];
+    const metrics: ConversationMetricPacket[] = [];
+    bus.on("stt.result", (pkt) => {
+      finals.push(pkt as SttResultPacket);
+    });
+    bus.on("stt.error", (pkt) => {
+      errors.push(pkt as SttErrorPacket);
+    });
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+      provider_finalize_timeout_ms: 10,
+      finalize_timeout_fallback: true,
+    });
+
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-empty-discard",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    plugin.forceFinalize("turn-empty-discard");
+    await waitFor(metrics, 2);
+
+    expect(finals).toHaveLength(0);
+    expect(
+      errors.filter((e) => String((e.cause as Error | undefined)?.message ?? "").includes("Finalize timed out")),
+    ).toHaveLength(0);
+    expect(metrics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "stt_provider_finalize_timeout_empty_discard",
+        contextId: "turn-empty-discard",
+      }),
+    ]));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("emits stt.error for odd-length PCM16 without throwing into the bus pump", async () => {
     const receivedAudio: Buffer[] = [];
     const endpointUrl = await createLocalServer((socket) => {
@@ -1319,5 +1597,188 @@ describe("DeepgramSTTPlugin provider speech-start (vad_events)", () => {
     await started;
 
     expect(connectionUrls[0]!).not.toContain("keyterm=");
+  });
+
+  it("reconfigure replaces keyterms + endpointing + hard language and reconnects with the new URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      language: "en-US",
+      keyterm: ["Syrinx"],
+      endpointing: 300,
+    });
+    await waitFor(connectionUrls, 1);
+    expect(connectionUrls[0]!).toContain("keyterm=Syrinx");
+    expect(connectionUrls[0]!).toContain("endpointing=300");
+    expect(connectionUrls[0]!).toContain("language=en-US");
+
+    expect(plugin.sttReconfigure).toBe(plugin);
+    // Hard language switch (e.g. code-switch to Spanish, or Nova-3 "multi") + keyterms + endpointing.
+    plugin.reconfigure({ keyterms: ["account number"], endpointingMs: 120, language: "es-ES" });
+    await waitFor(connectionUrls, 2);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const reconnected = connectionUrls[1]!;
+    expect(reconnected).toContain("keyterm=account+number");
+    expect(reconnected).toContain("endpointing=120");
+    expect(reconnected).toContain("language=es-ES");
+    expect(reconnected).not.toContain("keyterm=Syrinx");
+    expect(reconnected).not.toContain("language=en-US");
+  });
+
+  it("reconfigure ignores Flux-only fields and does not reconnect or corrupt the Nova URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      keyterm: ["Syrinx"],
+      endpointing: 300,
+    });
+    await waitFor(connectionUrls, 1);
+
+    plugin.reconfigure({ eotThreshold: 0.95, eagerEotThreshold: 0.4, eotTimeoutMs: 2000, contextText: "noop" });
+    // Give reconnect a chance if it incorrectly fired.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(connectionUrls).toHaveLength(1);
+    const url = connectionUrls[0]!;
+    expect(url).toContain("keyterm=Syrinx");
+    expect(url).toContain("endpointing=300");
+    expect(url).not.toContain("eot_threshold");
+    expect(url).not.toContain("eager_eot");
+  });
+
+  it("defaults encoding/channels/no_delay and lets them be overridden on the listen URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const busDefault = new PipelineBusImpl();
+    const startedDefault = startBus(busDefault);
+    const pluginDefault = new DeepgramSTTPlugin();
+    await pluginDefault.initialize(busDefault, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+    });
+    await waitFor(connectionUrls, 1);
+    await pluginDefault.close();
+    busDefault.stop();
+    await startedDefault;
+
+    expect(connectionUrls[0]!).toContain("encoding=linear16");
+    expect(connectionUrls[0]!).toContain("channels=1");
+    expect(connectionUrls[0]!).toContain("no_delay=true");
+
+    const busOverride = new PipelineBusImpl();
+    const startedOverride = startBus(busOverride);
+    const pluginOverride = new DeepgramSTTPlugin();
+    await pluginOverride.initialize(busOverride, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 8000,
+      encoding: "mulaw",
+      channels: 2,
+      no_delay: false,
+    });
+    await waitFor(connectionUrls, 2);
+    await pluginOverride.close();
+    busOverride.stop();
+    await startedOverride;
+
+    const overridden = connectionUrls[1]!;
+    expect(overridden).toContain("encoding=mulaw");
+    expect(overridden).toContain("channels=2");
+    expect(overridden).toContain("no_delay=false");
+  });
+
+  it("merges query_params into the Deepgram listen URL", async () => {
+    const connectionUrls: string[] = [];
+    const server = await new Promise<WebSocketServer>((resolve) => {
+      let nextServer: WebSocketServer;
+      nextServer = new WebSocketServer({ port: 0 }, () => resolve(nextServer));
+    });
+    servers.push(server);
+    server.on("connection", (_socket, req) => {
+      connectionUrls.push(req.url ?? "");
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+    const endpointUrl = `ws://127.0.0.1:${address.port}/listen`;
+
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new DeepgramSTTPlugin();
+    await plugin.initialize(bus, {
+      api_key: "test",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      query_params: {
+        punctuate: true,
+        diarize: "true",
+        numerals: false,
+        tag: ["voice", "prod"],
+      },
+    });
+    await waitFor(connectionUrls);
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = connectionUrls[0]!;
+    expect(url).toContain("punctuate=true");
+    expect(url).toContain("diarize=true");
+    expect(url).toContain("numerals=false");
+    expect(url).toContain("tag=voice");
+    expect(url).toContain("tag=prod");
   });
 });

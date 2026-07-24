@@ -1,0 +1,23 @@
+
+=== CF CASCADE PASS: YES ===
+deployed: https://syrinx-voice-smartturn-spike.mithushancj.workers.dev
+ws: wss://syrinx-voice-smartturn-spike.mithushancj.workers.dev/ws?sessionId=cf-cascade-6468aa77-052c-4227-b0ab-c3e8e33b6bfb
+first-audio latency (after last frame): 9956ms
+user transcript: What's the application deadline for the computer science masters?
+agent reply: The application deadline for the computer science master's program is March 31.
+turn transcript: 
+grounded March 31: true
+audio bytes: 122880
+out: /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/test/performance/runs/cascade-cf-smoke/audio-out.wav
+{
+  "ok": true,
+  "deployedUrl": "https://syrinx-voice-smartturn-spike.mithushancj.workers.dev",
+  "wsUrl": "wss://syrinx-voice-smartturn-spike.mithushancj.workers.dev/ws?sessionId=cf-cascade-6468aa77-052c-4227-b0ab-c3e8e33b6bfb",
+  "userTranscript": "What's the application deadline for the computer science masters?",
+  "agentReply": "The application deadline for the computer science master's program is March 31.",
+  "turnTranscript": "",
+  "audioBytes": 122880,
+  "firstAudioLatencyMs": 9956,
+  "groundedMarch31": true,
+  "outPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/test/performance/runs/cascade-cf-smoke/audio-out.wav"
+}

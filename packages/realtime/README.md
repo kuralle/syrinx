@@ -105,6 +105,34 @@ Cartesia, …) all dial through `createWorkersSocket` so auth headers ride on th
 Regression lock: `edge-safety.test.ts` runs the adapter + bridge with `Buffer` and `process` removed from
 `globalThis`.
 
+### Gemini Live transcription, voice, and API version
+
+`fromGeminiLive` keeps both transcription directions enabled by default and makes each one
+configurable (set either to `false` to disable it):
+
+```ts
+const adapter = fromGeminiLive({
+  apiKey,
+  transcription: { input: true, output: true },
+  speechConfig: { voice: "Kore", languageCode: "en-US" },
+  apiVersion: "v1alpha",
+});
+```
+
+The adapter maps these options to Gemini Live's `inputAudioTranscription`,
+`outputAudioTranscription`, and `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName` setup fields.
+The server reports both transcripts in `serverContent.inputTranscription` and
+`serverContent.outputTranscription`, which become `{ type: "transcript", role, text, final }` events.
+
+Google's [Live API capabilities guide](https://ai.google.dev/gemini-api/docs/live-api/capabilities)
+currently documents input transcription as unsupported by Gemini 3.1 Flash Live Preview. When using
+that model, enabling `transcription.input` will not produce user transcripts; use a Live model that
+supports input transcription or a separate STT provider when user transcripts are required. Native
+audio models also choose their output language automatically, so `languageCode` is intended for models
+that support explicit language selection. See Google's [API version guide](https://ai.google.dev/gemini-api/docs/api-versions)
+for version semantics; `apiVersion` is applied at SDK client level because Live does not support
+request-level HTTP options.
+
 ## The Responder-Thinker primitive (the delegate seam)
 
 The bi-model shape has a name: **Responder-Thinker** — a fast realtime **responder** on the audio

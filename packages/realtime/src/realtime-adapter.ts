@@ -33,6 +33,8 @@ export interface RealtimeAdapter {
    * provider cannot accept text input omit it, and the bridge silently ignores typed turns for them.
    */
   sendText?(text: string): void;
+  /** Inject transient context without requesting a provider response. */
+  injectContext?(text: string): void;
   /**
    * Commit any buffered user input and request a response. For Syrinx-OWNED turn detection
    * (provider server VAD disabled via turnDetection:null): the host calls this when its own
@@ -64,13 +66,21 @@ export interface RealtimeResumeMessage {
   readonly content: string;
 }
 
+/** Token usage a realtime provider reports on response completion (e.g. OpenAI response.done). */
+export interface RealtimeUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
+
 export type RealtimeEvent =
   | { type: "audio"; pcm16: Uint8Array; sampleRateHz: number }
   | { type: "speech_started" }
+  | { type: "speech_stopped" }
   | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
   | { type: "tool_call"; toolId: string; toolName: string; args: Record<string, unknown> }
   | { type: "response_started" }
-  | { type: "response_done" }
+  | { type: "response_done"; usage?: RealtimeUsage }
   // G4: a native-resume provider issued a fresh resumption handle — persist the
   // latest one and pass it back on reconnect (Gemini `sessionResumption`).
   | { type: "resumption_handle"; handle: string }

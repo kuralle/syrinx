@@ -5,7 +5,7 @@ import { RealtimeSocket } from "@kuralle-syrinx/ws/realtime";
 
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
-import type { RealtimeAdapter, RealtimeEvent, RealtimeResumeMessage } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeResumeMessage, RealtimeUsage } from "./realtime-adapter.js";
 
 export interface OpenAiCompatibleRealtimeConfig {
   readonly apiKey: string;
@@ -18,6 +18,11 @@ export interface OpenAiCompatibleRealtimeConfig {
   readonly buildUrl?: (model: string) => string;
   readonly caps: RealtimeAdapter["caps"];
   readonly buildSessionUpdate: () => Record<string, unknown>;
+  /**
+   * Optional fields merged into `session.update.session` after `buildSessionUpdate()`.
+   * Use for provider-specific knobs the adapter does not enumerate (mirrors TTS `extra_body`).
+   */
+  readonly sessionExtra?: Record<string, unknown> | (() => Record<string, unknown>);
   /**
    * G4 resume-by-replay: returns the prior conversation to re-create as
    * `conversation.item.create` items after each (re)connect's `session.update` —
@@ -117,9 +122,14 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
   private applySessionConfig(): void {
     const reconnected = this.opened;
     this.opened = true;
+    const session = this.config.buildSessionUpdate();
+    const extra =
+      typeof this.config.sessionExtra === "function"
+        ? this.config.sessionExtra()
+        : this.config.sessionExtra;
     this.socket?.send({
       type: "session.update",
-      session: this.config.buildSessionUpdate(),
+      session: extra ? { ...session, ...extra } : session,
     });
     // G4 resume-by-replay: re-create the prior conversation as items. Providers
     // without native resume start every (re)connection amnesiac; replaying the
@@ -169,6 +179,17 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
       },
     });
     this.requestResponseCreate();
+  }
+
+  injectContext(text: string): void {
+    this.requireSocket().send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text }],
+      },
+    });
   }
 
   requestResponse(): void {
@@ -311,6 +332,9 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
       case "input_audio_buffer.speech_started":
         this.stream.push({ type: "speech_started" });
         break;
+      case "input_audio_buffer.speech_stopped":
+        this.stream.push({ type: "speech_stopped" });
+        break;
       case "response.output_audio_transcript.delta": {
         const delta = msg["delta"];
         if (typeof delta === "string" && delta.length > 0) {
@@ -374,7 +398,10 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
         if (toolCall) {
           this.stream.push(toolCall);
         }
-        this.stream.push({ type: "response_done" });
+        // response.usage is snake_case token counts; forward so the bridge can meter
+        // the native front (previously native turns produced NO usage at all).
+        const usage = extractRealtimeUsage(msg["response"]);
+        this.stream.push(usage ? { type: "response_done", usage } : { type: "response_done" });
         break;
       }
       case "error": {
@@ -405,6 +432,21 @@ class OpenAiCompatibleRealtimeAdapter implements RealtimeAdapter {
         break;
     }
   }
+}
+
+/** Pull snake_case token counts off a realtime response.usage object, when present. */
+function extractRealtimeUsage(response: unknown): RealtimeUsage | undefined {
+  if (!response || typeof response !== "object") return undefined;
+  const usage = (response as Record<string, unknown>)["usage"];
+  if (!usage || typeof usage !== "object") return undefined;
+  const u = usage as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+  const out: RealtimeUsage = {
+    ...(num(u["input_tokens"]) !== undefined ? { inputTokens: num(u["input_tokens"]) } : {}),
+    ...(num(u["output_tokens"]) !== undefined ? { outputTokens: num(u["output_tokens"]) } : {}),
+    ...(num(u["total_tokens"]) !== undefined ? { totalTokens: num(u["total_tokens"]) } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function extractFunctionCall(response: unknown): RealtimeEvent | null {

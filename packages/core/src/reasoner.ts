@@ -8,6 +8,9 @@
 
 /** A reasoning backend reduced to one normalized pull-stream per turn. */
 export interface Reasoner {
+  /** Add transient steering context consumed by the next turn, when supported. */
+  injectContext?(text: string): void;
+
   /**
    * Drive one reasoning turn. The returned async-iterable IS the response.
    * Cancellation (barge-in) is via `turn.signal` (abort) — the adapter forwards
@@ -50,11 +53,35 @@ export type ReasoningPart =
   | { readonly type: "text-delta"; readonly text: string }
   | { readonly type: "tool-call"; readonly toolId: string; readonly toolName: string; readonly args: Record<string, unknown> }
   | { readonly type: "tool-result"; readonly toolId: string; readonly toolName: string; readonly result: string }
+  | { readonly type: "control"; readonly name: string; readonly payload: unknown }
+  | { readonly type: "blocked"; readonly userFacingMessage: string; readonly payload?: unknown }
   // Human-in-the-loop pause (step 3). ALWAYS the terminal part for the turn.
   | { readonly type: "suspended"; readonly runId: string; readonly toolId?: string; readonly prompt?: string; readonly payload: unknown }
   // (B1) Error/abort the backend surfaced. The bridge treats `error` like today's
   // thrown TextStreamPart `error`/`tool-error`/`finish-step(error)`: it drives the
   // retry/`llm.error` path. `recoverable` mirrors `categorizeLlmError`. ALWAYS terminal.
   | { readonly type: "error"; readonly cause: Error; readonly recoverable: boolean }
-  | { readonly type: "finish"; readonly reason: "stop" | "tool" | "length"; readonly text: string };
+  | {
+      readonly type: "finish";
+      readonly reason: "stop" | "tool" | "length";
+      readonly text: string;
+      /**
+       * Billable token usage for this turn, when the backend reports it. Optional —
+       * a reasoner that cannot report usage omits it, and the metering path treats a
+       * missing field as "unknown", never zero. Consumed into `usage.recorded`.
+       */
+      readonly usage?: ReasonerUsage;
+    };
 
+/** Token usage a reasoner may attach to its terminal `finish` part. */
+export interface ReasonerUsage {
+  /** Provider slug (e.g. "openai"), for low-cardinality cost attribution. */
+  readonly provider?: string;
+  /** Model id (e.g. "gpt-4.1-mini"). Without this, spend cannot be attributed to a model. */
+  readonly model?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+}

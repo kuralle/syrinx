@@ -1,0 +1,13 @@
+{
+  "task": "fed232e1 — reasoner-latency v2v<1s gate + OQ2",
+  "kind": "live-measurement",
+  "commands_run": [
+    { "cmd": "pnpm --filter ...02-hello-voice-headless smoke:flux-speculative-ab (×3)", "exit_code": 0, "note": "3 live A/B runs, all verdict PASS" }
+  ],
+  "claims": [
+    { "id": "spec-start-live", "statement": "speculative-start (Lever D) beats plain on endpoint→first-token in all 3 runs", "evidence": "OFF median 756ms -> ON median 618ms; saved 135-786ms", "verified": true },
+    { "id": "oq2", "statement": "interim<->final divergence nil on clean fixture; draft promoted with 0 regeneration", "evidence": "eager 1 / resumed 0 / llmCalls 1 in every run+arm", "verified": true },
+    { "id": "v2v-edge", "statement": "v2v from confirmed endpoint ~0.9s via D, at the 1s line (not sub-800ms)", "evidence": "618ms ON first-token + ~300ms TTS-TTFB", "verified": true, "honest_caveat": "n=1 fixture; not a comfortable sub-1s; consistent with OUTCOMES 'not a claimed sub-1s'" }
+  ],
+  "artifacts": ["docs/latency-budget.md (Lever D section)", "runs/spec-ab-run{1,2,3}.txt", "runs/reasoner-v2v-gate-implementation-notes.md"]
+}

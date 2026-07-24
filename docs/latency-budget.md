@@ -110,3 +110,64 @@ The sub-1s claim rests on **Lever D** (speculative-start overlap), not B/C — m
 **OQ2 — interim↔final divergence.** Every run, **both** arms: `1 llm call, eager endpoints 1, resumed 0`. The single eager (interim) endpoint matched the final transcript, so the speculative draft **promoted without regeneration** — **zero divergence-caused rework, zero wasted LLM call** on this clean pause-free utterance. This bounds OQ2's *cost* (nil on a clean turn); it does not characterise divergence across noisy/mid-pause turns (n=1 fixture).
 
 **Verdict (honest close).** Speculative-start (D) beat the plain path on endpoint→first-token in **all 3 runs** (saved 135–786 ms). v2v from the confirmed endpoint ≈ ON first-token (618 ms median) + TTS-TTFB (~300 ms) ≈ **~0.9 s** — **at the edge of the 800 ms SLO / clearing the 1500 ms P99 band**, achieved via **D**, not B/C. This is not a comfortable sub-800 ms; it is D landing v2v right at the 1s line on a clean turn, exactly as the RFC thesis predicts. The composed `route→hedge→speculative` config is drop-in at `withVoice({ reasoner })` (no seam change; see `sprints/reasoner-latency/OUTCOMES.md`). Raw runs: `runs/spec-ab-run{1,2,3}.txt`.
+
+## Scope correction — the ~0.9 s figure is a tool-free number (2026-07-19)
+
+The ~0.9 s above is real but **narrow**, and it has been read as a product claim it does not
+support. It was measured on a clean, pause-free, **tool-free** fixture, from the *confirmed
+endpoint*, on a single-pass generation. A tool-calling turn is a different animal.
+
+Live decomposition of one real tool-calling cascade turn (Deepgram nova-3 → gpt-4.1-mini +
+tools → Cartesia sonic-3, same harness, `turn_latency`):
+
+| stage | ms | share |
+|---|---|---|
+| `llmTtftMs` | 3539 | 90% |
+| `ttsTtfbMs` | 242 | 6% |
+| tool execution | ~0 | 0% |
+| `unattributedMs` (sentence aggregation) | 333 | 8% |
+| **`ttfaMs`** | **4114** | |
+
+Two things this changes:
+
+**Tools are not the cost — extra inference passes are.** Tool execution measured 0–1 ms (the
+fixture's tools are local stubs). The 3.5 s is sequential LLM passes: the model cannot answer
+before the tool returns, so a grounded answer is gated behind ≥2 round-trips.
+
+**A tool preamble recovers most of the perceived gap.** Asking the model for one short grounded
+sentence *before* the tool call moved `ttfaMs` from 3813/4114 ms to 1404/1732 ms (n=2 per arm,
+same fixture/tools/model) — with the tool still called and the grounded answer still delivered.
+See `runs/phase0-spike-implementation-notes.md` (A8).
+
+**State it honestly.** The preamble does not reduce time-to-**answer**; it reduces time-to-first-
+*useful* audio. Any latency number quoted from a turn where a preamble, filler, or backchannel
+spoke first must be reported alongside the `fillerUsed` / `backchannelUsed` flags on
+`turn_latency`, or it is measuring time-to-acknowledgement and calling it latency — the exact
+confound that made the native-realtime arm's "1.3 s" unusable in `docs/interaction-thesis-results.md`.
+
+## Correction — Lever D is Flux-specific, and net-harmful on a per-interim endpointer (2026-07-20)
+
+The Lever D section above concludes that speculative-start "is what actually clears 1s". That holds
+**on Deepgram Flux** and does not generalise. Measured live once the `speculative.draft_*` counters
+existed to make it observable — cascade + `PipecatEOSPlugin` (smart-turn), one turn per arm:
+
+| | started | discarded | promoted | ttfaMs | llmTtftMs |
+|---|---|---|---|---|---|
+| speculative ON | 13 | **13** | **0** | 1724 | 1269 |
+| speculative OFF | 0 | 0 | 0 | **1302** | **1025** |
+
+Thirteen speculative LLM calls per turn, all discarded, none promoted.
+
+**Why.** Promotion requires `draft.userText === eos.text` (exact equality). Flux gates its eager
+endpoint on `eager_eot_threshold` and guarantees the EndOfTurn transcript matches the preceding
+EagerEndOfTurn absent a TurnResumed — so drafts promote, and the OQ2 "1 llm call, 0 resumed" result
+recorded above is correct *for that endpointer*. `PipecatEOSPlugin` instead emits `eos.interim` on
+every non-empty STT interim; each discards the prior draft and starts a new call, and the surviving
+draft is built on an interim transcript that rarely equals the final one.
+
+**Guidance: enable `speculative` only with a confidence-gated eager endpointer.** With smart-turn it
+is roughly 13x the LLM spend for no latency benefit. Documented at the option definition in
+`packages/aisdk/src/index.ts`.
+
+(n=1 per arm — the latency delta is within provider noise; the structural numbers are 13 discarded
+and 0 promoted.)

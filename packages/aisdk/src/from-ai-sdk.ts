@@ -8,6 +8,7 @@
 import {
   streamText,
   type FinishReason,
+  type LanguageModelUsage,
   type ModelMessage,
   type TextStreamPart,
   type ToolChoice,
@@ -19,6 +20,7 @@ import {
   type Reasoner,
   type ReasonerMessage,
   type ReasonerTurn,
+  type ReasonerUsage,
   type ReasoningPart,
 } from "@kuralle-syrinx/core";
 import type { AISDKStreamFactory } from "./index.js";
@@ -79,7 +81,7 @@ async function* streamFromStreamText(config: StreamTextConfig, turn: ReasonerTur
     messages,
     abortSignal: turn.signal,
   });
-  yield* mapTextStreamParts(result.fullStream);
+  yield* mapTextStreamParts(result.fullStream, modelIdentity(config.model));
 }
 
 async function* streamFromFactory(factory: AISDKStreamFactory, turn: ReasonerTurn): AsyncGenerator<ReasoningPart> {
@@ -112,6 +114,7 @@ function mapMessages(messages: readonly ReasonerMessage[]): ModelMessage[] {
 
 async function* mapTextStreamParts(
   source: AsyncIterable<TextStreamPart<ToolSet>>,
+  identity: { provider?: string; model?: string } = {},
 ): AsyncGenerator<ReasoningPart> {
   let accumulatedText = "";
   let sawFinish = false;
@@ -176,6 +179,11 @@ async function* mapTextStreamParts(
             type: "finish",
             reason: mapFinishReason(part.finishReason),
             text: accumulatedText,
+            // The AI SDK finish part carries totalUsage; forward it so the bridge can
+            // record cost. Omit entirely when the provider reported nothing.
+            ...(part.totalUsage
+              ? { usage: { ...identity, ...toReasonerUsage(part.totalUsage) } }
+              : {}),
           };
           return;
         }
@@ -201,6 +209,32 @@ async function* mapTextStreamParts(
   if (!sawFinish) {
     yield toErrorPart(new Error("AI SDK stream ended without a provider finish reason"));
   }
+}
+
+/**
+ * Extract provider/model for cost attribution. The AI SDK model is either a bare id
+ * string (`"openai/gpt-4.1-mini"`) or a model object exposing `.provider` / `.modelId`.
+ * Without this, usage counters are tagged with empty provider/model and spend cannot be
+ * attributed to a model — the whole point of the low-cardinality tags.
+ */
+export function modelIdentity(model: StreamTextConfig["model"]): { provider?: string; model?: string } {
+  if (typeof model === "string") return { model };
+  const m = model as { provider?: unknown; modelId?: unknown };
+  return {
+    ...(typeof m.provider === "string" ? { provider: m.provider } : {}),
+    ...(typeof m.modelId === "string" ? { model: m.modelId } : {}),
+  };
+}
+
+/** Copy only the token fields the SDK actually populated (all are `number | undefined`). */
+function toReasonerUsage(u: LanguageModelUsage): ReasonerUsage {
+  return {
+    ...(u.inputTokens !== undefined ? { inputTokens: u.inputTokens } : {}),
+    ...(u.outputTokens !== undefined ? { outputTokens: u.outputTokens } : {}),
+    ...(u.totalTokens !== undefined ? { totalTokens: u.totalTokens } : {}),
+    ...(u.cachedInputTokens !== undefined ? { cachedInputTokens: u.cachedInputTokens } : {}),
+    ...(u.reasoningTokens !== undefined ? { reasoningTokens: u.reasoningTokens } : {}),
+  };
 }
 
 function mapFinishReason(finishReason: FinishReason): "stop" | "tool" | "length" {

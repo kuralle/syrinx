@@ -23,6 +23,7 @@ import {
   type EdgeRecorder,
 } from "@kuralle-syrinx/server-websocket/edge";
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
+import { runTelnyxEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-telnyx";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
 import type { IdleTimeoutConfig, Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
@@ -84,7 +85,7 @@ export interface DelegateQueryContext<Env = unknown> {
 
 /**
  * Fired when the Reasoner produced the turn's final answer. Self-contained (carries the
- * query again) so a consumer can log/persist the grounded Q&A pair from this one hook.
+ * query again) so a consumer can log/persist the grounded Q&A pair or message its client.
  */
 export interface DelegateResultContext<Env = unknown> {
   readonly query: string;
@@ -93,8 +94,11 @@ export interface DelegateResultContext<Env = unknown> {
   readonly grounded: boolean;
   readonly toolId?: string;
   readonly toolName?: string;
+  readonly control?: { name: string; payload: unknown };
+  readonly blocked?: { userFacingMessage: string; payload?: unknown };
   readonly turnId: string;
   readonly sessionId: string;
+  /** The connection that initiated this delegate; use `send(...)` for an app message to that client. */
   readonly connection: VoiceConnection;
   /** The Worker env — bindings for logging/persistence (e.g. an R2 bucket). */
   readonly env: Env;
@@ -105,10 +109,12 @@ export interface WithVoiceOptions<Env> {
    * The connection wire protocol this host speaks. `"edge"` (default) is the Syrinx
    * browser/edge JSON+envelope protocol (`runVoiceEdgeWebSocketConnection`). `"twilio"`
    * speaks the Twilio Media Streams protocol (μ-law 8 kHz both ways,
-   * `runTwilioEdgeWebSocketConnection`) for a PSTN leg. One transport per Agent class —
-   * route `/ws` to an `"edge"` agent and `/twilio` to a `"twilio"` agent.
+   * `runTwilioEdgeWebSocketConnection`) for a PSTN leg. `"telnyx"` speaks the Telnyx
+   * Media Streaming protocol (PCMU/PCMA/G722/L16, `runTelnyxEdgeWebSocketConnection`).
+   * One transport per Agent class — route `/ws` to an `"edge"` agent, `/twilio` to a
+   * `"twilio"` agent, and `/telnyx` to a `"telnyx"` agent.
    */
-  readonly transport?: "edge" | "twilio";
+  readonly transport?: "edge" | "twilio" | "telnyx";
   /** The voice pipeline: `{ kind: "realtime", ... }` or `{ kind: "cascaded", ... }`. */
   readonly pipeline: VoicePipeline<Env>;
   /**
@@ -140,8 +146,9 @@ export interface WithVoiceOptions<Env> {
   readonly onDelegateQuery?: (ctx: DelegateQueryContext<Env>) => void | Promise<void>;
   /**
    * Delegate observability (G2): fired when the Reasoner produced the turn's final answer —
-   * the hook for logging/persisting the grounded Q&A pair (query + answer + durationMs +
-   * grounded). Throwing here never affects the call.
+   * the hook for logging/persisting the grounded Q&A pair or sending a post-result app message
+   * through `ctx.connection` (query + answer + durationMs + grounded). Throwing here never affects
+   * the call.
    */
   readonly onDelegateResult?: (ctx: DelegateResultContext<Env>) => void | Promise<void>;
   /**
@@ -169,8 +176,10 @@ export interface WithVoiceOptions<Env> {
   readonly outputSampleRateHz?: number;
   readonly resumeWindowMs?: number;
   /**
-   * Derive the Syrinx session id. Defaults to the `?sessionId=` query param, then
-   * the Agent instance `name` (each routed DO instance is one stable session).
+   * Derive the Syrinx session id. When supplied, this resolver is authoritative;
+   * otherwise the `?sessionId=` query param is used, then a per-connection random id.
+   * The Agent instance `name` is not used because concurrent connections to one DO
+   * must not silently share a session.
    */
   readonly sessionId?: (request: Request, agentName: string) => string;
 }
@@ -405,6 +414,8 @@ export function withVoice<Env, TBase extends AgentLike>(
                   grounded: e.grounded,
                   toolId: e.toolId,
                   toolName: e.toolName,
+                  control: e.control,
+                  blocked: e.blocked,
                   turnId: e.turnId,
                   sessionId,
                   connection: voiceConnection,
@@ -427,6 +438,22 @@ export function withVoice<Env, TBase extends AgentLike>(
         // id from the `?sessionId=` query (the callSid), resamples to the engine rate,
         // and manages its own lease/heartbeat. Recorder is edge-only.
         void runTwilioEdgeWebSocketConnection(socket, request, {
+          sessionStore: this.#store,
+          createSession,
+          ...(options.inputSampleRateHz !== undefined
+            ? { engineSampleRateHz: options.inputSampleRateHz }
+            : {}),
+          ...(options.resumeWindowMs !== undefined ? { resumeWindowMs: options.resumeWindowMs } : {}),
+          ...(options.backgroundAudio ? { backgroundAudio: options.backgroundAudio } : {}),
+        }).catch(onRunnerSettled);
+        return;
+      }
+
+      if (options.transport === "telnyx") {
+        // Telnyx Media Streaming: PCMU/PCMA/G722/L16 per negotiated start.media_format.
+        // Same lease/heartbeat pattern as Twilio; recorder is edge-only.
+        // Live streaming_start → /telnyx is carrier-gated / unit-tested only.
+        void runTelnyxEdgeWebSocketConnection(socket, request, {
           sessionStore: this.#store,
           createSession,
           ...(options.inputSampleRateHz !== undefined

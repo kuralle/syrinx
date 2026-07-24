@@ -115,6 +115,7 @@ export class RealtimeBridge implements VoicePlugin {
   private turnAssistantText = "";
   /** Concatenated streamed transcript fragments — providers that emit deltas only, no final (Gemini Live). */
   private turnAssistantDeltas = "";
+  private pendingSpeechEndedAtMs: number | null = null;
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
   private delegateTask: Promise<void> | null = null;
@@ -128,6 +129,16 @@ export class RealtimeBridge implements VoicePlugin {
     private readonly delegateToolName = "consult_knowledge",
     private readonly opts: RealtimeBridgeOptions = {},
   ) {}
+
+  injectContext(text: string): void {
+    // Provider history differs here: OpenAI retains system items, while Gemini drops
+    // system/developer history, so the adapter selects the provider-safe representation.
+    if (this.adapter.injectContext) {
+      this.adapter.injectContext(text);
+      return;
+    }
+    console.warn("RealtimeBridge: context injection requested but the adapter does not support it");
+  }
 
   async initialize(bus: PipelineBus, _cfg: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -216,6 +227,12 @@ export class RealtimeBridge implements VoicePlugin {
         } else if (!ev.final && ev.text) {
           // Streamed fragments already carry their own leading spaces — concatenate verbatim.
           this.turnAssistantDeltas += ev.text;
+          bus.push(Route.Main, {
+            kind: "llm.delta",
+            contextId: this.contextId,
+            timestampMs: Date.now(),
+            text: ev.text,
+          });
         }
         break;
       case "tool_call":
@@ -223,9 +240,22 @@ export class RealtimeBridge implements VoicePlugin {
         break;
       case "response_done":
         this.onResponseDone(bus);
+        // Meter the native front — previously native turns produced no usage at all.
+        if (ev.usage && this.contextId) {
+          bus.push(Route.Background, {
+            kind: "usage.recorded",
+            contextId: this.contextId,
+            timestampMs: Date.now(),
+            stage: "llm",
+            ...ev.usage,
+          });
+        }
         break;
       case "speech_started":
         this.onSpeechStarted(bus);
+        break;
+      case "speech_stopped":
+        this.onSpeechStopped(bus);
         break;
       case "resumption_handle": {
         // G4: persist-worthy native-resume handle (Gemini). Background route —
@@ -338,6 +368,25 @@ export class RealtimeBridge implements VoicePlugin {
     this.inflight = controller;
     let answer = "";
     let grounded = false;
+    let blockedMessage: string | undefined;
+    let blockedPayload: unknown;
+    let passStartedMs = Date.now();
+    let passTtftRecorded = false;
+    const pushConversationMetric = (name: string, value: string, timestampMs: number): void => {
+      bus.push(Route.Main, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs,
+        name,
+        value,
+      });
+    };
+    const recordPassTtft = (timestampMs: number): void => {
+      if (passTtftRecorded) return;
+      passTtftRecorded = true;
+      pushConversationMetric("llm.pass_ttft_ms", String(timestampMs - passStartedMs), timestampMs);
+    };
+    pushConversationMetric("llm.call_started", "1", passStartedMs);
 
     // G2 observability: the query is on its way to the reasoner (Background route, R4).
     const queryStartedMs = Date.now();
@@ -361,10 +410,37 @@ export class RealtimeBridge implements VoicePlugin {
       })) {
         switch (part.type) {
           case "text-delta":
+            recordPassTtft(Date.now());
             answer += part.text;
+            break;
+          case "tool-call":
+            recordPassTtft(Date.now());
             break;
           case "tool-result":
             grounded = true;
+            passStartedMs = Date.now();
+            passTtftRecorded = false;
+            pushConversationMetric("llm.call_started", "1", passStartedMs);
+            break;
+          case "control": {
+            const controlMs = Date.now();
+            bus.push(Route.Background, {
+              kind: "delegate.result",
+              contextId,
+              timestampMs: controlMs,
+              query: userText,
+              answer,
+              durationMs: controlMs - queryStartedMs,
+              grounded,
+              toolId: ev.toolId,
+              toolName: ev.toolName,
+              control: { name: part.name, payload: part.payload },
+            });
+            break;
+          }
+          case "blocked":
+            blockedMessage = part.userFacingMessage;
+            blockedPayload = part.payload;
             break;
           case "finish":
             if (!answer && part.text) answer = part.text;
@@ -382,6 +458,7 @@ export class RealtimeBridge implements VoicePlugin {
             this.onError(bus, part.cause, true);
             return;
         }
+        if (blockedMessage !== undefined) break;
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -390,6 +467,24 @@ export class RealtimeBridge implements VoicePlugin {
     } finally {
       // Only clear if still ours — a newer delegate may have replaced this.inflight.
       if (this.inflight === controller) this.inflight = undefined;
+    }
+
+    if (blockedMessage !== undefined) {
+      const blockedMs = Date.now();
+      bus.push(Route.Background, {
+        kind: "delegate.result",
+        contextId,
+        timestampMs: blockedMs,
+        query: userText,
+        answer: blockedMessage,
+        durationMs: blockedMs - queryStartedMs,
+        grounded,
+        toolId: ev.toolId,
+        toolName: ev.toolName,
+        blocked: { userFacingMessage: blockedMessage, payload: blockedPayload },
+      });
+      this.adapter.injectToolResult(ev.toolId, this.formatToolResult(blockedMessage));
+      return;
     }
 
     if (answer.length === 0) {
@@ -445,6 +540,20 @@ export class RealtimeBridge implements VoicePlugin {
     bus.push(Route.Critical, packet);
   }
 
+  private onSpeechStopped(bus: PipelineBus): void {
+    const timestampMs = Date.now();
+    if (!this.contextId) {
+      // Server VAD reports speech end before response.created mints the response context.
+      this.pendingSpeechEndedAtMs = timestampMs;
+      return;
+    }
+    bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: this.contextId,
+      timestampMs,
+    });
+  }
+
   private onResponseStarted(bus: PipelineBus): void {
     const previousContextId = this.contextId;
     this.contextId = crypto.randomUUID();
@@ -453,6 +562,14 @@ export class RealtimeBridge implements VoicePlugin {
     this.turnAssistantDeltas = "";
     this.playedMs = 0;
     this.audioRemainder = new Uint8Array(0);
+    if (this.pendingSpeechEndedAtMs !== null) {
+      bus.push(Route.Main, {
+        kind: "vad.speech_ended",
+        contextId: this.contextId,
+        timestampMs: this.pendingSpeechEndedAtMs,
+      });
+      this.pendingSpeechEndedAtMs = null;
+    }
     const packet: TurnChangePacket = {
       kind: "turn.change",
       contextId: this.contextId,
@@ -558,19 +675,21 @@ export class RealtimeBridge implements VoicePlugin {
     // providers that only emit non-final deltas (Gemini Live).
     const assistantText = this.turnAssistantText.trim() || this.turnAssistantDeltas.trim();
     if (assistantText) {
-      const delta: LlmDeltaPacket = {
-        kind: "llm.delta",
-        contextId: this.contextId,
-        timestampMs,
-        text: assistantText,
-      };
       const done: LlmResponseDonePacket = {
         kind: "llm.done",
         contextId: this.contextId,
         timestampMs,
         text: assistantText,
       };
-      bus.push(Route.Main, delta, done);
+      if (this.turnAssistantDeltas.length === 0) {
+        bus.push(Route.Main, {
+          kind: "llm.delta",
+          contextId: this.contextId,
+          timestampMs,
+          text: assistantText,
+        });
+      }
+      bus.push(Route.Main, done);
     }
     bus.push(Route.Main, turnComplete, ttsEnd);
   }

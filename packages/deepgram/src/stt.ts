@@ -1,39 +1,35 @@
 // SPDX-License-Identifier: MIT
 //
-// Syrinx Kernel v2 — Deepgram STT Plugin
+// Syrinx Kernel v2 — Deepgram Nova STT Plugin
 //
-// Follows Rapida's session-long connection pattern:
-//   - One WebSocket per session (not per turn)
-//   - Audio streams continuously, VAD/EOS requests Deepgram Finalize
-//   - KeepAlive holds the session open during post-turn silence and playout
-//   - CloseStream is only used when the session is shutting down, never per turn
-//   - Interim transcripts for real-time display
-//   - Final transcripts can trigger eos.turn_complete, or Pipecat EOS can own finalization
-//
-// Guards (Syrinx additions beyond Rapida):
-//   - forceFinalize() sends Deepgram Finalize and waits for provider confirmation
-//   - Never promotes interim/cached text to final without speech_final/from_finalize
-//   - Emits provider-boundary metrics for audio byte/duration and finalize provenance
-//
-// Reference: Rapida transformer/deepgram/stt.go + internal/stt_callback.go
+// Session lifecycle (socket, reconnect, keepalive, billing funnel) lives in
+// @kuralle-syrinx/stt-core. This file is the Nova wire protocol: listen URL +
+// query knobs, Finalize + CloseStream frames, and the provider-policy state
+// machine (multi-segment accumulation, speech_final/from_finalize gating,
+// Finalize timeout/fallback/reset, UtteranceEnd backstop).
 
-import type { PipelineBus } from "@kuralle-syrinx/core";
 import {
   Route,
-  type AudioFormat,
-  type VoicePlugin,
-  type PluginConfig,
-  type SttErrorPacket,
-  type VadSpeechStartedPacket,
   assertAudioFormat,
-  assertAudioPayload,
-  requireStringConfig,
   optionalStringConfig,
   readProviderRetryConfig,
-  categorizeSttError,
-  isRecoverable,
+  requireStringConfig,
+  type AudioFormat,
+  type PipelineBus,
+  type PluginConfig,
+  type SttReconfigure,
+  type SttReconfigurePartial,
+  type VoicePlugin,
 } from "@kuralle-syrinx/core";
-import { WebSocketConnection, type SocketData, type SocketFactory } from "@kuralle-syrinx/ws";
+import {
+  defaultNodeSocketFactory,
+  startStreamingSttSession,
+  type SttEvent,
+  type SttProtocolHost,
+  type SttWireProtocol,
+  type StreamingSttSession,
+} from "@kuralle-syrinx/stt-core";
+import type { SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 
 interface ProviderTranscriptState {
   lastInterimTranscript: string;
@@ -60,57 +56,25 @@ function boundedAdd(set: Set<string>, value: string, cap: number): void {
   }
 }
 
-export class DeepgramSTTPlugin implements VoicePlugin {
-  readonly endpointingCapability = {
-    owner: "provider_stt" as const,
-    disableConfig: {
-      emit_eos_on_final: false,
-      finalize_on_speech_final: false,
-    },
-  };
+type MetricSink = (contextId: string, name: string, value: unknown) => void;
 
-  private bus: PipelineBus | null = null;
-  private apiKey: string = "";
-  private sampleRate: number = 16000;
-  private model: string = "nova-3";
-  private language: string = "en-US";
-  private endpointing: number = 300;
-  private endpointUrl: string = "wss://api.deepgram.com/v1/listen";
-  private smartFormat: boolean = true;
-  private interimResults: boolean = true;
-  private vadEvents: boolean = true;
-  // Deepgram gap-based utterance boundary (ms). When > 0 (requires interim_results),
-  // Deepgram emits UtteranceEnd even when `speech_final` never fires — the documented
-  // backstop for noisy/continuous lines (telephony) where a turn would otherwise wedge.
-  private utteranceEndMs: number = 0;
-  private confidenceThreshold: number = 0;
-  private finalizeOnSpeechFinal: boolean = true;
-  private emitEosOnFinal: boolean = true;
-  private providerFinalizeTimeoutMs: number = 1200;
-  // Consecutive unconfirmed Finalize timeouts that force a connection reset. A single
-  // slow finalize discards its turn but keeps the (healthy) socket; only repeated
-  // failures with no confirmed final between them look like a wedged stream worth
-  // reconnecting. Prevents one slow finalize from cascading into the next turns.
-  private finalizeResetThreshold: number = 2;
-  private consecutiveFinalizeTimeouts = 0;
-  // When the provider never confirms a Finalize, complete the turn with the best transcript
-  // already buffered instead of dropping it. For live conversation a reply on slightly
-  // imperfect text beats silently losing the user's turn. Opt-in (off preserves the strict
-  // "never promote unconfirmed" behavior for callers that need it).
-  private finalizeTimeoutFallback: boolean = false;
-  private keepAliveIntervalMs: number = 3000;
-  // nova-3 keyterm prompting: bias recognition toward domain terms (names, products,
-  // codes) — the #1 production voice failure is mishearing exactly these.
-  private keyterms: readonly string[] = [];
+interface DeepgramNovaProtocolConfig {
+  readonly model: string;
+  readonly language: string;
+  readonly sampleRate: number;
+  readonly vadEvents: boolean;
+  readonly confidenceThreshold: number;
+  readonly finalizeOnSpeechFinal: boolean;
+  readonly emitEosOnFinal: boolean;
+  readonly providerFinalizeTimeoutMs: number;
+  readonly finalizeResetThreshold: number;
+  readonly finalizeTimeoutFallback: boolean;
+  readonly getContextId: () => string;
+  readonly onMetric: MetricSink;
+}
 
-  // Session-long WebSocket, managed by the shared connection (reconnect, keepalive).
-  private conn: WebSocketConnection | null = null;
-  private currentContextId = "";
-  private streamStartTime = 0;
-  private disposers: Array<() => void> = [];
-
-  constructor(private readonly socketFactory?: SocketFactory) {}
-
+class DeepgramSttWireProtocol implements SttWireProtocol {
+  private host: SttProtocolHost | null = null;
   private transcriptStateByContextId = new Map<string, ProviderTranscriptState>();
   private finalizeRequestedContextIds = new Set<string>();
   private finalizedContextIds = new Set<string>();
@@ -119,330 +83,312 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   private providerFinalizeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private providerFinalizeCorrelationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private pendingProviderFinalizeContextIds: string[] = [];
-  private audioStatsByContextId = new Map<string, {
-    bytes: number;
-    chunks: number;
-    firstSentAtMs: number;
-    lastSentAtMs: number;
-  }>();
-  private audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 };
-
-  async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
-    this.bus = bus;
-    this.apiKey = requireStringConfig(config, "api_key");
-    this.sampleRate = (config["sample_rate"] as number) ?? 16000;
-    this.model = optionalStringConfig(config, "model") ?? "nova-3";
-    this.language = optionalStringConfig(config, "language") ?? "en-US";
-    this.endpointing = (config["endpointing"] as number) ?? 300;
-    this.endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.deepgram.com/v1/listen";
-    this.smartFormat = (config["smart_format"] as boolean) ?? true;
-    this.interimResults = (config["interim_results"] as boolean) ?? true;
-    // Opt-in: provider SpeechStarted → vad.speech_started is for VAD-less
-    // deployments (edge cascade). On sessions with a local VAD the duplicate,
-    // laggier speech-start signal corrupts VAD/EOS-owned turn-taking (the turn
-    // never completes) — proven by the Fly telephony spike.
-    this.vadEvents = (config["vad_events"] as boolean) ?? false;
-    // Deepgram requires utterance_end_ms >= 1000 and interim_results; clamp to that.
+  private audioStatsByContextId = new Map<
+    string,
     {
-      const raw = (config["utterance_end_ms"] as number) ?? 0;
-      this.utteranceEndMs = raw > 0 ? Math.max(1000, raw) : 0;
+      bytes: number;
+      chunks: number;
+      firstSentAtMs: number;
+      lastSentAtMs: number;
+      billedBytes?: number;
     }
-    this.confidenceThreshold =
-      (config["confidence_threshold"] as number) ?? 0;
-    this.finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
-    this.emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
-    this.providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
-    this.finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
-    this.finalizeTimeoutFallback = (config["finalize_timeout_fallback"] as boolean) ?? false;
-    this.keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
-    {
-      const raw = config["keyterm"];
-      this.keyterms = Array.isArray(raw)
-        ? raw.filter((t): t is string => typeof t === "string" && t.length > 0)
-        : typeof raw === "string" && raw.length > 0
-          ? [raw]
-          : [];
-    }
-    this.audioFormat = { encoding: "pcm_s16le", sampleRateHz: this.sampleRate, channels: 1 };
-    assertAudioFormat(this.audioFormat);
+  >();
+  private consecutiveFinalizeTimeouts = 0;
+  /** Mutable so a hard-language reconfigure re-stamps stt.result to the new language. */
+  private currentLanguage: string;
 
-    // One session-long socket, managed (reconnect + KeepAlive) by WebSocketConnection.
-    this.conn = new WebSocketConnection({
-      url: () => {
-        const params = new URLSearchParams({
-          encoding: "linear16",
-          sample_rate: String(this.sampleRate),
-          interim_results: String(this.interimResults),
-          endpointing: String(this.endpointing),
-          smart_format: String(this.smartFormat),
-          model: this.model,
-          language: this.language,
-          channels: "1",
-          no_delay: "true",
-          vad_events: String(this.vadEvents),
-          ...(this.utteranceEndMs > 0 ? { utterance_end_ms: String(this.utteranceEndMs) } : {}),
-        });
-        for (const term of this.keyterms) params.append("keyterm", term);
-        const separator = this.endpointUrl.includes("?") ? "&" : "?";
-        return `${this.endpointUrl}${separator}${params.toString()}`;
-      },
-      headers: { Authorization: `Token ${this.apiKey}` },
-      socketFactory: this.socketFactory ?? await defaultSocketFactory(),
-      retry: readProviderRetryConfig(config),
-      replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
-      onReplay: (event, count) => {
-        this.pushMetric(this.currentContextId, `stt.deepgram.reconnect_replay_${event}`, String(count));
-      },
-      keepAliveIntervalMs: this.keepAliveIntervalMs,
-      keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
-      onMessage: (data) => {
-        if (typeof data === "string") this.handleProviderMessage(data);
-      },
-      onConnectionLost: (err) => {
-        this.discardProviderStateForReconnect();
-        this.emitError(this.currentContextId, err);
-      },
-    });
-    await this.conn.connect();
-
-    // Listen for audio packets — stream immediately
-    this.disposers.push(
-      bus.on("stt.audio", async (pkt: unknown) => {
-        const audioPkt = pkt as { audio: Uint8Array; contextId?: string };
-        if (audioPkt.contextId) {
-          this.currentContextId = audioPkt.contextId;
-        }
-        const sent = await this.sendAudio(audioPkt.audio, this.currentContextId);
-        if (sent) {
-          this.recordAudioSent(this.currentContextId, audioPkt.audio.byteLength);
-        }
-        if (this.streamStartTime === 0) {
-          this.streamStartTime = Date.now();
-        }
-      }),
-
-      // Turn change handler
-      bus.on("turn.change", (pkt: unknown) => {
-        const tc = pkt as { contextId: string };
-        this.currentContextId = tc.contextId;
-        this.streamStartTime = Date.now();
-      }),
-
-      // STT interrupt handler
-      bus.on("interrupt.stt", () => {
-        this.streamStartTime = Date.now();
-        this.resetTurnTranscriptState();
-      }),
-      bus.on("stt.finalize", (pkt: unknown) => {
-        const request = pkt as { contextId: string };
-        this.forceFinalize(request.contextId);
-      }),
-    );
+  constructor(private readonly cfg: DeepgramNovaProtocolConfig) {
+    this.currentLanguage = cfg.language;
   }
 
-  private handleProviderMessage(data: string): void {
-    let msg: Record<string, unknown>;
-    try {
-      msg = JSON.parse(data) as Record<string, unknown>;
-    } catch (err) {
-      this.emitError(
-        this.currentContextId,
-        new Error(`Deepgram STT provider sent malformed JSON: ${err instanceof Error ? err.message : String(err)}`),
-      );
-      return;
-    }
-
-    if (isDeepgramProviderError(msg)) {
-      this.emitError(this.currentContextId, deepgramProviderError(msg));
-      return;
-    }
-
-    // Provider speech-start (vad_events=true): the generic speech-start signal —
-    // the same packet a local VAD plugin emits — so barge-in works on VAD-less
-    // deployments. The session/TurnArbiter owns what to do with it.
-    if (msg["type"] === "SpeechStarted") {
-      if (!this.vadEvents) return;
-      this.bus?.push(Route.Main, {
-        kind: "vad.speech_started",
-        contextId: this.currentContextId,
-        timestampMs: Date.now(),
-        confidence: 1,
-      } satisfies VadSpeechStartedPacket);
-      return;
-    }
-
-    // Deepgram's gap-based utterance boundary (utterance_end_ms). This fires even
-    // when `speech_final` is missed on a noisy/continuous line, so it's the backstop
-    // that stops a turn from wedging forever. If we hold un-finalized transcript for
-    // the current turn, complete it.
-    if (msg["type"] === "UtteranceEnd") {
-      const ctxId = this.currentContextId;
-      if (
-        this.emitEosOnFinal &&
-        ctxId &&
-        !this.finalizedContextIds.has(ctxId) &&
-        this.combinedFinalTranscript(ctxId)
-      ) {
-        this.bus?.push(Route.Background, {
-          kind: "metric.conversation",
-          contextId: ctxId,
-          timestampMs: Date.now(),
-          name: "deepgram.utterance_end_backstop",
-          value: "1",
-        });
-        this.pushTurnComplete(ctxId);
-      }
-      return;
-    }
-
-    const alt = providerAlternative(msg);
-    if (!alt || typeof alt["transcript"] !== "string") return;
-
-    const transcript = alt["transcript"].trim();
-    const confidence = typeof alt["confidence"] === "number" ? alt["confidence"] : 0;
-    const fromFinalize = msg["from_finalize"] === true;
-    const speechFinal = msg["speech_final"] === true;
-    const providerContextId = msg["is_final"] === true
-      ? this.contextIdForProviderFinal({ speechFinal, fromFinalize })
-      : this.currentContextId;
-    if (!transcript || this.finalizedContextIds.has(providerContextId)) return;
-
-    const state = this.transcriptState(providerContextId);
-    state.lastInterimTranscript = transcript;
-    state.lastInterimConfidence = confidence;
-
-    // Confidence threshold filter (Rapida pattern)
-    if (
-      this.confidenceThreshold > 0 &&
-      confidence < this.confidenceThreshold
-    ) {
-      this.bus?.push(Route.Background, {
-        kind: "metric.conversation",
-        contextId: providerContextId,
-        timestampMs: Date.now(),
-        name: "stt_low_confidence",
-        value: String(confidence),
-      });
-      return;
-    }
-
-    if (msg["is_final"] === true) {
-      if (this.ignoreNextProviderFinalContextIds.delete(providerContextId)) {
-        this.resetPendingTranscript(providerContextId);
-        return;
-      }
-      this.appendFinalSegment(providerContextId, transcript, confidence);
-      if (speechFinal) this.speechFinalContextIds.add(providerContextId);
-      const finalizeRequested = this.finalizeRequestedContextIds.has(providerContextId);
-      this.pushProviderFinalMetric(providerContextId, transcript, {
-        confidence,
-        speechFinal,
-        fromFinalize,
-        finalizeRequested,
-      });
-      this.pushResult(transcript, confidence, providerContextId, {
-        name: "deepgram",
-        model: this.model,
-        region: "global",
-        speechFinal,
-        fromFinalize,
-        finalizeRequested,
-      });
-      if (speechFinal || fromFinalize) {
-        this.resolveProviderFinalize(providerContextId);
-      }
-      if (this.emitEosOnFinal && ((this.finalizeOnSpeechFinal && speechFinal) || (finalizeRequested && fromFinalize))) {
-        this.pushTurnComplete(providerContextId);
-      }
-    } else {
-      this.pushInterim(transcript, providerContextId, alt);
-    }
+  setLanguage(language: string): void {
+    this.currentLanguage = language;
   }
 
-  /** Stream audio to Deepgram immediately. No batching, no CloseStream. */
-  async sendAudio(audio: Uint8Array, contextId = this.currentContextId): Promise<boolean> {
-    if (audio.byteLength === 0) return true;
-    try {
-      assertAudioPayload(this.audioFormat, audio);
-      if (!this.conn) throw new Error("Deepgram STT is not connected");
-      await this.conn.ensureReady();
-      this.conn.send(audio);
-      return true;
-    } catch (err) {
-      this.emitError(contextId, err instanceof Error ? err : new Error(String(err)));
-      return false;
-    }
+  attach(host: SttProtocolHost): void {
+    this.host = host;
   }
 
-  /** Request that Deepgram flush buffered audio and return provider-final text. */
-  forceFinalize(contextId?: string): void {
-    const ctxId = contextId ?? this.currentContextId;
-    if (!ctxId || !this.bus) return;
-    this.requestProviderFinalize(ctxId);
+  encodeAudio(audio: Uint8Array): readonly SocketData[] {
+    // Record after the engine has committed to sending (encodeAudio is only invoked
+    // on the send path). Bytes are used for provider-boundary metrics, not billing
+    // (billing is the base's sent-bytes funnel).
+    this.recordAudioSent(this.cfg.getContextId(), audio.byteLength);
+    return [audio];
   }
 
-  private requestProviderFinalize(contextId: string): void {
-    if (this.finalizedContextIds.has(contextId)) return;
+  encodeFinalize(contextId: string): readonly SocketData[] {
+    if (!contextId || this.finalizedContextIds.has(contextId)) return [];
+    return [JSON.stringify({ type: "Finalize" })];
+  }
+
+  onFinalizeSent(contextId: string): void {
+    if (!contextId || this.finalizedContextIds.has(contextId)) return;
     this.finalizeRequestedContextIds.add(contextId);
     this.trackPendingProviderFinalize(contextId);
     this.pushMetric(contextId, "stt_provider_finalize_requested", this.audioStats(contextId));
-    if (this.conn?.isReady) {
-      this.conn.send(JSON.stringify({ type: "Finalize" }));
-    }
-    if (!this.emitEosOnFinal && this.hasFinalTranscript(contextId)) {
+
+    if (!this.cfg.emitEosOnFinal && this.hasFinalTranscript(contextId)) {
       this.scheduleProviderFinalizeCorrelationExpiry(contextId);
       return;
     }
 
     this.clearProviderFinalizeTimer(contextId);
-    if (this.providerFinalizeTimeoutMs <= 0) return;
+    if (this.cfg.providerFinalizeTimeoutMs <= 0) return;
     const timer = setTimeout(() => {
       this.providerFinalizeTimers.delete(contextId);
       this.handleProviderFinalizeTimeout(contextId);
-    }, this.providerFinalizeTimeoutMs);
+    }, this.cfg.providerFinalizeTimeoutMs);
     this.providerFinalizeTimers.set(contextId, timer);
   }
 
+  encodeClose(): readonly SocketData[] {
+    if (this.transcriptStateByContextId.size > 0) {
+      this.pushMetric(
+        this.cfg.getContextId(),
+        "stt_pending_transcript_discarded_on_close",
+        this.audioStats(this.cfg.getContextId()),
+      );
+    }
+    this.clearAllProviderState({ keepFinalized: false });
+    return [JSON.stringify({ type: "CloseStream" })];
+  }
+
+  onConnectionLost(): void {
+    this.discardProviderStateForReconnect();
+  }
+
+  decode(data: SocketData, _isBinary: boolean): readonly SttEvent[] {
+    if (typeof data !== "string") return [];
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(data) as Record<string, unknown>;
+    } catch (err) {
+      return [
+        {
+          type: "error",
+          contextId: this.cfg.getContextId(),
+          error: new Error(
+            `Deepgram STT provider sent malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        },
+      ];
+    }
+
+    if (isDeepgramProviderError(msg)) {
+      return [
+        {
+          type: "error",
+          contextId: this.cfg.getContextId(),
+          error: deepgramProviderError(msg),
+        },
+      ];
+    }
+
+    if (msg["type"] === "SpeechStarted") {
+      if (!this.cfg.vadEvents) return [];
+      return [{ type: "speech_started", contextId: this.cfg.getContextId() }];
+    }
+
+    if (msg["type"] === "UtteranceEnd") {
+      return this.handleUtteranceEnd();
+    }
+
+    const alt = providerAlternative(msg);
+    if (!alt || typeof alt["transcript"] !== "string") return [];
+
+    const transcript = alt["transcript"].trim();
+    const confidence = typeof alt["confidence"] === "number" ? alt["confidence"] : 0;
+    const fromFinalize = msg["from_finalize"] === true;
+    const speechFinal = msg["speech_final"] === true;
+    const providerContextId =
+      msg["is_final"] === true
+        ? this.contextIdForProviderFinal({ speechFinal, fromFinalize })
+        : this.cfg.getContextId();
+    if (!transcript || this.finalizedContextIds.has(providerContextId)) return [];
+
+    const state = this.transcriptState(providerContextId);
+    state.lastInterimTranscript = transcript;
+    state.lastInterimConfidence = confidence;
+
+    if (this.cfg.confidenceThreshold > 0 && confidence < this.cfg.confidenceThreshold) {
+      this.pushMetric(providerContextId, "stt_low_confidence", String(confidence));
+      return [];
+    }
+
+    if (msg["is_final"] === true) {
+      return this.handleIsFinal(providerContextId, transcript, confidence, {
+        speechFinal,
+        fromFinalize,
+      });
+    }
+
+    return this.interimEvents(transcript, providerContextId, alt);
+  }
+
+  /** Clear per-turn transcript buffers (interrupt.stt). */
+  resetTurnTranscriptState(): void {
+    this.resetPendingTranscript(this.cfg.getContextId());
+  }
+
+  private handleUtteranceEnd(): readonly SttEvent[] {
+    const ctxId = this.cfg.getContextId();
+    if (
+      !this.cfg.emitEosOnFinal ||
+      !ctxId ||
+      this.finalizedContextIds.has(ctxId) ||
+      !this.combinedFinalTranscript(ctxId)
+    ) {
+      return [];
+    }
+    this.pushMetric(ctxId, "deepgram.utterance_end_backstop", "1");
+    return this.commitTurnComplete(ctxId);
+  }
+
+  private handleIsFinal(
+    providerContextId: string,
+    transcript: string,
+    confidence: number,
+    flags: { readonly speechFinal: boolean; readonly fromFinalize: boolean },
+  ): readonly SttEvent[] {
+    if (this.ignoreNextProviderFinalContextIds.delete(providerContextId)) {
+      this.resetPendingTranscript(providerContextId);
+      return [];
+    }
+    this.appendFinalSegment(providerContextId, transcript, confidence);
+    if (flags.speechFinal) this.speechFinalContextIds.add(providerContextId);
+    const finalizeRequested = this.finalizeRequestedContextIds.has(providerContextId);
+    this.pushProviderFinalMetric(providerContextId, transcript, {
+      confidence,
+      speechFinal: flags.speechFinal,
+      fromFinalize: flags.fromFinalize,
+      finalizeRequested,
+    });
+
+    const events: SttEvent[] = [
+      {
+        type: "final",
+        contextId: providerContextId,
+        text: transcript,
+        confidence,
+        language: this.currentLanguage,
+        // No speechFinal: base emits stt.result + bills, but NOT eos (eos comes via turn_complete).
+        provider: {
+          name: "deepgram",
+          model: this.cfg.model,
+          region: "global",
+          speechFinal: flags.speechFinal,
+          fromFinalize: flags.fromFinalize,
+          finalizeRequested,
+        },
+      },
+    ];
+
+    if (flags.speechFinal || flags.fromFinalize) {
+      this.resolveProviderFinalize(providerContextId);
+    }
+    if (
+      this.cfg.emitEosOnFinal &&
+      ((this.cfg.finalizeOnSpeechFinal && flags.speechFinal) ||
+        (finalizeRequested && flags.fromFinalize))
+    ) {
+      events.push(...this.commitTurnComplete(providerContextId));
+    }
+    return events;
+  }
+
+  private interimEvents(
+    transcript: string,
+    contextId: string,
+    alt: Record<string, unknown>,
+  ): readonly SttEvent[] {
+    const wordTimings = mapProviderWordTimings(alt);
+    const events: SttEvent[] = [{ type: "interim", contextId, text: transcript }];
+    events.push({
+      type: "partial",
+      contextId,
+      text: transcript,
+      ...(wordTimings ? { wordTimings } : {}),
+    });
+    return events;
+  }
+
+  private commitTurnComplete(contextId: string): readonly SttEvent[] {
+    const transcript = this.combinedFinalTranscript(contextId);
+    if (!transcript) return [];
+    this.resolveProviderFinalize(contextId);
+    boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
+    this.consecutiveFinalizeTimeouts = 0;
+    this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
+    this.audioStatsByContextId.delete(contextId);
+    this.resetPendingTranscript(contextId);
+    return [{ type: "turn_complete", contextId, text: transcript }];
+  }
+
   private handleProviderFinalizeTimeout(contextId: string): void {
-    if (!this.finalizeRequestedContextIds.has(contextId) || this.finalizedContextIds.has(contextId)) return;
+    if (!this.finalizeRequestedContextIds.has(contextId) || this.finalizedContextIds.has(contextId)) {
+      return;
+    }
     this.pushMetric(contextId, "stt_provider_finalize_timeout", this.audioStats(contextId));
 
-    // Graceful degradation (opt-in): rather than dropping the user's turn when the provider
-    // never confirms the Finalize, complete it with the best buffered text — confirmed
-    // is_final segments first, then the latest interim — so the turn still reaches the LLM.
-    if (this.finalizeTimeoutFallback) {
+    if (this.cfg.finalizeTimeoutFallback) {
       const state = this.transcriptState(contextId);
       const fallbackText = this.combinedFinalTranscript(contextId) || state.lastInterimTranscript;
       if (fallbackText) {
-        this.pushMetric(contextId, "stt_provider_finalize_timeout_fallback", this.audioStats(contextId));
-        // A late provider-final for this turn must not double-emit after we promote here.
+        this.pushMetric(
+          contextId,
+          "stt_provider_finalize_timeout_fallback",
+          this.audioStats(contextId),
+        );
         this.ignoreNextProviderFinalContextIds.add(contextId);
-        this.pushFinal(fallbackText, state.finalConfidence || state.lastInterimConfidence, contextId);
+        this.promoteFallbackFinal(
+          fallbackText,
+          state.finalConfidence || state.lastInterimConfidence,
+          contextId,
+        );
         this.resetPendingTranscript(contextId);
         return;
       }
-      // No buffered text — a silence-only/orphan turn (e.g. an always-on client that rotated its
-      // contextId onto trailing silence). Discard it silently; a finalize timeout on a turn that
-      // never had speech is not an error worth surfacing.
-      this.pushMetric(contextId, "stt_provider_finalize_timeout_empty_discard", this.audioStats(contextId));
+      this.pushMetric(
+        contextId,
+        "stt_provider_finalize_timeout_empty_discard",
+        this.audioStats(contextId),
+      );
       this.discardUnconfirmedTurn(contextId);
       return;
     }
 
     this.discardUnconfirmedTurn(contextId);
-    this.emitError(
+    this.host?.emit({
+      type: "error",
       contextId,
-      new Error("Deepgram STT Finalize timed out before speech_final/from_finalize confirmation"),
-    );
-    // A single slow finalize is not a wedged stream: keep the healthy socket so the
-    // next turn streams normally instead of stalling on a reconnect (which loses
-    // Deepgram-side context and cascades into more timeouts). Only reconnect once the
-    // failures repeat without a confirmed final between them (counter cleared in pushFinal).
+      error: new Error(
+        "Deepgram STT Finalize timed out before speech_final/from_finalize confirmation",
+      ),
+    });
     this.consecutiveFinalizeTimeouts += 1;
-    if (this.consecutiveFinalizeTimeouts >= this.finalizeResetThreshold) {
+    if (this.consecutiveFinalizeTimeouts >= this.cfg.finalizeResetThreshold) {
       this.consecutiveFinalizeTimeouts = 0;
-      this.conn?.reset();
+      this.host?.reset();
     }
+  }
+
+  /** Fallback promote: result + optional eos via base (speechFinal: true). */
+  private promoteFallbackFinal(transcript: string, confidence: number, contextId: string): void {
+    this.resolveProviderFinalize(contextId);
+    boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
+    this.consecutiveFinalizeTimeouts = 0;
+    this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
+    this.host?.emit({
+      type: "final",
+      contextId,
+      text: transcript,
+      confidence,
+      language: this.currentLanguage,
+      speechFinal: true,
+      provider: { name: "deepgram", model: this.cfg.model, region: "global" },
+    });
+    this.audioStatsByContextId.delete(contextId);
   }
 
   private discardUnconfirmedTurn(contextId: string): void {
@@ -455,83 +401,36 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     this.resetPendingTranscript(contextId);
   }
 
-  /** Emit final transcript + EOS turn complete. */
-  private pushFinal(transcript: string, confidence: number, contextId = this.currentContextId): void {
-    const ctxId = contextId;
-    this.resolveProviderFinalize(ctxId);
-    boundedAdd(this.finalizedContextIds, ctxId, MAX_RETIRED_CONTEXTS);
+  private discardProviderStateForReconnect(): void {
+    const contextId = this.cfg.getContextId();
+    const discarded =
+      this.transcriptStateByContextId.size > 0 ||
+      this.finalizeRequestedContextIds.size > 0 ||
+      this.audioStatsByContextId.size > 0 ||
+      this.providerFinalizeTimers.size > 0 ||
+      this.providerFinalizeCorrelationTimers.size > 0;
+    this.clearAllProviderState({ keepFinalized: true });
+    // A reconnect (from any cause) starts a fresh provider stream, so the wedged-stream
+    // signal resets too — otherwise a stale count could force an avoidable reset on the
+    // first timeout after reconnecting.
     this.consecutiveFinalizeTimeouts = 0;
-    this.pushMetric(ctxId, "stt_audio_sent", this.audioStats(ctxId));
-    this.pushResult(transcript, confidence, ctxId);
-
-    if (this.emitEosOnFinal) {
-      this.bus?.push(Route.Main, {
-        kind: "eos.turn_complete",
-        contextId: ctxId,
-        timestampMs: Date.now(),
-        text: transcript,
-        transcripts: [],
-      });
+    if (discarded && contextId) {
+      this.pushMetric(contextId, "stt_provider_reconnect_discarded_state", {});
     }
-    this.audioStatsByContextId.delete(ctxId);
   }
 
-  private pushTurnComplete(contextId: string): void {
-    const transcript = this.combinedFinalTranscript(contextId);
-    if (!transcript || !this.bus) return;
-    this.resolveProviderFinalize(contextId);
-    boundedAdd(this.finalizedContextIds, contextId, MAX_RETIRED_CONTEXTS);
-    this.consecutiveFinalizeTimeouts = 0;
-    this.pushMetric(contextId, "stt_audio_sent", this.audioStats(contextId));
-    this.bus.push(Route.Main, {
-      kind: "eos.turn_complete",
-      contextId,
-      timestampMs: Date.now(),
-      text: transcript,
-      transcripts: [],
-    });
-    this.audioStatsByContextId.delete(contextId);
-    this.resetPendingTranscript(contextId);
-  }
-
-  private pushResult(
-    transcript: string,
-    confidence: number,
-    contextId = this.currentContextId,
-    provider: Record<string, unknown> = { name: "deepgram", model: this.model, region: "global" },
-  ): void {
-    this.bus?.push(Route.Main, {
-      kind: "stt.result",
-      contextId,
-      timestampMs: Date.now(),
-      text: transcript,
-      confidence,
-      language: this.language,
-      provider,
-    });
-  }
-
-  /** Emit interim transcript for real-time display. */
-  private pushInterim(
-    transcript: string,
-    contextId = this.currentContextId,
-    alt: Record<string, unknown> | null = null,
-  ): void {
-    const timestampMs = Date.now();
-    this.bus?.push(Route.Main, {
-      kind: "stt.interim",
-      contextId,
-      timestampMs,
-      text: transcript,
-    });
-    const wordTimings = mapProviderWordTimings(alt);
-    this.bus?.push(Route.Main, {
-      kind: "stt.partial",
-      contextId,
-      timestampMs,
-      text: transcript,
-      ...(wordTimings ? { wordTimings } : {}),
-    });
+  private clearAllProviderState(opts: { keepFinalized: boolean }): void {
+    for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
+    this.providerFinalizeTimers.clear();
+    for (const timer of this.providerFinalizeCorrelationTimers.values()) clearTimeout(timer);
+    this.providerFinalizeCorrelationTimers.clear();
+    this.pendingProviderFinalizeContextIds = [];
+    this.finalizeRequestedContextIds.clear();
+    if (!opts.keepFinalized) this.finalizedContextIds.clear();
+    this.speechFinalContextIds.clear();
+    this.ignoreNextProviderFinalContextIds.clear();
+    this.transcriptStateByContextId.clear();
+    this.audioStatsByContextId.clear();
   }
 
   private appendFinalSegment(contextId: string, transcript: string, confidence: number): void {
@@ -545,15 +444,14 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   private combinedFinalTranscript(contextId: string): string {
-    return this.transcriptState(contextId).finalTranscriptParts.join(" ").replace(/\s+/g, " ").trim();
+    return this.transcriptState(contextId)
+      .finalTranscriptParts.join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private resetPendingTranscript(contextId: string): void {
     this.transcriptStateByContextId.delete(contextId);
-  }
-
-  private resetTurnTranscriptState(): void {
-    this.resetPendingTranscript(this.currentContextId);
   }
 
   private transcriptState(contextId: string): ProviderTranscriptState {
@@ -574,10 +472,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     return Boolean(state && state.finalTranscriptParts.length > 0);
   }
 
-  private contextIdForProviderFinal(flags: { readonly speechFinal: boolean; readonly fromFinalize: boolean }): string {
+  private contextIdForProviderFinal(flags: {
+    readonly speechFinal: boolean;
+    readonly fromFinalize: boolean;
+  }): string {
     const pending = this.pendingProviderFinalizeContextIds[0];
     if (pending && (flags.speechFinal || flags.fromFinalize)) return pending;
-    return this.currentContextId;
+    return this.cfg.getContextId();
   }
 
   private trackPendingProviderFinalize(contextId: string): void {
@@ -587,17 +488,19 @@ export class DeepgramSTTPlugin implements VoicePlugin {
   }
 
   private removePendingProviderFinalize(contextId: string): void {
-    this.pendingProviderFinalizeContextIds = this.pendingProviderFinalizeContextIds.filter((ctxId) => ctxId !== contextId);
+    this.pendingProviderFinalizeContextIds = this.pendingProviderFinalizeContextIds.filter(
+      (ctxId) => ctxId !== contextId,
+    );
   }
 
   private scheduleProviderFinalizeCorrelationExpiry(contextId: string): void {
     this.clearProviderFinalizeCorrelationTimer(contextId);
-    if (this.providerFinalizeTimeoutMs <= 0) return;
+    if (this.cfg.providerFinalizeTimeoutMs <= 0) return;
     const timer = setTimeout(() => {
       this.providerFinalizeCorrelationTimers.delete(contextId);
       this.finalizeRequestedContextIds.delete(contextId);
       this.removePendingProviderFinalize(contextId);
-    }, this.providerFinalizeTimeoutMs);
+    }, this.cfg.providerFinalizeTimeoutMs);
     this.providerFinalizeCorrelationTimers.set(contextId, timer);
   }
 
@@ -656,65 +559,13 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     return {
       bytes: stats.bytes,
       chunks: stats.chunks,
-      durationMs: Math.round((stats.bytes / 2 / this.sampleRate) * 1000),
+      durationMs: Math.round((stats.bytes / 2 / this.cfg.sampleRate) * 1000),
       wallClockMs: stats.lastSentAtMs - stats.firstSentAtMs,
     };
   }
 
   private pushMetric(contextId: string, name: string, value: unknown): void {
-    this.bus?.push(Route.Background, {
-      kind: "metric.conversation",
-      contextId,
-      timestampMs: Date.now(),
-      name,
-      value: typeof value === "string" ? value : JSON.stringify(value),
-    });
-  }
-
-  private emitError(contextId: string, err: Error): void {
-    const category = categorizeSttError(err);
-    const packet: SttErrorPacket = {
-      kind: "stt.error",
-      contextId,
-      timestampMs: Date.now(),
-      component: "stt" as const,
-      category,
-      cause: err,
-      isRecoverable: isRecoverable(category),
-    };
-    this.bus?.push(Route.Critical, packet);
-  }
-
-  async close(): Promise<void> {
-    for (const dispose of this.disposers.splice(0)) dispose();
-    if (this.transcriptStateByContextId.size > 0) {
-      this.pushMetric(this.currentContextId, "stt_pending_transcript_discarded_on_close", this.audioStats(this.currentContextId));
-    }
-    for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
-    this.providerFinalizeTimers.clear();
-    for (const timer of this.providerFinalizeCorrelationTimers.values()) clearTimeout(timer);
-    this.providerFinalizeCorrelationTimers.clear();
-    this.pendingProviderFinalizeContextIds = [];
-    this.finalizeRequestedContextIds.clear();
-    this.finalizedContextIds.clear();
-    this.speechFinalContextIds.clear();
-    this.ignoreNextProviderFinalContextIds.clear();
-    this.transcriptStateByContextId.clear();
-    this.audioStatsByContextId.clear();
-
-    if (this.conn) {
-      // Graceful end-of-stream so Deepgram flushes and closes cleanly.
-      if (this.conn.isReady) {
-        try {
-          this.conn.send(JSON.stringify({ type: "CloseStream" }));
-        } catch {
-          // best effort
-        }
-      }
-      await this.conn.close();
-      this.conn = null;
-    }
-    this.bus = null;
+    this.cfg.onMetric(contextId, name, value);
   }
 
   private clearProviderFinalizeTimer(contextId: string): void {
@@ -730,38 +581,211 @@ export class DeepgramSTTPlugin implements VoicePlugin {
     clearTimeout(timer);
     this.providerFinalizeCorrelationTimers.delete(contextId);
   }
-
-  private discardProviderStateForReconnect(): void {
-    const contextId = this.currentContextId;
-    const discarded = this.transcriptStateByContextId.size > 0 ||
-      this.finalizeRequestedContextIds.size > 0 ||
-      this.audioStatsByContextId.size > 0 ||
-      this.providerFinalizeTimers.size > 0 ||
-      this.providerFinalizeCorrelationTimers.size > 0;
-    for (const timer of this.providerFinalizeTimers.values()) clearTimeout(timer);
-    this.providerFinalizeTimers.clear();
-    for (const timer of this.providerFinalizeCorrelationTimers.values()) clearTimeout(timer);
-    this.providerFinalizeCorrelationTimers.clear();
-    this.pendingProviderFinalizeContextIds = [];
-    this.finalizeRequestedContextIds.clear();
-    this.speechFinalContextIds.clear();
-    this.ignoreNextProviderFinalContextIds.clear();
-    this.audioStatsByContextId.clear();
-    // A reconnect (from any cause) starts a fresh provider stream, so the wedged-stream
-    // signal resets too — otherwise a stale count could force an avoidable reset on the
-    // first timeout after reconnecting.
-    this.consecutiveFinalizeTimeouts = 0;
-    this.transcriptStateByContextId.clear();
-    if (discarded && contextId) {
-      this.pushMetric(contextId, "stt_provider_reconnect_discarded_state", {});
-    }
-  }
-
 }
 
-async function defaultSocketFactory(): Promise<SocketFactory> {
-  const mod = await import("@kuralle-syrinx/ws/node");
-  return mod.createNodeWsSocket;
+export class DeepgramSTTPlugin implements VoicePlugin {
+  readonly endpointingCapability = {
+    owner: "provider_stt" as const,
+    disableConfig: {
+      emit_eos_on_final: false,
+      finalize_on_speech_final: false,
+    },
+  };
+
+  private bus: PipelineBus | null = null;
+  private session: StreamingSttSession | null = null;
+  private protocol: DeepgramSttWireProtocol | null = null;
+  private currentContextId = "";
+  private model = "nova-3";
+  private language = "en-US";
+  private sampleRate = 16000;
+  private endpointing = 300;
+  private endpointUrl = "wss://api.deepgram.com/v1/listen";
+  private smartFormat = true;
+  private interimResults = true;
+  private vadEvents = false;
+  private utteranceEndMs = 0;
+  private keyterms: readonly string[] = [];
+  private encoding = "linear16";
+  private channels = 1;
+  private noDelay = true;
+  private queryParams: Record<string, unknown> | undefined;
+  private disposers: Array<() => void> = [];
+
+  constructor(private readonly socketFactory?: SocketFactory) {}
+
+  async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
+    this.bus = bus;
+    const apiKey = requireStringConfig(config, "api_key");
+    this.sampleRate = (config["sample_rate"] as number) ?? 16000;
+    this.model = optionalStringConfig(config, "model") ?? "nova-3";
+    this.language = optionalStringConfig(config, "language") ?? "en-US";
+    this.endpointing = (config["endpointing"] as number) ?? 300;
+    this.endpointUrl =
+      optionalStringConfig(config, "endpoint_url") ?? "wss://api.deepgram.com/v1/listen";
+    this.smartFormat = (config["smart_format"] as boolean) ?? true;
+    this.interimResults = (config["interim_results"] as boolean) ?? true;
+    // Opt-in: provider SpeechStarted → vad.speech_started is for VAD-less
+    // deployments (edge cascade). On sessions with a local VAD the duplicate,
+    // laggier speech-start signal corrupts VAD/EOS-owned turn-taking (the turn
+    // never completes) — proven by the Fly telephony spike.
+    this.vadEvents = (config["vad_events"] as boolean) ?? false;
+    {
+      const raw = (config["utterance_end_ms"] as number) ?? 0;
+      this.utteranceEndMs = raw > 0 ? Math.max(1000, raw) : 0;
+    }
+    const confidenceThreshold = (config["confidence_threshold"] as number) ?? 0;
+    const finalizeOnSpeechFinal = (config["finalize_on_speech_final"] as boolean) ?? true;
+    const emitEosOnFinal = (config["emit_eos_on_final"] as boolean) ?? true;
+    const providerFinalizeTimeoutMs = (config["provider_finalize_timeout_ms"] as number) ?? 1200;
+    const finalizeResetThreshold = (config["finalize_reset_threshold"] as number) ?? 2;
+    const finalizeTimeoutFallback = (config["finalize_timeout_fallback"] as boolean) ?? false;
+    const keepAliveIntervalMs = (config["keep_alive_interval_ms"] as number) ?? 3000;
+    {
+      const raw = config["keyterm"];
+      this.keyterms = Array.isArray(raw)
+        ? raw.filter((t): t is string => typeof t === "string" && t.length > 0)
+        : typeof raw === "string" && raw.length > 0
+          ? [raw]
+          : [];
+    }
+    this.encoding = optionalStringConfig(config, "encoding") ?? "linear16";
+    this.channels =
+      typeof config["channels"] === "number" && Number.isFinite(config["channels"])
+        ? Math.max(1, Math.floor(config["channels"] as number))
+        : 1;
+    this.noDelay = (config["no_delay"] as boolean) ?? true;
+    this.queryParams = readPlainObject(config["query_params"]);
+
+    const audioFormat: AudioFormat = {
+      encoding: "pcm_s16le",
+      sampleRateHz: this.sampleRate,
+      channels: 1,
+    };
+    assertAudioFormat(audioFormat);
+
+    // Track context before the session handlers so encodeAudio sees the live turn id.
+    this.disposers.push(
+      bus.on("stt.audio", (pkt: unknown) => {
+        const audioPkt = pkt as { contextId?: string };
+        if (audioPkt.contextId) this.currentContextId = audioPkt.contextId;
+      }),
+      bus.on("turn.change", (pkt: unknown) => {
+        this.currentContextId = (pkt as { contextId: string }).contextId;
+      }),
+      bus.on("interrupt.stt", () => {
+        this.protocol?.resetTurnTranscriptState();
+      }),
+    );
+
+    this.protocol = new DeepgramSttWireProtocol({
+      model: this.model,
+      language: this.language,
+      sampleRate: this.sampleRate,
+      vadEvents: this.vadEvents,
+      confidenceThreshold,
+      finalizeOnSpeechFinal,
+      emitEosOnFinal,
+      providerFinalizeTimeoutMs,
+      finalizeResetThreshold,
+      finalizeTimeoutFallback,
+      getContextId: () => this.currentContextId,
+      onMetric: (contextId, name, value) => {
+        bus.push(Route.Background, {
+          kind: "metric.conversation",
+          contextId,
+          timestampMs: Date.now(),
+          name,
+          value: typeof value === "string" ? value : JSON.stringify(value),
+        });
+      },
+    });
+
+    this.session = await startStreamingSttSession(bus, {
+      protocol: this.protocol,
+      provider: { name: "deepgram", model: this.model, region: "global" },
+      format: audioFormat,
+      language: this.language,
+      emitEosOnFinal,
+      url: () => {
+        const params = new URLSearchParams({
+          encoding: this.encoding,
+          sample_rate: String(this.sampleRate),
+          interim_results: String(this.interimResults),
+          endpointing: String(this.endpointing),
+          smart_format: String(this.smartFormat),
+          model: this.model,
+          language: this.language,
+          channels: String(this.channels),
+          no_delay: String(this.noDelay),
+          vad_events: String(this.vadEvents),
+          ...(this.utteranceEndMs > 0 ? { utterance_end_ms: String(this.utteranceEndMs) } : {}),
+        });
+        for (const term of this.keyterms) params.append("keyterm", term);
+        applyQueryParams(params, this.queryParams);
+        const separator = this.endpointUrl.includes("?") ? "&" : "?";
+        return `${this.endpointUrl}${separator}${params.toString()}`;
+      },
+      headers: { Authorization: `Token ${apiKey}` },
+      socketFactory: this.socketFactory ?? (await defaultNodeSocketFactory()),
+      retry: readProviderRetryConfig(config),
+      replayBufferSize: (config["replay_buffer_size"] as number) ?? 64,
+      keepAliveIntervalMs,
+      keepAliveMessage: () => JSON.stringify({ type: "KeepAlive" }),
+      metricPrefix: "stt.deepgram",
+    });
+  }
+
+  /**
+   * Per-turn reconfigure of keyterms / silence endpointing. Nova has no in-band
+   * Configure message — updates instance state then reconnects via `session.reset()`
+   * so the re-evaluated `url()` carries the new params (LiveKit Nova-3 pattern).
+   * Call only at a turn boundary (between utterances); reconnect is not free and
+   * would drop mid-utterance audio. keyterms REPLACE the list (Flux semantics).
+   * `language` hard-switches recognition (e.g. "es-ES" or Nova-3 "multi") — applied on
+   * reconnect via the rebuilt `url()`, and re-stamped onto stt.result. Flux-only fields
+   * (eotThreshold, eagerEotThreshold, eotTimeoutMs, contextText) are ignored.
+   */
+  get sttReconfigure(): SttReconfigure {
+    return this;
+  }
+
+  reconfigure(partial: SttReconfigurePartial): void {
+    let changed = false;
+    if (partial.keyterms !== undefined) {
+      this.keyterms = partial.keyterms;
+      changed = true;
+    }
+    if (partial.endpointingMs !== undefined) {
+      this.endpointing = partial.endpointingMs;
+      changed = true;
+    }
+    if (partial.language !== undefined) {
+      this.language = partial.language;
+      this.protocol?.setLanguage(partial.language);
+      changed = true;
+    }
+    if (changed) this.session?.reset();
+  }
+
+  /** Request that Deepgram flush buffered audio and return provider-final text. */
+  forceFinalize(contextId?: string): void {
+    const ctxId = contextId ?? this.currentContextId;
+    if (!ctxId || !this.bus) return;
+    this.bus.push(Route.Main, {
+      kind: "stt.finalize",
+      contextId: ctxId,
+      timestampMs: Date.now(),
+    });
+  }
+
+  async close(): Promise<void> {
+    for (const dispose of this.disposers.splice(0)) dispose();
+    await this.session?.dispose();
+    this.session = null;
+    this.protocol = null;
+    this.bus = null;
+  }
 }
 
 function mapProviderWordTimings(
@@ -795,7 +819,7 @@ function providerAlternative(msg: Record<string, unknown>): Record<string, unkno
   const alternatives = (channel as { alternatives?: unknown }).alternatives;
   if (!Array.isArray(alternatives)) return null;
   const first = alternatives[0];
-  return first && typeof first === "object" ? first as Record<string, unknown> : null;
+  return first && typeof first === "object" ? (first as Record<string, unknown>) : null;
 }
 
 function isDeepgramProviderError(msg: Record<string, unknown>): boolean {
@@ -811,7 +835,9 @@ function deepgramProviderError(msg: Record<string, unknown>): Error {
     code ? `code=${code}` : "",
     description,
     requestId ? `request_id=${requestId}` : "",
-  ].filter((part) => part.length > 0).join(" ");
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
   return new Error(details ? `Deepgram STT provider error: ${details}` : "Deepgram STT provider error");
 }
 
@@ -820,4 +846,27 @@ function firstString(...values: unknown[]): string {
     if (typeof value === "string" && value.length > 0) return value;
   }
   return "";
+}
+
+function readPlainObject(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+/** Merge open-ended provider query knobs. Arrays append; scalars set (override). */
+function applyQueryParams(params: URLSearchParams, extra: Record<string, unknown> | undefined): void {
+  if (!extra) return;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null) continue;
+        params.append(key, String(item));
+      }
+      continue;
+    }
+    params.set(key, String(value));
+  }
 }

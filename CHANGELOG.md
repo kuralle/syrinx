@@ -2,6 +2,235 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## Unreleased
+
+### Added — Telnyx transport on the Cloudflare Workers edge
+
+Closes the Slice F CF gap: G.722/PCMA (and the whole Telnyx media-stream path) now run on the
+Workers edge, not only the Node host. Mirrors the existing Twilio-on-Workers wiring.
+
+- **`server-websocket`**: `edge-telnyx.ts` — a Workers-native Telnyx media-stream runner
+  (`runTelnyxEdgeWebSocketConnection` / `createTelnyxEdgeWebSocketUpgrade`) on `ManagedSocket`
+  (`@kuralle-syrinx/ws/workers`), mirroring `edge-twilio.ts` including its session-lease leak-safety
+  (connection-count decrement before `release`, hangup-vs-transient retain, pre-lease buffering).
+  New `./edge-telnyx` export.
+- **`server-websocket`**: `telnyx-codec.ts` — the per-codec transcode (PCMU/PCMA/G722/L16 select +
+  stateful G.722 state + `validateTelnyxStart`) factored out of the Node `telnyx.ts` into a
+  **Workers-safe shared module** both the Node host and the Workers runner import (no duplication).
+- **`cf-agents`**: `withVoice` gains `transport: "telnyx"`.
+- **`server-workers`**: `TelnyxVoiceConversation` Durable Object (`withVoice(Agent,{transport:"telnyx"})`),
+  `/telnyx` route + `TELNYX_VOICE_CONVERSATIONS` binding + wrangler migration, and a
+  `/telnyx-stream-start` helper that constructs a TeXML `<Stream>` or a Call-Control `streaming_start`
+  payload (pure; live POST to the trunk is carrier-gated).
+- **Unverified against a live carrier / live Workers deploy:** a real number's `streaming_start`
+  reaching `/telnyx` and codec negotiation on a trunk. Unit-verified (server-websocket 273,
+  cf-agents 40, server-workers 26; `-r typecheck` 0); the runner + codecs are Workers-safe.
+
+### Added — telephony (Slice F): G.722/PCMA codecs, DTMF-send, call transfer
+
+**Honesty label (non-negotiable):** all three deliverables are **unit-verified only**. There are **no live
+carrier credentials** in this build. Do **not** treat green unit tests as certification that DTMF is
+decoded by a real IVR, that a trunk negotiates G.722/PCMA, or that a transfer bridges live.
+**Carrier-gated / unverified:** real IVR DTMF decode, trunk G.722 negotiation, live transfer bridge.
+
+- **`core/audio`**: `alaw.ts` — ITU-T G.711 A-law (PCMA) encode/decode (`decodeALawToPcm16` /
+  `encodePcm16ToALaw`), pure TypedArray, Workers-safe. Unit-tested against known A-law values +
+  round-trip fidelity.
+- **`core/audio`**: `g722.ts` — stateful G.722 64 kbit/s sub-band ADPCM (16 kHz PCM16 ↔ G.722).
+  **Spec-implemented, round-trip-tested, NOT ITU-vector-certified** (authoritative ITU G.722 test
+  vectors were not embedded). Pure TypedArray, Workers-safe.
+- **`core` packets**: `dtmf.send` (digits `[0-9*#wW]`, pause `w`/`W`) and `call.transfer`
+  (`warm` | `cold` | `sip_refer`, optional warm `summary`). Factories: `dtmfSend`, `callTransfer`.
+- **`server-websocket`**: Telnyx `validateTelnyxStart` accepts `PCMA`@8k and `G722`@16k; inbound
+  decode / outbound encode wired (G.722 keeps 16 kHz for STT — no 8 kHz downsample pitfall).
+- **`server-websocket`**: pure carrier command constructors + injectable `fetch()` dispatch
+  (`carrier-commands.ts`) for Twilio/Telnyx DTMF-send and transfer. Prefer Call-Control transfer over
+  SIP REFER (STIR/SHAKEN attestation B). Warm-handoff summary seam (`WarmTransferSummarizer`). Bus
+  wiring for `dtmf.send` / `call.transfer` on Twilio + Telnyx transports. Live HTTP dispatch is
+  mockable and **unverified against a live carrier**.
+- **CF Workers**: codecs + constructors use only TypedArray / global `fetch` / injected creds (no
+  `process.env`, no Node `Buffer` in shared codec/command paths). Telnyx media path lives in
+  `server-websocket` (shared with the Node host); the Workers edge currently binds Twilio Media
+  Streams via `edge-twilio` (PCMU) — Telnyx G.722/PCMA on Workers requires a Telnyx DO binding that
+  is not first-party yet (flagged).
+
+**Metering — usage → dollars → cap.** The load-bearing "fitting" that keeps Syrinx an embeddable
+engine while making it straightforward to later wrap as a billed hosted API (AssemblyAI-style):
+per-stage resource consumption is recorded where it happens, priced by a versioned catalog, and
+bounded by a spend guard. Additive and opt-in; no breaking changes. The engine emits the signals —
+billing, dashboards, and quotas are downstream consumers.
+
+### Added — usage seam
+- **`core`**: `UsageRecordedPacket` — one billable unit recorded at its source, `stage: "llm" | "stt" | "tts"`
+  with `provider`/`model` and the stage-appropriate quantity (LLM tokens incl. cached/reasoning; STT
+  `audioSeconds`; TTS `characters`). `VoiceAgentSession` accumulates these into an end-of-session `usage`
+  manifest and exports each as a counter through `MetricsExporter.observeCounter`, tagged
+  **low-cardinality only** (provider/model/stage — never sessionId/speechId, matching LiveKit's cap).
+- **`core` / `aisdk` / `realtime`**: `ReasonerUsage` on `ReasoningPart.finish`; the LLM producer wired on
+  both fronts — cascade (AI SDK `finish.totalUsage`, per-pass) and native realtime (OpenAI
+  `response.done` usage).
+
+### Added — usage producers (STT + TTS)
+- **`deepgram` / `cartesia` / `openai-tts`**: the STT (audio-seconds) and TTS (characters) producers,
+  completing the three-stage manifest (only the LLM stage was wired before). STT emits at the
+  **final-transcript funnel** (`pushResult`), so usage is recorded under **both** Deepgram-owned
+  endpointing (`emit_eos_on_final: true`) **and** smart-turn endpointing (`emit_eos_on_final: false`,
+  where Deepgram never signals turn-complete); billing is **incremental per is_final segment**, so a
+  multi-segment turn sums to its true audio duration without double-counting. TTS bills the synthesized
+  character count and does **not** charge cancelled/failed (barged) turns. Cartesia routes its usage
+  through the existing `tts-core` `sideband` event, not a new channel.
+- Live-verified: a single cascade turn (smart-turn endpointing) exports all three stages —
+  `usage.audioSeconds` (deepgram/nova-3), `usage.inputTokens`/`outputTokens` (openai/gpt-4.1-mini),
+  `usage.characters` (cartesia/sonic-3).
+- **Full provider coverage:** producers now also wired for **Grok STT/TTS, Gemini TTS, Google STT, and
+  Epsilon TTS** — every STT/TTS provider emits `usage.recorded`, so metering is complete regardless of
+  provider. STT producers use the same incremental-delta funnel (Grok from provider `duration`; Google
+  from `resultEndOffset`/`resultEndTime` with a byte fallback); the tts-core providers (Grok, Epsilon)
+  route through the `sideband` event, Gemini via its `emitEnd`. Live-verified on Grok (STT
+  `audioSeconds` + TTS `characters`); Epsilon is unit-only (endpoint offline).
+
+### Added — pricing + spend cap
+- **`core`**: `pricing.ts` — a versioned, per-modality `PriceCatalog` (`source` + `version` stamp;
+  STT `$/audio-second`, LLM `$/1M` input/output/cached tokens, TTS `$/1M` characters) with a
+  `DEFAULT_PRICE_CATALOG` of current public list prices; local/self-hosted models are explicitly
+  zero-cost. `costOf(usage, catalog)` returns a typed **`unpriced`** result for an unknown
+  provider/model rather than a silent `$0`.
+- **`core`**: `spend-cap.ts` — `SpendCapGuard` accumulates priced usage with **observe (`record`) and
+  control (`check`) separated** so the same usage is never double-counted; the cap latches once on breach
+  for the session/provider layer to refuse or fall back. Standalone and fully unit-tested — the session
+  wires it in a later change.
+
+**Observability seams — build any dashboard on the engine's signals.** The engine emits structured,
+low-cardinality signals; billing, dashboards (Lens-style), and evals are downstream consumers. Additive.
+
+### Added — two-layer observability + localization
+- **`core`**: `MetricTags.layer` (`"infrastructure" | "conversation"`) set on every metric emit, and
+  `localizeTurn()` composing a per-turn `turn.localization` verdict (infra-breached → conversation-flagged
+  → none) so a consumer can route "was this a system failure or an agent failure?" without collapsing the
+  dual-dimension (task-success vs satisfaction) scores into one number.
+
+### Added — acoustic signals as observability
+- **`core` / `vap` / `pipecat-smart-turn`**: `AcousticSignalPacket` (`acoustic.signal`:
+  prosody / backchannel / interruption / primary_speaker / echo_rejected / cadence), tagged
+  `layer: "conversation"` and emitted from the sources Syrinx already computes for turn-taking
+  (`PrimarySpeakerGate`, the VAP policy sink, the turn-arbiter, backchannel/cadence). A **signal** surface
+  only — sentiment/emotion classification stays a consumer, not baked into core; the VAP-dormant path
+  emits no prosody and does not throw.
+
+### Added — surface dropped Kuralle orchestration parts
+- **`core` / `kuralle` / `aisdk` / `realtime` / `cf-agents`**: `ReasoningPart` gains an additive
+  `control` variant (passthrough for handoff / conversation-outcome / escalation / flow-transition) and a
+  terminal `blocked` variant (moderation); `from-kuralle` now maps these instead of dropping them at
+  `default`, and surfaces them through the existing `delegate.result` host channel. **Correctness fix:** a
+  `safety-blocked` turn now **speaks** its `userFacingMessage` (cascade emits `llm.delta`/`llm.done` →
+  TTS; realtime injects a tool result) and ends the turn cleanly, instead of degrading into the generic
+  "stream ended without a done part" error. Both `ReasoningPart` consumers (`ReasoningBridge`,
+  `RealtimeBridge`) handle the new variants; the wrapper reasoners (`HedgedReasoner`, `RoutingReasoner`)
+  pass them through.
+
+### Added — silent context-injection seam (background-observer guardrails)
+- **`core` / `aisdk` / `realtime`**: `inject.message` gains `mode?: "speak" | "context"` (default `speak`,
+  back-compat) and `Reasoner.injectContext?(text)`, so a background observer LLM can bias the agent's
+  **next** turn without blocking or being spoken (LiveKit's observer-guardrail pattern). Cascade
+  (`ReasoningBridge`) appends an additive `{role:"system"}` message to history and keeps it **out of the
+  durable session store** (transient steering, not durable history); the base system prompt is never
+  replaced. Realtime handles the provider asymmetry: OpenAI injects a system `conversation.item.create`;
+  Gemini Live (which drops system/developer roles) falls back to a `role:"user"`, `turnComplete:false`
+  context turn — documented, never a silent no-op. The observer loop ships as an example
+  (`examples/02-hello-voice-headless`, single-flight + per-violation dedup), proving the seam without
+  baking policy into core.
+
+### Added — phone-line turn quality
+- **`pipecat-smart-turn`**: `fuseEndpointDecision` gains a **minimum-speech** third condition
+  (`minSpeechMs`, default `0` = unchanged) — endpoint only when acoustic AND semantic AND enough real
+  speech, so a brief cough/noise burst no longer trips a false turn end (the AssemblyAI/LiveKit 3-way AND).
+  Per-turn voiced-ms is accumulated in the EOS plugin and threaded through the interaction policy.
+- **`core`**: opt-in **outbound loudness normalization** (`audio/loudness.ts` `normalizeLoudness` —
+  running-RMS gain toward a target, slew-limited, with an exponential soft-limit that asymptotes below the
+  Int16 ceiling so it never hard-clips or wraps), wired in `handleTtsAudio` via an `outboundLoudness`
+  session config. **Default off** (byte-identical passthrough); telephony legs benefit, the browser leg
+  (getUserMedia AEC/gain) is unaffected. The engine-level, provider-agnostic piece only — number
+  verbalization / pronunciation / SSML remain prompt/provider concerns, out of scope.
+
+### Added — mid-stream STT reconfigure seam (vendor-agnostic)
+- **`core` / `deepgram`**: `SttReconfigure` / `SttReconfigurePartial` — a vendor-agnostic seam for
+  per-turn STT reconfiguration (keyterms, end-of-turn thresholds, language hints) that normalizes the
+  differing vendor wire shapes (Deepgram Flux `Configure`, AssemblyAI `UpdateConfiguration`,
+  Speechmatics `SetRecognitionConfig`) behind one interface an `InteractionPolicy` can actuate.
+  `DeepgramFluxSTTPlugin.reconfigure()` implements it via the Flux in-band `Configure` control message —
+  no reconnect, live-verified (`ConfigureSuccess` ~234 ms) — surfacing `ConfigureSuccess`/`ConfigureFailure`
+  as metrics.
+- **`deepgram` / `core`**: `DeepgramSTTPlugin` (Nova — the STT every flagship path uses) implements the
+  same seam via **reconnect-at-turn-boundary** (Nova has no in-band `Configure`; the LiveKit Nova-3
+  pattern): `reconfigure()` updates keyterms + `endpointing` and reconnects through the existing
+  `WebSocketConnection.reset()` so the rebuilt URL carries the new params, with replay-on-reconnect
+  preserving in-flight audio. Reconnect fires only when a Nova-supported field changed. A `stt.reconfigure`
+  bus packet routes through `VoiceAgentSession` to the plugin's `sttReconfigure` — the Syrinx-native
+  equivalent of LiveKit's `stt.update_options()` lever. Live-verified (mid-session reconfigure reconnects,
+  replays 12 buffered frames, recognition continues). This reaches **functional parity** with
+  LiveKit/Pipecat on the flagship STT.
+- **`core` / `deepgram`**: `SttReconfigurePartial.language` — a **hard recognition-language switch**
+  (distinct from soft `languageHints`), e.g. `"en-US" → "es-ES"` or Nova-3 `"multi"` for code-switch.
+  Nova applies it on reconnect (rebuilt URL) and re-stamps `stt.result.language`; Flux (model-fixed
+  `flux-general-en`) ignores it and relies on `languageHints`. The enabler for conversation-state-driven
+  language biasing (bias the recognizer to the language the dialog expects next). Live-verified
+  (mid-session switch to `language=multi` reconnects, recognition continues).
+- **Scope note:** per-turn STT reconfigure is a commodity capability (LiveKit `stt.update_options`,
+  Pipecat `STTUpdateSettingsFrame`, AssemblyAI `agent_context` all ship it), **not a differentiator** —
+  this lands the vendor-agnostic seam + Flux (in-band) and Nova (reconnect) implementations + the actuation
+  lever. The *auto-policy* (inferring what to bias / when from the dialogue act) is intentionally deferred —
+  nobody ships that either, so deferring it stays at parity.
+
+### Added — package `@kuralle-syrinx/elevenlabs` (TTS + STT)
+- **`elevenlabs`** (new): a top-tier vendor with both streaming modalities, on the shared transport.
+  - **TTS** — `ElevenLabsTTSPlugin`: multi-context WebSocket (`multi-stream-input`, concurrent contexts
+    keyed by `context_id`) on `tts-core`; sends the required `InitializeConnectionMulti` frame before a
+    context's first text; base64 audio; `usage.recorded{tts, characters}` **billed on audio received**
+    (EL streams audio with `isFinal:null` and a rejected generation returns an empty final that must not
+    be billed). `output_format` and a `generation_config` passthrough are dev-configurable, not pinned.
+  - **STT** — `ElevenLabsSTTPlugin`: **Scribe v2 Realtime** WebSocket — `partial_transcript` → `stt.interim`,
+    `committed_transcript` → `stt.result`; `usage.recorded{stt, audioSeconds}` at the final funnel with
+    delta-billing; reuses `@kuralle-syrinx/ws` (reconnect/replay).
+  - Real cited pricing in `core/pricing.ts` (Scribe v2 $0.39/hr; Flash/Turbo $50/1M, Multilingual $100/1M chars).
+  - **Live-verified end-to-end** (TTS audio + usage, STT transcript + usage). Default voice is a premade
+    voice accessible to free API accounts (library voices like Rachel require a paid plan; overridable via `voice_id`).
+
+### Changed — config flexibility (default, never hard-pin)
+- **all TTS/STT/Realtime adapters**: audited so every provider knob is dev-overridable with the prior value
+  as the default, plus a provider-specific passthrough for fields the adapter doesn't enumerate — extending
+  the Gemini-Live fix (`c8aa3fa`, #28/#29/#31/#32) and the `openai-tts` `extra_body` model across the board.
+  Highlights: cartesia/gemini `generation_config`; deepgram/grok STT `query_params`; deepgram encoding/container;
+  google language_codes/location/recognizer/encoding; realtime `sessionExtra`/`sessionConfig` merged into
+  `session.update`. Behavior-preserving; each override is unit-tested.
+
+### Changed — Epsilon → example
+- **`epsilon`** package **removed** (dead endpoint). Its code moved into
+  `examples/02-hello-voice-headless/src/custom-tts-provider/` as a **"how to build a custom TTS provider"**
+  reference (WireProtocol on `tts-core` + `ws`). No package, no dependency edge. Real multi-context WS
+  TTS/STT now lives in `@kuralle-syrinx/elevenlabs`.
+
+### Added — package `@kuralle-syrinx/stt-core` (shared STT streaming lifecycle)
+- **`stt-core`** (new): the STT counterpart of `tts-core`. `SttWireProtocol` (provider-specific only:
+  `encodeFinalize`, `decode(data,isBinary) → SttEvent[]`, optional `isReady()`) + `startStreamingSttSession`,
+  which owns the `@kuralle-syrinx/ws` `WebSocketConnection`, `stt.interim`/`stt.result` emit, the
+  smart-turn-safe final-transcript funnel, `usage.recorded{stt, audioSeconds}` delta-billing, and finalize —
+  so a new STT adapter is just a `SttWireProtocol`. **Grok STT migrated** onto it (behavior-preserving;
+  live-verified). It also **buffers pre-handshake audio and flushes it on the ready transition** (rather than
+  dropping audio that races ahead of a provider handshake like Grok's `transcript.created`) — no start-of-speech
+  loss.
+- **`stt-core` extensible base (wave 1):** optional `encodeAudio` / `onOpen` / `encodeReconfigure` seams;
+  richer `SttEvent` vocab (`speech_started`, `partial`, `eos_interim`, `eos_retracted`); sent-bytes billing
+  fallback when a final has no provider duration (and duration finals advance the byte marker so a later
+  no-duration final cannot double-bill); `StreamingSttSession.reconfigure` / `reset`. **ElevenLabs STT**,
+  **Google STT**, and **Deepgram Flux STT** migrated onto it (behavior-preserving). Deepgram nova Finalize
+  state machine remains a separate wave.
+- **`stt-core` / `deepgram` (wave 2 — nova):** optional async-emit seams — `SttProtocolHost` (`attach` /
+  `emit` / `reset`), `onFinalizeSent`, `Transport.reset`, and `SttEvent.turn_complete` (eos-only, no
+  result/usage). **Deepgram Nova STT** migrated onto the base (behavior-preserving): Finalize
+  timeout/fallback/reset, multi-segment accumulation, `speech_final`/`from_finalize` gating, UtteranceEnd
+  backstop, and provider-boundary metrics stay in the wire protocol; socket/reconnect/billing/buffer funnel
+  is shared.
+
 ## 4.2.0 — 2026-07-11
 
 Additive, lockstep. The "vNext" batch: model-agnostic full-duplex turn-taking, half-cascade

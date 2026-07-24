@@ -1,0 +1,107 @@
+$ tsx scripts/run-interaction-thesis-matrix.ts
+reusing 01-late-add
+reusing 02-registration-holds
+reusing 03-financial-aid
+reusing 04-advisor-approval
+reusing 05-instructor-email
+reusing 06-international-status
+reusing 07-housing
+reusing 08-accessibility
+reusing 09-athletics
+reusing 10-lab-fee
+reusing 11-case-open
+reusing 12-next-steps
+reusing 13-clarify-deadline
+reusing 14-appointment
+reusing 15-summary
+reusing 16-goodbye
+reusing 17-parent-consent
+reusing 18-department-seat
+reusing 19-class-attendance
+reusing 20-refund-risk
+reusing 21-appeal-path
+reusing 22-notification-preference
+reusing 23-readback
+reusing 24-final-confirmation
+# Interaction thesis matrix (cascade+rules vs native-realtime)
+
+| config | turn-taking | overlap | avg-latency(ms) | task-success | note |
+|---|---|---|---|---|---|
+| cascade+rules | 100 | 100 | 5055 | 1.00 |  |
+| native-realtime | 0 | 100 | 1246 | 1.00 |  |
+
+Thesis verdict: PROVEN — cascade+rules matches native turn-taking with no task-success regression
+
+{
+  "generatedAt": "2026-07-11T11:28:27.932Z",
+  "dry": false,
+  "rows": [
+    {
+      "config": "cascade+rules",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 100,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 5055
+      },
+      "taskSuccessRate": 1
+    },
+    {
+      "config": "native-realtime",
+      "gated": false,
+      "turnTaking": {
+        "turnTakingTimingScore": 0,
+        "overlapScore": 100,
+        "avgResponseLatencyMs": 1246
+      },
+      "taskSuccessRate": 1
+    }
+  ],
+  "verdict": {
+    "proven": true,
+    "reason": "cascade+rules matches native turn-taking with no task-success regression"
+  },
+  "turns": {
+    "cascadeRules": [
+      {
+        "id": "cascade-turn-01",
+        "fixtureId": "01-late-add",
+        "responseLatencyMs": 4500,
+        "taskSucceeded": true
+      },
+      {
+        "id": "cascade-turn-02",
+        "fixtureId": "02-registration-holds",
+        "responseLatencyMs": 6039,
+        "taskSucceeded": true
+      },
+      {
+        "id": "cascade-turn-03",
+        "fixtureId": "03-financial-aid",
+        "responseLatencyMs": 4625,
+        "taskSucceeded": true
+      }
+    ],
+    "nativeRealtime": [
+      {
+        "id": "native-turn-01",
+        "fixtureId": "01-late-add",
+        "responseLatencyMs": 1095,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-02",
+        "fixtureId": "02-registration-holds",
+        "responseLatencyMs": 1409,
+        "taskSucceeded": true
+      },
+      {
+        "id": "native-turn-03",
+        "fixtureId": "03-financial-aid",
+        "responseLatencyMs": 1235,
+        "taskSucceeded": true
+      }
+    ]
+  }
+}
+

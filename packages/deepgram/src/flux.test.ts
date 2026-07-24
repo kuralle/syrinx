@@ -10,6 +10,7 @@ import {
   type InterimEndOfSpeechPacket,
   type SttInterimPacket,
   type SttResultPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { DeepgramFluxSTTPlugin } from "./flux.js";
@@ -121,6 +122,50 @@ describe("DeepgramFluxSTTPlugin", () => {
     expect(url).toContain("keyterm=Syrinx");
   });
 
+  it("reconfigure sends a Flux Configure control message with only the supplied fields", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, { keyterm: ["Syrinx"] });
+    const received: string[] = [];
+    local.sockets[0]!.on("message", (data, isBinary) => {
+      if (!isBinary) received.push(data.toString());
+    });
+
+    plugin.reconfigure({ keyterms: ["account number", "Syrinx"], eotThreshold: 0.85, eotTimeoutMs: 3000 });
+    await waitFor(received);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0]!)).toEqual({
+      type: "Configure",
+      thresholds: { eot_threshold: 0.85, eot_timeout_ms: 3000 },
+      keyterms: ["account number", "Syrinx"],
+    });
+  });
+
+  it("surfaces ConfigureSuccess / ConfigureFailure acks as metrics", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local);
+    const metrics: string[] = [];
+    bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+
+    local.sockets[0]!.send(JSON.stringify({ type: "ConfigureSuccess", keyterms: ["account number"] }));
+    await waitFor(metrics);
+    local.sockets[0]!.send(JSON.stringify({ type: "ConfigureFailure", code: "INVALID_THRESHOLD", description: "bad" }));
+    await waitFor(metrics, 2);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(metrics).toContain("stt.flux.configure_success");
+    expect(metrics).toContain("stt.flux.configure_failure");
+  });
+
   it("omits eager_eot_threshold by default (eager mode is opt-in)", async () => {
     const local = await createLocalServer();
     const { bus, plugin, started } = await startPlugin(local);
@@ -223,5 +268,88 @@ describe("DeepgramFluxSTTPlugin", () => {
     await started;
 
     expect(speechStarts.length).toBe(1);
+  });
+
+  it("emits usage.recorded with stage stt and audioSeconds on EndOfTurn", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local);
+    // startPlugin already sent 320 bytes @ 16kHz → 320/2/16000 = 0.01 s
+
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const socket = local.sockets[0]!;
+    socket.send(
+      turnInfo("EndOfTurn", {
+        transcript: "hello flux",
+        words: [{ word: "hello", confidence: 0.9 }],
+      }),
+    );
+    await waitFor(usage);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-1",
+        stage: "stt",
+        provider: "deepgram",
+        model: "flux-general-en",
+        audioSeconds: 0.01,
+      }),
+    ]);
+  });
+
+  it("defaults encoding=linear16 and allows encoding override", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      encoding: "mulaw",
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    expect(local.connectionUrls[0]!).toContain("encoding=mulaw");
+  });
+
+  it("merges query_params into the Flux listen URL", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      query_params: {
+        profanity_filter: true,
+        tag: "flux-prod",
+      },
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = local.connectionUrls[0]!;
+    expect(url).toContain("encoding=linear16");
+    expect(url).toContain("eot_threshold=0.7");
+    expect(url).toContain("profanity_filter=true");
+    expect(url).toContain("tag=flux-prod");
+  });
+
+  it("forwards language_hint as a repeatable query param", async () => {
+    const local = await createLocalServer();
+    const { bus, plugin, started } = await startPlugin(local, {
+      language_hint: ["en", "es"],
+    });
+
+    await plugin.close();
+    bus.stop();
+    await started;
+
+    const url = local.connectionUrls[0]!;
+    expect(url).toContain("language_hint=en");
+    expect(url).toContain("language_hint=es");
   });
 });

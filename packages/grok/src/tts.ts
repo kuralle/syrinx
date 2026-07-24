@@ -7,6 +7,7 @@
 // Grok relies on the engine's streaming carry.
 
 import {
+  Route,
   assertAudioFormat,
   optionalStringConfig,
   readProviderRetryConfig,
@@ -35,13 +36,17 @@ class GrokWireProtocol implements WireProtocol {
   // to the current one. (Audio for an interrupted context is dropped by the engine's
   // cancelled-key tracking, which subsumes Grok's old `clearedPending` race guard.)
   private current: AttributionKey | null = null;
+  private readonly charactersByKey = new Map<AttributionKey, number>();
+
+  constructor(private readonly modelId: string) {}
 
   attributionFor(contextId: string): { key: AttributionKey; contextId: string } {
     this.current = attributionKey(contextId);
     return { key: this.current, contextId };
   }
 
-  encodeText(_key: AttributionKey, text: string): SocketData[] {
+  encodeText(key: AttributionKey, text: string): SocketData[] {
+    this.charactersByKey.set(key, (this.charactersByKey.get(key) ?? 0) + text.length);
     return [JSON.stringify({ type: "text.delta", delta: text })];
   }
 
@@ -49,7 +54,8 @@ class GrokWireProtocol implements WireProtocol {
     return [JSON.stringify({ type: "text.done" })];
   }
 
-  encodeCancel(): SocketData[] {
+  encodeCancel(key: AttributionKey): SocketData[] {
+    this.charactersByKey.delete(key);
     return [JSON.stringify({ type: "text.clear" })];
   }
 
@@ -78,14 +84,38 @@ class GrokWireProtocol implements WireProtocol {
         }
       }
       case "audio.done": {
+        const characters = key ? (this.charactersByKey.get(key) ?? 0) : 0;
+        if (key) this.charactersByKey.delete(key);
         this.current = null;
-        return key ? [{ type: "context_end", key }] : [];
+        if (!key) return [];
+        const events: WireEvent[] = [];
+        // Sideband before context_end so the engine still has the key→context mapping.
+        if (characters > 0) {
+          const modelId = this.modelId;
+          events.push({
+            type: "sideband",
+            key,
+            route: Route.Background,
+            build: (ctxId, timestampMs) => ({
+              kind: "usage.recorded",
+              contextId: ctxId,
+              timestampMs,
+              stage: "tts" as const,
+              provider: "grok",
+              model: modelId,
+              characters,
+            }),
+          });
+        }
+        events.push({ type: "context_end", key });
+        return events;
       }
       case "audio.clear":
         // Provider acknowledged a text.clear. Audio for the interrupted context is already
         // dropped via the engine's cancelled tracking; nothing more to do.
         return [];
       case "error":
+        if (key) this.charactersByKey.delete(key);
         return key ? [{ type: "error", key, error: grokProviderError(msg) }] : [];
       default:
         return [];
@@ -104,11 +134,13 @@ export class GrokTTSPlugin implements VoicePlugin {
     const language = optionalStringConfig(config, "language") ?? "en";
     const endpointUrl = optionalStringConfig(config, "endpoint_url") ?? "wss://api.x.ai/v1/tts";
     const sampleRate = readPositiveInteger(config["sample_rate"], 16000);
+    const codec = optionalStringConfig(config, "codec") ?? "pcm";
+    const bitRate = readPositiveIntegerOrUndefined(config["bit_rate"]);
     const audioFormat: AudioFormat = { encoding: "pcm_s16le", sampleRateHz: sampleRate, channels: 1 };
     assertAudioFormat(audioFormat);
 
     this.session = await startStreamingTtsSession(bus, {
-      protocol: new GrokWireProtocol(),
+      protocol: new GrokWireProtocol(voiceId),
       provider: { name: "grok", model: voiceId, region: "global" },
       format: audioFormat,
       sampleRateHz: sampleRate,
@@ -116,9 +148,10 @@ export class GrokTTSPlugin implements VoicePlugin {
         const params = new URLSearchParams({
           language,
           voice: voiceId,
-          codec: "pcm",
+          codec,
           sample_rate: String(sampleRate),
         });
+        if (bitRate !== undefined) params.set("bit_rate", String(bitRate));
         const separator = endpointUrl.includes("?") ? "&" : "?";
         return `${endpointUrl}${separator}${params.toString()}`;
       },
@@ -150,6 +183,12 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+function readPositiveIntegerOrUndefined(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : undefined;
 }
 
 function readNonNegativeInteger(value: unknown, fallback: number): number {

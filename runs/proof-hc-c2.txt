@@ -1,0 +1,3 @@
+pnpm install --no-frozen-lockfile: 0
+pnpm --filter @kuralle-syrinx/zeta-tts typecheck: 0
+pnpm --filter @kuralle-syrinx/zeta-tts test: 0

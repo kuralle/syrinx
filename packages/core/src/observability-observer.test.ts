@@ -123,12 +123,11 @@ describe("ObservabilityObserver", () => {
       expect(v2v).toBeDefined();
       expect(v2v!.valueMs).toBeGreaterThanOrEqual(0);
       expect(v2v!.tags).toEqual({
-        sessionId: "sess-1",
-        speechId: SPEECH_ID,
         provider: "p1",
         model: "m1",
         region: "r1",
         cancelled: "false",
+        layer: "conversation",
       });
 
       const thinking = exporter.histograms.find((h) => h.name === "thinking_ms");
@@ -138,6 +137,11 @@ describe("ObservabilityObserver", () => {
       const agentSpeech = exporter.histograms.find((h) => h.name === "agent_speech_ms");
       expect(agentSpeech).toBeDefined();
       expect(agentSpeech!.valueMs).toBeGreaterThanOrEqual(0);
+
+      for (const histogram of exporter.histograms) {
+        expect(histogram.tags).not.toHaveProperty("sessionId");
+        expect(histogram.tags).not.toHaveProperty("speechId");
+      }
     });
   });
 
@@ -238,7 +242,6 @@ describe("ObservabilityObserver", () => {
         provider: "cartesia",
         model: "sonic-3",
         region: "global",
-        speechId: SPEECH_ID,
       });
     });
   });

@@ -12,6 +12,7 @@ const sendRealtimeInput = vi.fn();
 const sendToolResponse = vi.fn();
 const sendClientContent = vi.fn();
 const closeSession = vi.fn();
+const GoogleGenAI = vi.fn();
 
 let onopen: (() => void) | null = null;
 let onmessage: ((msg: LiveServerMessage) => void) | null = null;
@@ -34,7 +35,7 @@ const liveConnect = vi.fn().mockImplementation(async ({ callbacks }: {
 });
 
 vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(() => ({
+  GoogleGenAI: GoogleGenAI.mockImplementation(() => ({
     live: { connect: liveConnect },
   })),
   Modality: { AUDIO: "AUDIO" },
@@ -45,6 +46,7 @@ afterEach(() => {
   sendToolResponse.mockClear();
   sendClientContent.mockClear();
   closeSession.mockClear();
+  GoogleGenAI.mockClear();
   liveConnect.mockClear();
   onopen = null;
   onmessage = null;
@@ -68,6 +70,20 @@ function inject(msg: Partial<LiveServerMessage> & Record<string, unknown>): void
 }
 
 describe("fromGeminiLive", () => {
+  it("frames silent context as a user-role update because Gemini drops system history", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key" });
+
+    await adapter.open(new AbortController().signal);
+    adapter.injectContext!("Use the verified deadline.");
+
+    expect(sendClientContent).toHaveBeenCalledWith({
+      turns: [{ role: "user", parts: [{ text: "[Context-only instruction]\nUse the verified deadline." }] }],
+      turnComplete: false,
+    });
+
+    await adapter.close();
+  });
+
   it("emits client calls for open, audio, and tool result", async () => {
     const adapter = fromGeminiLive({
       apiKey: "test-key",
@@ -97,6 +113,11 @@ describe("fromGeminiLive", () => {
         },
       }],
     }]);
+    // Both directions default ON. Input in particular must stay on: RealtimeBridge turns
+    // `role: "user"` transcripts into stt.result packets, so defaulting it off would silently
+    // remove all user-side text on the Gemini front. #32 asked for configurable, not disabled.
+    expect(connectArg.config["inputAudioTranscription"]).toEqual({});
+    expect(connectArg.config["outputAudioTranscription"]).toEqual({});
 
     const pcm = new Uint8Array([0, 1, 2, 3]);
     adapter.sendAudio(pcm);
@@ -129,6 +150,47 @@ describe("fromGeminiLive", () => {
     expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
   });
 
+  it("builds the documented transcription, speech, and API-version setup options", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      transcription: {
+        input: true,
+        output: { languageCodes: ["en-US"] },
+      },
+      speechConfig: { voice: "Kore", languageCode: "en-US" },
+      apiVersion: "v1alpha",
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      apiKey: "test-key",
+      httpOptions: { apiVersion: "v1alpha" },
+    });
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config).toMatchObject({
+      inputAudioTranscription: {},
+      outputAudioTranscription: { languageCodes: ["en-US"] },
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+        languageCode: "en-US",
+      },
+    });
+  });
+
+  it("allows either transcription direction to be disabled", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      transcription: { input: false, output: false },
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["inputAudioTranscription"]).toBeUndefined();
+    expect(connectArg.config["outputAudioTranscription"]).toBeUndefined();
+  });
+
   it("G4/WBS-4: native resume — always enables sessionResumption, passes a prior handle through, surfaces new handles", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key", sessionResumptionHandle: "handle-prev" });
     expect(adapter.caps.supportsNativeResume).toBe(true);
@@ -155,6 +217,69 @@ describe("fromGeminiLive", () => {
     await adapter.open(new AbortController().signal);
     const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
     expect(connectArg.config["sessionResumption"]).toEqual({});
+    await adapter.close();
+  });
+
+  it("cfg-flex: responseModalities, generationConfig, safety, sessionResumption, and connectConfig reach live.connect", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      responseModalities: ["AUDIO", "TEXT"],
+      temperature: 0.4,
+      topP: 0.9,
+      topK: 32,
+      maxOutputTokens: 1024,
+      mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
+      seed: 7,
+      generationConfig: { candidateCount: 1 },
+      safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }],
+      thinkingConfig: { includeThoughts: false },
+      enableAffectiveDialog: true,
+      realtimeInputConfig: { turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" },
+      contextWindowCompression: { slidingWindow: {} },
+      proactivity: { proactiveAudio: true },
+      explicitVadSignal: true,
+      sessionResumption: { transparent: true },
+      sessionResumptionHandle: "handle-prev",
+      connectConfig: { avatarConfig: { enabled: false } },
+    });
+
+    await adapter.open(new AbortController().signal);
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["responseModalities"]).toEqual(["AUDIO", "TEXT"]);
+    expect(connectArg.config["temperature"]).toBe(0.4);
+    expect(connectArg.config["topP"]).toBe(0.9);
+    expect(connectArg.config["topK"]).toBe(32);
+    expect(connectArg.config["maxOutputTokens"]).toBe(1024);
+    expect(connectArg.config["mediaResolution"]).toBe("MEDIA_RESOLUTION_MEDIUM");
+    expect(connectArg.config["seed"]).toBe(7);
+    expect(connectArg.config["generationConfig"]).toEqual({ candidateCount: 1 });
+    expect(connectArg.config["safetySettings"]).toEqual([
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+    ]);
+    expect(connectArg.config["thinkingConfig"]).toEqual({ includeThoughts: false });
+    expect(connectArg.config["enableAffectiveDialog"]).toBe(true);
+    expect(connectArg.config["realtimeInputConfig"]).toEqual({
+      turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+    });
+    expect(connectArg.config["contextWindowCompression"]).toEqual({ slidingWindow: {} });
+    expect(connectArg.config["proactivity"]).toEqual({ proactiveAudio: true });
+    expect(connectArg.config["explicitVadSignal"]).toBe(true);
+    expect(connectArg.config["sessionResumption"]).toEqual({
+      transparent: true,
+      handle: "handle-prev",
+    });
+    expect(connectArg.config["avatarConfig"]).toEqual({ enabled: false });
+    // Defaults still on.
+    expect(connectArg.config["inputAudioTranscription"]).toEqual({});
+    expect(connectArg.config["outputAudioTranscription"]).toEqual({});
+    await adapter.close();
+  });
+
+  it("cfg-flex: sessionResumption false omits the field entirely", async () => {
+    const adapter = fromGeminiLive({ apiKey: "test-key", sessionResumption: false });
+    await adapter.open(new AbortController().signal);
+    const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+    expect(connectArg.config["sessionResumption"]).toBeUndefined();
     await adapter.close();
   });
 

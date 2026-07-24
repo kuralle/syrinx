@@ -41,6 +41,7 @@ const LOCK_RELEASE_GRACE_MS = 500;
 interface TurnState {
   readonly contextId: string;
   audio: number[];
+  speechMs: number;
   finalPackets: SttResultPacket[];
   finalSegments: string[];
   latestInterim: string;
@@ -70,6 +71,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private incompleteFallbackMs = 2000;
   private semanticShortcutDelayMs = 50;
   private semanticDeferFallbackMs = 4000;
+  private minSpeechMs = 0;
   private maxTurnDurationMs = 15000;
   private semanticEndpointingEnabled = true;
   private probabilityThreshold = 0.5;
@@ -97,6 +99,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     this.incompleteFallbackMs = readNonNegativeNumber(config["incomplete_fallback_ms"], 2000);
     this.semanticShortcutDelayMs = readNonNegativeNumber(config["semantic_shortcut_delay_ms"], 50);
     this.semanticDeferFallbackMs = readNonNegativeNumber(config["semantic_defer_fallback_ms"], 4000);
+    this.minSpeechMs = readNonNegativeNumber(config["min_speech_ms"], 0);
     this.maxTurnDurationMs = readNonNegativeNumber(config["max_turn_duration_ms"], 15000);
     this.semanticEndpointingEnabled = readBooleanConfig(config["semantic_endpointing_enabled"], true);
     this.probabilityThreshold = readProbability(config["probability_threshold"], 0.5);
@@ -160,6 +163,9 @@ export class PipecatEOSPlugin implements VoicePlugin {
     for (const sample of samples) {
       state.audio.push(sample / 32768);
     }
+    if (state.speechActive) {
+      state.speechMs += (samples.length / SAMPLE_RATE) * 1000;
+    }
     if (state.audio.length > MAX_AUDIO_SAMPLES) {
       state.audio.splice(0, state.audio.length - MAX_AUDIO_SAMPLES);
     }
@@ -190,11 +196,16 @@ export class PipecatEOSPlugin implements VoicePlugin {
     const semantic = scoreSemanticCompleteness(transcript);
     state.semanticComplete = semantic.complete;
 
-    if (state.boundaryAnalyzed && state.smartTurnComplete && state.semanticComplete) {
+    if (
+      state.boundaryAnalyzed &&
+      state.smartTurnComplete &&
+      state.semanticComplete &&
+      state.speechMs >= this.minSpeechMs
+    ) {
       this.scheduleFinalize(state, this.finalizeDelayMs);
       return;
     }
-    if (state.smartTurnComplete && state.semanticComplete) {
+    if (state.smartTurnComplete && state.semanticComplete && state.speechMs >= this.minSpeechMs) {
       this.scheduleFinalize(state, this.finalizeDelayMs);
       return;
     }
@@ -219,10 +230,12 @@ export class PipecatEOSPlugin implements VoicePlugin {
   private handleSpeechStarted(pkt: VadSpeechStartedPacket): void {
     if (this.lockedContextIds.has(pkt.contextId)) return;
     const state = this.stateFor(pkt.contextId);
+    const startsTurn = !state.boundaryAnalyzed && state.finalPackets.length === 0;
     if (state.sttQuietTimer) {
       clearTimeout(state.sttQuietTimer);
       state.sttQuietTimer = null;
     }
+    if (startsTurn) state.speechMs = 0;
     state.boundaryAnalyzed = false;
     state.smartTurnComplete = false;
     state.semanticComplete = false;
@@ -262,10 +275,10 @@ export class PipecatEOSPlugin implements VoicePlugin {
     state.semanticComplete = semantic.complete;
 
     const fusion = transcript.trim()
-      ? fuseEndpointDecision(state.smartTurnComplete, semantic, this.fusionConfig())
+      ? fuseEndpointDecision(state.smartTurnComplete, semantic, state.speechMs, this.fusionConfig())
       : {
-          release: state.smartTurnComplete,
-          requestFinalize: state.smartTurnComplete,
+          release: state.smartTurnComplete && state.speechMs >= this.minSpeechMs,
+          requestFinalize: state.smartTurnComplete && state.speechMs >= this.minSpeechMs,
           finalizeDelayMs: this.finalizeDelayMs,
         };
 
@@ -299,6 +312,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
     const state: TurnState = {
       contextId,
       audio: [],
+      speechMs: 0,
       finalPackets: [],
       finalSegments: [],
       latestInterim: "",
@@ -410,6 +424,7 @@ export class PipecatEOSPlugin implements VoicePlugin {
       finalizeDelayMs: this.finalizeDelayMs,
       semanticShortcutDelayMs: this.semanticShortcutDelayMs,
       incompleteFallbackMs: this.incompleteFallbackMs,
+      minSpeechMs: this.minSpeechMs,
     };
   }
 

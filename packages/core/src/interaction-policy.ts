@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+import type { AcousticSignal } from "./packets.js";
+
 export interface WordTiming {
   readonly word: string;
   readonly startMs: number;
@@ -85,9 +87,19 @@ export type InteractionDecision =
   | { readonly kind: "hold" }
   | { readonly kind: "interrupt"; readonly interruptedContextId: string };
 
+export interface AcousticSignalObservation {
+  readonly contextId: string;
+  readonly timestampMs: number;
+  readonly signal: AcousticSignal;
+  readonly payload?: Readonly<Record<string, unknown>>;
+}
+
+export type AcousticSignalSink = (signal: AcousticSignalObservation) => void;
+
 export interface InteractionPolicy {
   observe(obs: InteractionObservation): readonly InteractionDecision[];
   reset(contextId: string): void;
+  setAcousticSignalSink?(sink: AcousticSignalSink): void;
 }
 
 /** Optional lifecycle for externally supplied model policies (session-owned). */

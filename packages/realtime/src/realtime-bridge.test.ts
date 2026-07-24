@@ -70,9 +70,14 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
   }
 
   readonly sentText: string[] = [];
+  readonly injectedContexts: string[] = [];
 
   sendText(text: string): void {
     this.sentText.push(text);
+  }
+
+  injectContext(text: string): void {
+    this.injectedContexts.push(text);
   }
 
   requestResponseCalls = 0;
@@ -133,6 +138,16 @@ describe("RealtimeBridge", () => {
 
   afterEach(() => {
     for (const bus of buses.splice(0)) bus.stop();
+  });
+
+  it("forwards silent context to the adapter without creating a response", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+
+    bridge.injectContext("Correction: use the verified deadline.");
+
+    expect(adapter.injectedContexts).toEqual(["Correction: use the verified deadline."]);
+    expect(adapter.requestResponseCalls).toBe(0);
   });
 
   it("maps one turn to turn.change → tts.audio → eos.turn_complete → tts.end with one contextId", async () => {
@@ -548,6 +563,48 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("emits per-pass conversation metrics for delegated tool loops", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "tool-call", toolId: "rag-1", toolName: "retrieve", args: { q: "fees" } };
+        yield { type: "tool-result", toolId: "rag-1", toolName: "retrieve", result: "ten dollars" };
+        yield { type: "text-delta", text: "The fee is ten dollars." };
+        yield { type: "finish", reason: "stop", text: "The fee is ten dollars." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const metrics: Array<{ name: string; value: string }> = [];
+    const bus = new PipelineBusImpl({
+      onPacket: (_route, packet) => {
+        if (packet.kind === "metric.conversation") {
+          const metric = packet as unknown as { name: string; value: string };
+          metrics.push({ name: metric.name, value: metric.value });
+        }
+      },
+    });
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_metrics_1",
+      toolName: "consult_knowledge",
+      args: { query: "What is the fee?" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(metrics.filter((metric) => metric.name === "llm.call_started")).toHaveLength(2);
+    expect(metrics.filter((metric) => metric.name === "llm.pass_ttft_ms")).toHaveLength(2);
+    expect(metrics.filter((metric) => metric.name === "llm.pass_ttft_ms").every((metric) => Number(metric.value) >= 0)).toBe(true);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("G2/WBS-1: delegate.result grounded=false when the reasoner used no tool", async () => {
     const adapter = new FakeRealtimeAdapter();
     const reasoner: Reasoner = {
@@ -575,6 +632,85 @@ describe("RealtimeBridge", () => {
 
     await waitForCondition(() => results.length === 1);
     expect(results[0]!.grounded).toBe(false);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("surfaces control parts and continues to the delegate result", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "control", name: "handoff", payload: { targetAgent: "billing" } };
+        yield { type: "text-delta", text: "Billing can help." };
+        yield { type: "finish", reason: "stop", text: "Billing can help." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_control",
+      toolName: "consult_knowledge",
+      args: { query: "billing" },
+    });
+
+    await waitForCondition(() => results.length === 2);
+    expect(results[0]).toMatchObject({
+      control: { name: "handoff", payload: { targetAgent: "billing" } },
+    });
+    expect(results[1]).toMatchObject({ answer: "Billing can help." });
+    expect(adapter.injectedToolResults[0]!.text).toContain("Billing can help.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("surfaces a blocked part as a safe terminal delegate result", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield {
+          type: "blocked",
+          userFacingMessage: "I cannot help with that request.",
+          payload: { moderator: "safety" },
+        };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_blocked",
+      toolName: "consult_knowledge",
+      args: { query: "unsafe" },
+    });
+
+    await waitForCondition(() => results.length === 1);
+    expect(results[0]).toMatchObject({
+      answer: "I cannot help with that request.",
+      blocked: {
+        userFacingMessage: "I cannot help with that request.",
+        payload: { moderator: "safety" },
+      },
+    });
+    expect(adapter.injectedToolResults[0]!.text).toContain("I cannot help with that request.");
 
     await bridge.close();
     bus.stop();
@@ -929,6 +1065,85 @@ describe("RealtimeBridge", () => {
     await bridge.close();
     bus.stop();
     await started;
+  });
+
+  it("pushes vad.speech_ended when the realtime provider reports speech stopped", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const ended: unknown[] = [];
+    bus.on("vad.speech_ended", (pkt) => { ended.push(pkt); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "speech_stopped" });
+    adapter.emit({ type: "response_started" });
+
+    await waitForCondition(() => ended.length === 1);
+    expect(ended[0]).toMatchObject({
+      kind: "vad.speech_ended",
+      contextId: expect.any(String),
+      timestampMs: expect.any(Number),
+    });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("streams native assistant transcript deltas onto the llm bus before response completion", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const deltas: LlmDeltaPacket[] = [];
+    bus.on("llm.delta", (pkt) => { deltas.push(pkt as LlmDeltaPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The fee is ten dollars.", final: false });
+
+    await waitForCondition(() => deltas.length === 1);
+    expect(deltas[0]).toMatchObject({
+      kind: "llm.delta",
+      text: "The fee is ten dollars.",
+    });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("produces a non-empty turn-latency breakdown for a native turn", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const session = new VoiceAgentSession({ plugins: {} });
+    session.registerPlugin("realtime", bridge);
+    const events: Array<Record<string, unknown>> = [];
+    session.on("turn_latency", (event) => { events.push(event); });
+
+    await session.start();
+    adapter.emit({ type: "speech_stopped" });
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "transcript", role: "assistant", text: "The fee is ten dollars.", final: false });
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "audio", pcm16: frameSizedPcm24k(), sampleRateHz: 24_000 });
+    adapter.emit({ type: "response_done" });
+
+    await waitForCondition(() => events.length === 1);
+    expect(events[0]).toEqual(expect.objectContaining({
+      anchor: "speech_end",
+      llmTtftMs: expect.any(Number),
+      textAggregationMs: expect.any(Number),
+      ttsTtfbMs: expect.any(Number),
+      unattributedMs: expect.any(Number),
+    }));
+
+    await session.close();
   });
 
   it("surfaces a delta-only assistant transcript (Gemini Live: no final transcript event)", async () => {

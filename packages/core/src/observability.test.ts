@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   InMemoryMetricsExporter,
+  localizeTurn,
   monotonicNowMs,
   noopMetricsExporter,
   reconstructTurnTimeline,
@@ -48,6 +49,14 @@ describe("noopMetricsExporter", () => {
   it("accepts histogram and span calls without throwing", () => {
     noopMetricsExporter.observeHistogram("ignored", 0, {});
     noopMetricsExporter.startSpan("ignored", {}).end();
+  });
+});
+
+describe("turn localization", () => {
+  it("prioritizes infrastructure, keeps conversation-only failures separate, and reports clean turns", () => {
+    expect(localizeTurn({ infrastructureBreached: true, conversationFlagged: true })).toBe("infrastructure");
+    expect(localizeTurn({ infrastructureBreached: false, conversationFlagged: true })).toBe("conversation");
+    expect(localizeTurn({ infrastructureBreached: false, conversationFlagged: false })).toBe("none");
   });
 });
 

@@ -1,0 +1,287 @@
+---
+const GITHUB = 'https://github.com/kuralle/syrinx';
+const INSTALL = 'npm install @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia';
+
+const cascadeCode = `// Cascade: STT -> your reasoner -> TTS
+import { VoiceAgentSession } from '@kuralle-syrinx/core';
+import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
+import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
+import { ReasoningBridge, fromStreamText } from '@kuralle-syrinx/aisdk';
+
+const session = new VoiceAgentSession({
+  plugins: {
+    stt: { api_key: DEEPGRAM_API_KEY, model: 'nova-3', sample_rate: 16000 },
+    bridge: {},
+    tts: { api_key: CARTESIA_API_KEY, voice_id: CARTESIA_VOICE_ID },
+  },
+  endpointingOwner: 'provider_stt',
+});
+
+session.registerPlugin('stt', new DeepgramSTTPlugin());
+session.registerPlugin('bridge', new ReasoningBridge(fromStreamText({ model, system })));
+session.registerPlugin('tts', new CartesiaTTSPlugin());`;
+
+const realtimeCode = `// Native realtime: one speech-to-speech model
+import { RealtimeBridge, fromOpenAIRealtime } from '@kuralle-syrinx/realtime';
+
+session.registerPlugin(
+  'realtime',
+  new RealtimeBridge(fromOpenAIRealtime({ apiKey, socketFactory })),
+);
+
+// Same tools, resume, and observability as the cascade —
+// swap OpenAI Realtime for Gemini Live with one import.`;
+
+const edgeCode = `// Ship on Cloudflare Workers — one hibernatable
+// Durable Object per conversation, same engine.
+import { Agent } from 'agents';
+import { withVoice } from '@kuralle-syrinx/cf-agents';
+
+export class VoiceConversation extends withVoice(Agent, {
+  pipeline: {
+    kind: 'cascaded',
+    stt: (env) => ({ plugin: new DeepgramSTTPlugin(createWorkersSocket), config }),
+    tts: (env) => ({ plugin: new CartesiaTTSPlugin(createWorkersSocket), config }),
+  },
+  reasoner,
+}) {}`;
+
+const features = [
+  { t: 'Three architectures', d: 'Cascade (STT → LLM → TTS), native realtime speech-to-speech, and half-cascade — one session shell, one interaction policy.' },
+  { t: 'Providers are thin adapters', d: 'Deepgram, Cartesia, ElevenLabs, Google, Grok, Gemini, OpenAI-compatible — each a small wire protocol over a shared streaming lifecycle.' },
+  { t: 'The transport edge, solved', d: 'A resumable WebSocket audio protocol for browsers, plus PSTN termination for Twilio, Telnyx, and SmartPBX. Reconnect and mid-call resume built in.' },
+  { t: 'Node and Cloudflare Workers', d: 'The same session runs on a Node server or as a hibernatable Durable Object on the edge — no rewrite to ship.' },
+  { t: 'Turn-taking that isn’t a stopwatch', d: 'An interaction policy owns endpointing and barge-in, from a silence timer up to semantic end-of-turn and voice-activity projection.' },
+  { t: 'Usage → dollars → cap', d: 'Every stage emits a usage packet; a versioned price catalog turns it into cost, and a spend cap bounds it.' },
+  { t: 'Observability & dashboards', d: 'Low-cardinality metrics, usage, and acoustic signals stream to a MetricsExporter — point them at Prometheus, OpenTelemetry, or your own dashboard, with no per-provider instrumentation.' },
+];
+
+const steps = [
+  { n: '01', t: 'Install', d: 'npm install the packages you need. No repo to clone — Syrinx ships on npm as @kuralle-syrinx/*.' },
+  { n: '02', t: 'Build', d: 'Wire an STT/LLM/TTS cascade or a realtime front, plug in your reasoner, and add tools.' },
+  { n: '03', t: 'Ship', d: 'Attach a browser or telephony transport and deploy — on Node or Cloudflare Workers.' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Syrinx — A TypeScript-native voice engine</title>
+    <meta
+      name="description"
+      content="Build real-time voice agents in TypeScript. Own the transport edge, swap the STT/LLM/TTS pipeline or run a native realtime model, and ship on Node or Cloudflare Workers."
+    />
+    <link rel="canonical" href="https://syrinx.asyncdot.com/" />
+    <meta property="og:title" content="Syrinx — A TypeScript-native voice engine" />
+    <meta property="og:description" content="Real-time voice agents in TypeScript. Swappable STT/LLM/TTS or native realtime, on Node and Cloudflare Workers." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://syrinx.asyncdot.com/" />
+  </head>
+  <body>
+    <div class="grid-bg">
+      <header class="nav wrap">
+        <a class="brand" href="/">
+          <svg class="logo" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="#0f172a"></rect>
+            <path d="M8 16 h2 M12 11 v10 M16 7 v18 M20 11 v10 M24 16 h0" stroke="#2dd4bf" stroke-width="2.2" stroke-linecap="round"></path>
+          </svg>
+          Syrinx
+        </a>
+        <nav class="nav-links">
+          <a href="/introduction/">Docs</a>
+          <a href="/providers/overview/">Providers</a>
+          <a href="/telephony/overview/">Telephony</a>
+          <a href={GITHUB} aria-label="GitHub" class="gh">GitHub ↗</a>
+        </nav>
+      </header>
+
+      <main class="wrap">
+        <section class="hero">
+          <p class="eyebrow">TypeScript-native · Node + Cloudflare Workers · open source</p>
+          <h1>A voice engine for<br />real-time agents.</h1>
+          <p class="sub">
+            Own the transport edge, swap the STT / LLM / TTS pipeline or run a native
+            speech-to-speech model, and ship on Node or Cloudflare Workers — all from one session.
+          </p>
+
+          <div class="cta-row">
+            <button id="copyInstall" class="btn btn-primary" data-prompt={INSTALL}>
+              <span class="dot"></span>
+              <span class="label">Copy install</span>
+            </button>
+            <a class="btn btn-ghost" href="/getting-started/quickstart/">Read the docs</a>
+          </div>
+          <code class="prompt-line">{INSTALL}</code>
+        </section>
+
+        <section class="showcase">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="cascade">cascade</button>
+            <button class="tab" data-tab="realtime">realtime</button>
+            <button class="tab" data-tab="edge">cloudflare</button>
+          </div>
+          <pre class="panel active" data-panel="cascade"><code>{cascadeCode}</code></pre>
+          <pre class="panel" data-panel="realtime"><code>{realtimeCode}</code></pre>
+          <pre class="panel" data-panel="edge"><code>{edgeCode}</code></pre>
+        </section>
+
+        <section class="steps">
+          {steps.map((s) => (
+            <div class="step">
+              <span class="step-n">{s.n}</span>
+              <h3>{s.t}</h3>
+              <p>{s.d}</p>
+            </div>
+          ))}
+        </section>
+
+        <section class="features">
+          <h2 class="section-title">One engine, every way to build voice.</h2>
+          <div class="grid">
+            {features.map((f) => (
+              <div class="card">
+                <h3>{f.t}</h3>
+                <p>{f.d}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section class="cta-band">
+          <h2>Start building.</h2>
+          <p>Install from npm and run a live voice turn in a few minutes.</p>
+          <div class="cta-row center">
+            <a class="btn btn-primary" href="/getting-started/quickstart/">Quickstart</a>
+            <a class="btn btn-ghost" href="/guides/building-a-voice-agent/">Build a voice agent</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer wrap">
+        <span>Syrinx — a TypeScript-native voice engine.</span>
+        <nav class="foot-links">
+          <a href="/getting-started/quickstart/">Quickstart</a>
+          <a href="/providers/overview/">Providers</a>
+          <a href="https://www.npmjs.com/package/@kuralle-syrinx/core">npm</a>
+          <a href={GITHUB}>GitHub</a>
+          <span class="muted">MIT</span>
+        </nav>
+      </footer>
+    </div>
+
+    <script>
+      const btn = document.getElementById('copyInstall') as HTMLButtonElement | null;
+      const label = btn?.querySelector('.label');
+      btn?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.prompt ?? '');
+          if (label) {
+            const prev = label.textContent;
+            label.textContent = 'Copied ✓';
+            window.setTimeout(() => { label.textContent = prev; }, 1600);
+          }
+        } catch { /* clipboard blocked */ }
+      });
+
+      document.querySelectorAll<HTMLButtonElement>('.tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+          document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+          tab.classList.add('active');
+          document.querySelector(`.panel[data-panel="${tab.dataset.tab}"]`)?.classList.add('active');
+        });
+      });
+    </script>
+
+    <style is:global>
+      :root {
+        --ink: #0f172a;
+        --ink-2: #334155;
+        --muted: #64748b;
+        --line: #e2e8f0;
+        --bg: #ffffff;
+        --accent: #0d9488;
+        --radius: 12px;
+        --max: 1080px;
+        --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+        --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: var(--sans); color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; line-height: 1.5; }
+      a { color: inherit; text-decoration: none; }
+      .grid-bg {
+        min-height: 100vh;
+        background-color: var(--bg);
+        background-image:
+          linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(15, 23, 42, 0.035) 1px, transparent 1px);
+        background-size: 34px 34px;
+      }
+      .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+      .nav { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.05rem; letter-spacing: -0.01em; }
+      .logo { width: 24px; height: 24px; flex-shrink: 0; }
+      .nav-links { display: flex; gap: 26px; align-items: center; font-size: 0.92rem; color: var(--ink-2); }
+      .nav-links a:hover { color: var(--ink); }
+      .nav-links .gh { color: var(--muted); }
+
+      .hero { padding: 96px 0 64px; max-width: 780px; }
+      .eyebrow { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); margin: 0 0 22px; letter-spacing: 0.02em; }
+      h1 { font-size: clamp(2.6rem, 6vw, 4.4rem); line-height: 1.02; letter-spacing: -0.035em; font-weight: 800; margin: 0 0 22px; }
+      .sub { font-size: clamp(1.05rem, 2vw, 1.25rem); color: var(--ink-2); max-width: 640px; margin: 0 0 34px; }
+      .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .cta-row.center { justify-content: center; }
+      .btn { display: inline-flex; align-items: center; gap: 10px; height: 46px; padding: 0 22px; border-radius: 999px; font-size: 0.95rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: transform 0.06s ease, background 0.15s ease, border-color 0.15s ease; }
+      .btn:active { transform: translateY(1px); }
+      .btn-primary { background: var(--accent); color: #fff; }
+      .btn-primary:hover { background: #0b7d72; }
+      .btn-ghost { background: #fff; color: var(--ink); border-color: var(--line); }
+      .btn-ghost:hover { border-color: #cbd5e1; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.3); }
+      .prompt-line { display: inline-block; margin-top: 20px; font-family: var(--mono); font-size: 0.82rem; color: var(--muted); background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; padding: 9px 13px; max-width: 100%; overflow-x: auto; white-space: nowrap; }
+
+      .showcase { margin: 8px 0 88px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03); overflow: hidden; }
+      .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); background: #f8fafc; overflow-x: auto; }
+      .tab { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); background: transparent; border: none; border-bottom: 2px solid transparent; padding: 14px 18px; cursor: pointer; white-space: nowrap; }
+      .tab:hover { color: var(--ink-2); }
+      .tab.active { color: var(--ink); background: #fff; border-bottom-color: var(--accent); }
+      .panel { display: none; margin: 0; padding: 22px 24px; font-family: var(--mono); font-size: 0.85rem; line-height: 1.65; color: #0f172a; overflow-x: auto; tab-size: 2; }
+      .panel.active { display: block; }
+      .panel code { font-family: inherit; white-space: pre; }
+
+      .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin: 0 0 88px; }
+      .step { border-left: 2px solid var(--line); padding: 4px 0 4px 18px; }
+      .step-n { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); }
+      .step h3 { margin: 8px 0 6px; font-size: 1.1rem; letter-spacing: -0.01em; }
+      .step p { margin: 0; color: var(--ink-2); font-size: 0.95rem; }
+
+      .section-title { font-size: clamp(1.6rem, 3.5vw, 2.3rem); letter-spacing: -0.03em; font-weight: 800; margin: 0 0 28px; }
+      .features { margin-bottom: 88px; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+      .card { border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding: 22px; transition: border-color 0.15s ease; }
+      .card:hover { border-color: #cbd5e1; }
+      .card h3 { margin: 0 0 8px; font-size: 1.02rem; letter-spacing: -0.01em; }
+      .card p { margin: 0; color: var(--ink-2); font-size: 0.92rem; }
+
+      .cta-band { text-align: center; border: 1px solid var(--line); border-radius: 16px; background: #f8fafc; padding: 56px 24px; margin-bottom: 72px; }
+      .cta-band h2 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); letter-spacing: -0.03em; font-weight: 800; margin: 0 0 8px; }
+      .cta-band p { color: var(--ink-2); margin: 0 0 24px; }
+
+      .footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-top: 28px; padding-bottom: 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; }
+      .foot-links { display: flex; gap: 20px; align-items: center; }
+      .foot-links a:hover { color: var(--ink); }
+      .foot-links .muted { color: var(--muted); }
+
+      @media (max-width: 760px) {
+        .steps, .grid { grid-template-columns: 1fr; }
+        .hero { padding: 64px 0 48px; }
+        .nav-links { gap: 16px; }
+        .nav-links a:not(.gh) { display: none; }
+      }
+    </style>
+  </body>
+</html>

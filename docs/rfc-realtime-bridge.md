@@ -1,6 +1,7 @@
 # RFC: RealtimeBridge — bi-model voice (gpt-realtime-2 front + Reasoner "meat" back)
 
-> **Status:** Draft → Ready-for-build · **Branch:** `v2` · **Owner:** manager (octalpixel) · **Date:** 2026-06-06
+> **Status:** **Implemented** — shipped on `v2` and released; `RealtimeBridge` + the OpenAI/Gemini
+> adapters live in `packages/realtime`. · **Owner:** manager (octalpixel) · **Drafted:** 2026-06-06
 > **Backlog ID:** B-01 (`docs/rfc-reasoner-bridge.md` §9.1: "Realtime / S2S `RealtimeBridge` (sibling `VoicePlugin`)")
 > **Design of record this refines:** [`rfc-reasoner-bridge.md`](./rfc-reasoner-bridge.md) (v2.3) — the `Reasoner` seam.
 > **Research + rationale:** [`../bi-model-research/README.md`](../bi-model-research/README.md) · **Blueprint:** [`../bi-model-research/blueprint.md`](../bi-model-research/blueprint.md)

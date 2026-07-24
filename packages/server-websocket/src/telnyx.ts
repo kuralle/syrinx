@@ -5,12 +5,9 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { Route, type VoiceAgentSession } from "@kuralle-syrinx/core";
 import {
-  bigEndianPcm16BytesToSamples,
-  decodeMuLawToPcm16,
-  encodePcm16ToMuLaw,
+  createG722DecoderState,
   pcm16BytesToSamples,
   pcm16SamplesToBytes,
-  pcm16SamplesToBigEndianBytes,
   resamplePcm16Streaming,
   type StreamingPcm16Resampler,
 } from "@kuralle-syrinx/core/audio";
@@ -30,12 +27,28 @@ import { wireTelephonyOutboundPipeline, installTelephonyTurnRotation } from "./o
 import {
   decodeStrictBase64,
   nonNegativeInteger,
-  numberFromString,
   optionalNonNegativeIntegerString,
   optionalPositiveIntegerString,
   positiveInteger,
   rawDataToText,
 } from "./transport-helpers.js";
+import type { FetchLike, TelnyxRestCredentials, WarmTransferSummarizer } from "./carrier-commands.js";
+import { wireCarrierControl } from "./wire-carrier-control.js";
+import {
+  createTelnyxG722State,
+  decodeTelnyxInboundPayload,
+  defaultTelnyxContextId,
+  encodeTelnyxOutboundPayload,
+  splitTelnyxEncodedFrames,
+  validateTelnyxStart,
+  wireSampleRateForCodec,
+  type TelnyxCodec,
+  type TelnyxG722State,
+  type TelnyxStartPayload,
+} from "./telnyx-codec.js";
+
+export type { TelnyxCodec, TelnyxStartPayload } from "./telnyx-codec.js";
+export { validateTelnyxStart, defaultTelnyxContextId } from "./telnyx-codec.js";
 
 export interface TelnyxMediaStreamServerOptions {
   readonly server?: HttpServer;
@@ -47,7 +60,7 @@ export interface TelnyxMediaStreamServerOptions {
   readonly inputSampleRateHz?: number;
   readonly outputSampleRateHz?: number;
   /** Must match the `stream_bidirectional_codec` selected when starting the Telnyx call stream. */
-  readonly bidirectionalCodec?: "PCMU" | "L16";
+  readonly bidirectionalCodec?: TelnyxCodec;
   readonly outboundFrameDurationMs?: number;
   readonly maxQueuedOutputAudioMs?: number;
   /** Ambient/thinking bed mixed (ducked) under assistant speech (see BackgroundAudioConfig). */
@@ -61,6 +74,15 @@ export interface TelnyxMediaStreamServerOptions {
   readonly maxConcurrentSessions?: number;
   readonly maxConcurrentSessionsScope?: "path" | "server";
   readonly onTransportMetric?: (name: string) => void;
+  /**
+   * Injected Call Control credentials for dtmf.send / call.transfer dispatch.
+   * Workers: pass secrets from `env`. Never read from process.env here.
+   * Live dispatch unverified without credentials.
+   */
+  readonly callControlCredentials?: TelnyxRestCredentials;
+  readonly callControlFetch?: FetchLike;
+  readonly callControlWebhookUrl?: string;
+  readonly warmTransferSummarizer?: WarmTransferSummarizer;
 }
 
 export interface TelnyxMediaStreamServer {
@@ -68,17 +90,6 @@ export interface TelnyxMediaStreamServer {
   readonly wsServer: WebSocketServer;
   address(): ReturnType<HttpServer["address"]>;
   close(opts?: GracefulCloseOptions): Promise<void>;
-}
-
-export interface TelnyxStartPayload {
-  readonly stream_id?: string;
-  readonly call_control_id?: string;
-  readonly call_session_id?: string;
-  readonly media_format?: {
-    readonly encoding?: string;
-    readonly sample_rate?: number | string;
-    readonly channels?: number | string;
-  };
 }
 
 interface TelnyxMediaMessage {
@@ -102,10 +113,9 @@ interface PendingTelnyxMediaFrame {
   readonly pcm: Int16Array;
 }
 
-type TelnyxCodec = "PCMU" | "L16";
-
 interface TelnyxConnectionState {
   streamId: string;
+  callControlId: string;
   contextId: string;
   contextBase: string;
   turnCounter: number;
@@ -125,6 +135,8 @@ interface TelnyxConnectionState {
   onPlaybackMarkReceived?: () => void;
   clearPlayout: (reason: string) => void;
   readonly streamingResamplers: Map<string, StreamingPcm16Resampler>;
+  /** Stateful G.722 encoder/decoder (only used when codec is G722). */
+  g722: TelnyxG722State;
 }
 
 const DEFAULT_ENGINE_SAMPLE_RATE_HZ = 16000;
@@ -155,7 +167,7 @@ export async function createTelnyxMediaStreamServer(
   const sessions = new Set<VoiceAgentSession>();
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? DEFAULT_ENGINE_SAMPLE_RATE_HZ;
   const bidirectionalCodec: TelnyxCodec = options.bidirectionalCodec ?? "PCMU";
-  const outboundSampleRateHz = bidirectionalCodec === "L16" ? 16000 : 8000;
+  const outboundSampleRateHz = wireSampleRateForCodec(bidirectionalCodec);
   const outboundFrameDurationMs = positiveInteger(options.outboundFrameDurationMs) ?? DEFAULT_OUTBOUND_FRAME_DURATION_MS;
   const maxQueuedOutputAudioMs = positiveInteger(options.maxQueuedOutputAudioMs) ?? DEFAULT_MAX_QUEUED_OUTPUT_AUDIO_MS;
   const maxInboundReorderFrames = positiveInteger(options.maxInboundReorderFrames) ?? DEFAULT_MAX_INBOUND_REORDER_FRAMES;
@@ -172,6 +184,7 @@ export async function createTelnyxMediaStreamServer(
   const adapter: TransportAdapter<TelnyxConnectionState> = {
     createState: () => ({
       streamId: "",
+      callControlId: "",
       contextId: "",
       contextBase: "",
       turnCounter: 0,
@@ -190,6 +203,7 @@ export async function createTelnyxMediaStreamServer(
       pendingEndMarkName: "",
       clearPlayout: () => undefined,
       streamingResamplers: new Map(),
+      g722: createTelnyxG722State(bidirectionalCodec),
     }),
 
     async acquireSession({ request, shouldAbort, onSessionCreated }) {
@@ -220,6 +234,15 @@ export async function createTelnyxMediaStreamServer(
         if (sent) state.pendingEndMarkName = "";
       };
       state.onPlaybackMarkReceived = sendPendingEndMark;
+
+      wireCarrierControl(session, disposers, {
+        carrier: "telnyx",
+        getCallControlId: () => state.callControlId || undefined,
+        credentials: options.callControlCredentials,
+        fetchImpl: options.callControlFetch,
+        webhookUrl: options.callControlWebhookUrl,
+        warmSummarizer: options.warmTransferSummarizer,
+      });
 
       const outbound = wireTelephonyOutboundPipeline({
         session,
@@ -323,10 +346,16 @@ export async function createTelnyxMediaStreamServer(
         const format = validateTelnyxStart(start);
         state.streamId = message.stream_id ?? start.stream_id ?? "";
         if (!state.streamId) throw new Error("Telnyx start event is missing stream_id");
+        state.callControlId = start.call_control_id?.trim() ?? "";
         state.contextId = contextIdFn(start);
         state.contextBase = state.contextId;
         state.inboundCodec = format.codec;
         state.inboundSampleRateHz = format.sampleRateHz;
+        // G.722 is stateful — reset decoder on each stream start. Keep 16 kHz
+        // for inbound (do NOT downsample before STT; that is the quality pitfall).
+        if (format.codec === "G722") {
+          state.g722.decoder = createG722DecoderState();
+        }
         state.started = true;
         state.nextInboundMediaChunk = 1;
         state.inboundMediaReorderBuffer.clear();
@@ -338,7 +367,7 @@ export async function createTelnyxMediaStreamServer(
         const payload = message.media?.payload;
         if (!payload) throw new Error("Telnyx media event is missing media.payload");
         const encoded = decodeStrictBase64(payload, "media.payload");
-        const pcm = decodeInboundPayload(encoded, state.inboundCodec);
+        const pcm = decodeInboundPayload(encoded, state);
         const chunk = optionalPositiveIntegerString(message.media?.chunk, "Telnyx media.chunk");
         if (chunk === undefined) {
           emitTelnyxMediaFrame(session, state, { chunk: 0, timestamp: message.media?.timestamp, pcm }, inputSampleRateHz);
@@ -657,25 +686,8 @@ function rememberTelnyxMediaTimestamp(
   state.lastInboundMediaTimestampMs = timestampMs;
 }
 
-function validateTelnyxStart(start: TelnyxStartPayload): { readonly codec: TelnyxCodec; readonly sampleRateHz: number } {
-  const format = start.media_format;
-  if (!format) throw new Error("Telnyx start event is missing media_format");
-  const encoding = format.encoding?.trim().toUpperCase();
-  if (encoding !== "PCMU" && encoding !== "L16") {
-    throw new Error(`Unsupported Telnyx media encoding: ${format.encoding ?? "unknown"}`);
-  }
-  const sampleRateHz = numberFromString(format.sample_rate);
-  if (encoding === "PCMU" && sampleRateHz !== 8000) throw new Error(`Unsupported Telnyx PCMU sample rate: ${String(format.sample_rate)}`);
-  if (encoding === "L16" && sampleRateHz !== 16000) throw new Error(`Unsupported Telnyx L16 sample rate: ${String(format.sample_rate)}`);
-  if (sampleRateHz === null) throw new Error(`Unsupported Telnyx sample rate: ${String(format.sample_rate)}`);
-  const channels = numberFromString(format.channels);
-  if (channels !== 1) throw new Error(`Unsupported Telnyx channel count: ${String(format.channels)}`);
-  return { codec: encoding, sampleRateHz };
-}
-
-function decodeInboundPayload(input: Uint8Array, codec: TelnyxCodec): Int16Array {
-  if (codec === "PCMU") return decodeMuLawToPcm16(input);
-  return bigEndianPcm16BytesToSamples(input);
+function decodeInboundPayload(input: Uint8Array, state: TelnyxConnectionState): Int16Array {
+  return decodeTelnyxInboundPayload(input, state.inboundCodec, state.g722);
 }
 
 function encodeOutboundPayload(
@@ -686,25 +698,8 @@ function encodeOutboundPayload(
 ): Uint8Array[] {
   const samples = pcm16BytesToSamples(audio);
   const resampled = resamplePcm16Streaming(state.streamingResamplers, samples, sourceSampleRateHz, state.outboundSampleRateHz);
-  const encoded = state.outboundCodec === "PCMU"
-    ? encodePcm16ToMuLaw(resampled)
-    : pcm16SamplesToBigEndianBytes(resampled);
-  const frameBytes = Math.max(1, Math.round((state.outboundSampleRateHz * frameDurationMs) / 1000) * (state.outboundCodec === "L16" ? 2 : 1));
-  const frames: Uint8Array[] = [];
-  for (let offset = 0; offset < encoded.byteLength; offset += frameBytes) {
-    frames.push(encoded.subarray(offset, Math.min(encoded.byteLength, offset + frameBytes)));
-  }
-  return frames;
-}
-
-function defaultTelnyxContextId(start: TelnyxStartPayload): string {
-  const callControlId = start.call_control_id?.trim();
-  if (callControlId) return `telnyx-${callControlId}`;
-  const callSessionId = start.call_session_id?.trim();
-  if (callSessionId) return `telnyx-${callSessionId}`;
-  const streamId = start.stream_id?.trim();
-  if (streamId) return `telnyx-${streamId}`;
-  return `telnyx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const encoded = encodeTelnyxOutboundPayload(resampled, state.outboundCodec, state.g722);
+  return splitTelnyxEncodedFrames(encoded, state.outboundCodec, state.outboundSampleRateHz, frameDurationMs);
 }
 
 function sendTelnyxError(socket: WebSocket, streamId: string, message: string, maxBufferedAmountBytes: number): void {

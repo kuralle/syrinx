@@ -4,6 +4,14 @@ Grounded in real scripts and handoff docs as of `2026-05-30`. Every command matc
 `examples/02-hello-voice-headless/package.json`. Every provider-doc URL is cited from `VOICE-ENGINE-HARDENING.md`
 Sources or `TELEPHONY-VOICE-HANDOFF.md`; claims without a verifiable source are marked **UNVERIFIED**.
 
+> **Coverage gaps (as of 2026-07) — not yet given rungs below.** These features ship **unit-verified** and
+> lack dedicated live-smoke `scripts` entries, so no certified command exists to list here yet:
+> **ElevenLabs** (TTS + Scribe v2 STT — live-verified via `scripts/spike-elevenlabs.ts`, but no
+> `smoke:*` rung), the **`stt-core`** shared lifecycle + its provider migrations, the telephony
+> **G.722/PCMA codecs, DTMF-send, call transfer** (Slice F — carrier-gated, no live IVR/trunk/transfer
+> certification), and **Telnyx-on-Cloudflare-Workers** (unverified against a live carrier or deploy).
+> Add rungs here only once real `smoke:*` scripts back them — do not list a command that does not exist.
+
 ---
 
 ## 1. Prerequisites

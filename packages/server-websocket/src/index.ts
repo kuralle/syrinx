@@ -61,6 +61,24 @@ export * from "./smartpbx.js";
 export * from "./session-store.js";
 export { validateTwilioSignature } from "./twilio-auth.js";
 export {
+  buildTwilioSendDigits,
+  buildTelnyxSendDtmf,
+  buildTwilioTransfer,
+  buildTelnyxTransfer,
+  dispatchTwilioCommand,
+  dispatchTelnyxCommand,
+  resolveTransferSummary,
+  type TwilioSendDigitsCommand,
+  type TelnyxSendDtmfCommand,
+  type TwilioTransferCommand,
+  type TelnyxTransferCommand,
+  type TwilioRestCredentials,
+  type TelnyxRestCredentials,
+  type WarmTransferSummarizer,
+  type FetchLike,
+} from "./carrier-commands.js";
+export { wireCarrierControl, type CarrierControlOptions } from "./wire-carrier-control.js";
+export {
   BackgroundAudioMixer,
   wireBackgroundThinking,
   wireBackgroundBackchannel,
@@ -77,6 +95,7 @@ export interface VoiceWebSocketServerOptions {
   readonly host?: string;
   readonly path?: string;
   readonly createSession: (request: IncomingMessage) => VoiceAgentSession | Promise<VoiceAgentSession>;
+  /** Explicit resolver for the session identity; when set, it takes precedence over the request query. */
   readonly sessionId?: (request: IncomingMessage) => string;
   readonly contextId?: () => string;
   readonly inputSampleRateHz?: number;
@@ -193,7 +212,6 @@ export async function createVoiceWebSocketServer(
   });
   const wsServer = routedWebSocket.wsServer;
   const sessionStore = options.sessionStore ?? new InMemorySessionStore();
-  const sessionIdFn = options.sessionId ?? defaultSessionId;
   const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
@@ -223,7 +241,12 @@ export async function createVoiceWebSocketServer(
     }),
 
     async acquireSession({ request, state, shouldAbort, onSessionCreated }) {
-      const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(request) ?? sessionIdFn(request));
+      // An explicit resolver is authoritative. Hosts such as cf-agents resolve the
+      // id before creating the session so the reasoner, session store, and transport
+      // all use the same identity even when the request carries a different wire id.
+      const requestedSessionId = sanitizeSessionId(
+        options.sessionId?.(request) ?? sessionIdFromRequest(request) ?? defaultSessionId(),
+      );
       const leased = await sessionStore.lease(requestedSessionId, async () => {
         const sess = await options.createSession(request);
         onSessionCreated(sess);

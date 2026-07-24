@@ -31,10 +31,10 @@
     "@kuralle-syrinx/core": "workspace:*"
   },
   "peerDependencies": {
-    "@kuralle-agents/core": ">=0.8.0"
+    "@kuralle-agents/core": ">=0.13.0 <1"
   },
   "devDependencies": {
-    "@kuralle-agents/core": "^0.8.5",
+    "@kuralle-agents/core": "^0.13.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
   }

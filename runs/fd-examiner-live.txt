@@ -1,0 +1,15 @@
+$ tsx scripts/run-fullduplex-examiner.ts
+Error: ENOENT: no such file or directory, open '/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/conversation.wav'
+    at Object.openSync (node:fs:560:18)
+    at readFileSync (node:fs:444:35)
+    at measureStereoOverlapMs (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/eva-evaluator.ts:210:15)
+    at runFullduplexExaminer (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:706:29)
+    at async main (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-fullduplex-examiner.ts:794:18) {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/conversation.wav'
+}
+/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @kuralle-syrinx-example/02-hello-voice-headless@0.0.0 smoke:fullduplex-examiner: `tsx scripts/run-fullduplex-examiner.ts`
+Exit status 1

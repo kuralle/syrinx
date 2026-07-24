@@ -13,6 +13,10 @@
       {
         "name": "TWILIO_VOICE_CONVERSATIONS",
         "class_name": "TwilioVoiceConversation"
+      },
+      {
+        "name": "TELNYX_VOICE_CONVERSATIONS",
+        "class_name": "TelnyxVoiceConversation"
       }
     ]
   },
@@ -30,6 +34,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["TwilioVoiceConversation"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["TelnyxVoiceConversation"]
     }
   ],
   "vectorize": [

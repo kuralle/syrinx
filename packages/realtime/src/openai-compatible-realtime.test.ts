@@ -169,6 +169,92 @@ describe("createOpenAiCompatibleRealtimeAdapter text-only output", () => {
   });
 });
 
+describe("createOpenAiCompatibleRealtimeAdapter usage metering", () => {
+  it("surfaces response.usage token counts on response_done so the native front can be metered", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+
+    const eventsTask = collectEvents(adapter.events, 1);
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({
+      type: "response.done",
+      response: {
+        output: [],
+        usage: { input_tokens: 320, output_tokens: 45, total_tokens: 365 },
+      },
+    });
+
+    const events = await eventsTask;
+    expect(events).toEqual([
+      { type: "response_done", usage: { inputTokens: 320, outputTokens: 45, totalTokens: 365 } },
+    ]);
+  });
+
+  it("emits a plain response_done when the provider reports no usage", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+
+    const eventsTask = collectEvents(adapter.events, 1);
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    mock.inject({ type: "response.done", response: { output: [] } });
+
+    const events = await eventsTask;
+    expect(events).toEqual([{ type: "response_done" }]);
+  });
+});
+
+describe("createOpenAiCompatibleRealtimeAdapter sessionExtra", () => {
+  it("merges sessionExtra into session.update after buildSessionUpdate", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createOpenAiCompatibleRealtimeAdapter({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      defaultModel: "gpt-realtime-2",
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      caps: {
+        inputSampleRateHz: 24_000,
+        outputSampleRateHz: 24_000,
+        supportsConcurrentToolAudio: true,
+        supportsTruncate: true,
+        emitsServerSpeechStarted: true,
+        supportsTextOnlyModality: true,
+      },
+      buildSessionUpdate: () => ({
+        type: "realtime",
+        model: "gpt-realtime-2",
+        output_modalities: ["text"],
+      }),
+      sessionExtra: { tracing: { workflow_name: "extra" }, temperature: 0.2 },
+      supportsTruncate: true,
+      defaultErrorMessage: "OpenAI Realtime error",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    expect(JSON.parse(mock.sent[0]!)).toEqual({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        model: "gpt-realtime-2",
+        output_modalities: ["text"],
+        tracing: { workflow_name: "extra" },
+        temperature: 0.2,
+      },
+    });
+  });
+});
+
 describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned turns)", () => {
   it("sends input_audio_buffer.commit then response.create", async () => {
     const mock = createMockSocketHarness();
@@ -184,5 +270,24 @@ describe("createOpenAiCompatibleRealtimeAdapter requestResponse (Syrinx-owned tu
 
     expect(JSON.parse(mock.sent[baseline]!)).toEqual({ type: "input_audio_buffer.commit" });
     expect(JSON.parse(mock.sent[baseline + 1]!)).toEqual({ type: "response.create" });
+  });
+
+  it("surfaces input_audio_buffer.speech_stopped", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = createAdapter(mock);
+    let event: RealtimeEvent | undefined;
+    const eventsTask = collectEvents(adapter.events, 1).then((events) => {
+      event = events[0];
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+    mock.inject({ type: "input_audio_buffer.speech_stopped" });
+
+    await waitFor(() => event !== undefined);
+    await eventsTask;
+    expect(event).toEqual({ type: "speech_stopped" });
   });
 });

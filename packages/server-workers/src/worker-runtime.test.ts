@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+// Import Node's URL explicitly: this file's tsconfig loads @cloudflare/workers-types,
+// whose global URL (as of 4.20260603) dropped the Node-style `new URL(path, base)` overload.
+// This is a Node-side test (spawns wrangler `unstable_dev`), so it uses Node's URL.
+import { fileURLToPath, URL } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Miniflare } from "miniflare";
@@ -60,6 +63,7 @@ function newMiniflare(script: string, bindings: Record<string, unknown>): Minifl
     durableObjects: {
       VOICE_CONVERSATIONS: { className: "VoiceConversation", useSQLite: true },
       TWILIO_VOICE_CONVERSATIONS: { className: "TwilioVoiceConversation", useSQLite: true },
+      TELNYX_VOICE_CONVERSATIONS: { className: "TelnyxVoiceConversation", useSQLite: true },
     },
     vectorize: {
       VECTORIZE: { dimensions: 1536, metric: "cosine", index_name: "kuralle-university-kb" },
@@ -291,6 +295,73 @@ describe("TwilioVoiceConversation worker runtime", () => {
     },
     120_000,
   );
+});
+
+describe("TelnyxVoiceConversation worker runtime", () => {
+  // Deterministic, no keys: the Telnyx Media Streaming front accepts a WS upgrade at /telnyx
+  // through withVoice(Agent, { transport: "telnyx" }) — the cf-agents telephony front bundles
+  // and boots in workerd.
+  it("accepts a Telnyx Media Streaming WebSocket upgrade at /telnyx", async () => {
+    const script = await buildWorker();
+    const mf = newMiniflare(script, {});
+    try {
+      const response = await mf.dispatchFetch("http://localhost/telnyx?sessionId=telnyx-boot", {
+        headers: { Upgrade: "websocket" },
+      });
+      expect(response.status).toBe(101);
+      const ws = (response as unknown as Response & { webSocket?: WorkersWebSocket }).webSocket;
+      expect(ws).toBeTruthy();
+      ws!.accept();
+      ws!.close();
+    } finally {
+      await mf.dispose();
+    }
+  }, 20_000);
+
+  // Deterministic: TeXML Stream helper points at /telnyx with the sessionId.
+  it("returns TeXML <Stream> from /telnyx-stream-start pointing at /telnyx", async () => {
+    const script = await buildWorker();
+    const mf = newMiniflare(script, {});
+    try {
+      const res = await mf.dispatchFetch(
+        "http://localhost/telnyx-stream-start?sessionId=tx-session-1&codec=PCMA",
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/xml");
+      const texml = await res.text();
+      expect(texml).toContain("<Stream");
+      expect(texml).toContain("/telnyx?sessionId=tx-session-1");
+      expect(texml).toContain('bidirectionalCodec="PCMA"');
+    } finally {
+      await mf.dispose();
+    }
+  }, 20_000);
+
+  // Deterministic: streaming_start JSON payload for Call Control (live dispatch carrier-gated).
+  it("returns streaming_start JSON from /telnyx-stream-start?format=streaming_start", async () => {
+    const script = await buildWorker();
+    const mf = newMiniflare(script, {});
+    try {
+      const res = await mf.dispatchFetch(
+        "http://localhost/telnyx-stream-start?sessionId=tx-json-1&format=streaming_start&codec=G722",
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        stream_url: string;
+        stream_bidirectional_mode: string;
+        stream_bidirectional_codec: string;
+        stream_bidirectional_sampling_rate: number;
+        send_silence_when_idle: boolean;
+      };
+      expect(body.stream_url).toContain("/telnyx?sessionId=tx-json-1");
+      expect(body.stream_bidirectional_mode).toBe("rtp");
+      expect(body.stream_bidirectional_codec).toBe("G722");
+      expect(body.stream_bidirectional_sampling_rate).toBe(16000);
+      expect(body.send_silence_when_idle).toBe(true);
+    } finally {
+      await mf.dispose();
+    }
+  }, 20_000);
 });
 
 function downsampleTo8k(samples: Int16Array): Int16Array {

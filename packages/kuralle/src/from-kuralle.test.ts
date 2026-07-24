@@ -43,6 +43,10 @@ function done(sessionId?: string): KuralleStreamPart {
   return { type: "done", sessionId };
 }
 
+function safetyBlocked(userFacingMessage: string): KuralleStreamPart {
+  return { type: "safety-blocked", userFacingMessage };
+}
+
 async function* partsToEvents(parts: KuralleStreamPart[]): AsyncIterable<KuralleStreamPart> {
   for (const p of parts) yield p;
 }
@@ -143,6 +147,41 @@ describe("fromKuralleRuntime", () => {
     ]);
   });
 
+  it("speaks a kuralle per-tool interim: it arrives as text-delta before the tool result", async () => {
+    // Kuralle's `Tool.interim` / `interimAfterMs` is the tool-level equivalent of a spoken
+    // preamble — "Let me pull up your record" while a slow tool runs. It is NOT a distinct
+    // stream part: `ToolExecutor` fires an `onInterim` callback, and kuralle's `Runtime`
+    // converts it to `text-start` / `text-delta` / `text-end` on the run stream
+    // (Runtime.js — `onInterim: (message) => { emit({type:'text-delta', delta: message}) }`).
+    //
+    // So it reaches Syrinx as an ordinary text-delta and flows llm.delta -> bufferTtsText ->
+    // tts.text -> spoken audio, with no bridge change needed. This test pins that path so a
+    // future refactor of the text-delta case cannot silently mute every tool interim.
+    const reasoner = fromKuralleRuntime(
+      fakeRuntime([
+        toolCall("call-1", "studentRelationsLookup", { requestType: "late_add" }),
+        // The interim, as the runtime actually emits it — bare text-delta, mid-tool.
+        textDelta("Let me pull up your registration record."),
+        toolResult("call-1", "studentRelationsLookup", { addDeadline: "2027-02-05" }),
+        textDelta("Your late add deadline was February 5th."),
+        done("sess-interim"),
+      ]),
+      { sessionId: "sess-interim" },
+    );
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    const firstSpoken = parts.find((p) => p.type === "text-delta");
+    expect(firstSpoken).toEqual({
+      type: "text-delta",
+      text: "Let me pull up your registration record.",
+    });
+    // And it precedes the tool result, so the user hears it while the tool is still running.
+    const interimIdx = parts.findIndex((p) => p.type === "text-delta");
+    const resultIdx = parts.findIndex((p) => p.type === "tool-result");
+    expect(interimIdx).toBeLessThan(resultIdx);
+  });
+
   it("maps tool-call and tool-result with toolId from toolCallId", async () => {
     const reasoner = fromKuralleRuntime(
       fakeRuntime([
@@ -183,6 +222,38 @@ describe("fromKuralleRuntime", () => {
       expect(parts[0].cause.message).toBe("boom");
       expect(parts[0].recoverable).toBe(false);
     }
+  });
+
+  it("maps safety-blocked to a terminal blocked part without the missing-done error", async () => {
+    const reasoner = fromKuralleRuntime(
+      fakeRuntime([safetyBlocked("I cannot help with that request.")]),
+      { sessionId: "sess-safety" },
+    );
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      {
+        type: "blocked",
+        userFacingMessage: "I cannot help with that request.",
+        payload: { type: "safety-blocked", userFacingMessage: "I cannot help with that request." },
+      },
+    ]);
+    expect(parts.some((part) => part.type === "error")).toBe(false);
+  });
+
+  it("preserves orchestration parts as opaque control parts", async () => {
+    const handoff = { type: "handoff", targetAgent: "billing", reason: "account question" } satisfies KuralleStreamPart;
+    const outcome = { type: "conversation-outcome", outcome: { taskSuccess: true, satisfaction: false } } satisfies KuralleStreamPart;
+    const reasoner = fromKuralleRuntime(fakeRuntime([handoff, outcome, done()]), { sessionId: "sess-control" });
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      { type: "control", name: "handoff", payload: handoff },
+      { type: "control", name: "conversation-outcome", payload: outcome },
+      { type: "finish", reason: "stop", text: "" },
+    ]);
   });
 
   it("yields terminal error when stream ends without done", async () => {

@@ -25,6 +25,19 @@ export interface GrokRealtimeOptions {
   readonly instructions?: string;
   readonly inputRateHz?: number;
   readonly outputRateHz?: number;
+  /** Input audio format. Defaults to `{ type: "audio/pcm", rate: inputRateHz }`. */
+  readonly inputAudioFormat?: Record<string, unknown>;
+  /** Output audio format. Defaults to `{ type: "audio/pcm", rate: outputRateHz }`. */
+  readonly outputAudioFormat?: Record<string, unknown>;
+  readonly temperature?: number;
+  readonly modalities?: readonly string[];
+  readonly inputTranscription?: Record<string, unknown> | boolean;
+  readonly toolChoice?: string | Record<string, unknown>;
+  /**
+   * Merged last into `session.update.session` for provider-specific fields the
+   * adapter does not enumerate. Overrides same-key defaults when both set.
+   */
+  readonly sessionConfig?: Record<string, unknown>;
 }
 
 export function fromGrokRealtime(opts: GrokRealtimeOptions): RealtimeAdapter {
@@ -52,6 +65,14 @@ export function fromGrokRealtime(opts: GrokRealtimeOptions): RealtimeAdapter {
       const turnDetection =
         "turnDetection" in opts ? opts.turnDetection : { type: "server_vad" };
 
+      const inputAudio: Record<string, unknown> = {
+        format: opts.inputAudioFormat ?? { type: "audio/pcm", rate: inputRateHz },
+      };
+      if (opts.inputTranscription !== undefined) {
+        inputAudio["transcription"] =
+          opts.inputTranscription === true ? {} : opts.inputTranscription;
+      }
+
       const session: Record<string, unknown> = {
         voice,
         turn_detection: turnDetection,
@@ -62,13 +83,28 @@ export function fromGrokRealtime(opts: GrokRealtimeOptions): RealtimeAdapter {
           parameters: t.parameters,
         })),
         audio: {
-          input: { format: { type: "audio/pcm", rate: inputRateHz } },
-          output: { format: { type: "audio/pcm", rate: outputRateHz }, voice },
+          input: inputAudio,
+          output: {
+            format: opts.outputAudioFormat ?? { type: "audio/pcm", rate: outputRateHz },
+            voice,
+          },
         },
       };
 
       if (opts.instructions !== undefined) {
         session["instructions"] = opts.instructions;
+      }
+      if (opts.temperature !== undefined) {
+        session["temperature"] = opts.temperature;
+      }
+      if (opts.modalities !== undefined) {
+        session["output_modalities"] = opts.modalities;
+      }
+      if (opts.toolChoice !== undefined) {
+        session["tool_choice"] = opts.toolChoice;
+      }
+      if (opts.sessionConfig) {
+        Object.assign(session, opts.sessionConfig);
       }
 
       return session;

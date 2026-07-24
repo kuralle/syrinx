@@ -28,7 +28,7 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
 } from "@kuralle-syrinx/core";
-import { EpsilonTTSPlugin } from "@kuralle-syrinx/epsilon";
+import { EpsilonTTSPlugin } from "../src/custom-tts-provider/index.js";
 import { fromOpenAIRealtime, type RealtimeEvent } from "@kuralle-syrinx/realtime";
 import { createNodeWsSocket } from "@kuralle-syrinx/ws/node";
 

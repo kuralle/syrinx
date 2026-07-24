@@ -1,0 +1,33 @@
+$ tsx scripts/run-interaction-thesis-matrix.ts
+reusing 01-late-add
+reusing 02-registration-holds
+reusing 03-financial-aid
+reusing 04-advisor-approval
+reusing 05-instructor-email
+reusing 06-international-status
+reusing 07-housing
+reusing 08-accessibility
+reusing 09-athletics
+reusing 10-lab-fee
+reusing 11-case-open
+reusing 12-next-steps
+reusing 13-clarify-deadline
+reusing 14-appointment
+reusing 15-summary
+reusing 16-goodbye
+reusing 17-parent-consent
+reusing 18-department-seat
+reusing 19-class-attendance
+reusing 20-refund-risk
+reusing 21-appeal-path
+reusing 22-notification-preference
+reusing 23-readback
+reusing 24-final-confirmation
+Error: bridge.error/internal_fault: This operation was aborted
+    at waitForTurnComplete (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:356:27)
+    at driveTurns (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:416:11)
+    at async runNativeRealtimeSession (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:504:12)
+    at async main (/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless/scripts/run-interaction-thesis-matrix.ts:568:23)
+/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless:
+[ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @kuralle-syrinx-example/02-hello-voice-headless@0.0.0 smoke:interaction-thesis-matrix: `tsx scripts/run-interaction-thesis-matrix.ts`
+Exit status 1

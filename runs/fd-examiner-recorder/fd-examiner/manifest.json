@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "fd-examiner",
+  "startedAtMs": 1783784500310,
+  "closedAtMs": 1783784558984,
+  "files": {
+    "directory": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner",
+    "eventsPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/events.jsonl",
+    "userAudioPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/user_audio.pcm",
+    "assistantAudioPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/assistant_audio.pcm",
+    "manifestPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/manifest.json",
+    "conversationAudioPath": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/conversation.wav"
+  },
+  "audio": {
+    "user": {
+      "path": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/user_audio.pcm",
+      "sampleRateHz": 16000,
+      "encoding": "pcm_s16le",
+      "channels": 1,
+      "byteLength": 919040,
+      "durationMs": 28720,
+      "chunks": 1436
+    },
+    "assistant": {
+      "path": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/assistant_audio.pcm",
+      "sampleRateHz": 16000,
+      "encoding": "pcm_s16le",
+      "channels": 1,
+      "byteLength": 2058688,
+      "durationMs": 64334,
+      "chunks": 1280,
+      "truncations": 5
+    },
+    "conversation": {
+      "path": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/conversation.wav",
+      "sampleRateHz": 16000,
+      "channels": 2,
+      "encoding": "pcm_s16le",
+      "byteLength": 4117376,
+      "durationMs": 64334
+    }
+  },
+  "events": {
+    "path": "/Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/runs/fd-examiner-recorder/fd-examiner/events.jsonl",
+    "packets": 10894,
+    "byteLength": 2897326
+  }
+}

@@ -1,0 +1,24 @@
+$ tsx scripts/run-flux-speculative-ab.ts
+Warming LLM connection... done. Bare streamText TTFT: cold 2290ms, warm 2260ms.
+Arm 1/2: speculative OFF (live Flux + live gpt-4o-mini)
+
+--- speculative: OFF ---
+transcript              : "What did I just ask you about?"
+answer                  : "I'm unable to recall previous interactions; please restate your question."
+llm calls               : 1 (eager endpoints 1, resumed 0)
+endpoint → first token  : 753ms   <-- headline
+endpoint → answer done  : 1031ms
+
+Arm 2/2: speculative ON
+
+--- speculative: ON  ---
+transcript              : "What did I just ask you about?"
+answer                  : "I’m not sure what you asked about; could you please clarify?"
+llm calls               : 1 (eager endpoints 1, resumed 0)
+endpoint → first token  : 618ms   <-- headline
+endpoint → answer done  : 965ms
+
+=== A/B SUMMARY ===
+endpoint → first token: OFF 753ms vs ON 618ms  (saved 135ms)
+llm-call cost: OFF 1 vs ON 1
+verdict: PASS (both arms answered)

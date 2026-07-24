@@ -10,11 +10,18 @@
 import type { WordTiming } from "./interaction-policy.js";
 import { ErrorCategory } from "./packets.js";
 import type {
+  UsageRecordedPacket,
   ConversationMetricPacket,
+  AcousticSignalPacket,
+  AcousticSignal,
+  TurnLocalizationPacket,
   TurnBoundaryKind,
   TurnBoundaryEventPacket,
   DtmfDigit,
   DtmfReceivedPacket,
+  DtmfSendPacket,
+  CallTransferPacket,
+  CallTransferMode,
   RecordUserAudioPacket,
   RecordAssistantAudioDataPacket,
   RecordAssistantAudioTruncatePacket,
@@ -35,6 +42,7 @@ import type {
   InterruptLlmPacket,
   InterruptSttPacket,
   InjectMessagePacket,
+  SttReconfigurePacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   ReasoningSuspendedPacket,
@@ -46,6 +54,7 @@ import type {
   InteractionDuckPacket,
   InteractionResumePacket,
 } from "./packets.js";
+import type { SttReconfigurePartial } from "./plugin-contract.js";
 
 const DTMF_DIGITS = new Set<DtmfDigit>(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]);
 
@@ -65,6 +74,36 @@ export function dtmfReceived(
   return { kind: "dtmf.received", contextId, timestampMs, digit, provider, rawDigit };
 }
 
+const DTMF_SEND_CHARS = /^[0-9*#wW]+$/;
+
+/** Validate + build a `dtmf.send` packet. Throws on empty/invalid digit strings. */
+export function dtmfSend(contextId: string, timestampMs: number, digits: string): DtmfSendPacket {
+  if (!digits || !DTMF_SEND_CHARS.test(digits)) {
+    throw new Error(`Invalid dtmf.send digits: ${JSON.stringify(digits)} (expected [0-9*#wW]+)`);
+  }
+  return { kind: "dtmf.send", contextId, timestampMs, digits };
+}
+
+/** Build a `call.transfer` packet. */
+export function callTransfer(
+  contextId: string,
+  timestampMs: number,
+  mode: CallTransferMode,
+  target: string,
+  summary?: string,
+): CallTransferPacket {
+  const trimmed = target.trim();
+  if (!trimmed) throw new Error("call.transfer target must be a non-empty E.164 / SIP URI");
+  return {
+    kind: "call.transfer",
+    contextId,
+    timestampMs,
+    mode,
+    target: trimmed,
+    ...(summary !== undefined ? { summary } : {}),
+  };
+}
+
 export function metric(
   contextId: string,
   name: string,
@@ -72,6 +111,46 @@ export function metric(
   timestampMs: number = Date.now(),
 ): ConversationMetricPacket {
   return { kind: "metric.conversation", contextId, timestampMs, name, value };
+}
+
+export function acousticSignal(
+  contextId: string,
+  timestampMs: number,
+  signal: AcousticSignal,
+  payload?: Readonly<Record<string, unknown>>,
+): AcousticSignalPacket {
+  return {
+    kind: "acoustic.signal",
+    contextId,
+    timestampMs,
+    signal,
+    ...(payload ? { payload } : {}),
+  };
+}
+
+export function turnLocalization(
+  contextId: string,
+  timestampMs: number,
+  value: TurnLocalizationPacket["value"],
+  infrastructureBreached: boolean,
+  conversationFlagged: boolean,
+): TurnLocalizationPacket {
+  return {
+    kind: "turn.localization",
+    contextId,
+    timestampMs,
+    value,
+    infrastructureBreached,
+    conversationFlagged,
+  };
+}
+
+export function usageRecorded(
+  contextId: string,
+  fields: Omit<UsageRecordedPacket, "kind" | "contextId" | "timestampMs">,
+  timestampMs: number = Date.now(),
+): UsageRecordedPacket {
+  return { kind: "usage.recorded", contextId, timestampMs, ...fields };
 }
 
 export function turnBoundary(
@@ -212,8 +291,21 @@ export function ttsError(
   return { kind: "tts.error", contextId, timestampMs, component: "tts", category, cause, isRecoverable };
 }
 
-export function injectMessage(contextId: string, timestampMs: number, text: string): InjectMessagePacket {
-  return { kind: "inject.message", contextId, timestampMs, text };
+export function injectMessage(
+  contextId: string,
+  timestampMs: number,
+  text: string,
+  mode?: InjectMessagePacket["mode"],
+): InjectMessagePacket {
+  return { kind: "inject.message", contextId, timestampMs, text, ...(mode ? { mode } : {}) };
+}
+
+export function sttReconfigure(
+  contextId: string,
+  timestampMs: number,
+  partial: SttReconfigurePartial,
+): SttReconfigurePacket {
+  return { kind: "stt.reconfigure", contextId, timestampMs, partial };
 }
 
 export function llmDelta(contextId: string, timestampMs: number, text: string): LlmDeltaPacket {

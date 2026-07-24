@@ -9,6 +9,7 @@ import {
   type SttInterimPacket,
   type SttResultPacket,
   type EndOfSpeechPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 import { GoogleSTTPlugin } from "./index.js";
 
@@ -181,6 +182,160 @@ describe("GoogleSTTPlugin", () => {
     await started;
   });
 
+  it("emits usage.recorded with stage stt from tracked audio bytes on final", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            alternatives: [{ transcript: "hello world", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    // 640 bytes pcm_s16le @ 16kHz = 640 / 2 / 16000 = 0.02 s
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "latest_long",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-usage",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("prefers resultEndOffset for audioSeconds when present", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            resultEndOffset: "1.250s",
+            alternatives: [{ transcript: "hello world", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      model: "latest_long",
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-offset",
+      timestampMs: Date.now(),
+      audio: new Uint8Array(640),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-offset",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 1.25,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded even when emit_eos_on_final is false", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.once("message", () => {
+        socket.send(JSON.stringify({
+          results: [{
+            isFinal: true,
+            alternatives: [{ transcript: "account number please", confidence: 0.95 }],
+          }],
+        }));
+      });
+    });
+    const bus = new PipelineBusImpl();
+    const started = startBus(bus);
+    const plugin = new GoogleSTTPlugin();
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("usage.recorded", (pkt) => {
+      usage.push(pkt as UsageRecordedPacket);
+    });
+
+    const audio = new Uint8Array(640);
+    await plugin.initialize(bus, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+      sample_rate: 16000,
+      model: "latest_long",
+      emit_eos_on_final: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.audio",
+      contextId: "turn-smartturn",
+      timestampMs: Date.now(),
+      audio,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-smartturn",
+        stage: "stt",
+        provider: "google",
+        model: "latest_long",
+        audioSeconds: 0.02,
+      }),
+    ]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
   it("suppresses EOS when Smart Turn ownership disables provider finalization", async () => {
     const endpointUrl = await createLocalServer((socket) => {
       socket.once("message", () => {
@@ -269,5 +424,105 @@ describe("GoogleSTTPlugin", () => {
     await plugin.close();
     bus.stop();
     await started;
+  });
+
+  it("defaults recognition config knobs and allows overrides + feature passthrough", async () => {
+    const configs: any[] = [];
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data, isBinary) => {
+        if (!isBinary) configs.push(JSON.parse(data.toString()));
+      });
+    });
+
+    const busDefault = new PipelineBusImpl();
+    const startedDefault = startBus(busDefault);
+    const pluginDefault = new GoogleSTTPlugin();
+    await pluginDefault.initialize(busDefault, {
+      api_key: "test",
+      project_id: "test-project",
+      endpoint_url: endpointUrl,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pluginDefault.close();
+    busDefault.stop();
+    await startedDefault;
+
+    expect(configs[0]).toEqual({
+      recognizer: "projects/test-project/locations/global/recognizers/_",
+      streamingConfig: {
+        config: {
+          explicitDecodingConfig: {
+            encoding: "LINEAR16",
+            sampleRateHertz: 16000,
+            audioChannelCount: 1,
+          },
+          languageCodes: ["en-US"],
+          model: "latest_long",
+          features: {
+            enableAutomaticPunctuation: true,
+            enableWordConfidence: true,
+          },
+        },
+        streamingFeatures: {
+          interimResults: true,
+        },
+      },
+    });
+
+    const busOverride = new PipelineBusImpl();
+    const startedOverride = startBus(busOverride);
+    const pluginOverride = new GoogleSTTPlugin();
+    await pluginOverride.initialize(busOverride, {
+      api_key: "test",
+      project_id: "my-proj",
+      endpoint_url: endpointUrl,
+      location: "us-central1",
+      recognizer: "phone",
+      model: "chirp_2",
+      language: "es-ES",
+      language_codes: ["es-ES", "en-US"],
+      sample_rate: 8000,
+      encoding: "MULAW",
+      channels: 1,
+      enable_automatic_punctuation: false,
+      enable_word_confidence: false,
+      interim_results: false,
+      recognition_features: {
+        profanityFilter: true,
+        enableWordTimeOffsets: true,
+      },
+      streaming_features: {
+        enableVoiceActivityEvents: true,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await pluginOverride.close();
+    busOverride.stop();
+    await startedOverride;
+
+    expect(configs[1]).toEqual({
+      recognizer: "projects/my-proj/locations/us-central1/recognizers/phone",
+      streamingConfig: {
+        config: {
+          explicitDecodingConfig: {
+            encoding: "MULAW",
+            sampleRateHertz: 8000,
+            audioChannelCount: 1,
+          },
+          languageCodes: ["es-ES", "en-US"],
+          model: "chirp_2",
+          features: {
+            enableAutomaticPunctuation: false,
+            enableWordConfidence: false,
+            profanityFilter: true,
+            enableWordTimeOffsets: true,
+          },
+        },
+        streamingFeatures: {
+          interimResults: false,
+          enableVoiceActivityEvents: true,
+        },
+      },
+    });
   });
 });

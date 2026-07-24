@@ -1,6 +1,6 @@
 # Testing & baseline runbook
 
-How to verify a change, run the smokes, and establish/re-establish the latency baselines in this monorepo (22 `@kuralle-syrinx/*` packages). Grounded in the actual scripts + CI.
+How to verify a change, run the smokes, and establish/re-establish the latency baselines in this monorepo (25 `@kuralle-syrinx/*` packages). Grounded in the actual scripts + CI.
 
 ---
 

@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
+    "@kuralle-syrinx/stt-core": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*"
   },
   "devDependencies": {

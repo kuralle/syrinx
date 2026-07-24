@@ -4,6 +4,7 @@ import type { Reasoner, ReasonerTurn, ReasoningPart } from "@kuralle-syrinx/core
 import { categorizeLlmError, isRecoverable } from "@kuralle-syrinx/core";
 
 export interface KuralleStreamPart {
+  readonly [key: string]: unknown;
   readonly type: string;
   readonly delta?: string;
   readonly toolName?: string;
@@ -16,6 +17,8 @@ export interface KuralleStreamPart {
   readonly options?: unknown;
   readonly prompt?: string;
   readonly sessionId?: string;
+  readonly userFacingMessage?: string;
+  readonly payload?: unknown;
 }
 
 export interface KuralleMessageLike {
@@ -26,7 +29,18 @@ export interface KuralleMessageLike {
 export interface KuralleStoredSession {
   readonly id: string;
   messages: KuralleMessageLike[];
-  [key: string]: unknown;
+  /**
+   * Durable-run bookkeeping the bridge reads for flow-resume. Optional and unknown-typed
+   * because kuralle owns its shape.
+   *
+   * This was a `[key: string]: unknown` catch-all, which made the interface unsatisfiable
+   * by any concrete type: a real `Session` has no index signature, so it could never be
+   * assigned here. Nothing caught that, because nothing type-checked the bridge against
+   * the real Runtime — see `real-runtime.compile-check.ts`. Only this one key is read.
+   */
+  durableRuns?: unknown;
+  /** Working-memory blob the bridge inspects on resume. Kuralle owns its shape. */
+  workingMemory?: unknown;
 }
 
 export interface KuralleSessionStoreLike {
@@ -45,9 +59,32 @@ export interface KuralleRunOptions {
   readonly userId?: string;
   readonly agentId?: string;
   readonly abortSignal?: AbortSignal;
-  readonly historyDelta?: ReadonlyArray<{ readonly role: string; readonly content: string }>;
+  /**
+   * Prior turns seeded into an empty kuralle session (G4 resume-by-seed).
+   *
+   * Deliberately narrower than it looks: the real `Runtime.run` takes `ModelMessage[]`,
+   * whose `role` is a union, so a `string` role here would be too wide to assign — and a
+   * mutable array, so `ReadonlyArray` would not assign either. The producer
+   * (`buildHistoryDeltaSeed`) already filters to user/assistant, so this only makes the
+   * declaration honest about what the code was doing.
+   *
+   * `real-runtime.compile-check.ts` pins this against the actual Runtime type.
+   */
+  historyDelta?: Array<{ role: "user" | "assistant"; content: string }>;
 }
 
+/**
+ * The slice of kuralle's `Runtime` this bridge calls, as a loose structural shape.
+ *
+ * Deliberately hand-written rather than `Pick<Runtime, ...>`. Deriving was tried and is
+ * strictly worse here: it drags in `TurnHandle`, `HarnessStreamPart`, `Session` and
+ * `RunOptions` wholesale, so every test fake and adapter would have to construct
+ * full-fidelity kuralle objects to call a bridge whose whole point is loose coupling.
+ *
+ * The drift that freedom costs is contained by `real-runtime.compile-check.ts`, which
+ * asserts the REAL `Runtime` still satisfies this shape. That check is what was missing —
+ * not stricter types. It is the same pattern `cf-agents` uses for the agents SDK.
+ */
 export interface KuralleRuntimeLike {
   run(opts: KuralleRunOptions): KuralleTurnHandle;
   getSession?(sessionId: string): Promise<KuralleStoredSession | null>;
@@ -101,7 +138,10 @@ function seedHistoryDelta(
 ): Pick<KuralleRunOptions, "historyDelta"> | Record<string, never> {
   if (session && session.messages.length > 0) return {};
   const delta = messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
+    .filter(
+      (message): message is typeof message & { role: "user" | "assistant" } =>
+        message.role === "user" || message.role === "assistant",
+    )
     .map((message) => ({ role: message.role, content: message.content }));
   return delta.length > 0 ? { historyDelta: delta } : {};
 }
@@ -243,10 +283,18 @@ export async function* streamFromKuralle(
             payload: part,
           };
           return;
+        case "safety-blocked":
+          yield {
+            type: "blocked",
+            userFacingMessage: String(part.userFacingMessage ?? "This request cannot be completed."),
+            payload: part,
+          };
+          return;
         case "done":
           yield { type: "finish", reason: "stop", text: acc };
           return;
         default:
+          yield { type: "control", name: part.type, payload: part };
           break;
       }
       if (aborted) break;

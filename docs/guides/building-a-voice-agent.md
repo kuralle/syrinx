@@ -549,7 +549,7 @@ new RealtimeBridge(adapter, reasoner?, delegateToolName = "consult_knowledge", o
 This bi-model shape has a name — **Responder-Thinker**: the realtime front is the *responder* (presence, speech, turn-taking), the `Reasoner` is the *thinker* (facts, RAG, tools). Nobody else packages it turnkey; Syrinx's delegate seam ships four behaviors so you don't hand-roll them (RFC `docs/rfc-bimodel-delegate-seam.md`):
 
 1. **Faithful voicing (envelope, default).** The thinker's answer is injected as `{ "response_text": "...", "require_repeat_verbatim": true }` (plus an optional `render` directive) — the shape OpenAI's Realtime prompting guide validates for anti-paraphrase tool output. Your front prompt keys on `response_text` being the authoritative answer. Opt out with `toolResultFormat: "string"`.
-2. **Observability.** Every delegate run emits `delegate.query` → `delegate.result` bus packets (query, answer, `durationMs`, `grounded`); `withVoice` exposes them as `onDelegateQuery` / `onDelegateResult` hooks. No more wrapping the `Reasoner` to log.
+2. **Observability and client messaging.** Every delegate run emits `delegate.query` → `delegate.result` bus packets (query, answer, `durationMs`, `grounded`); `withVoice` exposes them as `onDelegateQuery` / `onDelegateResult` hooks. `onDelegateResult` carries the originating `connection`, so post-result UI messages can use `connection.send(...)` without a session-to-connection registry. No more wrapping the `Reasoner` to log.
 3. **"Thinking" cues.** The engine emits a typed tool-call lifecycle — `tool_call_started` / `tool_call_delayed` / `tool_call_complete` / `tool_call_failed` — over the wire, wrapping the thinker-latency window (started fires *before* the thinker runs; delayed is the time-triggered "still working"; failed covers errors, barge-in, and superseded turns). Key client earcons/indicators on these.
 4. **Durable resume.** With `withVoice` the conversation survives Durable Object eviction: the thinker re-seeds from DO-SQLite (`ReasonerSessionStore`), and the front resumes per provider capability — OpenAI replays the transcript (`resumeHistory`, `conversation.item.create`, never a `response.create`), Gemini passes its native `sessionResumption` handle through (`ctx.resume.providerHandle`) with no replay.
 
@@ -753,8 +753,8 @@ wrangler secret put OPENAI_API_KEY
 ```
 
 - Config: `packages/server-workers/wrangler.jsonc` — `VECTORIZE` binding, optional `RECORDINGS` R2.
-- Entry: `packages/server-workers/src/worker.ts` — `wss://<your-worker>/ws?sessionId=<id>`.
-- Session: `createLiveVoiceAgentSession` — Deepgram STT + `ReasoningBridge(createRealtimeKuralleReasoner(…))` + Deepgram TTS (`packages/server-workers/src/live-session.ts`).
+- Entry: `packages/server-workers/src/worker.ts` — one `withVoice(Agent, {...})` Durable Object per transport: `VoiceConversation` (`wss://<worker>/ws`, browser/edge), `TwilioVoiceConversation` (`/twilio`), and `TelnyxVoiceConversation` (`/telnyx` — unit-verified only, **unverified against a live carrier or a live Workers deploy**).
+- Pipeline/brain: `liveCascadedPipeline` + `createLiveReasoner` — Deepgram STT + kuralle reasoner + Deepgram TTS (`packages/server-workers/src/live-session.ts`).
 
 Health: `GET /health`. Recordings: `GET /recordings?sessionId=<id>` when R2 is bound.
 
@@ -765,8 +765,8 @@ pnpm --filter @kuralle-syrinx/server-workers run deploy:realtime
 # uses wrangler.realtime.jsonc
 ```
 
-- Entry: `packages/server-workers/src/worker-realtime.ts`.
-- Session: `createRealtimeVoiceAgentSession` — `fromOpenAIRealtime` or `fromGeminiLive` + `RealtimeBridge` + kuralle Vectorize reasoner (`packages/server-workers/src/live-realtime-session.ts`).
+- Entry: `packages/server-workers/src/worker-realtime.ts` — `RealtimeVoiceConversation` via `withVoice(Agent, {...})`.
+- Pipeline/brain: `realtimeVoicePipeline` + `createRealtimeReasoner` — `fromOpenAIRealtime` or `fromGeminiLive` + `RealtimeBridge` + kuralle Vectorize reasoner (`packages/server-workers/src/live-realtime-session.ts`).
 - Set `REALTIME_FRONT=gemini` and `GEMINI_API_KEY` for Gemini Live front.
 
 Use `wss://<your-worker>/ws?sessionId=<id>` — never paste live playground hostnames into your own deployments.

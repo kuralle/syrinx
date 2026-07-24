@@ -9,6 +9,7 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TtsErrorPacket,
+  type UsageRecordedPacket,
 } from "@kuralle-syrinx/core";
 
 import { DeepgramTTSPlugin } from "./tts.js";
@@ -99,6 +100,55 @@ describe("DeepgramTTSPlugin", () => {
     expect(audio.every((a) => a.contextId === "turn-1" && a.sampleRateHz === 24000)).toBe(true);
     expect(audio[0]!.audio).toEqual(new Uint8Array([1, 2, 3, 4]));
     expect(ends).toEqual([expect.objectContaining({ contextId: "turn-1" })]);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("emits usage.recorded with stage tts and characters equal to synthesized text length", async () => {
+    const endpointUrl = await createLocalServer((socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "Speak") {
+          socket.send(Buffer.from([1, 2, 3, 4]), { binary: true });
+        }
+        if (msg["type"] === "Flush") {
+          socket.send(JSON.stringify({ type: "Flushed", sequence_id: 0 }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    const usage: UsageRecordedPacket[] = [];
+    bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
+    bus.on("usage.recorded", (pkt) => { usage.push(pkt as UsageRecordedPacket); });
+
+    const textA = "Hello there.";
+    const textB = "Second sentence.";
+    await plugin.initialize(bus, {
+      api_key: "test-deepgram-key",
+      endpoint_url: endpointUrl,
+      sample_rate: 24000,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-usage", timestampMs: Date.now(), text: textA });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-usage", timestampMs: Date.now(), text: textB });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-usage", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1 && usage.length >= 1);
+
+    expect(usage).toEqual([
+      expect.objectContaining({
+        kind: "usage.recorded",
+        contextId: "turn-usage",
+        stage: "tts",
+        provider: "deepgram",
+        model: "aura-2-thalia-en",
+        characters: textA.length + textB.length,
+      }),
+    ]);
 
     await plugin.close();
     bus.stop();
@@ -305,6 +355,51 @@ describe("DeepgramTTSPlugin", () => {
     const allBytes = Buffer.concat(audio.map((a) => Buffer.from(a.audio)));
     expect(allBytes).toEqual(Buffer.from([0x11, 0x22, 0x33, 0x44]));
     expect(audio.every((a) => a.audio.byteLength % 2 === 0)).toBe(true);
+
+    await plugin.close();
+    bus.stop();
+    await started;
+  });
+
+  it("honors encoding and container overrides on the speak websocket URL", async () => {
+    let requestUrl = "";
+    const endpointUrl = await createLocalServer((socket, url) => {
+      requestUrl = url;
+      socket.on("message", (data) => {
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
+        if (msg["type"] === "Speak") {
+          socket.send(Buffer.from([1, 2, 3, 4]), { binary: true });
+        }
+        if (msg["type"] === "Flush") {
+          socket.send(JSON.stringify({ type: "Flushed", sequence_id: 0 }));
+        }
+      });
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+    const plugin = new DeepgramTTSPlugin();
+    const ends: TextToSpeechEndPacket[] = [];
+    bus.on("tts.end", (pkt) => {
+      ends.push(pkt as TextToSpeechEndPacket);
+    });
+
+    await plugin.initialize(bus, {
+      api_key: "test-deepgram-key",
+      endpoint_url: endpointUrl,
+      model: "aura-2-asteria-en",
+      encoding: "mulaw",
+      container: "none",
+      sample_rate: 8000,
+    });
+    bus.push(Route.Main, { kind: "tts.text", contextId: "turn-cfg", timestampMs: Date.now(), text: "Hello." });
+    bus.push(Route.Main, { kind: "tts.done", contextId: "turn-cfg", timestampMs: Date.now() });
+    await waitForCondition(() => ends.length >= 1 || requestUrl.length > 0);
+
+    expect(requestUrl).toContain("model=aura-2-asteria-en");
+    expect(requestUrl).toContain("encoding=mulaw");
+    expect(requestUrl).toContain("container=none");
+    expect(requestUrl).toContain("sample_rate=8000");
 
     await plugin.close();
     bus.stop();

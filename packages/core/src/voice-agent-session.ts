@@ -31,6 +31,10 @@ import type {
   InterruptionDetectedPacket,
   DelegateQueryPacket,
   DelegateResultPacket,
+  ConversationMetricPacket,
+  AcousticSignalPacket,
+  UsageStage,
+  UsageRecordedPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
   LlmToolCallPacket,
@@ -50,6 +54,7 @@ import type {
   EndOfSpeechPacket,
   InterimEndOfSpeechPacket,
   InjectMessagePacket,
+  SttReconfigurePacket,
   DisconnectRequestedPacket,
   InitializationFailedPacket,
   ModeSwitchRequestedPacket,
@@ -63,12 +68,18 @@ import {
 } from "./packets.js";
 import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
-import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText } from "./voice-text.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
 import { isLifecycleInteractionPolicy, type InteractionPolicy, type WordTiming } from "./interaction-policy.js";
-import { pcm16BytesToSamples } from "./audio/pcm.js";
+import { pcm16BytesToSamples, pcm16SamplesToBytes } from "./audio/pcm.js";
+import {
+  createLoudnessState,
+  normalizeLoudness,
+  type LoudnessConfig,
+  type LoudnessState,
+} from "./audio/loudness.js";
 import { DeferInteractionPolicy } from "./policies/defer.js";
 import { RuleBasedInteractionPolicy } from "./policies/rule-based.js";
 import * as make from "./packet-factories.js";
@@ -80,6 +91,7 @@ import {
   VoiceSessionWatchdogs,
 } from "./voice-agent-session-util.js";
 import { noopMetricsExporter, type MetricsExporter } from "./observability.js";
+import { localizeTurn, type ObservabilityLayer } from "./observability.js";
 import { ObservabilityObserver } from "./observability-observer.js";
 import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
@@ -141,6 +153,8 @@ export interface VoiceAgentSessionConfig {
    * instead of hanging. 0 disables. Default: 15000.
    */
   ttsStallMs?: number;
+  /** Optional per-session Int16 RMS normalization for outbound assistant audio. Disabled by default. */
+  outboundLoudness?: LoudnessConfig;
   /**
    * Max ms of silence on inbound user audio while the session is Ready before a
    * recoverable transport warning is emitted. Continuous streams (telephony, open
@@ -191,6 +205,7 @@ export interface VoiceAgentSessionConfig {
     readonly provider?: string;
     readonly model?: string;
     readonly region?: string;
+    readonly layer?: ObservabilityLayer;
   };
 }
 
@@ -203,7 +218,18 @@ export interface VoiceAgentSessionEvents {
   agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
   agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
   delegate_query: (event: { tsMs: number; turnId: string; query: string; toolId?: string; toolName?: string }) => void;
-  delegate_result: (event: { tsMs: number; turnId: string; query: string; answer: string; durationMs: number; grounded: boolean; toolId?: string; toolName?: string }) => void;
+  delegate_result: (event: {
+    tsMs: number;
+    turnId: string;
+    query: string;
+    answer: string;
+    durationMs: number;
+    grounded: boolean;
+    toolId?: string;
+    toolName?: string;
+    control?: { name: string; payload: unknown };
+    blocked?: { userFacingMessage: string; payload?: unknown };
+  }) => void;
   /**
    * G3: typed preamble/filler lifecycle for a pending tool call (Vapi-shaped:
    * started / delayed / complete / failed). `delayed` is time-triggered by
@@ -213,28 +239,58 @@ export interface VoiceAgentSessionEvents {
    */
   tool_call_cue: (event: { tsMs: number; turnId: string; phase: "started" | "delayed" | "complete" | "failed"; toolId: string; toolName: string; afterMs?: number }) => void;
   /**
-   * Per-turn latency decomposition, emitted once at the turn's first TTS audio.
+   * Per-turn latency decomposition, timestamped at the turn's first TTS audio.
+   * When generation is still active at first audio, emission waits for `tts.end` so
+   * provider passes that follow a spoken tool preamble are included in the totals.
    * `ttfaMs` is anchored to the real end of user speech (VAD speech-end, falling
    * back to the endpoint decision) — `fillerUsed` flags turns where a latency filler spoke
    * first, and `backchannelUsed` flags turns where a wait-gap cue played before the answer.
    * Decomposition: eouDelayMs (speech end → endpoint) + llmTtftMs (endpoint →
-   * first LLM delta) + ttsTtfbMs (first TTS text dispatched → first audio).
+   * first LLM delta) + textAggregationMs (first LLM delta → first TTS text) +
+   * ttsTtfbMs (first TTS text dispatched → first audio). A stage is omitted when the
+   * front does not produce that Syrinx packet for this turn: realtime fronts may emit
+   * provider audio directly, and provider-owned endpointing may complete after audio.
+   * `unattributedMs` is the explicit residual after subtracting only the stages present.
    */
   turn_latency: (event: {
     tsMs: number;
     turnId: string;
     ttfaMs: number;
+    anchor: "speech_end" | "eos";
     eouDelayMs?: number;
     llmTtftMs?: number;
+    textAggregationMs?: number;
     ttsTtfbMs?: number;
+    unattributedMs: number;
+    llmCallCount?: number;
+    llmPassTtftMs?: readonly number[];
     fillerUsed: boolean;
     backchannelUsed: boolean;
   }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
   agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
+  /**
+   * End-of-session usage manifest — the total billable resource this session consumed,
+   * summed per stage. Emitted once at close. This is the metering seam a host reads to
+   * bill, cap spend, or attribute cost to a tenant; today only the LLM stage is populated
+   * (STT/TTS producers are not yet wired), so `stages` may hold a single entry.
+   */
+  usage: (event: { tsMs: number; stages: readonly SessionStageUsage[] }) => void;
   error: (event: { tsMs: number; stage: string; category: string; message: string }) => void;
   closed: (event: { tsMs: number; reason: string }) => void;
   state_changed: (event: { tsMs: number; from: SessionState; to: SessionState }) => void;
+}
+
+/** Per-stage usage totals for a session. Absent fields were never reported by that stage. */
+export interface SessionStageUsage {
+  readonly stage: UsageStage;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly audioSeconds?: number;
+  readonly characters?: number;
 }
 
 type EventHandler<T> = (event: T) => void;
@@ -249,6 +305,8 @@ interface TurnTiming {
   eosMs?: number;
   firstLlmDeltaMs?: number;
   firstTtsTextMs?: number;
+  llmCallCount?: number;
+  llmPassTtftMs?: number[];
   fillerUsed?: boolean;
   backchannelUsed?: boolean;
 }
@@ -263,6 +321,25 @@ function toolCueTimerKey(contextId: string, toolId: string): string {
 
 function interactionPlayoutTimerKey(contextId: string): string {
   return `interaction.playout:${contextId}`;
+}
+
+function turnLocalizationTimerKey(contextId: string): string {
+  return `turn.localization:${contextId}`;
+}
+
+function isInfrastructureMetric(name: string): boolean {
+  return /(?:^|\.)(?:vad|stt|tts|tool|input|pipeline)\.(?:error|malfunction|timeout|stall|cadence)|(?:^|\.)(?:stage|error)\./i.test(name);
+}
+
+function isConversationEvaluationMetric(name: string, value: string): boolean {
+  if (!/(?:^|\.)(?:outcome|eval|evaluation|satisfaction|task_success|observer)(?:\.|$)/i.test(name)) {
+    return false;
+  }
+  return !/^(?:0|false|none|success|successful|passed|pass|good|healthy|ok)$/i.test(value.trim());
+}
+
+function isConversationControlName(name: string): boolean {
+  return /^(?:conversation-outcome|outcome|escalation|handoff|flow-transition|node-enter|node-exit|flow-enter|flow-end)$/.test(name);
 }
 
 // =============================================================================
@@ -304,11 +381,23 @@ export class VoiceAgentSession {
   private firstLlmDeltaReceived = new Set<string>();
   private readonly vaqiMissedResponseMs: number;
   private readonly ttsStallMs: number;
+  private readonly outboundLoudnessConfig: LoudnessConfig | null;
+  private readonly outboundLoudnessState: LoudnessState | null;
   private readonly inputCadenceTimeoutMs: number;
   private readonly watchdogs!: VoiceSessionWatchdogs;
   private readonly observabilityObserver: ObservabilityObserver;
+  private readonly metricsExporter: MetricsExporter;
+  private readonly observabilityDims: {
+    provider: string;
+    model: string;
+    region: string;
+    layer?: ObservabilityLayer;
+  };
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
+  private pendingTurnLatency = new Map<string, number>();
+  /** Running usage totals per stage, summed across the session; emitted at close. */
+  private readonly usageByStage = new Map<UsageStage, SessionStageUsage>();
   private speakerEnrollmentContextId: string | null = null;
   private firstTtsAudioFired = new Set<string>();
   private readonly pendingInteractionPlayoutTimers = new Set<string>();
@@ -323,6 +412,11 @@ export class VoiceAgentSession {
   private userSpeaking = false;
   private lastFinalizedContextId = "";
   private readonly sttPartialWordTimings = new Map<string, readonly WordTiming[]>();
+  private readonly turnLocalizationStates = new Map<
+    string,
+    { infrastructureBreached: boolean; conversationFlagged: boolean }
+  >();
+  private readonly emittedTurnLocalizations = new Set<string>();
 
   constructor(config: VoiceAgentSessionConfig) {
     const owner = config.endpointingOwner;
@@ -333,6 +427,8 @@ export class VoiceAgentSession {
     this.fullDuplex = config.fullDuplex === true;
     this.emitsBackchannel = config.emitsBackchannel === true;
     this.config = config;
+    this.outboundLoudnessConfig = config.outboundLoudness ?? null;
+    this.outboundLoudnessState = this.outboundLoudnessConfig ? createLoudnessState() : null;
     this.scheduler = config.scheduler ?? new TimerScheduler();
     this.ttsPlayout = new TtsPlayoutClock(this.scheduler);
     this.sttForceFinalizeTimeoutMs = config.sttForceFinalizeTimeoutMs ?? 7000;
@@ -340,6 +436,14 @@ export class VoiceAgentSession {
     this.delayCueAfterMs = config.delayCueAfterMs ?? 2000;
     this.primarySpeakerGate = new PrimarySpeakerGate({
       enabled: config.primarySpeakerBargeInEnabled !== false,
+      onDecision: (decision) => {
+        this.emitAcousticSignal(decision.contextId, Date.now(), decision.signal, {
+          accepted: decision.accepted,
+          frameCount: decision.frameCount,
+          primaryHits: decision.primaryHits,
+          echoRejectedFrames: decision.echoRejectedFrames,
+        });
+      },
     });
     this.latencyFiller = new LatencyFillerController({
       enabled: config.latencyFillerEnabled === true,
@@ -393,6 +497,9 @@ export class VoiceAgentSession {
       ? new DeferInteractionPolicy()
       : (this.injectedInteractionPolicy ?? this.ruleBasedPolicy);
     this.activeInteractionPolicy = coordinatorPolicy;
+    coordinatorPolicy.setAcousticSignalSink?.((signal) => {
+      this.emitAcousticSignal(signal.contextId, signal.timestampMs, signal.signal, signal.payload);
+    });
     this.interaction = new InteractionCoordinator({
       bus: this.bus,
       policy: coordinatorPolicy,
@@ -422,15 +529,18 @@ export class VoiceAgentSession {
     });
 
     const obs = config.observability;
+    this.metricsExporter = config.metricsExporter ?? noopMetricsExporter;
+    this.observabilityDims = {
+      provider: obs?.provider ?? "unknown",
+      model: obs?.model ?? "unknown",
+      region: obs?.region ?? "unknown",
+      layer: obs?.layer,
+    };
     this.observabilityObserver = new ObservabilityObserver({
       bus: this.bus,
-      exporter: config.metricsExporter ?? noopMetricsExporter,
+      exporter: this.metricsExporter,
       sessionId: obs?.sessionId ?? "",
-      dims: {
-        provider: obs?.provider ?? "unknown",
-        model: obs?.model ?? "unknown",
-        region: obs?.region ?? "unknown",
-      },
+      dims: this.observabilityDims,
       getContextId: () => this.currentContextId,
     });
 
@@ -536,6 +646,13 @@ export class VoiceAgentSession {
     this.turnArbiter.clear();
     this.turnUserStoppedAtMs.clear();
     this.turnTimings.clear();
+    for (const contextId of this.turnLocalizationStates.keys()) {
+      this.scheduler.cancel(turnLocalizationTimerKey(contextId));
+      this.emitTurnLocalization(contextId);
+    }
+    this.turnLocalizationStates.clear();
+    this.emittedTurnLocalizations.clear();
+    this.pendingTurnLatency.clear();
     this.firstTtsAudioFired.clear();
     this.fallbackInjectedContexts.clear();
     this.ttsTextBuffers.clear();
@@ -549,6 +666,9 @@ export class VoiceAgentSession {
 
     // 2. Run finalize chain (reverse order)
     await runFinalizeChain(this.initSteps);
+
+    // 2b. Emit the end-of-session usage manifest before the bus stops — the metering seam.
+    this.emitSessionUsage();
 
     // 3. Stop bus
     this.bus.stop();
@@ -640,6 +760,7 @@ export class VoiceAgentSession {
       this.lastFinalizedContextId = "";
       if (pkt.previousContextId) {
         this.sttPartialWordTimings.delete(pkt.previousContextId);
+        this.carryTurnTimingAcrossContextChange(pkt.previousContextId, pkt.contextId);
       }
     });
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
@@ -650,6 +771,8 @@ export class VoiceAgentSession {
     this.bus.on("llm.done", this.handleLlmDone.bind(this));
     this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
     this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
+    this.bus.on("metric.conversation", this.handleConversationMetric.bind(this));
+    this.bus.on("usage.recorded", (pkt) => this.handleUsageRecorded(pkt as UsageRecordedPacket));
 
     // Delegate (Responder-Thinker) observability — G2, RFC bimodel-delegate-seam
     this.bus.on("delegate.query", this.handleDelegateQuery.bind(this));
@@ -683,6 +806,9 @@ export class VoiceAgentSession {
 
     // Injected messages — push through LLM path for natural TTS
     this.bus.on("inject.message", this.handleInjectMessage.bind(this));
+
+    // Per-turn STT reconfigure (keyterms / endpointing / EOT thresholds)
+    this.bus.on("stt.reconfigure", this.handleSttReconfigure.bind(this));
 
     // Disconnect
     this.bus.on("session.disconnect", this.handleDisconnect.bind(this));
@@ -923,6 +1049,23 @@ export class VoiceAgentSession {
     this.watchdogs.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
   }
 
+  /**
+   * A realtime front rotates its contextId when the provider starts responding
+   * (`RealtimeBridge.onResponseStarted`), so the user-side anchors (`speechEndedMs`, `eosMs`)
+   * are recorded under the PREVIOUS context while `tts.audio` — and therefore the
+   * `turn_latency` emit — lands under the new one. Without carrying the record across the
+   * rotation, `emitTurnLatency` finds no anchor and silently drops every native turn.
+   *
+   * Only fills gaps: anything the new context already recorded wins.
+   */
+  private carryTurnTimingAcrossContextChange(previousContextId: string, contextId: string): void {
+    const previous = this.turnTimings.get(previousContextId);
+    if (!previous) return;
+    this.turnTimings.delete(previousContextId);
+    const current = this.turnTimings.get(contextId);
+    this.turnTimings.set(contextId, { ...previous, ...current });
+  }
+
   private timingFor(contextId: string): TurnTiming {
     let timing = this.turnTimings.get(contextId);
     if (!timing) {
@@ -932,28 +1075,82 @@ export class VoiceAgentSession {
     return timing;
   }
 
+  /** Emit a deferred turn_latency if one is pending, then clear it. Safe to call twice. */
+  private flushPendingTurnLatency(contextId: string): void {
+    const firstAudioMs = this.pendingTurnLatency.get(contextId);
+    if (firstAudioMs === undefined) return;
+    this.pendingTurnLatency.delete(contextId);
+    this.emitTurnLatency(contextId, firstAudioMs);
+  }
+
   private emitTurnLatency(contextId: string, firstAudioMs: number): void {
-    const timing = this.turnTimings.get(contextId);
+    const timing = this.timingFor(contextId);
     this.turnTimings.delete(contextId);
-    if (!timing) return;
     const anchorMs = timing.speechEndedMs ?? timing.eosMs;
     if (anchorMs === undefined) return; // text-injected or fallback turn — not a voice TTFA
+    const anchor = timing.speechEndedMs !== undefined ? "speech_end" : "eos";
+    const eouDelayMs =
+      timing.speechEndedMs !== undefined &&
+      timing.eosMs !== undefined &&
+      timing.eosMs <= firstAudioMs
+        ? timing.eosMs - timing.speechEndedMs
+        : undefined;
+    const llmAnchorMs = timing.eosMs ?? timing.speechEndedMs;
+    const llmTtftMs =
+      llmAnchorMs !== undefined && timing.firstLlmDeltaMs !== undefined
+        ? timing.firstLlmDeltaMs - llmAnchorMs
+        : undefined;
+    const textAggregationMs =
+      timing.firstLlmDeltaMs !== undefined && timing.firstTtsTextMs !== undefined
+        ? timing.firstTtsTextMs - timing.firstLlmDeltaMs
+        : undefined;
+    const ttsTtfbMs =
+      timing.firstTtsTextMs !== undefined
+        ? firstAudioMs - timing.firstTtsTextMs
+        : undefined;
+    const attributedMs = [eouDelayMs, llmTtftMs, textAggregationMs, ttsTtfbMs]
+      .filter((value): value is number => value !== undefined)
+      .reduce((sum, value) => sum + value, 0);
+    const ttfaMs = firstAudioMs - anchorMs;
+    const unattributedMs = ttfaMs - attributedMs;
+    if (unattributedMs >= 500) this.markInfrastructureBreach(contextId);
+    const fillerUsed = timing.fillerUsed === true;
+    const backchannelUsed = timing.backchannelUsed === true;
     this.emit("turn_latency", {
       tsMs: firstAudioMs,
       turnId: contextId,
-      ttfaMs: firstAudioMs - anchorMs,
-      ...(timing.speechEndedMs !== undefined && timing.eosMs !== undefined
-        ? { eouDelayMs: timing.eosMs - timing.speechEndedMs }
-        : {}),
-      ...(timing.eosMs !== undefined && timing.firstLlmDeltaMs !== undefined
-        ? { llmTtftMs: timing.firstLlmDeltaMs - timing.eosMs }
-        : {}),
-      ...(timing.firstTtsTextMs !== undefined
-        ? { ttsTtfbMs: firstAudioMs - timing.firstTtsTextMs }
-        : {}),
-      fillerUsed: timing.fillerUsed === true,
-      backchannelUsed: timing.backchannelUsed === true,
+      ttfaMs,
+      anchor,
+      ...(eouDelayMs !== undefined ? { eouDelayMs } : {}),
+      ...(llmTtftMs !== undefined ? { llmTtftMs } : {}),
+      ...(textAggregationMs !== undefined ? { textAggregationMs } : {}),
+      ...(ttsTtfbMs !== undefined ? { ttsTtfbMs } : {}),
+      unattributedMs,
+      ...(timing.llmCallCount !== undefined ? { llmCallCount: timing.llmCallCount } : {}),
+      ...(timing.llmPassTtftMs !== undefined ? { llmPassTtftMs: [...timing.llmPassTtftMs] } : {}),
+      fillerUsed,
+      backchannelUsed,
     });
+
+    const tags = {
+      ...this.observabilityDims,
+      layer: "infrastructure" as const,
+      cancelled: this.interruptedGenerationContextIds.has(contextId) ? "true" : "false",
+      anchor,
+      filler_used: String(fillerUsed),
+      backchannel_used: String(backchannelUsed),
+    };
+    const histograms: Array<readonly [string, number | undefined]> = [
+      ["turn.ttfa_ms", ttfaMs],
+      ["turn.eou_delay_ms", eouDelayMs],
+      ["turn.llm_ttft_ms", llmTtftMs],
+      ["turn.text_aggregation_ms", textAggregationMs],
+      ["turn.tts_ttfb_ms", ttsTtfbMs],
+      ["turn.unattributed_ms", unattributedMs],
+    ];
+    for (const [name, valueMs] of histograms) {
+      if (valueMs !== undefined) this.metricsExporter.observeHistogram(name, valueMs, tags);
+    }
   }
 
   private handleTurnComplete(pkt: EndOfSpeechPacket): void {
@@ -972,9 +1169,14 @@ export class VoiceAgentSession {
     const otherTtsActive = this.ttsPlayout.activeContexts().some((c) => c !== pkt.contextId);
     if (otherTtsActive && isBackchannel(pkt.text)) {
       this.bus.push(Route.Background, make.metric(pkt.contextId, "turn.backchannel_dropped", pkt.text));
+      this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "backchannel", { text: pkt.text });
       return;
     }
 
+    if (this.emittedTurnLocalizations.has(pkt.contextId)) {
+      this.emittedTurnLocalizations.delete(pkt.contextId);
+      this.turnLocalizationStates.delete(pkt.contextId);
+    }
     this.lastFinalizedContextId = pkt.contextId;
     this.interaction.reset(pkt.contextId);
 
@@ -985,6 +1187,7 @@ export class VoiceAgentSession {
     // - interruptedGenerationContextIds: else turn N+1's LLM/TTS packets are dropped after a prior barge-in
     // - fallbackInjectedContexts: else only one error fallback can ever be spoken per call
     this.firstTtsAudioFired.delete(pkt.contextId);
+    this.pendingTurnLatency.delete(pkt.contextId);
     this.interruptedGenerationContextIds.delete(pkt.contextId);
     this.fallbackInjectedContexts.delete(pkt.contextId);
 
@@ -1114,8 +1317,11 @@ export class VoiceAgentSession {
     if (complete.text) {
       const timing = this.turnTimings.get(contextId);
       if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
-      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), complete.text));
-      buffer.emitted = appendVoiceText(buffer.emitted, complete.text);
+      // Strip markdown before it reaches TTS, and track the SPOKEN form as the heard
+      // prefix so barge-in truncation reconciles against what was actually said.
+      const spoken = normalizeForSpeech(complete.text);
+      this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), spoken));
+      buffer.emitted = appendVoiceText(buffer.emitted, spoken);
     }
     buffer.pending = complete.remaining;
     this.ttsTextBuffers.set(contextId, buffer);
@@ -1124,7 +1330,7 @@ export class VoiceAgentSession {
   private flushTtsText(contextId: string, tsMs?: number): string {
     const buffer = this.ttsTextBuffers.get(contextId);
     if (!buffer) return "";
-    const tail = buffer.pending.trim();
+    const tail = normalizeForSpeech(buffer.pending.trim());
     if (tail) {
       const timing = this.turnTimings.get(contextId);
       if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
@@ -1246,6 +1452,9 @@ export class VoiceAgentSession {
   }
 
   private handleDelegateResult(pkt: DelegateResultPacket): void {
+    if (pkt.control && isConversationControlName(pkt.control.name)) {
+      this.markConversationFlag(pkt.contextId);
+    }
     this.emit("delegate_result", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1255,6 +1464,8 @@ export class VoiceAgentSession {
       grounded: pkt.grounded,
       toolId: pkt.toolId,
       toolName: pkt.toolName,
+      ...(pkt.control ? { control: pkt.control } : {}),
+      ...(pkt.blocked ? { blocked: pkt.blocked } : {}),
     });
     this.debugPush({
       component: "delegate",
@@ -1289,6 +1500,125 @@ export class VoiceAgentSession {
     });
   }
 
+  private handleConversationMetric(pkt: ConversationMetricPacket): void {
+    if (isInfrastructureMetric(pkt.name)) this.markInfrastructureBreach(pkt.contextId);
+    if (isConversationEvaluationMetric(pkt.name, pkt.value)) this.markConversationFlag(pkt.contextId);
+    if (pkt.name === "input.cadence_stall_ms") {
+      this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "cadence", { value: pkt.value });
+    }
+    if (pkt.name === "llm.call_started") {
+      const timing = this.timingFor(pkt.contextId);
+      timing.llmCallCount = (timing.llmCallCount ?? 0) + 1;
+      return;
+    }
+    if (pkt.name === "llm.pass_ttft_ms") {
+      const ttftMs = Number(pkt.value);
+      if (!Number.isFinite(ttftMs)) return;
+      const timing = this.timingFor(pkt.contextId);
+      (timing.llmPassTtftMs ??= []).push(ttftMs);
+    }
+  }
+
+  private emitAcousticSignal(
+    contextId: string,
+    timestampMs: number,
+    signal: AcousticSignalPacket["signal"],
+    payload?: Readonly<Record<string, unknown>>,
+  ): void {
+    this.bus.push(Route.Background, make.acousticSignal(contextId, timestampMs, signal, payload));
+    this.metricsExporter.observeCounter?.(`acoustic.${signal}`, 1, {
+      provider: this.observabilityDims.provider,
+      model: this.observabilityDims.model,
+      region: this.observabilityDims.region,
+      layer: "conversation",
+    });
+  }
+
+  private localizationStateFor(contextId: string): {
+    infrastructureBreached: boolean;
+    conversationFlagged: boolean;
+  } {
+    const existing = this.turnLocalizationStates.get(contextId);
+    if (existing) return existing;
+    const state = { infrastructureBreached: false, conversationFlagged: false };
+    this.turnLocalizationStates.set(contextId, state);
+    return state;
+  }
+
+  private markInfrastructureBreach(contextId: string): void {
+    this.localizationStateFor(contextId).infrastructureBreached = true;
+  }
+
+  private markConversationFlag(contextId: string): void {
+    this.localizationStateFor(contextId).conversationFlagged = true;
+  }
+
+  private emitTurnLocalization(contextId: string): void {
+    if (this.emittedTurnLocalizations.has(contextId)) return;
+    const state = this.localizationStateFor(contextId);
+    this.emittedTurnLocalizations.add(contextId);
+    this.bus.push(
+      Route.Background,
+      make.turnLocalization(
+        contextId,
+        Date.now(),
+        localizeTurn(state),
+        state.infrastructureBreached,
+        state.conversationFlagged,
+      ),
+    );
+  }
+
+  private scheduleTurnLocalization(contextId: string): void {
+    this.scheduler.schedule(turnLocalizationTimerKey(contextId), 0, () => {
+      this.emitTurnLocalization(contextId);
+    });
+  }
+
+  private static readonly USAGE_FIELDS = [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "reasoningTokens",
+    "audioSeconds",
+    "characters",
+  ] as const;
+
+  private handleUsageRecorded(pkt: UsageRecordedPacket): void {
+    // Accumulate into the per-stage running total. A missing field stays missing
+    // (never coerced to 0) so an un-reported dimension is distinguishable from a real 0.
+    const prev = this.usageByStage.get(pkt.stage) ?? { stage: pkt.stage };
+    const next: Record<string, unknown> = { ...prev };
+    for (const field of VoiceAgentSession.USAGE_FIELDS) {
+      const add = pkt[field];
+      if (typeof add === "number") next[field] = ((prev[field] as number | undefined) ?? 0) + add;
+    }
+    this.usageByStage.set(pkt.stage, next as unknown as SessionStageUsage);
+
+    // Export each recorded unit as a counter, tagged low-cardinality only — same
+    // discipline as turn_latency. provider/model are exemplar-safe; contextId is not,
+    // and must never become a metric dimension (LiveKit caps at model/provider).
+    const exporter = this.metricsExporter;
+    if (exporter.observeCounter) {
+      const tags = {
+        stage: pkt.stage,
+        provider: pkt.provider ?? "",
+        model: pkt.model ?? "",
+        layer: "infrastructure" as const,
+      };
+      for (const field of VoiceAgentSession.USAGE_FIELDS) {
+        const value = pkt[field];
+        if (typeof value === "number") exporter.observeCounter(`usage.${field}`, value, tags);
+      }
+    }
+  }
+
+  private emitSessionUsage(): void {
+    if (this.usageByStage.size === 0) return;
+    this.emit("usage", { tsMs: Date.now(), stages: [...this.usageByStage.values()] });
+  }
+
   private handleTtsAudio(pkt: TextToSpeechAudioPacket): void {
     if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
       this.bus.push(
@@ -1309,17 +1639,24 @@ export class VoiceAgentSession {
         );
         this.turnUserStoppedAtMs.delete(pkt.contextId);
       }
-      this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+      if (this.generatingContextIds.has(pkt.contextId)) {
+        this.pendingTurnLatency.set(pkt.contextId, pkt.timestampMs);
+      } else {
+        this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+      }
     }
 
-    this.primarySpeakerGate.observeAssistantPlayout(pkt.audio);
+    const audio = this.normalizeOutboundAudio(pkt.audio);
+    // Transport subscribers receive this same packet after the core handler.
+    if (audio !== pkt.audio) Object.assign(pkt, { audio });
+    this.primarySpeakerGate.observeAssistantPlayout(audio);
     // Audio just arrived — (re)arm the stall watchdog for this turn's TTS output.
     this.watchdogs.armTtsStallTimer(pkt.contextId);
 
     // Mark active and advance this context's playout cursor by the chunk's
     // realtime duration.
     const sampleRateHz = requireTtsAudioSampleRate(pkt.sampleRateHz);
-    const audioDurationMs = estimatePcm16Duration(pkt.audio, sampleRateHz);
+    const audioDurationMs = estimatePcm16Duration(audio, sampleRateHz);
     const now = Date.now();
     this.ttsPlayout.noteAudio(pkt.contextId, audioDurationMs, now);
     this.interaction.observe({
@@ -1327,7 +1664,7 @@ export class VoiceAgentSession {
       contextId: pkt.contextId,
       timestampMs: pkt.timestampMs,
       ttsActive: true,
-      audio: pcm16BytesToSamples(pkt.audio),
+      audio: pcm16BytesToSamples(audio),
       sampleRateHz,
     });
 
@@ -1344,18 +1681,37 @@ export class VoiceAgentSession {
       type: "audio",
       data: {
         context_id: pkt.contextId,
-        bytes: String(pkt.audio.length),
+        bytes: String(audio.length),
       },
       timestampMs: pkt.timestampMs,
     });
 
-    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), pkt.audio, sampleRateHz));
+    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), audio, sampleRateHz));
+  }
+
+  private normalizeOutboundAudio(audio: Uint8Array): Uint8Array {
+    if (
+      !this.outboundLoudnessConfig ||
+      !this.outboundLoudnessState ||
+      audio.byteLength % 2 !== 0
+    ) {
+      return audio;
+    }
+    const samples = pcm16BytesToSamples(audio);
+    return pcm16SamplesToBytes(
+      normalizeLoudness(samples, this.outboundLoudnessState, this.outboundLoudnessConfig),
+    );
   }
 
   private handleTtsEnd(pkt: TextToSpeechEndPacket): void {
     // Generation finished, but the streamed audio is still playing out. Keep the
     // context interruptible until its playout estimate elapses, then release it.
     this.generatingContextIds.delete(pkt.contextId);
+    const firstAudioMs = this.pendingTurnLatency.get(pkt.contextId);
+    if (firstAudioMs !== undefined) {
+      this.pendingTurnLatency.delete(pkt.contextId);
+      this.emitTurnLatency(pkt.contextId, firstAudioMs);
+    }
     const now = Date.now();
     this.ttsPlayout.scheduleRelease(pkt.contextId, now);
     const playoutEndMs = this.ttsPlayout.playoutEnd(pkt.contextId);
@@ -1368,6 +1724,7 @@ export class VoiceAgentSession {
       data: {},
       timestampMs: Date.now(),
     });
+    this.scheduleTurnLocalization(pkt.contextId);
   }
 
   private scheduleInteractionPlayoutTick(contextId: string, delayMs: number): void {
@@ -1406,6 +1763,15 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
+    // A barged turn still produced first audio, and its TTFA is a real measurement.
+    // Deferring emission to tts.end (so later tool passes are counted) must not make
+    // interrupted turns vanish from the metric: barge-in correlates with slow turns,
+    // so silently dropping them biases the sample toward the fast ones — the worst
+    // turns would disappear from exactly the number meant to detect them.
+    this.flushPendingTurnLatency(pkt.contextId);
+    this.emitAcousticSignal(pkt.contextId, pkt.timestampMs, "interruption", {
+      source: pkt.source,
+    });
     this.turnTimings.delete(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
@@ -1456,6 +1822,7 @@ export class VoiceAgentSession {
     this.interruptedGenerationContextIds.add(contextId);
     this.failPendingToolCues(contextId); // G3: a superseded turn's pending cue fails
     this.generatingContextIds.delete(contextId);
+    this.pendingTurnLatency.delete(contextId);
     this.latencyFiller.cancel(contextId);
     this.turnTimings.delete(contextId);
     this.firstLlmDeltaReceived.delete(contextId);
@@ -1469,6 +1836,12 @@ export class VoiceAgentSession {
   }
 
   private handleComponentError(pkt: VoiceErrorPacket): void {
+    this.markInfrastructureBreach(pkt.contextId);
+    this.metricsExporter.observeCounter?.("error.stage", 1, {
+      stage: pkt.component,
+      category: pkt.category,
+      layer: "infrastructure",
+    });
     this.emit("error", {
       tsMs: pkt.timestampMs,
       stage: `${pkt.component}.error`,
@@ -1508,6 +1881,7 @@ export class VoiceAgentSession {
     // leave the caller in unexplained silence: if the reasoning layer failed the turn,
     // speak a graceful fallback (G4 — Deepgram guide "never fail silently").
     this.maybeSpeakErrorFallback(pkt);
+    this.emitTurnLocalization(pkt.contextId);
   }
 
   private maybeSpeakErrorFallback(pkt: VoiceErrorPacket): void {
@@ -1536,9 +1910,32 @@ export class VoiceAgentSession {
   }
 
   private handleInjectMessage(pkt: InjectMessagePacket): void {
+    if (pkt.mode === "context") {
+      const bridge = this.plugins.get("bridge") as (VoicePlugin & {
+        injectContext?: (text: string) => void;
+      }) | undefined;
+      if (bridge?.injectContext) {
+        bridge.injectContext(pkt.text);
+      } else {
+        console.warn("VoiceAgentSession: context injection requested but the bridge does not support injectContext");
+      }
+      return;
+    }
+
     // Inject as synthetic LLM output — goes through normal TTS path
     this.bus.push(Route.Main, make.llmDelta(pkt.contextId, Date.now(), pkt.text));
     this.bus.push(Route.Main, make.llmDone(pkt.contextId, Date.now(), pkt.text));
+  }
+
+  private handleSttReconfigure(pkt: SttReconfigurePacket): void {
+    const stt = this.plugins.get("stt");
+    if (stt?.sttReconfigure) {
+      stt.sttReconfigure.reconfigure(pkt.partial);
+      return;
+    }
+    console.warn(
+      "VoiceAgentSession: stt.reconfigure requested but the STT plugin does not support sttReconfigure",
+    );
   }
 
   private handleDisconnect(pkt: DisconnectRequestedPacket): void {

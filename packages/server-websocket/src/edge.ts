@@ -54,6 +54,7 @@ export interface EdgeRecorder {
 export interface VoiceEdgeWebSocketOptions {
   readonly createSession: (request: Request) => VoiceAgentSession | Promise<VoiceAgentSession>;
   readonly recorder?: EdgeRecorder;
+  /** Explicit resolver for the session identity; when set, it takes precedence over the request query. */
   readonly sessionId?: (request: Request) => string;
   readonly contextId?: () => string;
   readonly inputSampleRateHz?: number;
@@ -143,7 +144,6 @@ export async function runVoiceEdgeWebSocketConnection(
   options: VoiceEdgeWebSocketOptions,
 ): Promise<void> {
   const scheduler = options.scheduler ?? new TimerScheduler();
-  const sessionIdFn = options.sessionId ?? defaultSessionId;
   const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
   const outputSampleRateHz = positiveInteger(options.outputSampleRateHz) ?? 16000;
@@ -243,7 +243,12 @@ export async function runVoiceEdgeWebSocketConnection(
   socket.onError(teardownConnection);
 
   try {
-    const requestedSessionId = sanitizeSessionId(sessionIdFromRequest(request) ?? sessionIdFn(request));
+    // An explicit resolver is authoritative. Hosts such as cf-agents resolve the
+    // id before creating the session so the reasoner, session store, and transport
+    // all use the same identity even when the request carries a different wire id.
+    const requestedSessionId = sanitizeSessionId(
+      options.sessionId?.(request) ?? sessionIdFromRequest(request) ?? defaultSessionId(),
+    );
     const leased = await withScheduledTimeout(
       options.sessionStore.lease(requestedSessionId, async () => {
         const sess = await options.createSession(request);

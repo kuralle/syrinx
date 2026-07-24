@@ -10,6 +10,7 @@
 //   Lifecycle:              InitStepCompleted, InitFailed, InitCompleted
 
 import type { WordTiming } from "./interaction-policy.js";
+import type { SttReconfigurePartial } from "./plugin-contract.js";
 
 // =============================================================================
 // Base Types
@@ -199,6 +200,16 @@ export interface FinalizeSttPacket extends VoicePacket {
   readonly kind: "stt.finalize";
 }
 
+/**
+ * Per-turn STT reconfigure actuation. Session routes to the stt plugin's
+ * `sttReconfigure` seam when present (warn-and-no-op otherwise).
+ * Call at a turn boundary so reconnect-based STTs do not drop mid-utterance audio.
+ */
+export interface SttReconfigurePacket extends VoicePacket {
+  readonly kind: "stt.reconfigure";
+  readonly partial: SttReconfigurePartial;
+}
+
 export interface SttErrorPacket extends VoicePacket, VoiceErrorPacket {
   readonly kind: "stt.error";
   readonly component: "stt";
@@ -280,6 +291,32 @@ export interface DtmfReceivedPacket extends VoicePacket {
   readonly rawDigit: string;
 }
 
+/**
+ * Outbound DTMF request (IVR navigation). Digits may include pause syntax
+ * `w` (0.5s) / `W` (1s). Mechanism unit-tested; live carrier decode unverified.
+ */
+export interface DtmfSendPacket extends VoicePacket {
+  readonly kind: "dtmf.send";
+  /** Digits in `[0-9*#wW]+`. */
+  readonly digits: string;
+}
+
+export type CallTransferMode = "warm" | "cold" | "sip_refer";
+
+/**
+ * Outbound call transfer. Prefer Call-Control transfer over SIP REFER where
+ * answer-rate matters (REFER drops STIR/SHAKEN attestation). Mechanism
+ * unit-tested; live transfer bridge unverified against a carrier.
+ */
+export interface CallTransferPacket extends VoicePacket {
+  readonly kind: "call.transfer";
+  readonly mode: CallTransferMode;
+  /** E.164 number or SIP URI. */
+  readonly target: string;
+  /** Warm-handoff context for the receiving agent/human (mode `"warm"`). */
+  readonly summary?: string;
+}
+
 // =============================================================================
 // LLM Pipeline Packets
 // =============================================================================
@@ -354,6 +391,14 @@ export interface DelegateResultPacket extends VoicePacket {
   readonly grounded: boolean;
   readonly toolId?: string;
   readonly toolName?: string;
+  readonly control?: {
+    readonly name: string;
+    readonly payload: unknown;
+  };
+  readonly blocked?: {
+    readonly userFacingMessage: string;
+    readonly payload?: unknown;
+  };
 }
 
 export interface ReasoningResumePacket extends VoicePacket {
@@ -506,6 +551,8 @@ export interface StopIdleTimeoutPacket extends VoicePacket {
 export interface InjectMessagePacket extends VoicePacket {
   readonly kind: "inject.message";
   readonly text: string;
+  /** Defaults to speak for compatibility with existing inject.message producers. */
+  readonly mode?: "speak" | "context";
 }
 
 export interface DisconnectRequestedPacket extends VoicePacket {
@@ -545,6 +592,58 @@ export interface ConversationMetricPacket extends VoicePacket {
   readonly kind: "metric.conversation";
   readonly name: string;
   readonly value: string;
+}
+
+export type AcousticSignal =
+  | "prosody"
+  | "backchannel"
+  | "interruption"
+  | "primary_speaker"
+  | "echo_rejected"
+  | "cadence";
+
+export interface AcousticSignalPacket extends VoicePacket {
+  readonly kind: "acoustic.signal";
+  readonly signal: AcousticSignal;
+  readonly payload?: Readonly<Record<string, unknown>>;
+}
+
+export type TurnLocalizationVerdict = "infrastructure" | "conversation" | "none";
+
+export interface TurnLocalizationPacket extends VoicePacket {
+  readonly kind: "turn.localization";
+  readonly value: TurnLocalizationVerdict;
+  readonly infrastructureBreached: boolean;
+  readonly conversationFlagged: boolean;
+}
+
+/** The pipeline stage that consumed resources. Billing planes group cost by this. */
+export type UsageStage = "llm" | "stt" | "tts";
+
+/**
+ * One unit of billable resource consumption, recorded where it happens.
+ *
+ * The full shape is defined up front — LLM tokens, STT audio-seconds, TTS characters —
+ * so a producer added later needs no schema change; only the LLM producer is wired today
+ * (the AI SDK finish part carries usage the bridge had been dropping). `VoiceAgentSession`
+ * accumulates these into an end-of-session `session.usage` manifest and exports them as
+ * counters — the load-bearing seam for metering, spend caps, and eventual per-tenant billing.
+ * Fields not applicable to a stage are simply absent (tokens on STT/TTS, seconds on LLM).
+ */
+export interface UsageRecordedPacket extends VoicePacket {
+  readonly kind: "usage.recorded";
+  readonly stage: UsageStage;
+  readonly provider?: string;
+  readonly model?: string;
+  // LLM
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly reasoningTokens?: number;
+  // STT / TTS
+  readonly audioSeconds?: number;
+  readonly characters?: number;
 }
 
 export type TurnBoundaryKind =
@@ -593,6 +692,7 @@ export type InputPacket =
   | SttPartialPacket
   | SttResultPacket
   | FinalizeSttPacket
+  | SttReconfigurePacket
   | SttErrorPacket
   | EndOfSpeechAudioPacket
   | EndOfSpeechPacket
@@ -638,7 +738,12 @@ export type AnyErrorPacket =
   | InitializationFailedPacket;
 
 /** Observability packets (Background route). */
-export type ObservabilityPacket = ConversationMetricPacket | TurnBoundaryEventPacket;
+export type ObservabilityPacket =
+  | ConversationMetricPacket
+  | TurnBoundaryEventPacket
+  | UsageRecordedPacket
+  | AcousticSignalPacket
+  | TurnLocalizationPacket;
 
 /** Delegate (Responder-Thinker) lifecycle packets (Background route). */
 export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;

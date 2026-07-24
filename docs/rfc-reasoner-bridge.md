@@ -1,6 +1,6 @@
 # RFC: `Reasoner` — a framework-agnostic reasoning seam for the cascading bridge
 
-**Status:** Draft v2.1 (revised after a cross-family review — pi-glm / GLM 5.1) · **Author:** Syrinx · **Date:** 2026-06-05 · **Branch target:** `v2`
+**Status:** **Implemented** — shipped on `v2` and released; every §9 risk closed out at 1.0 (see §9.1). · **Author:** Syrinx · **Drafted:** 2026-06-05 (v2.1, revised after a cross-family review — pi-glm / GLM 5.1)
 **Scope:** cascading (text) bridge only. **Non-goal:** the speech-to-speech / OpenAI Realtime path (deferred — see §9).
 
 > **v2.1 changelog (review fixes):** B1 — `ReasoningPart` gains an `error` variant; the AI SDK `error`/`tool-error`/`finish-step` parts now map to it instead of being dropped (they drive retry). B2 — added `fromStreamFactory`; the "9 tests unchanged" claim is corrected (assertions unchanged, the construction line adapts). B3 — **auto-wrap dropped**; callers wrap explicitly with `fromAiSdkAgent` / `fromMastraAgent` (the `"fullStream" in agent.stream()` discriminator was broken — `stream()` returns a `Promise` — and it contradicted §6). B4 — explicit spoken-prefix reconciliation policy on Mastra resume. M3 — latency gate now measures *no regression vs our own baseline on a stable local harness* (`smoke:websocket-interactive`), not a delta against a literature budget or the noisy deployed worker.

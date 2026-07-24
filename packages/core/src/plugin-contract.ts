@@ -22,8 +22,42 @@ export interface EndpointingCapability {
   readonly disableConfig?: PluginConfig;
 }
 
+/**
+ * Vendor-agnostic mid-stream STT reconfiguration. Per-turn reconfigure is a COMMODITY STT capability
+ * (Deepgram Flux `Configure`, AssemblyAI `UpdateConfiguration`, Speechmatics `SetRecognitionConfig`) —
+ * the value of THIS seam is normalizing those differing wire shapes behind one interface so an
+ * InteractionPolicy can actuate any STT without vendor-specific plumbing. All fields optional; a plugin
+ * applies what it supports and ignores the rest (best-effort — e.g. Deepgram ignores `contextText`).
+ */
+export interface SttReconfigurePartial {
+  readonly keyterms?: readonly string[];
+  readonly eotThreshold?: number;
+  readonly eagerEotThreshold?: number;
+  readonly eotTimeoutMs?: number;
+  /** Silence-based endpointing (ms). Nova-style; Flux may ignore (it uses eotTimeoutMs). */
+  readonly endpointingMs?: number;
+  readonly vadThreshold?: number;
+  readonly languageHints?: readonly string[];
+  /**
+   * Hard recognition-language switch (e.g. "en-US" → "es-ES", or Nova-3 "multi" for code-switch).
+   * Distinct from `languageHints` (soft bias): this changes the recognizer's language. Providers
+   * that carry language in the connection URL (Nova) reconnect to apply it; model-fixed providers
+   * (Flux, `flux-general-en`) ignore it and rely on `languageHints`.
+   */
+  readonly language?: string;
+  /** AssemblyAI-style agent-context biasing (the agent's own prior reply). Ignored where unsupported. */
+  readonly contextText?: string;
+}
+
+export interface SttReconfigure {
+  reconfigure(partial: SttReconfigurePartial): void;
+}
+
 export interface VoicePlugin {
   readonly endpointingCapability?: EndpointingCapability;
+
+  /** Present when the STT supports mid-stream reconfiguration (see {@link SttReconfigure}). */
+  readonly sttReconfigure?: SttReconfigure;
 
   /**
    * Initialize the plugin. Called during the init chain.

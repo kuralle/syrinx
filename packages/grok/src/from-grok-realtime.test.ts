@@ -276,4 +276,42 @@ describe("fromGrokRealtime", () => {
       emitsServerSpeechStarted: false,
     });
   });
+
+  it("cfg-flex: formats, transcription, temperature, modalities, toolChoice, sessionConfig reach session.update", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromGrokRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=grok-voice-latest",
+      inputAudioFormat: { type: "audio/pcmu", rate: 8000 },
+      outputAudioFormat: { type: "audio/pcmu", rate: 8000 },
+      inputTranscription: { model: "grok-asr" },
+      temperature: 0.55,
+      modalities: ["audio", "text"],
+      toolChoice: "required",
+      sessionConfig: { speed: 1.05, custom_field: "x" },
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    const session = (JSON.parse(mock.sent[0]!) as { session: Record<string, unknown> }).session;
+    expect(session["temperature"]).toBe(0.55);
+    expect(session["output_modalities"]).toEqual(["audio", "text"]);
+    expect(session["tool_choice"]).toBe("required");
+    expect(session["speed"]).toBe(1.05);
+    expect(session["custom_field"]).toBe("x");
+    // Default turn detection preserved when not overridden.
+    expect(session["turn_detection"]).toEqual({ type: "server_vad" });
+    expect(session["voice"]).toBe("eve");
+    const audio = session["audio"] as {
+      input: Record<string, unknown>;
+      output: Record<string, unknown>;
+    };
+    expect(audio.input["format"]).toEqual({ type: "audio/pcmu", rate: 8000 });
+    expect(audio.input["transcription"]).toEqual({ model: "grok-asr" });
+    expect(audio.output["format"]).toEqual({ type: "audio/pcmu", rate: 8000 });
+  });
 });

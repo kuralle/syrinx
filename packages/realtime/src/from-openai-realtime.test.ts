@@ -140,6 +140,33 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 }
 
 describe("fromOpenAIRealtime", () => {
+  it("injects silent context as an OpenAI system conversation item", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    adapter.injectContext!("Use the verified deadline.");
+
+    expect(JSON.parse(mock.sent[1]!)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: "Use the verified deadline." }],
+      },
+    });
+
+    await adapter.close();
+  });
+
   it("emits exact client events for open, audio, cancel, and tool result", async () => {
     const mock = createMockSocketHarness();
     const adapter = fromOpenAIRealtime({
@@ -525,6 +552,40 @@ describe("fromOpenAIRealtime", () => {
     });
     expect(adapter.caps.inputSampleRateHz).toBe(16000);
     expect(adapter.caps.outputSampleRateHz).toBe(16000);
+  });
+
+  it("cfg-flex: audio formats, noise_reduction, max_output_tokens, and sessionConfig reach session.update", async () => {
+    const mock = createMockSocketHarness();
+    const adapter = fromOpenAIRealtime({
+      apiKey: "test-key",
+      socketFactory: mock.factory,
+      url: () => "wss://example.test/realtime?model=gpt-realtime-2",
+      inputAudioFormat: { type: "audio/pcmu", rate: 8000 },
+      outputAudioFormat: { type: "audio/pcmu", rate: 8000 },
+      noiseReduction: { type: "near_field" },
+      maxOutputTokens: 2048,
+      sessionConfig: { speed: 1.1, tracing: { workflow_name: "cfg-flex" } },
+    });
+
+    const openTask = adapter.open(new AbortController().signal);
+    await waitFor(() => mock.sent.length > 0);
+    mock.inject({ type: "session.updated" });
+    await openTask;
+
+    const session = (JSON.parse(mock.sent[0]!) as { session: Record<string, unknown> }).session;
+    expect(session["max_output_tokens"]).toBe(2048);
+    expect(session["speed"]).toBe(1.1);
+    expect(session["tracing"]).toEqual({ workflow_name: "cfg-flex" });
+    const audio = session["audio"] as {
+      input: Record<string, unknown>;
+      output: Record<string, unknown>;
+    };
+    expect(audio.input["format"]).toEqual({ type: "audio/pcmu", rate: 8000 });
+    expect(audio.input["noise_reduction"]).toEqual({ type: "near_field" });
+    expect(audio.output["format"]).toEqual({ type: "audio/pcmu", rate: 8000 });
+    // Defaults still present when not overridden by sessionConfig.
+    expect(session["output_modalities"]).toEqual(["audio"]);
+    expect(session["tool_choice"]).toBe("auto");
   });
 
   it("R-10: skips response.create when requiresResponseCreateAfterToolOutput is false", async () => {

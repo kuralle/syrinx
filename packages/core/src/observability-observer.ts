@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Route, type PipelineBus } from "./pipeline-bus.js";
-import { monotonicNowMs, type MetricsExporter } from "./observability.js";
+import { monotonicNowMs, type MetricsExporter, type ObservabilityLayer } from "./observability.js";
 import type {
   TurnBoundaryKind,
   VadSpeechStartedPacket,
@@ -17,6 +17,7 @@ export interface ObservabilityDims {
   readonly provider: string;
   readonly model: string;
   readonly region: string;
+  readonly layer?: ObservabilityLayer;
 }
 
 export interface ObservabilityObserverDeps {
@@ -124,12 +125,11 @@ export class ObservabilityObserver {
 
     const dims = this.dimsFor(speechId, cancelled);
     const tags = {
-      sessionId: this.deps.sessionId,
-      speechId,
       provider: dims.provider,
       model: dims.model,
       region: dims.region,
       cancelled: dims.cancelled ? "true" : "false",
+      layer: dims.layer ?? "conversation",
     };
 
     if (boundary === "agent_started_speaking") {
@@ -179,12 +179,16 @@ export class ObservabilityObserver {
     });
   }
 
-  private dimsFor(speechId: string, cancelled: boolean): Required<ObservabilityDims> & { cancelled: boolean } {
+  private dimsFor(
+    speechId: string,
+    cancelled: boolean,
+  ): Required<ObservabilityDims> & { cancelled: boolean } {
     const stage = this.stageDims.get(speechId) ?? {};
     return {
       provider: stage.provider ?? this.deps.dims.provider,
       model: stage.model ?? this.deps.dims.model,
       region: stage.region ?? this.deps.dims.region,
+      layer: stage.layer ?? this.deps.dims.layer ?? "conversation",
       cancelled: cancelled || stage.cancelled === true,
     };
   }
