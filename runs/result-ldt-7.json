@@ -1,0 +1,15 @@
+{
+  "task": "LDT-7",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "approve",
+  "claims": [
+    { "command": "pnpm -C packages/browser-client test", "exit_code": 0, "note": "7 files, 94 tests (+15 for agent-state)" },
+    { "command": "pnpm -C packages/browser-client typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0, "note": "2 files, 7 tests" },
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "root_cause_fixed": "apps/studio vitest setup never called Testing Library cleanup(); every render accumulated in the DOM so a second getBy* in the same file failed with 'Found multiple elements'. Fixed in src/test/setup.ts rather than scoping around it — it would have broken every component test in waves 2-3."
+}

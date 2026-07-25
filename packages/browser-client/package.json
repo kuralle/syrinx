@@ -27,7 +27,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./record": "./src/session-record.ts"
+    "./record": "./src/session-record.ts",
+    "./agent-state": "./src/agent-state.ts"
   },
   "scripts": {
     "dev": "vite --port 5173",

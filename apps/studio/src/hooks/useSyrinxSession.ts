@@ -17,6 +17,11 @@ import {
   emptySessionRecord,
   type SessionRecord,
 } from "@kuralle-syrinx/browser-client/record";
+import {
+  INITIAL_AGENT_STATE,
+  nextAgentState,
+  type AgentStateSnapshot,
+} from "@kuralle-syrinx/browser-client/agent-state";
 
 export type SessionStatus = "offline" | "connecting" | "connected" | "error";
 
@@ -42,6 +47,8 @@ export interface SyrinxSessionControls {
   readonly inputSampleRateHz: number;
   /** Everything the server told us this session, structured. Drives timeline/events/metrics. */
   readonly record: SessionRecord;
+  /** What the agent is doing right now — derived, no server change needed. */
+  readonly agentState: AgentStateSnapshot;
   connect: () => Promise<void>;
   disconnect: () => void;
   clearTranscript: () => void;
@@ -58,6 +65,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const [playbackLevel, setPlaybackLevel] = useState(0);
   const [inputSampleRateHz, setInputSampleRateHz] = useState(16000);
   const [record, setRecord] = useState<SessionRecord>(() => emptySessionRecord());
+  const [agentState, setAgentState] = useState<AgentStateSnapshot>(INITIAL_AGENT_STATE);
   const recordStartedAtRef = useRef<number>(0);
 
   const clientRef = useRef<SyrinxBrowserClient | null>(null);
@@ -175,6 +183,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     clientRef.current = client;
     recordStartedAtRef.current = performance.now();
     setRecord(emptySessionRecord({ wsUrl }));
+    setAgentState(INITIAL_AGENT_STATE);
 
     unsubscribeRef.current = client.on((event: SyrinxBrowserClientEvent) => {
       if (event.type === "open") {
@@ -197,6 +206,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
         // transcript ignores, and unknown ones such as the agents-SDK cf_agent_*.
         const atMs = Math.round(performance.now() - recordStartedAtRef.current);
         setRecord((prev) => applyMessage(prev, event.message, atMs));
+        setAgentState((prev) => nextAgentState(prev, event.message, atMs));
         handleMessage(event.message);
         if (withMic && event.message.type === "ready" && event.message.audio?.inputSampleRateHz) {
           void startMic(client, event.message.audio.inputSampleRateHz).catch((error: unknown) => {
@@ -263,6 +273,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     playbackLevel,
     inputSampleRateHz,
     record,
+    agentState,
     connect,
     disconnect,
     clearTranscript,

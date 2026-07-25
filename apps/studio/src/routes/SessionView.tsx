@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { AgentStateBadge } from "@/components/AgentStateBadge";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
@@ -46,6 +47,10 @@ export function SessionView() {
         onClearTranscript={session.clearTranscript}
         onPlaySample={() => void session.playSample()}
       />
+
+      <div className="flex items-center gap-3">
+        <AgentStateBadge snapshot={session.agentState} />
+      </div>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <TranscriptPanel state={session.transcript} />
