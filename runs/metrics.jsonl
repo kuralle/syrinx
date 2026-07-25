@@ -5,3 +5,4 @@
 {"sprint":4,"phase":"closeout","verdict":"pr-ready","full_test_gate":"green (server-workers flake confirmed load-induced, passes isolated)","awaiting":"user go to push+open PR","date":"2026-07-09"}
 {"task":"01011923","wave":1,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"3d30e9d","note":"stt-core extensible base + EL/Google/Flux; caught+fixed double-subscribe regression"}
 {"task":"01011923","wave":2,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"9f0558a","note":"nova async-emit seam; caught+fixed billing-retire-on-turn.change under-bill; grok test aligned 0f18b83"}
+{"task":"LDT-15","worker":"manager","lane":"full","verdict":"shipped","note":"studio publishable; caught+fixed bundled deps declared as runtime deps"}

@@ -1,9 +1,38 @@
 {
   "name": "@kuralle-syrinx/studio",
-  "version": "0.0.0",
-  "private": true,
+  "version": "4.3.0",
+  "private": false,
   "type": "module",
+  "description": "Syrinx Studio — browser voice studio for local development: mic capture, live transcript, and session debugging over the Syrinx WebSocket protocol",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "studio",
+    "devtools"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "apps/studio"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "exports": {
+    "./dist-path": "./dist-path.js",
+    "./dist/*": "./dist/*"
+  },
+  "files": [
+    "dist",
+    "dist-path.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,9 +40,10 @@
     "deploy": "vite build && wrangler deploy",
     "hosted-test": "tsx scripts/hosted-test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "vite build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@kuralle-syrinx/browser-client": "workspace:*",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-select": "^2.2.6",
@@ -24,9 +54,7 @@
     "lucide-react": "^0.544.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "tailwind-merge": "^3.3.1"
-  },
-  "devDependencies": {
+    "tailwind-merge": "^3.3.1",
     "@tailwindcss/vite": "^4.1.12",
     "@testing-library/jest-dom": "^6.8.0",
     "@testing-library/react": "^16.3.0",

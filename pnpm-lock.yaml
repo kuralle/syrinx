@@ -145,7 +145,7 @@ importers:
         version: 4.97.0(@cloudflare/workers-types@4.20260603.1)
 
   apps/studio:
-    dependencies:
+    devDependencies:
       '@kuralle-syrinx/browser-client':
         specifier: workspace:*
         version: link:../../packages/browser-client
@@ -158,31 +158,12 @@ importers:
       '@radix-ui/react-slot':
         specifier: ^1.2.3
         version: 1.2.4(@types/react@19.2.16)(react@19.2.7)
-      '@tanstack/react-router':
-        specifier: ^1.131.2
-        version: 1.170.11(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      class-variance-authority:
-        specifier: ^0.7.1
-        version: 0.7.1
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
-      lucide-react:
-        specifier: ^0.544.0
-        version: 0.544.0(react@19.2.7)
-      react:
-        specifier: ^19.1.1
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.1.1
-        version: 19.2.7(react@19.2.7)
-      tailwind-merge:
-        specifier: ^3.3.1
-        version: 3.6.0
-    devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.1.12
         version: 4.3.0(vite@6.4.3(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0))
+      '@tanstack/react-router':
+        specifier: ^1.131.2
+        version: 1.170.11(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@testing-library/jest-dom':
         specifier: ^6.8.0
         version: 6.9.1
@@ -204,9 +185,27 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^5.0.2
         version: 5.2.0(vite@6.4.3(@types/node@22.19.19)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.3)(yaml@2.9.0))
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
       jsdom:
         specifier: ^26.1.0
         version: 26.1.0
+      lucide-react:
+        specifier: ^0.544.0
+        version: 0.544.0(react@19.2.7)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.7(react@19.2.7)
+      tailwind-merge:
+        specifier: ^3.3.1
+        version: 3.6.0
       tailwindcss:
         specifier: ^4.1.12
         version: 4.3.0

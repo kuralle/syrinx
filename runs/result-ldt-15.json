@@ -1,0 +1,14 @@
+{
+  "task": "LDT-15",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "full",
+  "claims": [
+    { "command": "node -e '<red-gate: private/files/version/exports>'", "exit_code": 0, "note": "was exit 1 (4 failures) before the change" },
+    { "command": "node --input-type=module -e 'import studioDistPath; assert index.html exists'", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0, "note": "1 file, 2 tests" },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0, "note": "post dependency move" },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ]
+}
