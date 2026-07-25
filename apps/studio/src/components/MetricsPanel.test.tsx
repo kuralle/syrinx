@@ -56,6 +56,34 @@ describe("MetricsPanel", () => {
     expect(warn).toHaveTextContent(/not a fast agent/i);
   });
 
+  it("counts a typed turn in the voice rows, because a typed turn is still spoken", () => {
+    // The real wire shape for a typed turn, captured live against dev:server: the
+    // server OMITS the marks it never measured (no speechEndMs, sttMs or e2eMs) and
+    // sends genuine TTS numbers, because sending text runs the same pipeline and the
+    // reply really is synthesised. Dropping these would hide a real measurement.
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", sttMs: 200, llmTTFTMs: 1000, ttsTTFBMs: 300, e2eMs: 1800 },
+      { type: "metrics", turnId: "typed", ttsTTFBMs: 454 },
+    ]);
+    render(<MetricsPanel record={record} textTurnIds={new Set(["typed"])} />);
+
+    // Transcription ran once — the typed turn never reached it, and n says so.
+    expect(screen.getByTestId("metrics-row-stt")).toHaveTextContent("1");
+    // The voice ran twice. 300 and 454 are both real.
+    expect(screen.getByTestId("metrics-row-tts")).toHaveTextContent("2");
+    expect(screen.getByTestId("metrics-text-turns")).toHaveTextContent(/1 of these turn was typed/i);
+    expect(screen.getByTestId("metrics-text-turns")).toHaveTextContent(/still spoken/i);
+  });
+
+  it("omits the transcription row when no turn was ever transcribed", () => {
+    const record = recordFrom([{ type: "metrics", turnId: "typed", ttsTTFBMs: 454 }]);
+    render(<MetricsPanel record={record} textTurnIds={new Set(["typed"])} />);
+
+    // Absent because it never ran — not a zero row claiming instant transcription.
+    expect(screen.queryByTestId("metrics-row-stt")).not.toBeInTheDocument();
+    expect(screen.getByTestId("metrics-row-tts")).toHaveTextContent("454ms");
+  });
+
   it("does not warn when every turn is above the floor", () => {
     const record = recordFrom([{ type: "metrics", turnId: "t1", e2eMs: 1500 }]);
     render(<MetricsPanel record={record} />);

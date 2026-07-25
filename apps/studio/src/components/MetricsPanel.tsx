@@ -5,7 +5,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const fmt = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
 
-export function MetricsPanel({ record }: { record: SessionRecord }): React.JSX.Element {
+export function MetricsPanel({
+  record,
+  textTurnIds,
+}: {
+  record: SessionRecord;
+  /** Turns the user typed. Counted like any other; used only to caption what they skipped. */
+  textTurnIds?: ReadonlySet<string>;
+}): React.JSX.Element {
+  const textTurnCount = record.turns.filter((t) => textTurnIds?.has(t.turnId)).length;
+  // Typed turns are aggregated like any other. A typed turn genuinely runs the
+  // reasoner and the voice — only transcription and endpointing are skipped — and
+  // the server omits a mark it never measured instead of sending a zero. So each
+  // stage's `n` already counts exactly the turns that reached it; dropping typed
+  // turns would discard real measurements, not protect the numbers.
   const m = buildSessionMetrics(record.turns);
 
   return (
@@ -69,6 +82,14 @@ export function MetricsPanel({ record }: { record: SessionRecord }): React.JSX.E
               </p>
             )}
           </>
+        )}
+
+        {textTurnCount > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="metrics-text-turns">
+            {textTurnCount} of these turn{textTurnCount === 1 ? " was" : "s were"} typed, so
+            {textTurnCount === 1 ? " it" : " they"} never reached the transcription row. The reply was
+            still spoken, so the voice rows include {textTurnCount === 1 ? "it" : "them"}.
+          </p>
         )}
       </CardContent>
     </Card>

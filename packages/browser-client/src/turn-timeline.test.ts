@@ -24,8 +24,8 @@ describe("turn timeline — segments", () => {
       turnWith({ speechEndMs: 1000, textReadyMs: 1300, firstAudioByteMs: 2500, firstAudioPlayedMs: 2700, lastAudioPlayedMs: 6300, e2eMs: 5300 }),
     );
     expect(tl.segments.map((s) => [s.label, s.durationMs])).toEqual([
-      ["Deciding you're done, and transcribing", 300],
-      ["Thinking", 1200],
+      ["Deciding you're done, transcribing, and thinking", 300],
+      ["Voice (to first audio)", 1200],
       ["First audio out", 200],
       ["Agent speaking", 3600],
     ]);
@@ -43,7 +43,7 @@ describe("turn timeline — segments", () => {
     const tl = buildTurnTimeline(
       turnWith({ speechEndMs: 0, textReadyMs: 100, firstAudioByteMs: 2000, firstAudioPlayedMs: 2100 }),
     );
-    expect(tl.segments.filter((s) => s.slowest).map((s) => s.label)).toEqual(["Thinking"]);
+    expect(tl.segments.filter((s) => s.slowest).map((s) => s.label)).toEqual(["Voice (to first audio)"]);
   });
 
   it("uses plain language, never packet names", () => {
@@ -74,7 +74,7 @@ describe("turn timeline — missing data is stated, not faked", () => {
       turnWith({ speechEndMs: 0, firstAudioByteMs: 1000, lastAudioPlayedMs: 3000 }),
     );
     expect(tl.segments.map((s) => [s.label, s.durationMs])).toEqual([
-      ["Thinking", 1000],
+      ["Voice (to first audio)", 1000],
       ["Agent speaking", 2000],
     ]);
   });

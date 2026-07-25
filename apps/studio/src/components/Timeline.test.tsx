@@ -48,6 +48,42 @@ describe("Timeline", () => {
     expect(screen.queryByTestId("fast-turn-warning")).not.toBeInTheDocument();
   });
 
+  it("charts a typed turn's real voice timings and names what it skipped", () => {
+    // Captured live against dev:server: a typed turn omits speechEnd/stt/e2e (never
+    // measured) and carries genuine audio marks, because the reply really is spoken.
+    const record = recordFrom([
+      {
+        type: "metrics",
+        turnId: "t1",
+        textReadyMs: 1_000_000,
+        firstAudioByteMs: 1_000_454,
+        firstAudioPlayedMs: 1_000_459,
+        lastAudioPlayedMs: 1_008_439,
+      },
+    ]);
+    render(<Timeline record={record} textTurnIds={new Set(["t1"])} />);
+
+    expect(screen.getByTestId("timeline-text-turn")).toHaveTextContent(/nothing transcribed you/i);
+    expect(screen.getByTestId("timeline-text-turn")).toHaveTextContent(/still spoken/i);
+    // The real waterfall is drawn, not suppressed: 454ms to the first audio byte.
+    expect(screen.getByTitle(/voice \(to first audio\)/i)).toBeInTheDocument();
+    expect(screen.getByTestId("timeline-lane")).toHaveTextContent("454ms");
+    // A typed turn cannot have been cut off by an endpointer that never ran.
+    expect(screen.queryByTestId("fast-turn-warning")).not.toBeInTheDocument();
+  });
+
+  it("keeps a spoken turn's audio stages when only some turns were typed", () => {
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
+      { type: "metrics", turnId: "t2", llmTTFTMs: 500, e2eMs: 900 },
+    ]);
+    render(<Timeline record={record} textTurnIds={new Set(["t2"])} />);
+
+    expect(screen.getAllByTestId("timeline-lane")).toHaveLength(2);
+    expect(screen.getByTitle(/deciding you're done/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId("timeline-text-turn")).toHaveLength(1);
+  });
+
   it("shows a turn with timings alongside one without", () => {
     const record = recordFrom([
       { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },

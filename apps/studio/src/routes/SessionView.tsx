@@ -5,6 +5,7 @@ import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
 import { EventLog } from "@/components/EventLog";
 import { MetricsPanel } from "@/components/MetricsPanel";
+import { TextComposer } from "@/components/TextComposer";
 import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,8 +59,15 @@ export function SessionView() {
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="flex min-h-0 flex-col gap-4">
           <TranscriptPanel record={session.record} />
-          <Timeline record={session.record} />
-          <MetricsPanel record={session.record} />
+          <TextComposer
+            mode={session.mode}
+            connected={session.status === "connected"}
+            micActive={session.micActive}
+            onModeChange={session.setMode}
+            onSend={session.sendText}
+          />
+          <Timeline record={session.record} textTurnIds={session.textTurnIds} />
+          <MetricsPanel record={session.record} textTurnIds={session.textTurnIds} />
           {/* Last on purpose — the timeline is primary, this is the escape hatch. */}
           <EventLog record={session.record} />
         </div>
@@ -81,9 +89,13 @@ export function SessionView() {
               <p className="text-xs text-muted-foreground">
                 {session.micActive
                   ? "Microphone streaming — server VAD decides turn boundaries."
-                  : session.status === "connected"
-                    ? "Waiting for microphone…"
-                    : "Connect to start a session."}
+                  : session.mode === "text"
+                    ? // Not "waiting" — text mode released it, and saying otherwise
+                      // would leave the user unsure whether the mic is still live.
+                      "Microphone released — text mode. Switch back to voice to re-request it."
+                    : session.status === "connected"
+                      ? "Waiting for microphone…"
+                      : "Connect to start a session."}
               </p>
             </CardContent>
           </Card>

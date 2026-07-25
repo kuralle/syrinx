@@ -47,8 +47,13 @@ export const FAST_TURN_FLOOR_MS = 700;
 // collapses its segment rather than corrupting the ones around it.
 const MARKS: readonly { readonly field: keyof TurnTimings; readonly label: string }[] = [
   { field: "speechEndMs", label: "You stopped speaking" },
-  { field: "textReadyMs", label: "Deciding you're done, and transcribing" },
-  { field: "firstAudioByteMs", label: "Thinking" },
+  { field: "textReadyMs", label: "Deciding you're done, transcribing, and thinking" },
+  // Segments are labelled by the mark that ENDS them, so this one covers
+  // textReady -> firstAudioByte: the reply text already exists and we are waiting on
+  // speech. That is time-to-first-audio, which `session-metrics` reports as
+  // "Voice (to first audio)" from the same field. Calling it "Thinking" made the two
+  // panels name one quantity two different things.
+  { field: "firstAudioByteMs", label: "Voice (to first audio)" },
   { field: "firstAudioPlayedMs", label: "First audio out" },
   { field: "lastAudioPlayedMs", label: "Agent speaking" },
 ];

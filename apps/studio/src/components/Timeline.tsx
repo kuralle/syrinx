@@ -1,5 +1,5 @@
-import { buildTimelines, type TurnTimeline } from "@kuralle-syrinx/browser-client/turn-timeline";
-import type { SessionRecord } from "@kuralle-syrinx/browser-client/record";
+import { buildTurnTimeline, type TurnTimeline } from "@kuralle-syrinx/browser-client/turn-timeline";
+import type { SessionRecord, TurnRecord } from "@kuralle-syrinx/browser-client/record";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMs } from "@/lib/format";
@@ -75,8 +75,37 @@ function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
   );
 }
 
-export function Timeline({ record }: { record: SessionRecord }): React.JSX.Element {
-  const timelines = buildTimelines(record.turns);
+// A typed turn skips being *heard*, not being *spoken*: sending text pushes an
+// immediate end-of-turn into the same pipeline, so the reasoner and the voice both
+// run for real (verified live — a typed turn returns ~108KB of speech).
+//
+// So there is nothing to strip. The server omits a mark it never measured rather
+// than sending a zero, and the lane below already renders only the marks present —
+// which for a typed turn is a genuine "text ready → first audio → done" waterfall.
+// Deleting those would hide a real measurement, which is the same lie as a fake one
+// pointed the other way.
+function TypedTurnNote(): React.JSX.Element {
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="timeline-text-turn">
+      Typed turn — nothing transcribed you and nothing judged when you finished, so those steps are
+      absent below. The reply was still spoken, so the voice timings are real.
+    </p>
+  );
+}
+
+export function Timeline({
+  record,
+  textTurnIds,
+}: {
+  record: SessionRecord;
+  /** Turns the user typed. Only the studio knows — the wire cannot tell them apart. */
+  textTurnIds?: ReadonlySet<string>;
+}): React.JSX.Element {
+  const timelines = record.turns.map((turn) => ({
+    turn,
+    isText: textTurnIds?.has(turn.turnId) ?? false,
+    timeline: buildTurnTimeline(turn),
+  }));
 
   return (
     <Card>
@@ -92,8 +121,11 @@ export function Timeline({ record }: { record: SessionRecord }): React.JSX.Eleme
           </p>
         ) : (
           <div className="space-y-4">
-            {timelines.map((t) => (
-              <Lane key={t.turnId} timeline={t} />
+            {timelines.map(({ turn, isText, timeline }) => (
+              <div key={turn.turnId} className="space-y-1" data-mode={isText ? "text" : "voice"}>
+                {isText && <TypedTurnNote />}
+                <Lane timeline={timeline} />
+              </div>
             ))}
           </div>
         )}

@@ -19,6 +19,9 @@ import {
 
 export type SessionStatus = "offline" | "connecting" | "connected" | "error";
 
+/** Voice streams the mic; text sends typed turns and holds no microphone at all. */
+export type ConversationMode = "voice" | "text";
+
 function pcm16Rms(data: ArrayBuffer): number {
   const samples = new Int16Array(data);
   if (samples.length === 0) return 0;
@@ -42,10 +45,20 @@ export interface SyrinxSessionControls {
   readonly record: SessionRecord;
   /** What the agent is doing right now — derived, no server change needed. */
   readonly agentState: AgentStateSnapshot;
+  readonly mode: ConversationMode;
+  /**
+   * Turns that first appeared while the session was in text mode. The wire cannot
+   * tell them apart — a typed turn comes back as a transcript like any other — but
+   * the studio knows, because in text mode there is no microphone to hear.
+   */
+  readonly textTurnIds: ReadonlySet<string>;
   connect: () => Promise<void>;
   disconnect: () => void;
   clearTranscript: () => void;
   playSample: () => Promise<void>;
+  /** Switches modality in place. Never reconnects, so the record survives the switch. */
+  setMode: (mode: ConversationMode) => void;
+  sendText: (text: string) => void;
 }
 
 export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
@@ -58,7 +71,13 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const [inputSampleRateHz, setInputSampleRateHz] = useState(16000);
   const [record, setRecord] = useState<SessionRecord>(() => emptySessionRecord());
   const [agentState, setAgentState] = useState<AgentStateSnapshot>(INITIAL_AGENT_STATE);
+  const [mode, setModeState] = useState<ConversationMode>("voice");
+  const [textTurnIds, setTextTurnIds] = useState<ReadonlySet<string>>(() => new Set());
   const recordStartedAtRef = useRef<number>(0);
+  // The message listener is installed once per connection, so it would close over a
+  // stale `mode`. A ref keeps the attribution honest across a mid-session switch.
+  const modeRef = useRef<ConversationMode>("voice");
+  const seenTurnIdsRef = useRef<Set<string>>(new Set());
 
   const clientRef = useRef<SyrinxBrowserClient | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
@@ -144,6 +163,30 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     setMicActive(true);
   }, []);
 
+  // Switching modality tears down or rebuilds the microphone only. The socket, the
+  // record and the derived agent state are untouched, so the conversation continues
+  // across the switch instead of starting over.
+  const setMode = useCallback((next: ConversationMode): void => {
+    modeRef.current = next;
+    setModeState(next);
+    if (next === "text") {
+      stopMic();
+      return;
+    }
+    const client = clientRef.current;
+    if (!client?.connected || !readyRef.current) return;
+    void startMic(client, inputSampleRateHz).catch((error: unknown) => {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setStatus("error");
+    });
+  }, [inputSampleRateHz, startMic, stopMic]);
+
+  const sendText = useCallback((text: string): void => {
+    const trimmed = text.trim();
+    if (trimmed === "") return;
+    clientRef.current?.sendText(trimmed);
+  }, []);
+
   const disconnect = useCallback((): void => {
     readyRef.current = false;
     uplinkContextIdRef.current = "";
@@ -159,7 +202,8 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   }, [stopMic, stopPlayback]);
 
   const connect = useCallback(async (opts?: { readonly mic?: boolean }): Promise<void> => {
-    const withMic = opts?.mic !== false;
+    // Connecting in text mode must not open a microphone the user cannot see.
+    const withMic = opts?.mic !== false && modeRef.current === "voice";
     disconnect();
     setStatus("connecting");
     setErrorMessage(undefined);
@@ -177,6 +221,8 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     recordStartedAtRef.current = performance.now();
     setRecord(emptySessionRecord({ wsUrl }));
     setAgentState(INITIAL_AGENT_STATE);
+    seenTurnIdsRef.current = new Set();
+    setTextTurnIds(new Set());
 
     unsubscribeRef.current = client.on((event: SyrinxBrowserClientEvent) => {
       if (event.type === "open") {
@@ -198,6 +244,16 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
         // Every message goes into the record — including the ~15 types the
         // transcript ignores, and unknown ones such as the agents-SDK cf_agent_*.
         const atMs = Math.round(performance.now() - recordStartedAtRef.current);
+        // Attribute a turn to the modality that opened it — the first message
+        // carrying a new turnId. A voice turn still landing its tail after the user
+        // flips to text stays a voice turn, which is what actually happened.
+        const turnId = (event.message as { turnId?: unknown }).turnId;
+        if (typeof turnId === "string" && !seenTurnIdsRef.current.has(turnId)) {
+          seenTurnIdsRef.current.add(turnId);
+          if (modeRef.current === "text") {
+            setTextTurnIds((prev) => new Set(prev).add(turnId));
+          }
+        }
         setRecord((prev) => applyMessage(prev, event.message, atMs));
         setAgentState((prev) => nextAgentState(prev, event.message, atMs));
         handleMessage(event.message);
@@ -270,9 +326,13 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     inputSampleRateHz,
     record,
     agentState,
+    mode,
+    textTurnIds,
     connect,
     disconnect,
     clearTranscript,
     playSample,
+    setMode,
+    sendText,
   };
 }
