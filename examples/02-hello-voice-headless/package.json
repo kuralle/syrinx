@@ -11,7 +11,7 @@
     "fixtures:gemini-university": "tsx scripts/generate-gemini-university-fixtures.ts",
     "fixtures:gemini-turn-detection": "tsx scripts/generate-gemini-turn-detection-fixtures.ts",
     "lint": "eslint src test scripts --ext .ts",
-    "review:studio": "tsx scripts/serve-websocket-review-studio.ts",
+    "dev:server": "tsx scripts/dev-server.ts",
     "review:telephony": "tsx scripts/serve-telephony-review.ts",
     "review:synthetic-carrier": "tsx scripts/serve-synthetic-carrier.ts",
     "telephony:spike": "tsx scripts/start-telephony-spike.ts",

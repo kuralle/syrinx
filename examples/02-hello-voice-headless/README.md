@@ -26,7 +26,10 @@ pnpm exec tsx src/hello-voice-agent.ts
 pnpm exec tsx src/talking-thinking.ts
 
 # Talk to an agent from your browser: http://127.0.0.1:4173
-pnpm review:studio
+pnpm dev:server
+
+# ...or point it at the agent you are building
+pnpm dev:server --agent ./src/hello-voice-agent.ts#createHelloVoiceAgent
 ```
 
 Those three are the whole "does this work on my machine" story. Everything below is
@@ -46,8 +49,10 @@ for a specific question.
 
 Run `pnpm run` to list all 60. They group as:
 
-- **`review:*`** — interactive servers you drive by hand. `review:studio` (browser +
-  mic), `review:telephony`, `review:synthetic-carrier`.
+- **`dev:server`** — the browser + mic server. Runs the bundled demo, or `--agent
+  <module>#<export>` to run yours.
+- **`review:*`** — the other interactive servers you drive by hand:
+  `review:telephony`, `review:synthetic-carrier`.
 - **`smoke:*-emulator`** — carrier emulators (Twilio, Telnyx, SmartPBX). No carrier
   account needed; they speak the real media-stream wire protocol locally.
 - **`smoke:*-carrier-call`** — the real thing. Needs live carrier credentials.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 // Guards the standalone studio page (packages/voice-client-browser/index.html), which is
-// served raw by the review studio. Its assistant-audio decoder is PCM16-only (no Opus
+// served raw by the dev server as a fallback when apps/studio has not been built. Its assistant-audio decoder is PCM16-only (no Opus
 // decoder), so it must declare a pcm_s16le downlink capability on connect — otherwise the
 // server streams Opus envelopes it rejects with "PCM16 payload must contain an even number
 // of bytes" / "durationMs mismatch". Regression guard for that contract.

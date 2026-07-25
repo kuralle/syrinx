@@ -6,11 +6,13 @@ Built with Vite, React 19, TanStack Router, Tailwind, and shadcn/ui. Uses `@kura
 
 ## Local development
 
-1. Start the local voice backend (university support review server):
+1. Start the local voice backend:
 
 ```bash
-pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless review:studio
+pnpm --filter @kuralle-syrinx-example/02-hello-voice-headless dev:server
 ```
+
+Add `--agent <module>#<export>` to drive your own agent instead of the bundled demo.
 
 This serves the WebSocket endpoint at `ws://127.0.0.1:4173/ws` by default.
 

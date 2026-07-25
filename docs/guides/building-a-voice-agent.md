@@ -712,7 +712,7 @@ Wire protocol: `docs/websocket-audio-protocol.md`.
 
 ### Node: WebSocket server
 
-`@kuralle-syrinx/server-websocket` exposes `createVoiceWebSocketServer(options)` (`packages/server-websocket/src/index.ts`). Minimal shape from `examples/02-hello-voice-headless/scripts/serve-websocket-review-studio.ts`:
+`@kuralle-syrinx/server-websocket` exposes `createVoiceWebSocketServer(options)` (`packages/server-websocket/src/index.ts`). Minimal shape from `examples/02-hello-voice-headless/scripts/dev-server.ts`:
 
 ```ts
 import { createServer } from "node:http";
@@ -809,6 +809,6 @@ The front model can speak a lead-in while kuralle runs RAG/tools — measured de
 - Run cascade voice: `smoke:kuralle-cascade-clean`
 - Run bi-model: `smoke:realtime-kuralle-bimodel`
 - Run memory: `smoke:kuralle-memory`
-- Local review UI: `review:studio` in the example package
+- Local browser + mic UI: `dev:server` in the example package (`--agent <module>#<export>` for your own agent)
 
 For wire format and provider testing, see `docs/websocket-audio-protocol.md` and `PROVIDER-TESTING.md`.
