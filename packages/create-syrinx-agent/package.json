@@ -1,0 +1,45 @@
+{
+  "name": "create-syrinx-agent",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Scaffold a Syrinx voice agent project — STT/TTS/reasoner/transport picked by flag, one generator instead of enumerated templates",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "scaffold",
+    "create"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/create-syrinx-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
+  "bin": {
+    "create-syrinx-agent": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.6"
+  }
+}

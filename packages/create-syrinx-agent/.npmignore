@@ -1,0 +1,4 @@
+*.test.ts
+*.tsbuildinfo
+.DS_Store
+__fixtures__/
