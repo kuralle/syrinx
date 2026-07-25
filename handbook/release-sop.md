@@ -67,9 +67,11 @@ npm view @kuralle-syrinx/server-websocket dependencies   # no "workspace:*" anyw
 # 4. The npm page renders
 # Open https://www.npmjs.com/package/@kuralle-syrinx/core — README visible?
 # 4.1.0 regression: registry readmeFilename was empty ("") even though the tarball
-# contained package/README.md, so the page rendered blank. If it recurs, republish the
-# affected package with the npm CLI (npm publish of the pnpm-packed tarball) and file
-# the pnpm version in this doc.
+# contained package/README.md, so the page rendered blank. STILL PRESENT through 4.3.0
+# (verified 2026-07-25: the packument `readme` field is empty on 4.0.0–4.3.0). A same-version
+# republish CANNOT fix it — `npm publish` of the 4.3.0 tarball returns
+# `403 You cannot publish over the previously published versions`. The readme is immutable
+# per published version; the fix applies only to the NEXT version (see §4).
 ```
 
 (Until the Gate-0 build pipeline lands in `launch-playbook.md`, test #1 is EXPECTED to
@@ -78,8 +80,16 @@ accepted state. Remove this paragraph when dist/ ships.)
 
 ## 4. Known gotchas (append as discovered)
 
-- **Blank npm page** (4.1.0): pnpm publish did not attach readme metadata to the
-  registry document. Tarball was fine. Check #4 above every release.
+- **Blank npm page** (4.1.0 → still 4.3.0): `pnpm -r publish` does not attach the readme to
+  the registry document — the tarball ships `README.md` but the packument `readme` /
+  `readmeFilename` are empty, so the npm page body renders blank. Immutable once published (a
+  same-version `npm publish` 403s — see §3 check 4). **Durable fix (next release only):**
+  publish each package via `pnpm pack` (verified: it rewrites `workspace:*` → concrete versions,
+  same as `pnpm publish`) then `npm publish <tarball>` — `npm publish` attaches the readme. Verify
+  `npm view @kuralle-syrinx/core readme | wc -c` > 0. **Also:** 12 of 25 packages ship no
+  `README.md` at all (browser-client, cartesia, deepgram, gemini, google, recorder,
+  server-websocket, server-workers, silero-vad, test, tts-core, ws) — those pages stay blank until
+  a README is authored, independent of the publish tool.
 - **Metadata regression** (4.1.0): core lost description/keywords between 3.1.0 and
   4.1.0. package.json metadata is part of review for any package.json diff.
 - **`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`** on fresh dependency bumps → `trustLockfile`.
