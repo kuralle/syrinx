@@ -1,0 +1,20 @@
+{
+  "task": "LDT-2",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "approve",
+  "claims": [
+    { "command": "pnpm -C packages/browser-client test", "exit_code": 0, "note": "6 files, 79 tests" },
+    { "command": "pnpm -C packages/browser-client typecheck", "exit_code": 0 },
+    { "command": "tsx runs/node-safety-check.ts (import via /record subpath in Node)", "exit_code": 0,
+      "note": "hasDom:false, turns:1, assembled correctly — subpath is genuinely Node-safe" },
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "bugs_found_by_tests": [
+    "upsertToolCall clobbered afterMs/name with undefined when a later tool_call_* phase carried fewer fields; fixed by stripping undefined keys before merge",
+    "unchecked index access on turns[idx] under noUncheckedIndexedAccess; fixed by restructuring to find/map rather than index"
+  ]
+}

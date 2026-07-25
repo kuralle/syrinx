@@ -8,3 +8,4 @@
 {"task":"LDT-15","worker":"manager","lane":"full","verdict":"shipped","note":"studio publishable; caught+fixed bundled deps declared as runtime deps"}
 {"task":"LDT-17","worker":"manager","lane":"approve","verdict":"pass","note":"cross-origin WS to wrangler dev reaches a withVoice DO; route = kebab-case of DO class"}
 {"task":"LDT-18","worker":"manager","lane":"approve","verdict":"gap-found","note":"metrics message absent on Workers path; timeline becomes server work on CF"}
+{"task":"LDT-2","worker":"manager","lane":"approve","verdict":"shipped","note":"SessionRecord assembler in browser-client/record; 79 tests; caught undefined-clobber in tool-call merge"}
