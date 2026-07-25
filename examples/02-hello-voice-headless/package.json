@@ -70,6 +70,7 @@
     "@ai-sdk/google": "^3.0.0",
     "@ai-sdk/openai": "^3.0.67",
     "@kuralle-syrinx/core": "workspace:*",
+    "@kuralle-syrinx/cli": "workspace:*",
     "@kuralle-syrinx/browser-client": "workspace:*",
     "@kuralle-syrinx/aisdk": "workspace:*",
     "@kuralle-syrinx/mastra": "workspace:*",

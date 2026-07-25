@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: MIT
+//
+// This example's default kernel: Deepgram STT + SileroVAD + an OpenAI-backed
+// ReasoningBridge + Cartesia TTS. Hardcoded providers are legitimate HERE —
+// this is a demo harness, not a shipped package — but the mechanics of
+// actually driving a turn (feed audio, capture the transcript/reply/timings,
+// write artifacts) must not be duplicated. That part moved to
+// @kuralle-syrinx/cli's `driveTurn` (LDT-20): this file builds the session,
+// `driveTurn` runs it. There is exactly one implementation of "run a turn".
 
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { config as loadDotenv } from "dotenv";
 import { createOpenAI } from "@ai-sdk/openai";
 import { stepCountIs } from "ai";
 import {
-  Route,
   VoiceAgentSession,
   type PluginConfig,
-  type RecordUserAudioPacket,
-  type TextToSpeechAudioPacket,
-  type TextToSpeechEndPacket,
-  type VoiceAgentSessionEvents,
   type VoicePlugin,
 } from "@kuralle-syrinx/core";
 import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
@@ -25,14 +24,9 @@ import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
 import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 
-const require = createRequire(import.meta.url);
-const { WaveFile } = require("wavefile") as typeof import("wavefile");
+import { driveTurn, readPcm16Mono16kWav, type PerTurnMetrics, type TurnResult } from "@kuralle-syrinx/cli/turn-runner";
 
 export const DEFAULT_MODEL = "gpt-4.1-mini";
-
-const SAMPLES_PER_FRAME = 320;
-const DEFAULT_FIXTURE_PATH =
-  "/Users/mithushancj/Documents/asyncdot/openscoped/voice-media-transport/research/agents/tests/test_realtime/hello_world.wav";
 
 const DEFAULT_VOICE_ID =
   typeof process.env["CARTESIA_VOICE_ID"] === "string" &&
@@ -66,34 +60,8 @@ export interface ExtendedRunOneTurnOptions extends RunOneTurnOptions {
   readonly realtimePacing?: boolean;
 }
 
-export interface PerTurnMetrics {
-  readonly turnId: string;
-  readonly inputAudioMs: number;
-  readonly speechEndToFinalTranscriptMs: number;
-  readonly speechEndToFirstAudioMs: number;
-  readonly endpointingMs: number;
-  readonly llmTTFTMs: number;
-  readonly ttsTTFBMs: number;
-  readonly e2eLatencyMs: number;
-  readonly agentTokens: number;
-  readonly playedMs: number;
-  readonly truncated: boolean;
-  readonly toolCalls: number;
-}
-
-export interface TurnResult {
-  readonly sessionDir: string;
-  readonly finalTranscript: string;
-  readonly agentReply: string;
-  readonly agentOutWavPath: string;
-  readonly inputWavPath: string;
-  readonly eventsJsonlPath: string;
-  readonly eventsJsonPath: string;
-  readonly transcriptJsonPath: string;
-  readonly metricsJsonPath: string;
-  readonly metrics: PerTurnMetrics;
-  readonly durationMs: number;
-}
+export type { PerTurnMetrics, TurnResult };
+export { readPcm16Mono16kWav };
 
 let envLoadedFromRoot = false;
 
@@ -121,87 +89,6 @@ export function listMissingVoiceHeadlessEnvKeys(): string[] {
   if (!process.env["OPENAI_API_KEY"]?.trim()) missing.push("OPENAI_API_KEY");
   if (!process.env["CARTESIA_API_KEY"]?.trim()) missing.push("CARTESIA_API_KEY");
   return missing;
-}
-
-export function readPcm16Mono16kWav(filePath: string): Int16Array {
-  const buf = readFileSync(filePath);
-  const wav = new WaveFile(Buffer.from(buf));
-  const fmt = wav.fmt as {
-    sampleRate: number;
-    numChannels: number;
-    bitsPerSample: number;
-    audioFormat: number;
-  };
-  if (fmt.numChannels !== 1) throw new Error(`expected mono WAV, got ${String(fmt.numChannels)} channels`);
-  if (fmt.bitsPerSample !== 16 || fmt.audioFormat !== 1) throw new Error("expected 16-bit PCM WAV");
-  const raw = wav.getSamples(false, Int16Array);
-  const mono: Int16Array | undefined = Array.isArray(raw) ? raw[0] : raw;
-  if (mono === undefined || !(mono instanceof Int16Array)) throw new Error("WAV has no mono channel samples");
-  return fmt.sampleRate === 16000 ? mono : resamplePcm16(mono, fmt.sampleRate, 16000);
-}
-
-function resamplePcm16(samples: Int16Array, fromHz: number, toHz: number): Int16Array {
-  if (fromHz <= 0 || toHz <= 0) throw new Error("invalid WAV sample rate");
-  const outLength = Math.max(1, Math.round((samples.length * toHz) / fromHz));
-  const out = new Int16Array(outLength);
-  const ratio = fromHz / toHz;
-  for (let i = 0; i < out.length; i += 1) {
-    const src = i * ratio;
-    const lo = Math.floor(src);
-    const hi = Math.min(samples.length - 1, lo + 1);
-    const frac = src - lo;
-    out[i] = Math.round(samples[lo]! * (1 - frac) + samples[hi]! * frac);
-  }
-  return out;
-}
-
-function pcmToBytes(samples: Readonly<Int16Array>): Uint8Array {
-  return new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-}
-
-function sliceFramePcm(samples: Readonly<Int16Array>, offset: number): Int16Array {
-  const end = Math.min(offset + SAMPLES_PER_FRAME, samples.length);
-  const frame = new Int16Array(SAMPLES_PER_FRAME);
-  if (end > offset) frame.set(samples.subarray(offset, end));
-  return frame;
-}
-
-function mergeBytes(chunks: readonly Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return merged;
-}
-
-function writePcm16Wav(path: string, chunks: readonly Uint8Array[], sampleRateHz: number): Promise<void> {
-  const bytes = mergeBytes(chunks);
-  const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
-  const wav = new WaveFile();
-  wav.fromScratch(1, sampleRateHz, "16", samples);
-  return writeFile(path, Buffer.from(wav.toBuffer()));
-}
-
-function eventLine(kind: string, data: Record<string, unknown>): string {
-  return `${JSON.stringify({ tsMs: Date.now(), kind, ...data })}\n`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-function resolveInputPath(path: string): string {
-  const resolved = resolve(path);
-  try {
-    readFileSync(resolved);
-    return resolved;
-  } catch {
-    if (basename(path) === "hello.wav") return DEFAULT_FIXTURE_PATH;
-    throw new Error(`input WAV not found: ${resolved}`);
-  }
 }
 
 async function resolveKernelOptions(ext: ExtendedRunOneTurnOptions): Promise<HeadlessSessionOptions> {
@@ -260,14 +147,6 @@ async function callOptionalScriptedStt(plugin: VoicePlugin | undefined, contextI
 }
 
 export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnResult> {
-  const sessionDir = resolve(opts.sessionDir);
-  await mkdir(sessionDir, { recursive: true });
-
-  const pcm =
-    opts.syntheticMono16kSamples !== undefined
-      ? Int16Array.from(opts.syntheticMono16kSamples)
-      : readPcm16Mono16kWav(resolveInputPath(opts.inputWavPath));
-
   const kernel = await resolveKernelOptions(opts);
   const session = new VoiceAgentSession({
     plugins: kernel.pluginConfig,
@@ -277,192 +156,15 @@ export async function runOneTurn(opts: ExtendedRunOneTurnOptions): Promise<TurnR
     session.registerPlugin(name, plugin);
   }
 
-  const contextId = randomUUID();
-  const inputChunks: Uint8Array[] = [];
-  const outputChunks: Uint8Array[] = [];
-  const eventLines: string[] = [];
-  const timeline = {
-    feedStartMs: 0,
-    speechEndMs: 0,
-    finalTranscriptMs: 0,
-    firstLlmDeltaMs: 0,
-    firstTtsAudioMs: 0,
-    ttsEndMs: 0,
-  };
-  let finalTranscript = "";
-  let agentReply = "";
-  let toolCalls = 0;
-
-  const offRecordUser = session.bus.on<RecordUserAudioPacket>("record.user_audio", (pkt) => {
-    inputChunks.push(pkt.audio);
+  return driveTurn({
+    session,
+    inputWavPath: opts.inputWavPath,
+    sessionDir: opts.sessionDir,
+    syntheticMono16kSamples: opts.syntheticMono16kSamples,
+    realtimePacing: opts.realtimePacing,
+    onAudioFrame: (contextId) => callOptionalFrameProcessor(kernel.plugins["vad"], contextId),
+    onAudioFed: (contextId) => callOptionalScriptedStt(kernel.plugins["stt"], contextId),
   });
-  const offTtsAudio = session.bus.on<TextToSpeechAudioPacket>("tts.audio", (pkt) => {
-    if (timeline.firstTtsAudioMs === 0) timeline.firstTtsAudioMs = pkt.timestampMs;
-    outputChunks.push(pkt.audio);
-  });
-
-  const ttsEnd = new Promise<void>((resolveEnd, reject) => {
-    const timeout = setTimeout(() => {
-      offTtsEnd();
-      reject(new Error("tts.end timeout"));
-    }, 120_000);
-    const offTtsEnd = session.bus.on<TextToSpeechEndPacket>("tts.end", (pkt) => {
-      if (pkt.contextId !== contextId) return;
-      clearTimeout(timeout);
-      offTtsEnd();
-      timeline.ttsEndMs = pkt.timestampMs;
-      resolveEnd();
-    });
-  });
-
-  const on = <K extends keyof VoiceAgentSessionEvents>(event: K, handler: VoiceAgentSessionEvents[K]): void => {
-    session.on(event, handler);
-  };
-  on("user_input_final", (event) => {
-    finalTranscript = event.text;
-    timeline.finalTranscriptMs = event.tsMs;
-    eventLines.push(eventLine("user_input_final", { turnId: event.turnId, text: event.text }));
-  });
-  on("agent_text_delta", (event) => {
-    if (timeline.firstLlmDeltaMs === 0) timeline.firstLlmDeltaMs = event.tsMs;
-    agentReply += event.delta;
-    eventLines.push(eventLine("agent_text_delta", { turnId: event.turnId, delta: event.delta }));
-  });
-  on("agent_tool_call", (event) => {
-    toolCalls += 1;
-    eventLines.push(eventLine("agent_tool_call", { turnId: event.turnId, name: event.name }));
-  });
-  on("agent_finished", (event) => {
-    eventLines.push(eventLine("agent_finished", { turnId: event.turnId }));
-  });
-  on("error", (event) => {
-    eventLines.push(eventLine("error", { stage: event.stage, category: event.category, message: event.message }));
-  });
-
-  await session.start();
-
-  session.bus.push(Route.Main, {
-    kind: "turn.change",
-    contextId,
-    previousContextId: "",
-    reason: "headless_turn_start",
-    timestampMs: Date.now(),
-  });
-
-  let offset = 0;
-  while (offset < pcm.length) {
-    const frame = sliceFramePcm(pcm, offset);
-    const audio = pcmToBytes(frame);
-    if (timeline.feedStartMs === 0) timeline.feedStartMs = Date.now();
-    session.bus.push(Route.Main, {
-      kind: "user.audio_received",
-      contextId,
-      timestampMs: Date.now(),
-      audio,
-    });
-    callOptionalFrameProcessor(kernel.plugins["vad"], contextId);
-    offset += SAMPLES_PER_FRAME;
-    if (opts.realtimePacing === true) await sleep(20);
-  }
-  timeline.speechEndMs = Date.now();
-
-  for (let pad = 0; pad < 40; pad += 1) {
-    const frame = new Int16Array(SAMPLES_PER_FRAME);
-    session.bus.push(Route.Main, {
-      kind: "user.audio_received",
-      contextId,
-      timestampMs: Date.now(),
-      audio: pcmToBytes(frame),
-    });
-    callOptionalFrameProcessor(kernel.plugins["vad"], contextId);
-    if (opts.realtimePacing === true) await sleep(20);
-  }
-
-  await callOptionalScriptedStt(kernel.plugins["stt"], contextId);
-  await ttsEnd;
-
-  offRecordUser();
-  offTtsAudio();
-
-  const metrics: PerTurnMetrics = {
-    turnId: contextId,
-    inputAudioMs: Math.round((pcm.length / 16000) * 1000),
-    speechEndToFinalTranscriptMs:
-      timeline.speechEndMs > 0 && timeline.finalTranscriptMs > 0
-        ? Math.max(0, timeline.finalTranscriptMs - timeline.speechEndMs)
-        : 0,
-    speechEndToFirstAudioMs:
-      timeline.speechEndMs > 0 && timeline.firstTtsAudioMs > 0
-        ? Math.max(0, timeline.firstTtsAudioMs - timeline.speechEndMs)
-        : 0,
-    endpointingMs:
-      timeline.feedStartMs > 0 && timeline.finalTranscriptMs > 0
-        ? Math.max(0, timeline.finalTranscriptMs - timeline.feedStartMs)
-        : 0,
-    llmTTFTMs:
-      timeline.finalTranscriptMs > 0 && timeline.firstLlmDeltaMs > 0
-        ? Math.max(0, timeline.firstLlmDeltaMs - timeline.finalTranscriptMs)
-        : 0,
-    ttsTTFBMs:
-      timeline.firstLlmDeltaMs > 0 && timeline.firstTtsAudioMs > 0
-        ? Math.max(0, timeline.firstTtsAudioMs - timeline.firstLlmDeltaMs)
-        : 0,
-    e2eLatencyMs:
-      timeline.feedStartMs > 0 && timeline.firstTtsAudioMs > 0
-        ? Math.max(0, timeline.firstTtsAudioMs - timeline.feedStartMs)
-        : 0,
-    agentTokens: agentReply.trim().length === 0 ? 0 : agentReply.trim().split(/\s+/).length,
-    playedMs: Math.round((mergeBytes(outputChunks).byteLength / 2 / 16000) * 1000),
-    truncated: false,
-    toolCalls,
-  };
-
-  const inputWavPath = join(sessionDir, "audio-in.wav");
-  const agentOutWavPath = join(sessionDir, "audio-out.wav");
-  const eventsJsonlPath = join(sessionDir, "events.jsonl");
-  const eventsJsonPath = join(sessionDir, "events.json");
-  const transcriptJsonPath = join(sessionDir, "transcript.json");
-  const metricsJsonPath = join(sessionDir, "metrics.json");
-  const events = eventLines
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-  const qualityGate = {
-    passed: finalTranscript.trim().length > 0 && agentReply.trim().length > 0 && outputChunks.length > 0,
-    failures: [
-      ...(finalTranscript.trim().length === 0 ? ["missing final transcript"] : []),
-      ...(agentReply.trim().length === 0 ? ["missing agent reply"] : []),
-      ...(outputChunks.length === 0 ? ["missing TTS audio"] : []),
-    ],
-  };
-
-  await writePcm16Wav(inputWavPath, inputChunks, 16000);
-  await writePcm16Wav(agentOutWavPath, outputChunks, 16000);
-  await writeFile(eventsJsonlPath, eventLines.join(""), "utf8");
-  await writeFile(eventsJsonPath, `${JSON.stringify({ events, qualityGate }, null, 2)}\n`, "utf8");
-  await writeFile(
-    transcriptJsonPath,
-    `${JSON.stringify({ finalTranscript, agentReply, turnCount: 1, metrics, qualityGate }, null, 2)}\n`,
-    "utf8",
-  );
-  await writeFile(metricsJsonPath, `${JSON.stringify({ ...metrics, turnCount: 1, qualityGate }, null, 2)}\n`, "utf8");
-
-  await session.close();
-
-  return {
-    sessionDir,
-    finalTranscript,
-    agentReply,
-    agentOutWavPath,
-    inputWavPath,
-    eventsJsonlPath,
-    eventsJsonPath,
-    transcriptJsonPath,
-    metricsJsonPath,
-    metrics,
-    durationMs:
-      timeline.feedStartMs > 0 && timeline.ttsEndMs > 0 ? Math.max(0, timeline.ttsEndMs - timeline.feedStartMs) : 0,
-  };
 }
 
 export { DEFAULT_VOICE_ID };

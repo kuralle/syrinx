@@ -1,0 +1,53 @@
+{
+  "name": "@kuralle-syrinx/cli",
+  "version": "4.3.0",
+  "private": false,
+  "description": "Agent-facing CLI for Syrinx — run a turn or a text exchange with deterministic, machine-readable (--json) output and exit codes. Not a console: no REPL, no chat loop, no microphone.",
+  "keywords": [
+    "voice",
+    "voice-agent",
+    "speech",
+    "syrinx",
+    "cli",
+    "agent",
+    "testing"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/kuralle/syrinx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kuralle/syrinx.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/kuralle/syrinx/issues"
+  },
+  "type": "module",
+  "bin": {
+    "syrinx": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    "./turn-runner": "./src/turn-runner.ts"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kuralle-syrinx/core": "workspace:*",
+    "wavefile": "^11.0.0"
+  },
+  "devDependencies": {
+    "@kuralle-syrinx/test": "workspace:*",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.6"
+  }
+}
