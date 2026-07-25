@@ -9,28 +9,46 @@ So test at three levels, and be honest about what each one can and cannot prove.
 
 ## Level 1 — Provider-free unit tests
 
-A `VoicePlugin` is a small interface: `initialize(bus, config)`, `close()`, and whichever packets you subscribe to. That makes a test double trivial, and lets you assert on packet flow with no network and no API keys — the level that belongs in CI:
+Syrinx publishes the test doubles it uses on itself. `@kuralle-syrinx/test` ships scripted `FakeSTT`, `FakeTTS`, `FakeVAD`, and `FakeBridge` plugins — each takes a list of events and emits them in order, so a whole turn runs with no network and no API keys. This is the level that belongs in CI:
 
-```ts
-import { PipelineBusImpl, Route, VoiceAgentSession, type PipelineBus, type PluginConfig, type VoicePlugin } from '@kuralle-syrinx/core';
-
-class FakeStt implements VoicePlugin {
-  private bus!: PipelineBus;
-
-  async initialize(bus: PipelineBus, _config: PluginConfig): Promise<void> {
-    this.bus = bus;
-  }
-
-  /** Pretend the caller finished saying something. */
-  say(text: string, contextId: string): void {
-    this.bus.push(Route.Main, { kind: 'stt.result', contextId, timestampMs: Date.now(), text, isFinal: true });
-  }
-
-  async close(): Promise<void> {}
-}
+```bash
+npm install --save-dev @kuralle-syrinx/test
 ```
 
-Register it in the `stt` slot, `await session.start()`, drive `say(...)`, and assert on what your reasoner and any observers received. Everything downstream of STT is now deterministic.
+```ts
+import { VoiceAgentSession } from '@kuralle-syrinx/core';
+import { FakeSTT, FakeBridge, FakeTTS } from '@kuralle-syrinx/test';
+
+const stt = new FakeSTT();
+const session = new VoiceAgentSession({
+  plugins: {
+    stt: {
+      scriptedEvents: [
+        { kind: 'interim', text: 'when is the' },
+        { kind: 'final', text: 'when is the deadline?', confidence: 0.95, ts: Date.now() },
+      ],
+    },
+    bridge: {
+      scriptedEvents: [
+        { kind: 'tool_call', id: '1', name: 'lookupDeadline', args: { program: 'cs' } },
+        { kind: 'tool_result', id: '1', result: 'March 1' },
+        { kind: 'text', delta: 'The deadline is March 1.' },
+        { kind: 'done' },
+      ],
+    },
+    tts: {},
+  },
+});
+
+session.registerPlugin('stt', stt);
+session.registerPlugin('bridge', new FakeBridge());
+session.registerPlugin('tts', new FakeTTS());
+await session.start();
+
+await stt.emitScripted('turn-1'); // drive the scripted transcript
+```
+
+`FakeBridge` subscribes to `eos.turn_complete` and replays its script when the turn closes, so tool-call ordering, observers, and barge-in handling are all exercised deterministically. Assert on the packets your code cares about.
 
 For synthetic audio, core exports the same tone helpers its own suite uses — no fixture files needed:
 

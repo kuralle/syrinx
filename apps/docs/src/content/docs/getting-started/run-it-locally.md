@@ -49,7 +49,7 @@ pnpm -C examples/02-hello-voice-headless exec tsx src/talking-thinking.ts
 
 ## 2. Your browser and a real microphone
 
-To actually talk to an agent, run the review studio — a local HTTP + WebSocket server that serves a mic-capture page and drives a live session behind it:
+To actually talk to an agent out loud, run the review studio — a local HTTP + WebSocket server that serves a mic-capture page and drives a live session behind it:
 
 ```bash
 pnpm -C examples/02-hello-voice-headless review:studio
@@ -62,6 +62,12 @@ TTS provider: cartesia; input PCM: 16000 Hz mono s16le
 ```
 
 Open <http://127.0.0.1:4173>, allow microphone access, and speak. The server owns turn detection, so you talk and stop naturally — there is no push-to-talk. Barge-in works: start talking while the agent is speaking and it yields.
+
+:::caution[It runs the bundled demo agent, not yours]
+`review:studio` drives a **fixed** agent — the university-support demo in `src/university-support-agent.ts`. There is currently no flag to point it at the agent you built; the environment variables below tune the server, not the agent. To hear *your* agent over a microphone today, copy `scripts/serve-websocket-review-studio.ts` and swap the session factory on the line that calls `createUniversitySupportSession`. Closing that gap properly is on the roadmap.
+:::
+
+For a richer client than the built-in page — transcript panel, backend switching, connection controls — [`apps/studio`](https://github.com/kuralle/syrinx/tree/main/apps/studio) is a Vite/React front end that speaks the same protocol. Run `review:studio` as the backend, then `pnpm --filter @kuralle-syrinx/studio dev`, and point it at `ws://127.0.0.1:4173/ws`.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
