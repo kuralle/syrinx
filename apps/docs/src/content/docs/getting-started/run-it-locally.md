@@ -67,7 +67,7 @@ Open <http://127.0.0.1:4173>, allow microphone access, and speak. The server own
 `review:studio` drives a **fixed** agent — the university-support demo in `src/university-support-agent.ts`. There is currently no flag to point it at the agent you built; the environment variables below tune the server, not the agent. To hear *your* agent over a microphone today, copy `scripts/serve-websocket-review-studio.ts` and swap the session factory on the line that calls `createUniversitySupportSession`. Closing that gap properly is on the roadmap.
 :::
 
-For a richer client than the built-in page — transcript panel, backend switching, connection controls — [`apps/studio`](https://github.com/kuralle/syrinx/tree/main/apps/studio) is a Vite/React front end that speaks the same protocol. Run `review:studio` as the backend, then `pnpm --filter @kuralle-syrinx/studio dev`, and point it at `ws://127.0.0.1:4173/ws`.
+For a richer client than the built-in page — transcript panel, backend switching, connection controls — [`apps/studio`](https://github.com/kuralle/syrinx/tree/main/apps/studio) is a Vite/React front end built on the [browser client SDK](/reference/browser-client/) — the same package you would use to put voice in your own app. Run `review:studio` as the backend, then `pnpm --filter @kuralle-syrinx/studio dev`, and point it at `ws://127.0.0.1:4173/ws`.
 
 | Variable | Default | What it does |
 | --- | --- | --- |

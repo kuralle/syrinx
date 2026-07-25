@@ -7,12 +7,6 @@ import {
 } from "@kuralle-syrinx/browser-client";
 
 import {
-  initialTranscriptState,
-  reduceTranscriptState,
-  type TranscriptState,
-} from "@/lib/transcript";
-
-import {
   applyMessage,
   emptySessionRecord,
   type SessionRecord,
@@ -38,7 +32,6 @@ function pcm16Rms(data: ArrayBuffer): number {
 
 export interface SyrinxSessionControls {
   readonly status: SessionStatus;
-  readonly transcript: TranscriptState;
   readonly sessionId: string | null;
   readonly errorMessage?: string;
   readonly micActive: boolean;
@@ -57,7 +50,6 @@ export interface SyrinxSessionControls {
 
 export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const [status, setStatus] = useState<SessionStatus>("offline");
-  const [transcript, setTranscript] = useState<TranscriptState>(initialTranscriptState);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
   const [micActive, setMicActive] = useState(false);
@@ -113,7 +105,8 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     }
     // Turn finished server-side — rotate the uplink contextId so the next utterance is a fresh turn.
     if (message.type === "turn_complete") uplinkContextIdRef.current = crypto.randomUUID();
-    setTranscript((current) => reduceTranscriptState(current, message));
+    // The transcript is a view of `record` (TranscriptPanel reads record.turns); there is
+    // no second fold of the messages. agentState is derived separately, below.
   }, []);
 
   const startMic = useCallback(async (client: SyrinxBrowserClient, targetRate: number): Promise<void> => {
@@ -254,8 +247,12 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     }
   }, [connect, inputSampleRateHz]);
 
+  // "Clear transcript" clears the observed conversation — which, now that the record is the
+  // single source, is the same thing as dropping its turns. Config (negotiated sample rates,
+  // etc.) is preserved so the Audio panel's labels and any replay stay honest; the `ready`
+  // message that carries it is not re-sent mid-session.
   const clearTranscript = useCallback((): void => {
-    setTranscript(initialTranscriptState);
+    setRecord((prev) => ({ ...prev, turns: [], droppedTurns: 0, sessionEvents: [] }));
   }, []);
 
   useEffect(() => () => {
@@ -265,7 +262,6 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
 
   return {
     status,
-    transcript,
     sessionId,
     errorMessage,
     micActive,

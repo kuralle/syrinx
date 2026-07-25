@@ -2,9 +2,8 @@ import { buildTimelines, type TurnTimeline } from "@kuralle-syrinx/browser-clien
 import type { SessionRecord } from "@kuralle-syrinx/browser-client/record";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatMs } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-const fmt = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
 
 function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
   const span = Math.max(
@@ -24,7 +23,7 @@ function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
               : "not enough timing marks"}
           </span>
         ) : (
-          <span className="tabular-nums text-muted-foreground">{fmt(timeline.totalMs)}</span>
+          <span className="tabular-nums text-muted-foreground">{formatMs(timeline.totalMs)}</span>
         )}
       </div>
 
@@ -33,8 +32,8 @@ function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
           className="rounded bg-rose-500/10 px-2 py-1 text-xs text-rose-700 dark:text-rose-300"
           data-testid="fast-turn-warning"
         >
-          Replied in {fmt(timeline.suspiciouslyFast.totalMs)} — below the{" "}
-          {fmt(timeline.suspiciouslyFast.floorMs)} floor. The endpointer probably fired while you
+          Replied in {formatMs(timeline.suspiciouslyFast.totalMs)} — below the{" "}
+          {formatMs(timeline.suspiciouslyFast.floorMs)} floor. The endpointer probably fired while you
           were still speaking. Check <code>minSpeechMs</code> and the endpointing owner.
         </p>
       )}
@@ -66,7 +65,7 @@ function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
               <span
                 className={cn("w-16 shrink-0 text-right tabular-nums", s.slowest && "font-semibold")}
               >
-                {fmt(s.durationMs)}
+                {formatMs(s.durationMs)}
               </span>
             </div>
           ))}

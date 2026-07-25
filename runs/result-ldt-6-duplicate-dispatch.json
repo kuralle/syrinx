@@ -1,0 +1,18 @@
+{
+  "status": "blocked",
+  "note": "Duplicate dispatch. A second worker (pid 79869, `claude -p < runs/brief-ldt-6.md`) was already ~5 min into this identical brief in this same non-isolated working tree, and completed it: apps/studio/src/components/EventLog.tsx, EventLog.test.tsx, apps/studio/src/lib/format.ts, and the SessionView mount are all present, with runs/result-ldt-6.json and runs/ldt-6-implementation-notes.md written. Writing my own EventLog.tsx would have clobbered complete, passing work mid-flight, so I did not write any source file.",
+  "claims": [],
+  "observed_not_claimed": [
+    {
+      "command": "pnpm -C apps/studio typecheck",
+      "exit_code": 2,
+      "why_not_a_claim": "Red, but NOT from LDT-6. Both errors are `Property 'state' does not exist on type TranscriptPanelProps` in src/lib/transcript.test.tsx:69 and src/routes/SessionView.tsx:60 — a third concurrent worker (pid 80197, `pi --model glm-5.2 @runs/brief-ldt-8.md`) rewrote TranscriptPanel.tsx from a `state` prop to a `record` prop at 19:05:18 and has not yet updated its two callers. Zero errors attributable to EventLog.tsx, format.ts or Timeline.tsx."
+    },
+    {
+      "command": "pnpm -C apps/studio test",
+      "exit_code": 1,
+      "why_not_a_claim": "1 failed / 29 passed. The single failure is TranscriptPanel (LDT-8's in-flight prop change). EventLog.test.tsx passed 11/11."
+    }
+  ],
+  "question": "LDT-6 is already delivered by pid 79869 and its own gate claims were almost certainly true when it ran them. But the engine re-runs those claims against the tree as it is NOW, and the concurrent LDT-8 worker has it red — so LDT-6's four true claims will fail on re-run through no fault of its own. Do you want the LDT-6 dispatch re-verified after the LDT-8 worker finishes (the correct fix), or should parallel dispatches be given isolated worktrees so shared-tree gate commands stop cross-failing? I did not run `pnpm -C apps/studio build` or `pnpm -r typecheck` because both would race the two live workers."
+}

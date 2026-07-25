@@ -12,3 +12,6 @@
 {"task":"LDT-7","worker":"manager","lane":"approve","verdict":"shipped","note":"derived agent state + badge; fixed missing Testing Library cleanup in the studio test harness"}
 {"task":"LDT-5","worker":"manager","lane":"approve","verdict":"shipped","note":"turn timeline w/ fast-turn floor; states missing timings instead of drawing empty lanes"}
 {"task":"LDT-9","worker":"manager","lane":"approve","verdict":"shipped","note":"session metrics w/ nearest-rank percentiles + fast-turn floor; states missing timings"}
+{"task":"LDT-6","worker":"claude+manager","lane":"approve","verdict":"shipped","note":"event log; manager caught 3 defects: dead noise entries, contradictory empty state, config-less copy"}
+{"task":"LDT-8","worker":"pi/glm-5.2","lane":"approve","verdict":"shipped","note":"transcript from SessionRecord; retired the parallel transcript.ts fold"}
+{"task":"LDT-22","worker":"manager","lane":"auto","verdict":"shipped","note":"browser-client README + docs page; every sample executed"}

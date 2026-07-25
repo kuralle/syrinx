@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { AgentStateBadge } from "@/components/AgentStateBadge";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
+import { EventLog } from "@/components/EventLog";
 import { MetricsPanel } from "@/components/MetricsPanel";
 import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
@@ -56,9 +57,11 @@ export function SessionView() {
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="flex min-h-0 flex-col gap-4">
-          <TranscriptPanel state={session.transcript} />
+          <TranscriptPanel record={session.record} />
           <Timeline record={session.record} />
           <MetricsPanel record={session.record} />
+          {/* Last on purpose — the timeline is primary, this is the escape hatch. */}
+          <EventLog record={session.record} />
         </div>
 
         <div className="flex flex-col gap-4">

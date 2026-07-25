@@ -1,0 +1,17 @@
+{
+  "task": "LDT-6",
+  "status": "done",
+  "worker": "claude (delegated) + manager review/fix",
+  "lane": "approve",
+  "claims": [
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0, "note": "5 files, 42 tests" },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "manager_fixes": [
+    "PER_FRAME listed ping and playout_progress, which are client->server only (browser-client:477,:514) and can never reach the record — dead config. agent_chunk (one per LLM delta, server-websocket:513) was missing and is the largest noise source after audio.",
+    "visible.length===0 rendered 'No entries match these filters' while the line above read 'N audio frames hidden' — contradictory. Now distinguishes suppressed from unmatched.",
+    "copyTurn serialised the bare TurnRecord, dropping record.config. A turn pasted into a bug report without its sample rate and endpointing owner is silently misleading."
+  ]
+}

@@ -84,6 +84,7 @@ export default defineConfig({
             { slug: 'reference/stt-reconfigure' },
             { slug: 'reference/observability' },
             { slug: 'reference/testing' },
+            { slug: 'reference/browser-client' },
             { slug: 'reference/usage-and-pricing' },
           ],
         },

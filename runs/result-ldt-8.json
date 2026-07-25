@@ -1,0 +1,15 @@
+{
+  "status": "done",
+  "claims": [
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "notes": [
+    "TranscriptPanel now renders from SessionRecord.turns — the record is the single source of what happened; there is no second fold of the messages. useSyrinxSession no longer holds a transcript TranscriptState.",
+    "Deleted apps/studio/src/lib/transcript.ts and apps/studio/src/lib/transcript.test.tsx. The reducer they covered (a parallel fold of stt_chunk/stt_output/agent_chunk/agent_end) is genuinely superseded: SessionRecord already parses all four of those plus agent_interrupted (reason + atMs) and the four tool_call_* phases. clearTranscript now clears record.turns (negotiated config is preserved so the Audio panel and any replay stay honest).",
+    "Coverage in apps/studio/src/components/TranscriptPanel.test.tsx (11 cases, every one folded via buildSessionRecord, same idiom as Timeline.test.tsx): interim rendered visibly provisional (muted+italic, 'listening') and replaced in place by the final with confidence shown; barge-in rendered inline with a plain-language reason (raw 'barge_in' never shown) and elapsed = interrupted.atMs - startedAtMs (pinned at 1.20s and, for a turn starting at 3000ms, 700ms — proving it is relative to the turn start, not record zero); each of started/delayed/complete/failed cue phases (started arms, delayed escalates with afterMs, complete/failed clear); failed visually distinct (red) from delayed (amber); tool name/args/result inspectable inline.",
+    "No new dependencies: lucide-react was already a devDependency; apps/studio/src/lib/format.ts and apps/studio/src/components/ui/badge.tsx are local; apps/studio/package.json is unchanged."
+  ]
+}
