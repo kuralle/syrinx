@@ -2,7 +2,7 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
-## Unreleased
+## 4.3.0 — 2026-07-25
 
 ### Added — Telnyx transport on the Cloudflare Workers edge
 
@@ -230,6 +230,15 @@ low-cardinality signals; billing, dashboards (Lens-style), and evals are downstr
   timeout/fallback/reset, multi-segment accumulation, `speech_final`/`from_finalize` gating, UtteranceEnd
   backstop, and provider-boundary metrics stay in the wire protocol; socket/reconnect/billing/buffer funnel
   is shared.
+
+### Fixed — deterministic type resolution on fresh installs
+- **workspace**: pin `undici-types` to 7.x so all three `@types/node` majors in the tree resolve one
+  consistent global `Response`. `6.21.0`'s `Response` lacked the newer `bytes()` method, so a fresh
+  install could land two conflicting `Response` definitions in one compilation (`TS2741` in
+  `@kuralle-syrinx/ws`). Mirrors the existing `undici` runtime override.
+- **`server-workers` / `server-workers-mastra`**: two Node tests import `URL` from `node:url`
+  (`@cloudflare/workers-types` 4.x dropped the global `new URL(path, base)` overload), keeping
+  `-r typecheck` green.
 
 ## 4.2.0 — 2026-07-11
 

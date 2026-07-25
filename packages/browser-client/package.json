@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/browser-client",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "private": false,
   "description": "Browser client for the Syrinx WebSocket audio protocol — mic capture, opus, jitter buffer, playout progress reporting, reconnect",
   "keywords": [

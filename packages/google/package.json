@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/google",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "private": false,
   "description": "Google Cloud Speech-to-Text v2 STT adapter for Syrinx",
   "keywords": [

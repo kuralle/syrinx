@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/cf-agents",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "private": false,
   "description": "withVoice(Agent) — add a Syrinx realtime or cascaded voice pipeline to a Cloudflare agents SDK Agent",
   "keywords": [

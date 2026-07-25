@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/server-websocket",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "private": false,
   "description": "Node WebSocket voice host for Syrinx — browser transport plus Twilio/Telnyx/SmartPBX telephony adapters, background audio, admission control",
   "keywords": [
