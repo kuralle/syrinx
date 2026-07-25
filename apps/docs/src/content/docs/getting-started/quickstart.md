@@ -53,21 +53,26 @@ session.registerPlugin('bridge', new ReasoningBridge(fromStreamText({
   system: 'You are a helpful voice assistant. Keep your replies short.',
 })));
 session.registerPlugin('tts', new CartesiaTTSPlugin());
+
+// Nothing happens until you start it: `start()` runs each plugin's init chain
+// and begins draining the packet bus. Register every plugin before calling it.
+await session.start();
 ```
 
 That's the whole agent: audio in becomes a transcript, the transcript becomes a reply, the reply becomes audio. Swap any provider — a different STT vendor, or a realtime speech-to-speech model instead of a cascade — and the session shape stays the same.
 
-## Stream real audio into it
+## Feed it audio
 
-The session above is the conversation logic; to feed it live audio you attach a **transport**:
+A started session is idle until something pushes audio frames at it. That something is a **transport**, and which one you pick is the difference between trying this locally and shipping it:
 
-- **Browser** — Syrinx's resumable WebSocket audio protocol.
+- **A WAV file** — the fastest way to see a full turn on your own machine, no server and no microphone. See [Run it locally](/getting-started/run-it-locally/).
+- **Browser** — Syrinx's resumable WebSocket audio protocol, for real microphone input.
 - **Telephony** — a [Twilio](/telephony/twilio/) or [Telnyx](/telephony/telnyx/) phone call.
 - **Cloudflare Workers** — run the whole thing on the edge, one Durable Object per call. See [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).
 
 ## See it run end to end
 
-Want a complete, runnable headless demo — audio fixture in, transcript, reply, audio out, with per-stage latency timings — before wiring your own transport? Browse or run [`run-kuralle-cascade-clean.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/scripts/run-kuralle-cascade-clean.ts) in [`examples/02-hello-voice-headless`](https://github.com/kuralle/syrinx/tree/main/examples/02-hello-voice-headless) on GitHub.
+**[Run it locally](/getting-started/run-it-locally/)** walks the shortest path from the code above to a turn you can watch happen: a fixture WAV in, a transcript, a reply, and spoken audio out — then the same agent driven from a browser with your microphone.
 
 ## Next
 

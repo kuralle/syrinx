@@ -39,7 +39,11 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting Started',
-          items: [{ slug: 'introduction' }, { slug: 'getting-started/quickstart' }],
+          items: [
+            { slug: 'introduction' },
+            { slug: 'getting-started/quickstart' },
+            { slug: 'getting-started/run-it-locally' },
+          ],
         },
         {
           label: 'Concepts',
@@ -79,6 +83,7 @@ export default defineConfig({
             { slug: 'reference/packets' },
             { slug: 'reference/stt-reconfigure' },
             { slug: 'reference/observability' },
+            { slug: 'reference/testing' },
             { slug: 'reference/usage-and-pricing' },
           ],
         },

@@ -33,10 +33,14 @@ session.registerPlugin('bridge', new ReasoningBridge(fromStreamText({
   system: 'You are a helpful voice assistant. Keep your replies short.',
 })));
 session.registerPlugin('tts', new CartesiaTTSPlugin());
+
+// Register every plugin first, then start: `start()` runs the init chain and
+// starts draining the bus. Until it resolves, the session does nothing.
+await session.start();
 ```
 
 :::tip
-This is a runnable example — see [`hello-voice-agent.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/hello-voice-agent.ts) on GitHub, or the full headless demo in [`examples/02-hello-voice-headless`](https://github.com/kuralle/syrinx/tree/main/examples/02-hello-voice-headless).
+This is a runnable example, not a sketch — [`hello-voice-agent.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/hello-voice-agent.ts) is this exact agent with a `main()` that feeds it a WAV fixture and prints the turn. Run it in one command: see [Run it locally](/getting-started/run-it-locally/).
 :::
 
 Each plugin only cares about the packets it consumes and produces:

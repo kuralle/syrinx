@@ -42,7 +42,7 @@ counter acoustic.interruption 1 {layer="conversation"}
 ```
 
 :::tip
-This exporter is a runnable file — [`observability-dashboard.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/observability-dashboard.ts) on GitHub.
+This exporter is a module you import, not a script — [`observability-dashboard.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/observability-dashboard.ts) exports `dashboardExporter` plus a `createSessionWithDashboard()` helper. To watch it emit real counters, pass it to an agent you run — see [Run it locally](/getting-started/run-it-locally/).
 :::
 
 For local development or incident reconstruction, `InMemoryMetricsExporter` captures everything in arrays:

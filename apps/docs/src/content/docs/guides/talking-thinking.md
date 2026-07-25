@@ -63,12 +63,18 @@ const session = new VoiceAgentSession({
 
 // The bridge delegates CONSULT_TOOL calls to the thinker.
 session.registerPlugin('realtime', new RealtimeBridge(front, thinker, CONSULT_TOOL.name));
+
+await session.start();
 ```
 
 That's the whole pattern. `new RealtimeBridge(front, thinker, CONSULT_TOOL.name)` — front, reasoner, and the tool name that means *"delegate this to the thinker."* Any tool call the front makes with that name is routed to the reasoner; any other tool call is yours to handle (see `onFrontToolCall` below).
 
 :::tip
-This is a runnable file — [`talking-thinking.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/talking-thinking.ts) on GitHub.
+This is a runnable file — [`talking-thinking.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/talking-thinking.ts). It needs only `OPENAI_API_KEY`, feeds itself a WAV fixture, and prints whether the front delegated to the thinker:
+
+```bash
+pnpm -C examples/02-hello-voice-headless exec tsx src/talking-thinking.ts
+```
 :::
 
 ## Proactivity lives in the front's prompt

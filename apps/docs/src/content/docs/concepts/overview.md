@@ -40,6 +40,8 @@ const session = new VoiceAgentSession({
 });
 session.registerPlugin('stt', new DeepgramSTTPlugin()); // swap for new ElevenLabsSTTPlugin() — nothing else changes
 session.registerPlugin('tts', new CartesiaTTSPlugin());
+
+await session.start(); // registration first, then start — see the Quickstart
 ```
 
 Underneath, every STT plugin is a thin wire protocol over the shared `stt-core` lifecycle (socket, reconnect, the interim/final funnel, usage billing); every TTS plugin is the same shape over `tts-core`. See [Providers](/providers/overview/) for the full list and their config.

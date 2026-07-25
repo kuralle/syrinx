@@ -76,7 +76,7 @@ Context injection requires the reasoner to support `injectContext` (the cascade 
 
 The whole point is that analysis latency never touches voice-to-voice latency. Don't `await` the evaluation on the turn path — fire it and let the correction land on a later turn. A good observer also de-duplicates (don't inject the same correction twice) and can drop stale evaluations when turns arrive faster than it can analyze them.
 
-A complete, runnable observer — a university-support guardrail that evaluates each turn and injects corrections — is in [`university-support-observer.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/university-support-observer.ts).
+A complete observer — a university-support guardrail that evaluates each turn and injects corrections — is in [`university-support-observer.ts`](https://github.com/kuralle/syrinx/blob/main/examples/02-hello-voice-headless/src/university-support-observer.ts). It is a plugin class you register on a session, not a script; register it on an agent you run to see it fire ([Run it locally](/getting-started/run-it-locally/)).
 
 ## See also
 
