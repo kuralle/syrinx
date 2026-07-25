@@ -1,0 +1,25 @@
+{
+  "finalTranscript": "What's the application deadline for the computer science masters?",
+  "agentReply": "Could you please specify the university or program you are referring to? Application deadlines can vary.",
+  "turnCount": 1,
+  "metrics": {
+    "turnId": "559ae94f-83da-45df-98c5-4b4aacee598c",
+    "inputAudioMs": 3901,
+    "speechEndToFinalTranscriptMs": 2034,
+    "speechEndToFirstAudioMs": 0,
+    "endpointingMs": 2034,
+    "llmTTFTMs": 1093,
+    "ttsTTFBMs": 0,
+    "e2eLatencyMs": 0,
+    "agentTokens": 16,
+    "playedMs": 0,
+    "truncated": false,
+    "toolCalls": 0
+  },
+  "qualityGate": {
+    "passed": false,
+    "failures": [
+      "missing TTS audio"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "format": "syrinx.fixture.v1",
+  "turnId": "7de3daa4-e418-43d1-b1e1-e2e39e4c0d96",
+  "expectedTranscript": "What's the application deadline for the computer science masters?",
+  "capturedAtIso": "2026-07-25T18:56:35.007Z",
+  "audioFile": "what-s-the-application-deadline-for-the-computer-2026-07-25_18-56-35.wav",
+  "audio": {
+    "sampleRateHz": 16000,
+    "channels": 1,
+    "encoding": "pcm_s16le",
+    "durationMs": 3901,
+    "truncated": false
+  },
+  "capture": {
+    "wsUrl": "ws://127.0.0.1:4173/ws",
+    "inputSampleRateHz": 16000,
+    "outputSampleRateHz": 16000,
+    "encoding": "opus"
+  }
+}

@@ -1,0 +1,22 @@
+{"tsMs":1785005847529,"kind":"user_input_final","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","text":"What's the application deadline for the computer science masters?"}
+{"tsMs":1785005847529,"kind":"user_input_final","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","text":"What's the application deadline for the computer science masters?"}
+{"tsMs":1785005848623,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":"Could"}
+{"tsMs":1785005848632,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" you"}
+{"tsMs":1785005848644,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" please"}
+{"tsMs":1785005848644,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" specify"}
+{"tsMs":1785005848668,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" the"}
+{"tsMs":1785005848668,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" university"}
+{"tsMs":1785005848683,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" or"}
+{"tsMs":1785005848684,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" program"}
+{"tsMs":1785005848690,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" you"}
+{"tsMs":1785005848696,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" are"}
+{"tsMs":1785005848842,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" referring"}
+{"tsMs":1785005848842,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" to"}
+{"tsMs":1785005848843,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":"?"}
+{"tsMs":1785005848843,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" Application"}
+{"tsMs":1785005848844,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" deadlines"}
+{"tsMs":1785005848844,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" can"}
+{"tsMs":1785005848844,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":" vary"}
+{"tsMs":1785005848844,"kind":"agent_text_delta","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c","delta":"."}
+{"tsMs":1785005848944,"kind":"agent_finished","turnId":"559ae94f-83da-45df-98c5-4b4aacee598c"}
+{"tsMs":1785005848971,"kind":"error","stage":"tts.error","category":"resource_exhausted","message":"Cartesia TTS provider error: Insufficient credits: This request requires approximately 72 credits but you have 35 remaining. Please upgrade your subscription or enable overages at https://play.cartesia.ai/subscription. status 402"}

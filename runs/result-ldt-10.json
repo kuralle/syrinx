@@ -1,0 +1,9 @@
+{
+  "status": "done",
+  "claims": [
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ]
+}
