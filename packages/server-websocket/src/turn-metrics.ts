@@ -8,6 +8,7 @@ import {
   type PipelineBus,
   type SttResultPacket,
   type TextToSpeechAudioPacket,
+  type TextToSpeechEndPacket,
   type TextToSpeechPlayoutProgressPacket,
   type TextToSpeechPlayoutStartedPacket,
   type VadSpeechEndedPacket,
@@ -44,6 +45,30 @@ export interface BrowserMetricsMessage {
     readonly totalMs?: number;
   };
 }
+
+/**
+ * The field set `buildBrowserMetricsMessage` populates for an audio-originated turn
+ * (`vad.speech_ended` + `stt.result` + `llm.delta` + `tts.audio` all measured) —
+ * everything EXCEPT `firstAudioPlayedMs`/`lastAudioPlayedMs`, which depend on a
+ * playout-completion signal whose *source* legitimately differs per transport
+ * (Node's browser websocket path paces server-side; the Workers/DO edge path is
+ * client-paced). Both runtimes call this same builder and must emit this same core
+ * set; the parity tests in both packages assert against this constant so a runtime
+ * that silently drops the `metrics` message, or diverges in shape, fails loudly.
+ */
+export const CORE_METRICS_FIELDS = [
+  "type",
+  "turnId",
+  "correlationId",
+  "speechEndMs",
+  "textReadyMs",
+  "firstAudioByteMs",
+  "sttMs",
+  "llmTTFTMs",
+  "ttsTTFBMs",
+  "e2eMs",
+  "eouBudgetMs",
+] as const;
 
 function positiveDelta(endMs: number, startMs: number): number | undefined {
   if (endMs <= 0 || startMs <= 0 || endMs < startMs) return undefined;
@@ -111,6 +136,23 @@ function emptyTurnState(): TurnTimestampState {
   };
 }
 
+export interface TurnMetricsTrackerOptions {
+  /**
+   * Additionally finalize (emit + clear) a turn's metrics on `tts.end` when no
+   * `tts.playout_progress` completion has arrived yet. The Node browser websocket
+   * path always gets a `tts.playout_progress` completion shortly after `tts.end`
+   * from its own server-side pacer (playout-progress.ts) — turning this on there
+   * would race a premature, playout-less emission ahead of the real one, so it
+   * defaults off and Node leaves it unset. The Workers/DO edge path is
+   * client-paced (the browser reports playout over the wire); a client that never
+   * reports it — a non-browser client, or a text-only smoke probe — would
+   * otherwise leave a turn's metrics pending forever, so edge opts in. If a
+   * richer client-reported completion arrives after this floor already fired,
+   * it is a no-op: the turn was already finalized and cleared.
+   */
+  readonly finalizeOnTtsEnd?: boolean;
+}
+
 export class TurnMetricsTracker {
   private readonly turns: Map<string, TurnTimestampState>;
 
@@ -118,6 +160,7 @@ export class TurnMetricsTracker {
     private readonly bus: PipelineBus,
     private readonly onEmit: (message: BrowserMetricsMessage) => void,
     persistedTurns?: Map<string, TurnTimestampState>,
+    private readonly options: TurnMetricsTrackerOptions = {},
   ) {
     this.turns = persistedTurns ?? new Map();
   }
@@ -170,11 +213,34 @@ export class TurnMetricsTracker {
         const progress = pkt as TextToSpeechPlayoutProgressPacket;
         const state = this.turns.get(progress.contextId);
         if (!state) return;
+        // The edge transport never emits `tts.playout_started` — the browser reports
+        // its own playout clock and that is forwarded here (edge.ts). So take the
+        // first progress report as the moment audio started playing. On the Node path
+        // `playout_started` has already set this, and the `=== 0` guard leaves it be.
+        if (state.firstAudioPlayedMs === 0) state.firstAudioPlayedMs = progress.timestampMs;
         if (progress.complete) {
           state.lastAudioPlayedMs = progress.timestampMs;
           this.onEmit(buildBrowserMetricsMessage(progress.contextId, state));
           this.turns.delete(progress.contextId);
         }
+      }),
+      this.bus.on("tts.end", (pkt) => {
+        if (!this.options.finalizeOnTtsEnd) return;
+        const end = pkt as TextToSpeechEndPacket;
+        const state = this.turns.get(end.contextId);
+        if (!state) return;
+        // `tts.end` means synthesis finished, which is EARLIER than playback finishing.
+        // So if this client is pacing playout, firing here would emit a poorer message
+        // and delete the turn before the real completion arrived — costing
+        // firstAudioPlayedMs, lastAudioPlayedMs, and downgrading e2eMs from
+        // "to first audio played" to "to first byte" on this runtime only. That is the
+        // exact runtime drift this tracker exists to prevent.
+        //
+        // A non-zero firstAudioPlayedMs means playout has been reported, so wait.
+        // The floor is only for clients that never report at all.
+        if (state.firstAudioPlayedMs !== 0) return;
+        this.onEmit(buildBrowserMetricsMessage(end.contextId, state));
+        this.turns.delete(end.contextId);
       }),
       this.bus.on("interrupt.tts", (pkt) => {
         this.turns.delete((pkt as InterruptTtsPacket).contextId);

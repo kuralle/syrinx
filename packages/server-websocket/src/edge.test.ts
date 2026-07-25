@@ -15,6 +15,7 @@ import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 import type { ManagedSocket, SocketData } from "@kuralle-syrinx/ws";
 import { InMemorySessionStore } from "./session-store.js";
 import { runVoiceEdgeWebSocketConnection, type EdgeRecorder } from "./edge.js";
+import { CORE_METRICS_FIELDS } from "./turn-metrics.js";
 
 const KEEP_ALIVE_KEY = "voice.edge.keep_alive";
 
@@ -587,5 +588,140 @@ describe("edge background audio", () => {
     expect(binary).toBeDefined();
     const wireSamples = new Int16Array(binary!.buffer.slice(binary!.byteOffset + (binary!.byteLength - 8)));
     expect(Array.from(wireSamples)).toEqual([500, 500, 500, 500]);
+  });
+});
+
+describe("edge turn metrics (LDT-18 parity)", () => {
+  // LDT-18: a complete turn on wrangler dev -> CascadedVoiceAgent produced no `metrics`
+  // message — the Node websocket path (index.ts) emits it, the Workers/DO edge path
+  // (edge.ts) silently did not. This must not regress silently on either side: this
+  // test and the Node-side "emits populated metrics after paced TTS playout completes"
+  // test (index.test.ts) both assert the exact same FULLY_MEASURED_METRICS_FIELDS set.
+  it("emits a populated metrics message once client-reported playout completes", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    let capturedSession: VoiceAgentSession | undefined;
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => {
+        capturedSession = fakeSession();
+        return capturedSession;
+      },
+    });
+    waitForReady(socket);
+    const session = capturedSession!;
+
+    const speechEndMs = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_ended",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs,
+    });
+    session.bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 200,
+      text: "hello",
+      confidence: 0.95,
+    });
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 500,
+      text: "hi there",
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "metrics-turn",
+      timestampMs: speechEndMs + 700,
+      audio: pcm16SamplesToBytes(new Int16Array(640).fill(1000)),
+      sampleRateHz: 16000,
+    });
+
+    // Edge is client-paced: the browser reports playout position/completion over the
+    // wire instead of the server pacing it internally (that's the Node path). There is
+    // no `tts.playout_started` here, so the FIRST progress report is taken as the moment
+    // audio began playing — otherwise this runtime would silently report a poorer
+    // `metrics` than Node for the same turn, which is the drift this parity work exists
+    // to remove rather than to document.
+    socket.emit(
+      JSON.stringify({ type: "playout_progress", contextId: "metrics-turn", playedOutMs: 1200 }),
+    );
+    socket.emit(
+      JSON.stringify({ type: "playout_progress", contextId: "metrics-turn", playedOutMs: 1200, complete: true }),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    const metrics = socket.json().find((m) => m.type === "metrics");
+    expect(metrics).toMatchObject({
+      type: "metrics",
+      turnId: "metrics-turn",
+      correlationId: "metrics-turn",
+      sttMs: 200,
+      llmTTFTMs: 300,
+      ttsTTFBMs: 200,
+    });
+    expect(typeof (metrics as { e2eMs?: number }).e2eMs).toBe("number");
+    // Measured from the client's first progress report, not omitted: a browser that
+    // paces its own playout knows this, and Node reports it, so edge must too.
+    expect((metrics as { firstAudioPlayedMs?: number }).firstAudioPlayedMs).toBeGreaterThan(0);
+    expect((metrics as { lastAudioPlayedMs?: number }).lastAudioPlayedMs).toBeGreaterThan(0);
+    // Parity: the Node websocket path emits this same core field set (index.test.ts
+    // "emits populated metrics after paced TTS playout completes"). With the played
+    // marks now measured on both, there is no field a browser session gets on one
+    // runtime and not the other.
+    for (const field of CORE_METRICS_FIELDS) expect(metrics).toHaveProperty(field);
+  });
+
+  it("falls back to a tts.end floor when the client never reports playout (e.g. a text-only turn, or a non-browser client)", async () => {
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    let capturedSession: VoiceAgentSession | undefined;
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => {
+        capturedSession = fakeSession();
+        return capturedSession;
+      },
+    });
+    waitForReady(socket);
+    const session = capturedSession!;
+
+    const textReadyMs = Date.now();
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "text-turn",
+      timestampMs: textReadyMs,
+      text: "hi there",
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.audio",
+      contextId: "text-turn",
+      timestampMs: textReadyMs + 350,
+      audio: pcm16SamplesToBytes(new Int16Array(640).fill(1000)),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.end",
+      contextId: "text-turn",
+      timestampMs: textReadyMs + 400,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const metrics = socket.json().find((m) => m.type === "metrics");
+    expect(metrics).toMatchObject({
+      type: "metrics",
+      turnId: "text-turn",
+      correlationId: "text-turn",
+      textReadyMs,
+      firstAudioByteMs: textReadyMs + 350,
+      ttsTTFBMs: 350,
+    });
+    // No speech/STT source on a text turn — omitted, not zeroed (positiveDelta contract).
+    expect(metrics).not.toHaveProperty("speechEndMs");
+    expect(metrics).not.toHaveProperty("sttMs");
+    expect(metrics).not.toHaveProperty("e2eMs");
   });
 });

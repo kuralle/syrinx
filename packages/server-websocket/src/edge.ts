@@ -37,6 +37,7 @@ import {
   resampleAudioBytes,
   socketDataToBytes,
 } from "./inbound-audio.js";
+import { TurnMetricsTracker, type TurnTimestampState } from "./turn-metrics.js";
 
 /**
  * Sink for per-conversation audio recording. The edge taps inbound caller audio
@@ -287,6 +288,7 @@ export async function runVoiceEdgeWebSocketConnection(
       socket,
       disposers,
       outputSampleRateHz,
+      leased.managed.turnMetricsTurns,
       options.recorder,
       options.backgroundAudio ? new BackgroundAudioMixer(options.backgroundAudio) : undefined,
     );
@@ -372,10 +374,24 @@ function wireEdgeSessionEvents(
   socket: ManagedSocket,
   disposers: Array<() => void>,
   outputSampleRateHz: number,
+  turnMetricsTurns: Map<string, TurnTimestampState>,
   recorder?: EdgeRecorder,
   backgroundAudio?: BackgroundAudioMixer,
 ): void {
   if (backgroundAudio) wireBackgroundAudio(session, backgroundAudio);
+
+  // Same per-turn latency decomposition the Node websocket path emits (turn-metrics.ts) —
+  // the browser/edge protocol is shared, so the `metrics` message must be too. Unlike
+  // Node, this transport is client-paced (no server-side pacer guarantees a
+  // `tts.playout_progress` completion), so also finalize on `tts.end` — see
+  // TurnMetricsTrackerOptions.finalizeOnTtsEnd.
+  const turnMetrics = new TurnMetricsTracker(
+    session.bus,
+    (message) => sendJson(socket, message),
+    turnMetricsTurns,
+    { finalizeOnTtsEnd: true },
+  );
+  turnMetrics.wire(disposers);
   const onSession = <K extends keyof VoiceAgentSessionEvents>(
     event: K,
     handler: VoiceAgentSessionEvents[K],

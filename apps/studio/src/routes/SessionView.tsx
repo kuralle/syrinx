@@ -1,10 +1,14 @@
 import { useMemo, useState } from "react";
 
+import { AgentErrorPanel } from "@/components/AgentErrorPanel";
 import { AgentStateBadge } from "@/components/AgentStateBadge";
+import { AudioHealthPanel } from "@/components/AudioHealthPanel";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
+import { ConnectionDiagnostics } from "@/components/ConnectionDiagnostics";
 import { EventLog } from "@/components/EventLog";
 import { MetricsPanel } from "@/components/MetricsPanel";
+import { SessionInfoPanel } from "@/components/SessionInfoPanel";
 import { TextComposer } from "@/components/TextComposer";
 import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
@@ -52,12 +56,27 @@ export function SessionView() {
         onPlaySample={() => void session.playSample()}
       />
 
+      {/* Directly under the connection bar: a failed connection is the first thing
+          to explain, and nothing below it will have any data to show. */}
+      <ConnectionDiagnostics
+        failure={session.failure}
+        resumeWindowMs={session.record.config.resumeWindowMs}
+        disconnectedAtMs={session.disconnectedAtMs}
+        onUseUrl={(url) => {
+          setCustomUrl(url);
+          setTarget("custom");
+        }}
+      />
+
       <div className="flex items-center gap-3">
         <AgentStateBadge snapshot={session.agentState} />
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="flex min-h-0 flex-col gap-4">
+          {/* Above the transcript: an error explains the gap in the conversation
+              below it, and it persists rather than passing by as a toast. */}
+          <AgentErrorPanel record={session.record} />
           <TranscriptPanel record={session.record} />
           <TextComposer
             mode={session.mode}
@@ -93,12 +112,30 @@ export function SessionView() {
                     ? // Not "waiting" — text mode released it, and saying otherwise
                       // would leave the user unsure whether the mic is still live.
                       "Microphone released — text mode. Switch back to voice to re-request it."
-                    : session.status === "connected"
-                      ? "Waiting for microphone…"
-                      : "Connect to start a session."}
+                    : session.micFailure
+                      ? // Never "waiting" for something that already failed — the
+                        // panel below says which problem it is and how to fix it.
+                        "No microphone — see the reason below."
+                      : session.status === "connected"
+                        ? "Waiting for microphone…"
+                        : "Connect to start a session."}
               </p>
             </CardContent>
           </Card>
+
+          <SessionInfoPanel record={session.record} />
+
+          <AudioHealthPanel
+            micFailure={session.micFailure}
+            mode={session.mode}
+            serverAudioBytes={session.record.turns.reduce((n, turn) => n + turn.ttsAudioBytes, 0)}
+            framesReceived={session.audioFramesReceived}
+            peakLevel={session.peakPlaybackLevel}
+            playbackState={session.playbackState}
+            turnCount={session.record.turns.length}
+            onModeChange={session.setMode}
+            onResumePlayback={() => void session.resumePlayback()}
+          />
         </div>
       </div>
     </div>

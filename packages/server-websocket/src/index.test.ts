@@ -23,6 +23,7 @@ import {
   createVoiceWebSocketServer,
 } from "./index.js";
 import { BROWSER_OPUS_FRAME_DURATION_MS } from "./browser-opus.js";
+import { CORE_METRICS_FIELDS } from "./turn-metrics.js";
 import {
   openBrowserClientAndReadReady,
   openBrowserSocketReady,
@@ -2034,6 +2035,9 @@ describe("createVoiceWebSocketServer", () => {
     expect(typeof (metrics as { e2eMs?: number }).e2eMs).toBe("number");
     expect((metrics as { firstAudioPlayedMs?: number }).firstAudioPlayedMs).toBeGreaterThan(0);
     expect((metrics as { lastAudioPlayedMs?: number }).lastAudioPlayedMs).toBeGreaterThan(0);
+    // LDT-18 parity: the Workers/DO edge path must emit this same core field set —
+    // see edge.test.ts "edge turn metrics (LDT-18 parity)".
+    for (const field of CORE_METRICS_FIELDS) expect(metrics).toHaveProperty(field);
 
     client.close();
     await server.close();

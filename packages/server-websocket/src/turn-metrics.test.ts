@@ -5,6 +5,7 @@ import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import {
   buildBrowserMetricsMessage,
   TurnMetricsTracker,
+  type BrowserMetricsMessage,
 } from "./turn-metrics.js";
 import { waitForCondition } from "./test-helpers.js";
 
@@ -60,6 +61,91 @@ describe("turn metrics", () => {
       totalMs: 380,
     });
     expect(message.sttMs).toBe(250);
+  });
+
+  // The edge/DO transport is client-paced: the browser reports its own playout clock
+  // and edge.ts forwards it, but nothing emits `tts.playout_started` there. These two
+  // pin down that `finalizeOnTtsEnd` is a floor for silent clients only — it must not
+  // pre-empt a client that IS reporting, because tts.end (synthesis done) always
+  // precedes playout completion (playback done).
+  describe("finalizeOnTtsEnd — the edge floor", () => {
+    const driveTurnToTtsEnd = (session: VoiceAgentSession, contextId: string): void => {
+      session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId, timestampMs: 500 });
+      session.bus.push(Route.Main, {
+        kind: "stt.result", contextId, timestampMs: 700, text: "hello", confidence: 0.99,
+      });
+      session.bus.push(Route.Main, { kind: "llm.delta", contextId, timestampMs: 900, text: "hi" });
+      session.bus.push(Route.Main, {
+        kind: "tts.audio", contextId, timestampMs: 1100, audio: new Uint8Array(640), sampleRateHz: 16000,
+      });
+    };
+
+    it("does not pre-empt a client that reports playout, keeping the played marks", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const emitted: BrowserMetricsMessage[] = [];
+      const tracker = new TurnMetricsTracker(
+        session.bus, (m) => emitted.push(m), undefined, { finalizeOnTtsEnd: true },
+      );
+      tracker.wire([]);
+      void session.start();
+
+      driveTurnToTtsEnd(session, "reporting");
+      // Browser starts playing and says so — no playout_started on this transport.
+      session.bus.push(Route.Main, {
+        kind: "tts.playout_progress", contextId: "reporting", timestampMs: 1200,
+        playedOutMs: 40, complete: false,
+      });
+      // Synthesis finishes BEFORE playback does. The floor must stay its hand here.
+      session.bus.push(Route.Main, { kind: "tts.end", contextId: "reporting", timestampMs: 1300 });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(emitted, "tts.end must not finalize a reporting client").toHaveLength(0);
+
+      // Playback actually finishes.
+      session.bus.push(Route.Main, {
+        kind: "tts.playout_progress", contextId: "reporting", timestampMs: 4000,
+        playedOutMs: 2800, complete: true,
+      });
+      await waitForCondition(() => emitted.length === 1);
+      const message = emitted[0];
+      // The whole point: these survive, and e2e is measured to audio PLAYED, not to
+      // first byte — the same semantics the Node path reports.
+      expect(message?.firstAudioPlayedMs).toBe(1200);
+      expect(message?.lastAudioPlayedMs).toBe(4000);
+      expect(message?.e2eMs).toBe(700);
+    });
+
+    it("floors on tts.end for a client that never reports playout", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const emitted: BrowserMetricsMessage[] = [];
+      const tracker = new TurnMetricsTracker(
+        session.bus, (m) => emitted.push(m), undefined, { finalizeOnTtsEnd: true },
+      );
+      tracker.wire([]);
+      void session.start();
+
+      driveTurnToTtsEnd(session, "silent");
+      session.bus.push(Route.Main, { kind: "tts.end", contextId: "silent", timestampMs: 1300 });
+      await waitForCondition(() => emitted.length === 1);
+
+      const message = emitted[0];
+      expect(message?.ttsTTFBMs).toBe(200);
+      // Never measured, so omitted rather than zeroed.
+      expect(message?.firstAudioPlayedMs).toBeUndefined();
+      expect(message?.lastAudioPlayedMs).toBeUndefined();
+    });
+
+    it("leaves the Node path alone — no floor unless opted in", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const emitted: BrowserMetricsMessage[] = [];
+      const tracker = new TurnMetricsTracker(session.bus, (m) => emitted.push(m));
+      tracker.wire([]);
+      void session.start();
+
+      driveTurnToTtsEnd(session, "node");
+      session.bus.push(Route.Main, { kind: "tts.end", contextId: "node", timestampMs: 1300 });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(emitted, "default must not finalize on tts.end").toHaveLength(0);
+    });
   });
 
   it("keeps correlation id stable for the turn context", async () => {

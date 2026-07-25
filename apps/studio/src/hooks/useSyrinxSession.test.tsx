@@ -199,6 +199,85 @@ describe("useSyrinxSession — conversation mode", () => {
     expect([...result.current.textTurnIds]).toEqual(["t2"]);
   });
 
+  it("keeps the session usable when the browser refuses the microphone", async () => {
+    // The failure this prevents: a denied microphone used to flip the whole session
+    // to "error", leaving nothing usable even though the socket and agent were fine.
+    getUserMedia.mockRejectedValueOnce(new DOMException("Permission denied", "NotAllowedError"));
+    const { result } = await connected();
+
+    await waitFor(() => expect(result.current.micFailure).toBeDefined());
+    expect(result.current.micFailure?.kind).toBe("denied");
+    expect(result.current.micActive).toBe(false);
+    // Still connected, still a session, and text mode still works with no microphone.
+    expect(result.current.status).toBe("connected");
+    expect(result.current.failure).toBeUndefined();
+
+    act(() => result.current.setMode("text"));
+    act(() => result.current.sendText("works with no microphone"));
+
+    expect(client().sentText).toEqual(["works with no microphone"]);
+    // Text mode holds no microphone, so there is no microphone problem to report.
+    expect(result.current.micFailure).toBeUndefined();
+  });
+
+  it("names a missing device apart from a denial", async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException("no mic", "NotFoundError"));
+    const { result } = await connected();
+
+    await waitFor(() => expect(result.current.micFailure?.kind).toBe("no-device"));
+    expect(result.current.status).toBe("connected");
+  });
+
+  it("keeps the session alive through an injected reasoner error, and keeps the error", async () => {
+    // LDT-13's done-condition at the hook: a recoverable llm.error must not end the
+    // session, and it must survive in the record rather than passing by.
+    const { result } = await connected();
+    message({ type: "stt_output", turnId: "t1", transcript: "hello" });
+
+    message({ type: "error", turnId: "t1", component: "llm.error", category: "rate_limit", message: "429" });
+
+    expect(result.current.status).toBe("connected");
+    expect(result.current.failure).toBeUndefined();
+    expect(result.current.record.turns[0]?.errors).toEqual([
+      { atMs: expect.any(Number), component: "llm.error", category: "rate_limit", message: "429" },
+    ]);
+    // The turn is still there, and still usable.
+    expect(result.current.record.turns[0]?.userTranscript).toBe("hello");
+
+    // A second error does not replace the first — the older one is usually the one
+    // that explains the failure.
+    message({ type: "error", turnId: "t1", component: "tts.error", category: "network_timeout", message: "timeout" });
+    expect(result.current.record.turns[0]?.errors).toHaveLength(2);
+  });
+
+  it("does not call a blip on a running session a failed start", async () => {
+    // A transport error after `ready` is a blip on a connection that already proved
+    // the address, the route and the agent. Naming it agent-init-failed would send
+    // the reader to look for a startup bug that does not exist.
+    const { result } = await connected();
+    await waitFor(() => expect(result.current.micActive).toBe(true));
+
+    act(() => {
+      client().emit({ type: "error", error: new Error("socket hiccup") });
+    });
+
+    expect(result.current.failure).toBeUndefined();
+    expect(result.current.errorMessage).toBe("socket hiccup");
+  });
+
+  it("counts the audio frames that actually arrive, and the loudest one", async () => {
+    const { result } = await connected();
+    const loud = new Int16Array([0, 16_384, -16_384, 0]);
+
+    act(() => {
+      client().emit({ type: "audio", data: new Int16Array(4).buffer });
+      client().emit({ type: "audio", data: loud.buffer });
+    });
+
+    expect(result.current.audioFramesReceived).toBe(2);
+    expect(result.current.peakPlaybackLevel).toBeGreaterThan(0);
+  });
+
   it("forgets text attribution when a new session starts", async () => {
     const { result } = await connected("text");
     message({ type: "stt_output", turnId: "t1", transcript: "typed" });
