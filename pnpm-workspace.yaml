@@ -3,6 +3,20 @@ packages:
   - "examples/*"
   - "apps/*"
 
+# Cap how many workspace packages pnpm runs a script in at once.
+#
+# Measured 2026-07-25: `pnpm -r test` failed 2 of 5 consecutive runs on an 8-core
+# machine, each time in a DIFFERENT package (realtime, cartesia) that passed 20/20
+# in isolation under heavy artificial load. The tests were not racing — the runner
+# was oversubscribed. 26 packages have a test script and vitest sizes a worker pool
+# per package to the core count, so an uncapped recursive run asks for ~200 workers
+# on 8 cores. That produces two failure modes, both of which read as flaky tests:
+# a 5s timeout from a pool that never gets scheduled, and ERR_IPC_CHANNEL_CLOSED
+# from tinypool losing a worker outright (zero failing assertions).
+#
+# Capped: 8 of 8 full runs green. Uncapped: 3 of 5. Raise only with evidence.
+workspaceConcurrency: 2
+
 overrides:
   undici: ">=7.28.0"
   # The tree carries three @types/node majors (18/22/24), each pinning a different
