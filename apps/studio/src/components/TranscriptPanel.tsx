@@ -27,6 +27,51 @@ import { cn } from "@/lib/utils";
 
 interface TranscriptPanelProps {
   readonly record: SessionRecord;
+  /** Save this turn as a replayable fixture. Omitted in contexts with no capture. */
+  readonly onSaveFixture?: (turn: TurnRecord) => void;
+  /** Why this turn cannot be saved, or undefined when it can. */
+  readonly canSaveFixture?: (turn: TurnRecord) => string | undefined;
+}
+
+/**
+ * Per-turn save. The disabled state always carries its reason — a greyed-out
+ * button with no explanation is its own bug, and "why can't I save this one?"
+ * is the first question a developer asks.
+ */
+function SaveFixtureButton({
+  turn,
+  onSave,
+  blockedReason,
+}: {
+  readonly turn: TurnRecord;
+  readonly onSave: (turn: TurnRecord) => void;
+  readonly blockedReason?: string;
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      {blockedReason !== undefined && (
+        <span className="text-[10px] text-muted-foreground" data-testid="save-fixture-blocked">
+          {blockedReason}
+        </span>
+      )}
+      <button
+        type="button"
+        disabled={blockedReason !== undefined}
+        onClick={() => { onSave(turn); }}
+        data-testid="save-fixture"
+        data-turn={turn.turnId}
+        title={blockedReason ?? "Download this turn's audio and its expected transcript"}
+        className={cn(
+          "rounded border px-2 py-0.5 text-[10px] font-medium",
+          blockedReason === undefined
+            ? "border-emerald-300 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+            : "border-muted text-muted-foreground opacity-60",
+        )}
+      >
+        Save as fixture
+      </button>
+    </div>
+  );
 }
 
 // The record's `phase` arrives from the `tool_call_*` cues. A backend that only sends
@@ -145,7 +190,15 @@ function InterruptionMarker({ turn }: { readonly turn: TurnRecord }): React.JSX.
   );
 }
 
-function TurnGroup({ turn }: { readonly turn: TurnRecord }): React.JSX.Element {
+function TurnGroup({
+  turn,
+  onSaveFixture,
+  canSaveFixture,
+}: {
+  readonly turn: TurnRecord;
+  readonly onSaveFixture?: (turn: TurnRecord) => void;
+  readonly canSaveFixture?: (turn: TurnRecord) => string | undefined;
+}): React.JSX.Element {
   const hasUserText = turn.userTranscript !== undefined || turn.userInterim !== undefined;
   const interim = turn.userTranscript === undefined && turn.userInterim !== undefined;
   const hasAgentText = turn.agentText.length > 0;
@@ -154,6 +207,9 @@ function TurnGroup({ turn }: { readonly turn: TurnRecord }): React.JSX.Element {
 
   return (
     <div className="space-y-2" data-testid="transcript-turn" data-turn={turn.turnId}>
+      {onSaveFixture !== undefined && (
+        <SaveFixtureButton turn={turn} onSave={onSaveFixture} blockedReason={canSaveFixture?.(turn)} />
+      )}
       {hasUserText && (
         <div
           data-testid={interim ? "transcript-user-interim" : "transcript-user"}
@@ -204,7 +260,7 @@ function TurnGroup({ turn }: { readonly turn: TurnRecord }): React.JSX.Element {
   );
 }
 
-export function TranscriptPanel({ record }: TranscriptPanelProps): React.JSX.Element {
+export function TranscriptPanel({ record, onSaveFixture, canSaveFixture }: TranscriptPanelProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   const turns = record.turns;
 
@@ -236,7 +292,14 @@ export function TranscriptPanel({ record }: TranscriptPanelProps): React.JSX.Ele
               progresses.
             </p>
           ) : (
-            turns.map((turn) => <TurnGroup key={turn.turnId} turn={turn} />)
+            turns.map((turn) => (
+              <TurnGroup
+                key={turn.turnId}
+                turn={turn}
+                onSaveFixture={onSaveFixture}
+                canSaveFixture={canSaveFixture}
+              />
+            ))
           )}
         </div>
       </CardContent>

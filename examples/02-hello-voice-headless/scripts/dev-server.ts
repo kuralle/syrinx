@@ -9,9 +9,9 @@
 // factory returning a VoiceAgentSession. Omit `#name` for a default export.
 
 import { createServer } from "node:http";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createVoiceWebSocketServer, installGracefulShutdown } from "@kuralle-syrinx/server-websocket";
@@ -166,6 +166,39 @@ async function loadStudioHtml(): Promise<{ html: string; source: string }> {
   }
 }
 
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".wav": "audio/wav",
+  ".map": "application/json; charset=utf-8",
+};
+
+/** A file under the Studio's dist, or undefined. Refuses to escape that directory. */
+function readAsset(pathname: string): { body: Buffer; contentType: string } | undefined {
+  const resolved = resolve(STUDIO_DIST, `.${pathname}`);
+  // `..` in a URL must not reach outside dist — this server binds to loopback by
+  // default but SYRINX_DEV_HOST can expose it.
+  if (resolved !== STUDIO_DIST && !resolved.startsWith(STUDIO_DIST + sep)) return undefined;
+  try {
+    if (!statSync(resolved).isFile()) return undefined;
+    return {
+      body: readFileSync(resolved),
+      contentType: CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function main(): Promise<void> {
   ensureRepoRootDotenv();
   coerceGoogleGenAiKey();
@@ -185,6 +218,15 @@ async function main(): Promise<void> {
     if (url.pathname === "/" || url.pathname === "/index.html") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       response.end(html);
+      return;
+    }
+    // The Studio is a bundle: its HTML is inert without /assets/*.js. Serving only
+    // index.html renders a blank page whose 404s are invisible unless you open the
+    // console — the page looks served and is not.
+    const asset = readAsset(url.pathname);
+    if (asset) {
+      response.writeHead(200, { "content-type": asset.contentType, "cache-control": "no-store" });
+      response.end(asset.body);
       return;
     }
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

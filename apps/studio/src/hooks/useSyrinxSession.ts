@@ -25,6 +25,9 @@ import {
 } from "@/lib/connection-failure";
 import { classifyMicFailure, type MicFailure } from "@/lib/audio-health";
 
+import { float32ToPcm16, resampleFloat32Linear } from "@kuralle-syrinx/browser-client";
+import { TurnAudioRecorder } from "@kuralle-syrinx/browser-client/turn-recorder";
+
 export type SessionStatus = "offline" | "connecting" | "connected" | "error";
 
 /**
@@ -101,6 +104,10 @@ export interface SyrinxSessionControls {
   disconnect: () => void;
   clearTranscript: () => void;
   playSample: () => Promise<void>;
+  /** WAV bytes for a turn, or undefined when never captured or evicted. */
+  getTurnAudio: (
+    turnId: string,
+  ) => { wav: Uint8Array; sampleRateHz: number; durationMs: number; truncated: boolean } | undefined;
   /** Switches modality in place. Never reconnects, so the record survives the switch. */
   setMode: (mode: ConversationMode) => void;
   sendText: (text: string) => void;
@@ -127,6 +134,9 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
   const [mode, setModeState] = useState<ConversationMode>("voice");
   const [textTurnIds, setTextTurnIds] = useState<ReadonlySet<string>>(() => new Set());
   const recordStartedAtRef = useRef<number>(0);
+  // Recording is on by default: a developer who has to arm it first will not have
+  // armed it for the turn that went wrong.
+  const recorderRef = useRef<TurnAudioRecorder>(new TurnAudioRecorder());
   // The message listener is installed once per connection, so it would close over a
   // stale `mode`. A ref keeps the attribution honest across a mid-session switch.
   const modeRef = useRef<ConversationMode>("voice");
@@ -251,6 +261,18 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
         fromSampleRateHz: captureContext.sampleRate,
         toSampleRateHz: targetRate,
       });
+      // Keep a copy of exactly what went on the wire, so a saved fixture replays
+      // the audio the agent actually heard. Same two helpers sendFloat32Audio uses
+      // internally — resampling it differently here would produce a fixture that
+      // subtly disagrees with the turn it claims to reproduce.
+      recorderRef.current.pushFrame(
+        float32ToPcm16(
+          resampleFloat32Linear(input, {
+            fromSampleRateHz: captureContext.sampleRate,
+            toSampleRateHz: targetRate,
+          }),
+        ),
+      );
     };
     source.connect(analyser);
     analyser.connect(processor);
@@ -299,6 +321,14 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     const trimmed = text.trim();
     if (trimmed === "") return;
     clientRef.current?.sendText(trimmed);
+  }, []);
+
+  const getTurnAudio = useCallback((turnId: string) => {
+    const wav = recorderRef.current.getWav(turnId);
+    if (!wav) return undefined;
+    const entry = recorderRef.current.list().find((t) => t.turnId === turnId);
+    if (!entry) return undefined;
+    return { wav, sampleRateHz: entry.sampleRateHz, durationMs: entry.durationMs, truncated: entry.truncated };
   }, []);
 
   const disconnect = useCallback((): void => {
@@ -353,6 +383,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     recordStartedAtRef.current = performance.now();
     setRecord(emptySessionRecord({ wsUrl }));
     setAgentState(INITIAL_AGENT_STATE);
+    recorderRef.current.reset();
     seenTurnIdsRef.current = new Set();
     setTextTurnIds(new Set());
 
@@ -410,6 +441,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
             setTextTurnIds((prev) => new Set(prev).add(turnId));
           }
         }
+        recorderRef.current.onMessage(event.message);
         setRecord((prev) => applyMessage(prev, event.message, atMs));
         setAgentState((prev) => nextAgentState(prev, event.message, atMs));
         handleMessage(event.message);
@@ -505,6 +537,7 @@ export function useSyrinxSession(wsUrl: string): SyrinxSessionControls {
     disconnect,
     clearTranscript,
     playSample,
+    getTurnAudio,
     setMode,
     sendText,
     resumePlayback,

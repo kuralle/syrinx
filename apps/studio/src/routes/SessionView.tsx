@@ -12,6 +12,8 @@ import { SessionInfoPanel } from "@/components/SessionInfoPanel";
 import { TextComposer } from "@/components/TextComposer";
 import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
+import { buildFixture, fixtureBlockedReason } from "@/lib/fixture-export";
+import { downloadFixture } from "@/lib/download";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSyrinxSession } from "@/hooks/useSyrinxSession";
 import {
@@ -77,7 +79,27 @@ export function SessionView() {
           {/* Above the transcript: an error explains the gap in the conversation
               below it, and it persists rather than passing by as a toast. */}
           <AgentErrorPanel record={session.record} />
-          <TranscriptPanel record={session.record} />
+          <TranscriptPanel
+            record={session.record}
+            canSaveFixture={(turn) =>
+              fixtureBlockedReason(turn, session.getTurnAudio(turn.turnId) !== undefined)
+            }
+            onSaveFixture={(turn) => {
+              const audio = session.getTurnAudio(turn.turnId);
+              if (!audio) return;
+              downloadFixture(
+                buildFixture({
+                  turn,
+                  config: session.record.config,
+                  wav: audio.wav,
+                  sampleRateHz: audio.sampleRateHz,
+                  durationMs: audio.durationMs,
+                  truncated: audio.truncated,
+                  capturedAtIso: new Date().toISOString(),
+                }),
+              );
+            }}
+          />
           <TextComposer
             mode={session.mode}
             connected={session.status === "connected"}

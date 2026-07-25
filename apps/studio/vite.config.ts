@@ -31,5 +31,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // e2e/ is Playwright: a real Chromium against a live backend. Running it here
+    // would make the unit gate depend on provider keys and a booted server.
+    exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
   },
 });

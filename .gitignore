@@ -34,3 +34,8 @@ bi-model-research/
 .wrangler/
 .plandesk/token
 .plandesk/server.json
+
+# Playwright e2e output. `runs/` is already transient; these two are Playwright's
+# own and land inside apps/studio.
+apps/studio/test-results/
+apps/studio/playwright-report/
