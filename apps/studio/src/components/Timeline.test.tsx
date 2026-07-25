@@ -93,4 +93,58 @@ describe("Timeline", () => {
     expect(screen.getAllByTestId("timeline-lane")).toHaveLength(2);
     expect(screen.getByText(/does not send per-turn timings/i)).toBeInTheDocument();
   });
+
+  it("names the endpointing owner in plain language — speech-to-text provider", () => {
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "end_of_speech" },
+    ]);
+    render(<Timeline record={record} />);
+    const marker = screen.getByTestId("timeline-endpointing");
+    expect(marker).toHaveAttribute("data-endpoint-kind", "endpoint");
+    expect(marker).toHaveTextContent(/speech-to-text provider/i);
+    expect(marker).toHaveTextContent(/finished speaking/i);
+    // No raw enum value leaks into user-facing text.
+    expect(marker).not.toHaveTextContent("provider_stt");
+  });
+
+  it("names the endpointing owner in plain language — Smart Turn", () => {
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" },
+    ]);
+    render(<Timeline record={record} />);
+    expect(screen.getByTestId("timeline-endpointing")).toHaveTextContent(/smart turn/i);
+  });
+
+  it("calls out a force-finalized turn as a timeout, not a natural endpoint", () => {
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" },
+    ]);
+    render(<Timeline record={record} />);
+    const marker = screen.getByTestId("timeline-endpointing");
+    expect(marker).toHaveAttribute("data-endpoint-kind", "endpoint");
+    expect(marker).toHaveTextContent(/force-finalized/i);
+    expect(marker).toHaveTextContent(/timeout/i);
+  });
+
+  it("detects a typed turn from the wire and never claims an endpointer fired", () => {
+    // No textTurnIds passed — the wire itself carries owner "text" on the metrics
+    // message. The timeline must light up the typed note from that signal alone.
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", textReadyMs: 100, firstAudioByteMs: 600, e2eMs: 900, endpointingOwner: "text", endpointingReason: "typed" },
+    ]);
+    render(<Timeline record={record} />);
+    expect(screen.getByTestId("timeline-text-turn")).toBeInTheDocument();
+    // A typed turn must not render an endpoint marker — nothing endpointed it.
+    expect(screen.queryByTestId("timeline-endpointing")).not.toBeInTheDocument();
+  });
+
+  it("says the cause is unknown when the backend omits the owner, rather than guessing", () => {
+    const record = recordFrom([
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
+    ]);
+    render(<Timeline record={record} />);
+    const marker = screen.getByTestId("timeline-endpointing");
+    expect(marker).toHaveAttribute("data-endpoint-kind", "unknown");
+    expect(marker).toHaveTextContent(/unknown/i);
+  });
 });

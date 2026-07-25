@@ -517,6 +517,8 @@ export class PipecatEOSPlugin implements VoicePlugin {
       timestampMs: Date.now(),
       text,
       transcripts: state.finalPackets,
+      endpointingOwner: "smart_turn",
+      endpointingReason: "end_of_speech",
     } satisfies EndOfSpeechPacket);
     this.turns.delete(state.contextId);
   }

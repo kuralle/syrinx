@@ -29,6 +29,8 @@ import type {
   SpeechToTextAudioPacket,
   EndOfSpeechAudioPacket,
   EndOfSpeechPacket,
+  TurnEndOwner,
+  TurnEndReason,
   SttPartialPacket,
   SttResultPacket,
   FinalizeSttPacket,
@@ -220,8 +222,19 @@ export function eosTurnComplete(
   timestampMs: number,
   text: string,
   transcripts: readonly SttResultPacket[],
+  endpointing?: { readonly owner: TurnEndOwner; readonly reason: TurnEndReason },
 ): EndOfSpeechPacket {
-  return { kind: "eos.turn_complete", contextId, timestampMs, text, transcripts };
+  return endpointing === undefined
+    ? { kind: "eos.turn_complete", contextId, timestampMs, text, transcripts }
+    : {
+        kind: "eos.turn_complete",
+        contextId,
+        timestampMs,
+        text,
+        transcripts,
+        endpointingOwner: endpointing.owner,
+        endpointingReason: endpointing.reason,
+      };
 }
 
 export function finalizeStt(contextId: string, timestampMs: number): FinalizeSttPacket {

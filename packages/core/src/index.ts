@@ -39,6 +39,8 @@ export {
   type EndOfSpeechPacket,
   type InterimEndOfSpeechPacket,
   type EndOfSpeechRetractedPacket,
+  type TurnEndOwner,
+  type TurnEndReason,
   type UserInputPacket,
 } from "./packets.js";
 

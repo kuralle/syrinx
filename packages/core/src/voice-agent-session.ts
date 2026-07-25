@@ -511,6 +511,8 @@ export class VoiceAgentSession {
       onBackchannelEmitted: (contextId) => {
         this.timingFor(contextId).backchannelUsed = true;
       },
+      endpointingOwner: this.endpointingOwner,
+      wasForceFinalized: (contextId) => this.watchdogs.wasForceFinalized(contextId),
     });
     this.watchdogs = new VoiceSessionWatchdogs({
       bus: this.bus,
@@ -874,8 +876,16 @@ export class VoiceAgentSession {
   }
 
   private handleUserText(pkt: UserTextReceivedPacket): void {
-    // Treat text input as an immediate EOS turn complete
-    this.bus.push(Route.Main, make.eosTurnComplete(pkt.contextId, pkt.timestampMs, pkt.text, []));
+    // Typed input is an immediate turn end — but nothing endpointed it and no one
+    // decided the caller stopped talking, because they typed. Label it as `text` so
+    // the timeline never claims a speech endpointer fired on a typed turn.
+    this.bus.push(
+      Route.Main,
+      make.eosTurnComplete(pkt.contextId, pkt.timestampMs, pkt.text, [], {
+        owner: "text",
+        reason: "typed",
+      }),
+    );
   }
 
   private handleSttPartial(pkt: SttPartialPacket): void {
@@ -1179,6 +1189,10 @@ export class VoiceAgentSession {
     }
     this.lastFinalizedContextId = pkt.contextId;
     this.interaction.reset(pkt.contextId);
+    // The force-finalize flag has now been read by whoever emitted this eos (and
+    // captured by the metrics tracker via its metric) — retire it so the per-call
+    // Set does not grow unbounded on a stable transport contextId.
+    this.watchdogs.clearForceFinalized(pkt.contextId);
 
     // Re-arm per-turn guard state for the next turn. Transports with a stable
     // per-call contextId (telephony callSid) reuse one id across turns, so these

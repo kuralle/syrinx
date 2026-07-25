@@ -411,3 +411,93 @@ describe("turn metrics", () => {
     await session.close();
   });
 });
+
+describe("turn metrics — endpointing decision", () => {
+  const emptyMarks = {
+    speechEndMs: 0,
+    sttFinalMs: 0,
+    eosMs: 0,
+    vadStopHangoverMs: 0,
+    textReadyMs: 0,
+    firstAudioByteMs: 0,
+    firstAudioPlayedMs: 0,
+    lastAudioPlayedMs: 0,
+  };
+
+  it("emits the owner/reason when the turn state carries them", () => {
+    const message = buildBrowserMetricsMessage("turn-dec", {
+      ...emptyMarks,
+      endpointingOwner: "smart_turn",
+      endpointingReason: "end_of_speech",
+    });
+    expect(message.endpointingOwner).toBe("smart_turn");
+    expect(message.endpointingReason).toBe("end_of_speech");
+  });
+
+  it("overrides the reason to force_finalized when the watchdog fired, even if the emitter said end_of_speech", () => {
+    // The completing eos may come from the STT plugin, which cannot know the
+    // force-finalize watchdog fired underneath it. The tracker reads that mark
+    // independently, so the truth wins here regardless of emitter.
+    const message = buildBrowserMetricsMessage("turn-forced", {
+      ...emptyMarks,
+      endpointingOwner: "provider_stt",
+      endpointingReason: "end_of_speech",
+      forceFinalized: true,
+    });
+    expect(message.endpointingOwner).toBe("provider_stt");
+    expect(message.endpointingReason).toBe("force_finalized");
+  });
+
+  it("omits the decision when the state has none (absent means absent)", () => {
+    const message = buildBrowserMetricsMessage("turn-none", { ...emptyMarks });
+    expect(message.endpointingOwner).toBeUndefined();
+    expect(message.endpointingReason).toBeUndefined();
+  });
+
+  it("captures owner from the completing eos and force-finalize from the watchdog metric", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const emitted: BrowserMetricsMessage[] = [];
+    const tracker = new TurnMetricsTracker(session.bus, (m) => emitted.push(m));
+    const disposers: Array<() => void> = [];
+    tracker.wire(disposers);
+    void session.start();
+
+    // The completing eos carries owner=provider_stt, reason=end_of_speech ...
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-dec",
+      timestampMs: 1000,
+      text: "hi",
+      transcripts: [],
+      endpointingOwner: "provider_stt",
+      endpointingReason: "end_of_speech",
+    });
+    // ... but the force-finalize watchdog fired for this turn — its mark arrives
+    // on the bus independently and must override the emitter's reason.
+    session.bus.push(Route.Background, {
+      kind: "metric.conversation",
+      contextId: "turn-dec",
+      timestampMs: 1050,
+      name: "stt.force_finalized",
+      value: "1",
+    });
+    // The watchdog mark rides the lower-priority Background route, which the bus
+    // drains only after Main. Let it land before playout completes (as it does in
+    // production, where the watchdog fires during STT, long before playback ends).
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-dec",
+      timestampMs: 2000,
+      playedOutMs: 0,
+      complete: true,
+    });
+
+    await waitForCondition(() => emitted.length === 1);
+    expect(emitted[0]!.endpointingOwner).toBe("provider_stt");
+    expect(emitted[0]!.endpointingReason).toBe("force_finalized");
+
+    for (const dispose of disposers) dispose();
+    await session.close();
+  });
+});

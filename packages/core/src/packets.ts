@@ -10,7 +10,7 @@
 //   Lifecycle:              InitStepCompleted, InitFailed, InitCompleted
 
 import type { WordTiming } from "./interaction-policy.js";
-import type { SttReconfigurePartial } from "./plugin-contract.js";
+import type { EndpointingOwner, SttReconfigurePartial } from "./plugin-contract.js";
 
 // =============================================================================
 // Base Types
@@ -220,11 +220,34 @@ export interface EndOfSpeechAudioPacket extends VoicePacket {
   readonly audio: Uint8Array;
 }
 
+/**
+ * Who decided a turn ended. Extends {@link EndpointingOwner} with the two
+ * non-plugin regimes: `"timer"` (a realtime front owns its own turn
+ * detection) and `"text"` (the user typed — no endpointer fired at all).
+ *
+ * Absent means genuinely unknown: never fabricate an owner the backend did
+ * not measure. A debugging surface that guesses is worse than one that says so.
+ */
+export type TurnEndOwner = EndpointingOwner | "timer" | "text";
+
+/**
+ * Why a turn ended, paired with {@link TurnEndOwner}.
+ * - `end_of_speech` — an endpointer marked natural end of speech.
+ * - `force_finalized` — the STT was force-finalized by the
+ *   `sttForceFinalizeTimeoutMs` watchdog (a timeout), not a natural endpoint.
+ * - `typed` — the turn came from typed input; no speech was endpointed.
+ */
+export type TurnEndReason = "end_of_speech" | "force_finalized" | "typed";
+
 export interface EndOfSpeechPacket extends VoicePacket {
   readonly kind: "eos.turn_complete";
   readonly text: string;
   /** All accumulated STT transcripts for this turn. */
   readonly transcripts: readonly SttResultPacket[];
+  /** Which owner decided the turn ended. Omitted when genuinely unknown. */
+  readonly endpointingOwner?: TurnEndOwner;
+  /** Why the turn ended. Omitted when genuinely unknown. */
+  readonly endpointingReason?: TurnEndReason;
 }
 
 export interface InterimEndOfSpeechPacket extends VoicePacket {

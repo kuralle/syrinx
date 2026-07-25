@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { VadAudioPacket } from "./packets.js";
-import type { SttInterimPacket, SttResultPacket } from "./packets.js";
+import type { SttInterimPacket, SttResultPacket, TurnEndOwner, TurnEndReason } from "./packets.js";
 import { Route } from "./pipeline-bus.js";
 import type { PipelineBus } from "./pipeline-bus.js";
 import { confidenceToWaitMs } from "./confidence-to-wait.js";
@@ -41,6 +41,10 @@ export class InteractionCoordinator {
       isTtsActive?: () => boolean;
       hasCueAsset?: (cueId: string) => boolean;
       onBackchannelEmitted?: (contextId: string) => void;
+      /** Session's configured endpointing owner — labels every eos this coordinator emits. */
+      endpointingOwner?: TurnEndOwner;
+      /** True when the STT force-finalize watchdog already fired for this context. */
+      wasForceFinalized?: (contextId: string) => boolean;
     },
   ) {
     this.scheduler = deps.scheduler ?? new TimerScheduler();
@@ -180,7 +184,18 @@ export class InteractionCoordinator {
         live.transcripts.length > 0
           ? live.transcripts
           : [{ kind: "stt.result", contextId, timestampMs: Date.now(), text: finalText, confidence: 0 }];
-      this.deps.bus.push(Route.Main, make.eosTurnComplete(contextId, Date.now(), finalText, transcripts));
+      // The policy committed to this turn, so the endpointing decision is genuinely
+      // known here — label who decided and why. A force-finalize watchdog firing
+      // underneath us is a different diagnosis from a natural endpoint.
+      const configuredOwner = this.deps.endpointingOwner;
+      const forced = this.deps.wasForceFinalized?.(contextId) === true;
+      const reason: TurnEndReason = forced ? "force_finalized" : "end_of_speech";
+      const endpointing =
+        configuredOwner === undefined ? undefined : { owner: configuredOwner, reason };
+      this.deps.bus.push(
+        Route.Main,
+        make.eosTurnComplete(contextId, Date.now(), finalText, transcripts, endpointing),
+      );
     });
   }
 

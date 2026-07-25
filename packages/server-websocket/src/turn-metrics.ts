@@ -11,6 +11,8 @@ import {
   type TextToSpeechEndPacket,
   type TextToSpeechPlayoutProgressPacket,
   type TextToSpeechPlayoutStartedPacket,
+  type TurnEndOwner,
+  type TurnEndReason,
   type VadSpeechEndedPacket,
 } from "@kuralle-syrinx/core";
 
@@ -23,6 +25,12 @@ export interface TurnTimestampState {
   firstAudioByteMs: number;
   firstAudioPlayedMs: number;
   lastAudioPlayedMs: number;
+  /** Who decided the turn ended — captured from the completing eos packet. */
+  endpointingOwner?: TurnEndOwner;
+  /** Why the turn ended — captured from the completing eos packet. */
+  endpointingReason?: TurnEndReason;
+  /** Set when the STT force-finalize watchdog fired for this turn. */
+  forceFinalized?: boolean;
 }
 
 export interface BrowserMetricsMessage {
@@ -44,6 +52,10 @@ export interface BrowserMetricsMessage {
     readonly endpointDelayMs?: number;
     readonly totalMs?: number;
   };
+  /** Which owner decided the turn ended. Omitted when the backend did not say. */
+  readonly endpointingOwner?: TurnEndOwner;
+  /** Why the turn ended. Omitted when the backend did not say. */
+  readonly endpointingReason?: TurnEndReason;
 }
 
 /**
@@ -106,6 +118,15 @@ export function buildBrowserMetricsMessage(
         }
       : undefined;
 
+  // The endpointing decision is a fact about the turn, not a timing measurement, so
+  // it is emitted whenever it is known — never coerced to a zero. A force-finalize
+  // watchdog firing overrides the emitter's reason: the STT plugin that produced the
+  // completing eos cannot know the watchdog fired, but this mark (stt.force_finalized)
+  // arrives independently on the bus, so the truth wins here regardless of emitter.
+  const endpointingOwner = timestamps.endpointingOwner;
+  const endpointingReason =
+    timestamps.forceFinalized === true ? "force_finalized" : timestamps.endpointingReason;
+
   return {
     type: "metrics",
     turnId,
@@ -120,6 +141,8 @@ export function buildBrowserMetricsMessage(
     ...(ttsTTFBMs !== undefined ? { ttsTTFBMs } : {}),
     ...(e2eFromPlayout !== undefined ? { e2eMs: e2eFromPlayout } : e2eFromByte !== undefined ? { e2eMs: e2eFromByte } : {}),
     ...(eouBudgetMs !== undefined ? { eouBudgetMs } : {}),
+    ...(endpointingOwner !== undefined ? { endpointingOwner } : {}),
+    ...(endpointingReason !== undefined ? { endpointingReason } : {}),
   };
 }
 
@@ -179,16 +202,29 @@ export class TurnMetricsTracker {
       }),
       this.bus.on("metric.conversation", (pkt) => {
         const metric = pkt as ConversationMetricPacket;
-        if (metric.name !== "vad.stop_hangover_ms") return;
-        const hangoverMs = Number(metric.value);
-        if (Number.isNaN(hangoverMs)) return;
-        const state = this.turnState(metric.contextId);
-        if (state.vadStopHangoverMs === 0) state.vadStopHangoverMs = hangoverMs;
+        if (metric.name === "vad.stop_hangover_ms") {
+          const hangoverMs = Number(metric.value);
+          if (Number.isNaN(hangoverMs)) return;
+          const state = this.turnState(metric.contextId);
+          if (state.vadStopHangoverMs === 0) state.vadStopHangoverMs = hangoverMs;
+          return;
+        }
+        if (metric.name === "stt.force_finalized") {
+          this.turnState(metric.contextId).forceFinalized = true;
+        }
       }),
       this.bus.on("eos.turn_complete", (pkt) => {
         const eos = pkt as EndOfSpeechPacket;
         const state = this.turnState(eos.contextId);
         if (state.eosMs === 0) state.eosMs = eos.timestampMs;
+        // First eos wins (mirrors eosMs): the completing eos is the first, and any
+        // duplicate is dropped downstream. Owner/reason are facts, not measurements.
+        if (state.endpointingOwner === undefined && eos.endpointingOwner !== undefined) {
+          state.endpointingOwner = eos.endpointingOwner;
+        }
+        if (state.endpointingReason === undefined && eos.endpointingReason !== undefined) {
+          state.endpointingReason = eos.endpointingReason;
+        }
       }),
       this.bus.on("llm.delta", (pkt) => {
         const delta = pkt as LlmDeltaPacket;

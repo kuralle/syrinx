@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildSessionRecord, type TurnRecord } from "./session-record.js";
-import { buildTurnTimeline, buildTimelines, FAST_TURN_FLOOR_MS } from "./turn-timeline.js";
+import { buildTurnTimeline, buildTimelines, endpointingMarker, FAST_TURN_FLOOR_MS } from "./turn-timeline.js";
 
 const turnWith = (timings: TurnRecord["timings"]): TurnRecord => ({
   turnId: "t1",
@@ -113,5 +113,39 @@ describe("turn timeline — from a real recorded session", () => {
     expect(tls).toHaveLength(2);
     expect(tls[0]?.segments).toHaveLength(2);
     expect(tls[1]?.unavailable).toBe("no-metrics"); // t2 never got metrics
+  });
+});
+
+describe("turn timeline — endpointing marker", () => {
+  it("names the owner in plain language, never the raw enum value", () => {
+    expect(endpointingMarker("provider_stt", "end_of_speech").text).toMatch(/speech-to-text provider/i);
+    expect(endpointingMarker("smart_turn", "end_of_speech").text).toMatch(/smart turn/i);
+    // "timer" covers both a realtime front and a session timer fallback, so the
+    // label stays honest for either — never assumes the realtime model specifically.
+    expect(endpointingMarker("timer", "end_of_speech").text).toMatch(/timer/i);
+    // No packet/message names leak into user-facing text.
+    for (const owner of ["provider_stt", "smart_turn", "timer"] as const) {
+      expect(endpointingMarker(owner, "end_of_speech").text).not.toMatch(/provider_stt|smart_turn|eos\.turn/);
+    }
+  });
+
+  it("says force-finalized was a timeout, not a natural endpoint", () => {
+    const m = endpointingMarker("provider_stt", "force_finalized");
+    expect(m.kind).toBe("endpoint");
+    expect(m.text).toMatch(/force-finalized.*timeout/i);
+  });
+
+  it("flags a typed turn and never claims an endpointer fired", () => {
+    const m = endpointingMarker("text", "typed");
+    expect(m.kind).toBe("typed");
+    expect(m.text).toMatch(/typed/i);
+    // It must not say an endpointer decided the turn ended — only that none ran.
+    expect(m.text).not.toMatch(/decided you had finished|force-finalized|marked the end/i);
+  });
+
+  it("says the cause is unknown rather than guessing when the owner is absent", () => {
+    const m = endpointingMarker(undefined, undefined);
+    expect(m.kind).toBe("unknown");
+    expect(m.text).toMatch(/unknown/i);
   });
 });

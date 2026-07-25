@@ -187,3 +187,33 @@ describe("session record — purity", () => {
     expect(buildSessionRecord(msgs)).toEqual(buildSessionRecord(msgs));
   });
 });
+
+describe("session record — endpointing decision", () => {
+  it("folds the owner/reason from metrics onto the turn, not into timings", () => {
+    const r = buildSessionRecord([
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" }, 0),
+    ]);
+    const t = turnAt(r, 0);
+    expect(t.endpointingOwner).toBe("smart_turn");
+    expect(t.endpointingReason).toBe("end_of_speech");
+    // The decision is a fact about the turn, not a timing — it must not leak into timings.
+    expect(t.timings).not.toHaveProperty("endpointingOwner");
+    expect(t.timings).not.toHaveProperty("endpointingReason");
+  });
+
+  it("omits the decision when metrics does not carry it (absent means absent)", () => {
+    const r = buildSessionRecord([
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500 }, 0),
+    ]);
+    const t = turnAt(r, 0);
+    expect(t.endpointingOwner).toBeUndefined();
+    expect(t.endpointingReason).toBeUndefined();
+  });
+
+  it("carries a force-finalized reason onto the turn", () => {
+    const r = buildSessionRecord([
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" }, 0),
+    ]);
+    expect(turnAt(r, 0).endpointingReason).toBe("force_finalized");
+  });
+});

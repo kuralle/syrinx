@@ -94,3 +94,55 @@ export function buildTurnTimeline(turn: TurnRecord): TurnTimeline {
 export function buildTimelines(turns: readonly TurnRecord[]): readonly TurnTimeline[] {
   return turns.map(buildTurnTimeline);
 }
+
+// -----------------------------------------------------------------------------
+// Endpointing decision rendering
+// -----------------------------------------------------------------------------
+// The timeline can already show WHEN a turn ended; this names WHO decided and WHY.
+// That turns "it cut me off" from a feeling into a named cause. Pure and DOM-free
+// so it is testable from a fixture; the component layer just renders `text`.
+
+export type EndpointingMarkerKind = "typed" | "endpoint" | "unknown";
+
+export interface EndpointingMarker {
+  readonly kind: EndpointingMarkerKind;
+  /** Plain language — never a packet or message name (`eos.turn_complete`, raw `provider_stt`, …). */
+  readonly text: string;
+}
+
+/**
+ * Turn an endpointing decision into the words a person reads. Internal type
+ * values (`provider_stt`, `smart_turn`, `timer`, `text`, `force_finalized`, …)
+ * stay internal; this is the only place they cross into user-facing text.
+ *
+ * A genuinely unknown decision is returned as `kind: "unknown"` rather than
+ * guessed — a debugging surface that fabricates a cause is worse than one that
+ * says it does not know.
+ */
+export function endpointingMarker(owner?: string, reason?: string): EndpointingMarker {
+  if (owner === "text") {
+    return {
+      kind: "typed",
+      text: "You typed this turn — nothing transcribed you and nothing judged when you finished, so no endpointer ran.",
+    };
+  }
+  const who =
+    owner === "provider_stt"
+      ? "The speech-to-text provider"
+      : owner === "smart_turn"
+        ? "The Smart Turn model"
+        : owner === "timer"
+          ? "A turn timer"
+          : undefined;
+  if (who === undefined) {
+    return {
+      kind: "unknown",
+      text: "This backend did not report what ended the turn, so the cause is unknown.",
+    };
+  }
+  const text =
+    reason === "force_finalized"
+      ? `${who} force-finalized the transcript after a timeout, not a natural end of speech.`
+      : `${who} decided you had finished speaking.`;
+  return { kind: "endpoint", text };
+}

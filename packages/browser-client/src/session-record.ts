@@ -80,6 +80,10 @@ export interface TurnRecord {
   readonly complete: boolean;
   /** Non-zero when this turn's event list hit the cap. Surfaced, never silent. */
   readonly droppedEvents: number;
+  /** Which owner decided the turn ended. Omitted when the backend did not say. */
+  readonly endpointingOwner?: string;
+  /** Why the turn ended. Omitted when the backend did not say. */
+  readonly endpointingReason?: string;
 }
 
 export interface SessionRecord {
@@ -252,8 +256,25 @@ export function applyMessage(
       };
       break;
     case "metrics": {
-      const { type: _t, turnId: _i, correlationId: _c, ...timings } = message as Record<string, unknown>;
-      turn = { ...turn, timings: timings as TurnTimings };
+      const {
+        type: _t,
+        turnId: _i,
+        correlationId: _c,
+        endpointingOwner: owner,
+        endpointingReason: reason,
+        ...timings
+      } = message as Record<string, unknown>;
+      // The endpointing decision is a fact about the turn, not a timing, so it lives
+      // on the turn itself — not inside `timings`. Preserve an earlier value if this
+      // metrics message omits it (re-emission should not erase a known decision).
+      const nextOwner = typeof owner === "string" ? owner : turn.endpointingOwner;
+      const nextReason = typeof reason === "string" ? reason : turn.endpointingReason;
+      turn = {
+        ...turn,
+        timings: timings as TurnTimings,
+        ...(nextOwner !== undefined ? { endpointingOwner: nextOwner } : {}),
+        ...(nextReason !== undefined ? { endpointingReason: nextReason } : {}),
+      };
       break;
     }
     case "error": {

@@ -28,6 +28,7 @@ import {
   resamplePcm16Streaming,
   type StreamingPcm16Resampler,
 } from "@kuralle-syrinx/core/audio";
+import type { TurnEndOwner, TurnEndReason } from "@kuralle-syrinx/core";
 import {
   decodeBrowserAssistantAudio,
   encodeBrowserAudioEnvelopeFrame,
@@ -116,6 +117,10 @@ export type SyrinxStudioMessage =
       readonly llmTTFTMs?: number;
       readonly ttsTTFBMs?: number;
       readonly e2eMs?: number;
+      /** Which owner decided the turn ended. Omitted when the backend did not say. */
+      readonly endpointingOwner?: TurnEndOwner;
+      /** Why the turn ended. Omitted when the backend did not say. */
+      readonly endpointingReason?: TurnEndReason;
     }
   | { readonly type: "error"; readonly component?: string; readonly category?: string; readonly message: string };
 
@@ -188,6 +193,11 @@ const RECONNECT_MAX_DELAY_MS = 30_000;
 const RECONNECT_MIN_STABLE_MS = 5_000;
 const RECONNECT_MAX_QUICK_FAILURES = 3;
 const KEEPALIVE_INTERVAL_MS = 10_000;
+
+// Endpointing decision values carried on the `metrics` message. Forward-compatible:
+// an unknown value (a newer backend) is ignored rather than dropping the message.
+const ENDPOINTING_OWNERS = new Set<string>(["provider_stt", "smart_turn", "timer", "text"]);
+const ENDPOINTING_REASONS = new Set<string>(["end_of_speech", "force_finalized", "typed"]);
 
 export class SyrinxBrowserClient {
   private readonly transport: ClientTransport;
@@ -811,6 +821,14 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
     };
   }
   if (type === "metrics") {
+    const endpointingOwner = optionalEndpointingEnum<TurnEndOwner>(
+      value.endpointingOwner,
+      ENDPOINTING_OWNERS,
+    );
+    const endpointingReason = optionalEndpointingEnum<TurnEndReason>(
+      value.endpointingReason,
+      ENDPOINTING_REASONS,
+    );
     return {
       type,
       turnId: optionalString(value.turnId, "metrics.turnId"),
@@ -824,6 +842,8 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
       llmTTFTMs: optionalNumber(value.llmTTFTMs, "metrics.llmTTFTMs"),
       ttsTTFBMs: optionalNumber(value.ttsTTFBMs, "metrics.ttsTTFBMs"),
       e2eMs: optionalNumber(value.e2eMs, "metrics.e2eMs"),
+      ...(endpointingOwner !== undefined ? { endpointingOwner } : {}),
+      ...(endpointingReason !== undefined ? { endpointingReason } : {}),
     };
   }
   if (type === "error") {
@@ -933,6 +953,12 @@ function optionalBoolean(value: unknown, name: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw new Error(`${name} must be a boolean`);
   return value;
+}
+
+function optionalEndpointingEnum<T extends string>(value: unknown, allowed: ReadonlySet<string>): T | undefined {
+  // Forward-compatible: an unknown value is treated as absent, not an error, so a
+  // newer backend adding an enum member does not break an older client's message.
+  return typeof value === "string" && allowed.has(value) ? (value as T) : undefined;
 }
 
 function requiredLiteral<T extends string | number>(value: unknown, expected: T, name: string): T {

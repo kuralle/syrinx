@@ -235,6 +235,8 @@ class SttEngineImpl implements SttEngine {
       timestampMs: this.now(),
       text,
       transcripts: [],
+      endpointingOwner: "provider_stt",
+      endpointingReason: "end_of_speech",
     });
     // Turn committed (per-segment results already billed) — retire billing.
     this.clearContextBilling(contextId);
@@ -327,6 +329,8 @@ class SttEngineImpl implements SttEngine {
           timestampMs: this.now(),
           text,
           transcripts: [],
+          endpointingOwner: "provider_stt",
+          endpointingReason: "end_of_speech",
         });
       }
       // Turn completed via a speech-final result (usage already billed above) — retire billing.

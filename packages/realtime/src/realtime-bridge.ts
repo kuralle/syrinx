@@ -653,6 +653,8 @@ export class RealtimeBridge implements VoicePlugin {
       timestampMs,
       text: this.turnUserText,
       transcripts,
+      endpointingOwner: "timer",
+      endpointingReason: "end_of_speech",
     };
 
     if (this.opts.textOnly) {

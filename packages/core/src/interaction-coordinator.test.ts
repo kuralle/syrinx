@@ -43,6 +43,8 @@ async function createCoordinator(
     isUserSpeaking?: () => boolean;
     isTtsActive?: () => boolean;
     hasCueAsset?: (cueId: string) => boolean;
+    endpointingOwner?: EndOfSpeechPacket["endpointingOwner"];
+    wasForceFinalized?: (contextId: string) => boolean;
   } = {},
 ) {
   const bus = new PipelineBusImpl();
@@ -63,6 +65,8 @@ async function createCoordinator(
     isUserSpeaking: options.isUserSpeaking,
     isTtsActive: options.isTtsActive,
     hasCueAsset: options.hasCueAsset,
+    endpointingOwner: options.endpointingOwner,
+    wasForceFinalized: options.wasForceFinalized,
   });
   coordinator.initialize();
   return { bus, coordinator, executor };
@@ -420,6 +424,106 @@ describe("InteractionCoordinator", () => {
     });
     await vi.advanceTimersByTimeAsync(5000);
     expect(completions).toEqual([]);
+    vi.useRealTimers();
+  });
+});
+
+describe("InteractionCoordinator — endpointing decision on eos", () => {
+  it("labels the completing eos with the session owner and a natural-end reason", async () => {
+    vi.useFakeTimers();
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "take_turn", confidence: 1 }],
+      { endpointingOwner: "smart_turn" },
+    );
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    coordinator.observe({
+      kind: "vad_speech_ended",
+      contextId: "turn-owner",
+      timestampMs: 1000,
+      hasActiveTts: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-owner",
+      timestampMs: 1100,
+      text: "hi",
+      confidence: 0.9,
+      language: "en-US",
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.endpointingOwner).toBe("smart_turn");
+    expect(completions[0]!.endpointingReason).toBe("end_of_speech");
+    vi.useRealTimers();
+  });
+
+  it("labels the reason force_finalized when the STT watchdog already fired", async () => {
+    vi.useFakeTimers();
+    const { bus, coordinator } = await createCoordinator(
+      [{ kind: "take_turn", confidence: 1 }],
+      { endpointingOwner: "provider_stt", wasForceFinalized: (cid) => cid === "turn-forced" },
+    );
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    coordinator.observe({
+      kind: "vad_speech_ended",
+      contextId: "turn-forced",
+      timestampMs: 1000,
+      hasActiveTts: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-forced",
+      timestampMs: 1100,
+      text: "hi",
+      confidence: 0.9,
+      language: "en-US",
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(completions).toHaveLength(1);
+    expect(completions[0]!.endpointingOwner).toBe("provider_stt");
+    expect(completions[0]!.endpointingReason).toBe("force_finalized");
+    vi.useRealTimers();
+  });
+
+  it("omits the decision when no owner is configured (unknown stays unknown)", async () => {
+    vi.useFakeTimers();
+    const { bus, coordinator } = await createCoordinator([{ kind: "take_turn", confidence: 1 }]);
+    const completions: EndOfSpeechPacket[] = [];
+    bus.on("eos.turn_complete", (pkt) => {
+      completions.push(pkt as EndOfSpeechPacket);
+    });
+
+    coordinator.observe({
+      kind: "vad_speech_ended",
+      contextId: "turn-unknown",
+      timestampMs: 1000,
+      hasActiveTts: false,
+    });
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "turn-unknown",
+      timestampMs: 1100,
+      text: "hi",
+      confidence: 0.9,
+      language: "en-US",
+    });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(completions).toHaveLength(1);
+    // No owner configured → the decision is genuinely unknown, so it is omitted
+    // rather than fabricated.
+    expect(completions[0]!.endpointingOwner).toBeUndefined();
+    expect(completions[0]!.endpointingReason).toBeUndefined();
     vi.useRealTimers();
   });
 });

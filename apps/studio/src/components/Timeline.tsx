@@ -1,4 +1,9 @@
-import { buildTurnTimeline, type TurnTimeline } from "@kuralle-syrinx/browser-client/turn-timeline";
+import {
+  buildTurnTimeline,
+  endpointingMarker,
+  type EndpointingMarker,
+  type TurnTimeline,
+} from "@kuralle-syrinx/browser-client/turn-timeline";
 import type { SessionRecord, TurnRecord } from "@kuralle-syrinx/browser-client/record";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,6 +80,27 @@ function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
   );
 }
 
+// Names the owner + reason for a turn's end in plain language. Rendered only for
+// speech turns that carried a decision on the wire; a typed turn is covered by
+// `TypedTurnNote` below, and a metrics-less turn has no decision to show.
+function EndpointingNote({ marker }: { marker: EndpointingMarker }): React.JSX.Element {
+  const muted = marker.kind === "unknown";
+  return (
+    <p
+      className={cn(
+        "rounded px-2 py-1 text-xs",
+        muted
+          ? "bg-muted text-muted-foreground"
+          : "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+      )}
+      data-testid="timeline-endpointing"
+      data-endpoint-kind={marker.kind}
+    >
+      {marker.text}
+    </p>
+  );
+}
+
 // A typed turn skips being *heard*, not being *spoken*: sending text pushes an
 // immediate end-of-turn into the same pipeline, so the reasoner and the voice both
 // run for real (verified live — a typed turn returns ~108KB of speech).
@@ -98,7 +124,12 @@ export function Timeline({
   textTurnIds,
 }: {
   record: SessionRecord;
-  /** Turns the user typed. Only the studio knows — the wire cannot tell them apart. */
+  /**
+   * Turns the user typed. The wire now carries this too (endpointing owner
+   * `"text"` on the `metrics` message), so the timeline lights up a typed turn
+   * from either source. Kept as a fallback for turns whose metrics have not
+   * arrived yet and as confirmation of the studio's own record.
+   */
   textTurnIds?: ReadonlySet<string>;
 }): React.JSX.Element {
   const timelines = record.turns.map((turn) => ({
@@ -121,12 +152,23 @@ export function Timeline({
           </p>
         ) : (
           <div className="space-y-4">
-            {timelines.map(({ turn, isText, timeline }) => (
-              <div key={turn.turnId} className="space-y-1" data-mode={isText ? "text" : "voice"}>
-                {isText && <TypedTurnNote />}
-                <Lane timeline={timeline} />
-              </div>
-            ))}
+            {timelines.map(({ turn, isText, timeline }) => {
+              const marker = endpointingMarker(turn.endpointingOwner, turn.endpointingReason);
+              const showTextNote = isText || marker.kind === "typed";
+              // The decision rides on the `metrics` message, so a turn with no metrics
+              // has no decision to render — its lane already says "no timing data".
+              const showDecision = !showTextNote && turn.timings !== undefined;
+              return (
+                <div key={turn.turnId} className="space-y-1" data-mode={showTextNote ? "text" : "voice"}>
+                  {showTextNote ? (
+                    <TypedTurnNote />
+                  ) : showDecision ? (
+                    <EndpointingNote marker={marker} />
+                  ) : null}
+                  <Lane timeline={timeline} />
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>

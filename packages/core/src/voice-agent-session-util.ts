@@ -81,6 +81,8 @@ export class VoiceSessionWatchdogs {
   private readonly scheduler: Scheduler;
   private sttForceFinalizeScheduled = false;
   private pendingSttContextId = "";
+  /** Contexts whose STT the force-finalize watchdog has already fired on this turn. */
+  private readonly forceFinalizedContexts = new Set<string>();
   private vaqiMissedResponseScheduled = false;
   private vaqiMissedResponseContextId = "";
   private vaqiMissedResponseStartMs = 0;
@@ -98,6 +100,7 @@ export class VoiceSessionWatchdogs {
     this.clearVaqiMissedResponseTimer();
     this.clearTtsStallTimer();
     this.clearInputCadenceWatchdog();
+    this.forceFinalizedContexts.clear();
   }
 
   scheduleSttForceFinalize(contextId: string): void {
@@ -109,9 +112,24 @@ export class VoiceSessionWatchdogs {
     this.sttForceFinalizeScheduled = true;
     this.scheduler.schedule("voice.watchdog.stt_force_finalize", this.deps.sttForceFinalizeTimeoutMs, () => {
       this.sttForceFinalizeScheduled = false;
+      this.forceFinalizedContexts.add(contextId);
+      // Broadcast the decision on the bus: the completing eos may come from the STT
+      // plugin (which cannot know the watchdog fired), so the metrics tracker reads
+      // this mark to label the turn rather than each emitter re-deriving it.
+      this.deps.bus.push(Route.Background, make.metric(contextId, "stt.force_finalized", "1"));
       const plugin = findForceFinalizableSttPlugin(this.deps.plugins);
       plugin?.forceFinalize(contextId);
     });
+  }
+
+  /** True when the force-finalize watchdog has already fired for this context this turn. */
+  wasForceFinalized(contextId: string): boolean {
+    return this.forceFinalizedContexts.has(contextId);
+  }
+
+  /** Retire the flag once the turn has completed (read by the emitter + metrics tracker). */
+  clearForceFinalized(contextId: string): void {
+    this.forceFinalizedContexts.delete(contextId);
   }
 
   clearSttForceFinalizeIfContext(contextId: string): void {
