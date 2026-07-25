@@ -71,6 +71,12 @@ export function sessionInfoRows(config: SessionConfig): readonly SessionInfoRow[
       note: config.encoding === undefined ? undefined : ENCODING_NOTE[config.encoding],
     },
     {
+      key: "targetFrameDurationMs",
+      label: "Audio frame duration",
+      value: config.targetFrameDurationMs === undefined ? undefined : `${String(config.targetFrameDurationMs)} ms`,
+      note: "how much audio each frame carries; not stated by every host",
+    },
+    {
       key: "binaryEnvelope",
       label: "Binary audio framing",
       value: config.binaryEnvelope,

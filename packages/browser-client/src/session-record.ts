@@ -35,6 +35,12 @@ export interface SessionConfig {
   readonly encoding?: "pcm_s16le" | "opus";
   readonly binaryEnvelope?: string;
   readonly rawBinaryInput?: boolean;
+  /**
+   * Frame duration the host paces to. Node states it; the Workers/DO host does not
+   * (measured live, 2026-07-25) — which is exactly the kind of divergence the session
+   * info panel exists to make visible, so it is captured rather than dropped.
+   */
+  readonly targetFrameDurationMs?: number;
   readonly resumeWindowMs?: number;
   /** Only present once the server exposes it; the timeline omits the marker rather than guessing. */
   readonly endpointingOwner?: string;
@@ -168,6 +174,7 @@ export function applyMessage(
         encoding: m.audio?.encoding ?? record.config.encoding,
         binaryEnvelope: m.audio?.binaryEnvelope ?? record.config.binaryEnvelope,
         rawBinaryInput: m.audio?.rawBinaryInput ?? record.config.rawBinaryInput,
+        targetFrameDurationMs: m.audio?.targetFrameDurationMs ?? record.config.targetFrameDurationMs,
       },
       sessionEvents: [...record.sessionEvents, ev],
     };

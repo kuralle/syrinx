@@ -85,14 +85,27 @@ describe("sessionInfoRows", () => {
     expect(valueOf(rows, "resumeWindowMs")).toBe("30.00s");
   });
 
-  it("states the same set of fields for both runtimes", () => {
+  it("shows which fields one runtime states and the other does not", () => {
     const node = sessionInfoRows(configFrom(NODE_READY, "ws://a/ws"));
     const workers = sessionInfoRows(configFrom(WORKERS_READY, "wss://b/ws"));
     const stated = (rows: readonly { key: string; value?: string }[]) =>
       rows.filter((row) => row.value !== undefined).map((row) => row.key);
-    // A field one runtime answers and the other does not is a bug, not a tier —
-    // this is the assertion that would catch it.
-    expect(stated(node)).toEqual(stated(workers));
+
+    // Measured live on 2026-07-25 (runs/ldt14-ready-parity-probe.mjs against dev:server
+    // and wrangler dev): the Node host states a frame duration and the Workers/DO host
+    // does not. That is the ONLY field either states alone. Pinning it here means a new
+    // divergence fails this test instead of quietly appearing in the panel — and the
+    // panel shows the field as not stated rather than omitting the row, which is the
+    // whole point of the canary.
+    const onlyNode = stated(node).filter((key) => !stated(workers).includes(key));
+    const onlyWorkers = stated(workers).filter((key) => !stated(node).includes(key));
+    expect(onlyNode).toEqual(["targetFrameDurationMs"]);
+    expect(onlyWorkers).toEqual([]);
+
+    // The row still exists for Workers, holding no value — absent, not hidden.
+    expect(workers.some((row) => row.key === "targetFrameDurationMs")).toBe(true);
+    expect(valueOf(workers, "targetFrameDurationMs")).toBeUndefined();
+    expect(valueOf(node, "targetFrameDurationMs")).toBe("20 ms");
   });
 
   it("keeps `false` distinct from not stated", () => {

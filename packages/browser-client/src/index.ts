@@ -68,6 +68,8 @@ export type SyrinxStudioMessage =
         readonly encoding: "pcm_s16le" | "opus";
         readonly supportedInputCodecs?: readonly string[];
         readonly channels: 1;
+        /** Node states this; the Workers/DO host does not. Optional for that reason. */
+        readonly targetFrameDurationMs?: number;
         readonly binaryEnvelope?: "syrinx.audio.v1";
         readonly rawBinaryInput?: boolean;
       };
