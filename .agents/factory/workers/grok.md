@@ -1,12 +1,12 @@
 ---
 type: worker
 probe: command -v grok
-command: grok --prompt-file {prompt_file} --model grok-composer-2.5-fast --always-approve --output-format plain
+command: grok --prompt-file {prompt_file} --model grok-4.5 --always-approve --output-format plain
 ---
 
 # grok
 
-Fast implementation worker (default IC). `--model grok-composer-2.5-fast`
+Fast implementation worker (default IC). `--model grok-4.5`
 is the installed default; swap to `grok-build` or another id from
 `grok models`. Never pass `--sandbox` — omitting it grants full IC
 access; `--sandbox` is opt-in to restrict, only for untrusted third-party

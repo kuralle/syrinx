@@ -1,0 +1,15 @@
+{
+  "task": "LDT-9",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "approve",
+  "claims": [
+    { "command": "pnpm -C packages/browser-client test", "exit_code": 0, "note": "9 files, 117 tests (+11)" },
+    { "command": "pnpm -C packages/browser-client typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0, "note": "4 files, 19 tests (+6)" },
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "note": "A test expectation was wrong, not the code: nearest-rank p50 of [100,200] is 100. Kept nearest-rank so every reported number is a measurement that actually occurred, and commented the test so it is not 'corrected' to an average later."
+}

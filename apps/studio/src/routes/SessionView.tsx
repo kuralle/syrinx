@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { AgentStateBadge } from "@/components/AgentStateBadge";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
+import { MetricsPanel } from "@/components/MetricsPanel";
 import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +58,7 @@ export function SessionView() {
         <div className="flex min-h-0 flex-col gap-4">
           <TranscriptPanel state={session.transcript} />
           <Timeline record={session.record} />
+          <MetricsPanel record={session.record} />
         </div>
 
         <div className="flex flex-col gap-4">

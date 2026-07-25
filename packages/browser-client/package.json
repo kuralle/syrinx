@@ -29,7 +29,8 @@
     ".": "./src/index.ts",
     "./record": "./src/session-record.ts",
     "./agent-state": "./src/agent-state.ts",
-    "./turn-timeline": "./src/turn-timeline.ts"
+    "./turn-timeline": "./src/turn-timeline.ts",
+    "./session-metrics": "./src/session-metrics.ts"
   },
   "scripts": {
     "dev": "vite --port 5173",

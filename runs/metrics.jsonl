@@ -11,3 +11,4 @@
 {"task":"LDT-2","worker":"manager","lane":"approve","verdict":"shipped","note":"SessionRecord assembler in browser-client/record; 79 tests; caught undefined-clobber in tool-call merge"}
 {"task":"LDT-7","worker":"manager","lane":"approve","verdict":"shipped","note":"derived agent state + badge; fixed missing Testing Library cleanup in the studio test harness"}
 {"task":"LDT-5","worker":"manager","lane":"approve","verdict":"shipped","note":"turn timeline w/ fast-turn floor; states missing timings instead of drawing empty lanes"}
+{"task":"LDT-9","worker":"manager","lane":"approve","verdict":"shipped","note":"session metrics w/ nearest-rank percentiles + fast-turn floor; states missing timings"}
