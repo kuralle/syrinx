@@ -1,0 +1,18 @@
+{
+  "task": "LDT-5",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "approve",
+  "claims": [
+    { "command": "pnpm -C packages/browser-client test", "exit_code": 0, "note": "8 files, 106 tests (+12 for turn-timeline)" },
+    { "command": "pnpm -C packages/browser-client typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio test", "exit_code": 0, "note": "3 files, 13 tests (+6 Timeline component tests)" },
+    { "command": "pnpm -C apps/studio typecheck", "exit_code": 0 },
+    { "command": "pnpm -C apps/studio build", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 }
+  ],
+  "notes": [
+    "Built against recorded SessionRecord fixtures, per the plan's mitigation for timeline noise. Live rendering follows the same path since the record is identical.",
+    "The Workers no-metrics case renders an explicit statement rather than an empty bar, which would read as a zero-latency turn."
+  ]
+}

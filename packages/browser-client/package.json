@@ -28,7 +28,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./record": "./src/session-record.ts",
-    "./agent-state": "./src/agent-state.ts"
+    "./agent-state": "./src/agent-state.ts",
+    "./turn-timeline": "./src/turn-timeline.ts"
   },
   "scripts": {
     "dev": "vite --port 5173",

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { AgentStateBadge } from "@/components/AgentStateBadge";
 import { AudioVisualizer } from "@/components/AudioVisualizer";
 import { ConnectionBar } from "@/components/ConnectionBar";
+import { Timeline } from "@/components/Timeline";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSyrinxSession } from "@/hooks/useSyrinxSession";
@@ -53,7 +54,10 @@ export function SessionView() {
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <TranscriptPanel state={session.transcript} />
+        <div className="flex min-h-0 flex-col gap-4">
+          <TranscriptPanel state={session.transcript} />
+          <Timeline record={session.record} />
+        </div>
 
         <div className="flex flex-col gap-4">
           <Card>

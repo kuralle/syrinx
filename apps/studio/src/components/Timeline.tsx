@@ -1,0 +1,104 @@
+import { buildTimelines, type TurnTimeline } from "@kuralle-syrinx/browser-client/turn-timeline";
+import type { SessionRecord } from "@kuralle-syrinx/browser-client/record";
+
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
+const fmt = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
+
+function Lane({ timeline }: { timeline: TurnTimeline }): React.JSX.Element {
+  const span = Math.max(
+    timeline.totalMs,
+    ...timeline.segments.map((s) => s.startMs + s.durationMs),
+    1,
+  );
+
+  return (
+    <div className="space-y-1" data-testid="timeline-lane" data-turn={timeline.turnId}>
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="font-medium">Turn {timeline.turnId}</span>
+        {timeline.unavailable ? (
+          <span className="text-muted-foreground">
+            {timeline.unavailable === "no-metrics"
+              ? "no timing data from this backend"
+              : "not enough timing marks"}
+          </span>
+        ) : (
+          <span className="tabular-nums text-muted-foreground">{fmt(timeline.totalMs)}</span>
+        )}
+      </div>
+
+      {timeline.suspiciouslyFast && (
+        <p
+          className="rounded bg-rose-500/10 px-2 py-1 text-xs text-rose-700 dark:text-rose-300"
+          data-testid="fast-turn-warning"
+        >
+          Replied in {fmt(timeline.suspiciouslyFast.totalMs)} — below the{" "}
+          {fmt(timeline.suspiciouslyFast.floorMs)} floor. The endpointer probably fired while you
+          were still speaking. Check <code>minSpeechMs</code> and the endpointing owner.
+        </p>
+      )}
+
+      {timeline.unavailable === "no-metrics" ? (
+        // Never draw an empty bar here — it would read as a zero-latency turn.
+        <p className="text-xs text-muted-foreground">
+          This backend does not send per-turn timings, so there is nothing to chart.
+        </p>
+      ) : (
+        <div className="space-y-0.5">
+          {timeline.segments.map((s) => (
+            <div key={s.key} className="flex items-center gap-2 text-xs">
+              <span className="w-56 shrink-0 truncate text-muted-foreground" title={s.label}>
+                {s.label}
+              </span>
+              <span className="relative h-3 flex-1 overflow-hidden rounded bg-muted">
+                <span
+                  className={cn(
+                    "absolute inset-y-0 rounded",
+                    s.slowest ? "bg-amber-500/70" : "bg-sky-500/50",
+                  )}
+                  style={{
+                    left: `${(s.startMs / span) * 100}%`,
+                    width: `${Math.max(0.5, (s.durationMs / span) * 100)}%`,
+                  }}
+                />
+              </span>
+              <span
+                className={cn("w-16 shrink-0 text-right tabular-nums", s.slowest && "font-semibold")}
+              >
+                {fmt(s.durationMs)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Timeline({ record }: { record: SessionRecord }): React.JSX.Element {
+  const timelines = buildTimelines(record.turns);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Turn timeline</CardTitle>
+        <CardDescription>Where each turn spent its time. The slowest step is highlighted.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {timelines.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="timeline-empty">
+            No turns yet. Speak, or send a text turn — each one gets a lane here showing how long it
+            took to hear you, decide you were done, think, and reply.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {timelines.map((t) => (
+              <Lane key={t.turnId} timeline={t} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
