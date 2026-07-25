@@ -3,3 +3,5 @@
 {"sprint":2,"chunk":"C3","story":"S2-01","worker":"grok","lane":"auto","verdict":"proceed","rounds":1,"review":"accepted","tests":"42 aisdk green","commit":"afc77b4","date":"2026-07-09"}
 {"sprint":3,"chunk":"C4-rescoped","story":"S3-01","worker":"grok","lane":"auto","verdict":"proceed","rounds":1,"review":"accepted","note":"migration skipped (net-harmful, B-07); ledger leak fixed (bound)","tests":"227 core + 42 aisdk green","commit":"71f79f2","close":"pending","date":"2026-07-09"}
 {"sprint":4,"phase":"closeout","verdict":"pr-ready","full_test_gate":"green (server-workers flake confirmed load-induced, passes isolated)","awaiting":"user go to push+open PR","date":"2026-07-09"}
+{"task":"01011923","wave":1,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"3d30e9d","note":"stt-core extensible base + EL/Google/Flux; caught+fixed double-subscribe regression"}
+{"task":"01011923","wave":2,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"9f0558a","note":"nova async-emit seam; caught+fixed billing-retire-on-turn.change under-bill; grok test aligned 0f18b83"}
