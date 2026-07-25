@@ -1,0 +1,20 @@
+{
+  "task": "LDT-17 + LDT-18",
+  "status": "done",
+  "worker": "manager (claude-opus-5)",
+  "lane": "approve",
+  "claims": [
+    { "command": "wrangler dev (examples/03-cf-agent-voice) + ws probe, Origin: http://localhost:5173", "exit_code": 0,
+      "result": "101 Switching Protocols on /agents/cascaded-voice-agent/dev; ready received" },
+    { "command": "route-shape probe: kebab vs PascalCase vs snake_case", "exit_code": 0,
+      "result": "kebab 101; PascalCase 400; snake_case 400 — kebab-case of the DO class name confirmed" },
+    { "command": "control probe with no Origin header", "exit_code": 0, "result": "also 101 — Origin is not gating" },
+    { "command": "full text turn on Workers (node runs/ldt18-probe.mjs)", "exit_code": 0,
+      "result": "ready→stt_output→turn_complete→agent_chunk→agent_end→tts_chunk→tts_end in 7.6s; metrics ABSENT" }
+  ],
+  "findings": {
+    "LDT-17": "PASS — cross-origin WS to wrangler dev reaches a withVoice DO and completes a full turn.",
+    "LDT-18": "FAIL (valid negative) — no `metrics` message on the Workers path despite a complete turn.",
+    "new": "Two non-Syrinx message types on the wire: cf_agent_identity, cf_agent_mcp_servers (agents-SDK), outside the SyrinxStudioMessage union."
+  }
+}

@@ -6,3 +6,5 @@
 {"task":"01011923","wave":1,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"3d30e9d","note":"stt-core extensible base + EL/Google/Flux; caught+fixed double-subscribe regression"}
 {"task":"01011923","wave":2,"worker":"grok-4.5","lane":"auto","verdict":"shipped","commit":"9f0558a","note":"nova async-emit seam; caught+fixed billing-retire-on-turn.change under-bill; grok test aligned 0f18b83"}
 {"task":"LDT-15","worker":"manager","lane":"full","verdict":"shipped","note":"studio publishable; caught+fixed bundled deps declared as runtime deps"}
+{"task":"LDT-17","worker":"manager","lane":"approve","verdict":"pass","note":"cross-origin WS to wrangler dev reaches a withVoice DO; route = kebab-case of DO class"}
+{"task":"LDT-18","worker":"manager","lane":"approve","verdict":"gap-found","note":"metrics message absent on Workers path; timeline becomes server work on CF"}
