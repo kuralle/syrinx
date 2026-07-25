@@ -979,19 +979,18 @@ describe("createTwilioMediaStreamServer", () => {
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
+    // A single burst whose duration (160ms) exceeds maxQueuedOutputAudioMs (100ms)
+    // overflows inside one enqueue() call — deterministic no matter how fast the
+    // paced-playout timer or bus drain loop happen to run. The previous version
+    // split this into two 80ms bursts separated by a fixed 10ms sleep, racing that
+    // sleep against the real pacer/drain-loop timers: under load the first burst
+    // could drain enough before the second arrived that the queue never overflowed,
+    // and the test then hung until the 5s waitForCondition timeout.
     session.bus.push(Route.Main, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
-      audio: pcm16SamplesToBytes(new Int16Array(1280)),
-      sampleRateHz: 16000,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
-      kind: "tts.audio",
-      contextId: "twilio-CA-test-call",
-      timestampMs: Date.now(),
-      audio: pcm16SamplesToBytes(new Int16Array(1280)),
+      audio: pcm16SamplesToBytes(new Int16Array(2560)),
       sampleRateHz: 16000,
     });
 

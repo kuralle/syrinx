@@ -226,7 +226,26 @@ describe("createSmartPbxMediaStreamServer", () => {
     const client = await openSmartPbxSocket(smartPbxUrl(address.port));
 
     client.send(JSON.stringify(smartPbxStart("pcm16", 24000)));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Prove the "start" event has actually been processed (state.started set) before
+    // pushing tts.audio directly onto session.bus, by round-tripping a silent inbound
+    // media frame and waiting for its user.audio_received echo: the transport rejects
+    // media before start, so seeing this packet guarantees start already landed. A fixed
+    // sleep here raced the WS round trip against the bus's own async drain loop — under
+    // load, Node can run the sleep's timer callback before the "start" frame's I/O
+    // callback in the same loop tick, so the sleep resolved before start was processed
+    // and the tts.audio push was silently dropped by isActive(), hanging the test.
+    const started = new Promise<void>((resolve) => {
+      const off = session.bus.on("user.audio_received", () => {
+        off();
+        resolve();
+      });
+    });
+    client.send(JSON.stringify({
+      event: "media",
+      media: { payload: Buffer.from(pcm16SamplesToBytes(new Int16Array([0, 0, 0]))).toString("base64") },
+    }));
+    await started;
+
     const outbound = readJsonMatching(client, (message) => message.event === "media");
     session.bus.push(Route.Main, {
       kind: "tts.audio",

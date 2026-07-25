@@ -477,7 +477,7 @@ describe("DeepgramSTTPlugin", () => {
       timestampMs: Date.now(),
       audio: new Uint8Array(640),
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(finals, 1);
     expect(finals).toEqual([
       expect.objectContaining({
         contextId: "turn-2",
@@ -487,7 +487,7 @@ describe("DeepgramSTTPlugin", () => {
     ]);
 
     plugin.forceFinalize("turn-2");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitFor(finals, 2);
     expect(finals).toEqual([
       expect.objectContaining({
         contextId: "turn-2",
