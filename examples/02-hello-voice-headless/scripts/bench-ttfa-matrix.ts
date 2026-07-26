@@ -16,6 +16,8 @@ import { performance } from "node:perf_hooks";
 
 import { VoiceAgentSession, type VoicePlugin } from "@kuralle-syrinx/core";
 import { ReasoningBridge, fromStreamText } from "@kuralle-syrinx/aisdk";
+import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
+import { defineAgent, createRuntime, MemoryStore } from "@kuralle-agents/core";
 import { createOpenAI } from "@ai-sdk/openai";
 import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { ElevenLabsSTTPlugin, ElevenLabsTTSPlugin } from "@kuralle-syrinx/elevenlabs";
@@ -74,7 +76,26 @@ const TTS: Record<string, Stage> = {
   },
 };
 
-function makeSession(sttName: string, ttsName: string): VoiceAgentSession {
+const SYSTEM = "You are a terse voice assistant. One short sentence.";
+
+/**
+ * The reasoner under test. Both drive the same model through the same
+ * ReasoningBridge seam, so a TTFT difference is the framework's, not the model's.
+ */
+function makeReasoner(kind: "aisdk" | "kuralle"): ConstructorParameters<typeof ReasoningBridge>[0] {
+  const openai = createOpenAI({ apiKey: env("OPENAI_API_KEY") });
+  if (kind === "aisdk") {
+    return fromStreamText({ model: openai("gpt-4.1-mini"), system: SYSTEM });
+  }
+  const runtime = createRuntime({
+    agents: [defineAgent({ id: "bench", model: openai("gpt-4.1-mini"), instructions: SYSTEM })],
+    defaultAgentId: "bench",
+    sessionStore: new MemoryStore(),
+  });
+  return fromKuralleRuntime(runtime as unknown as KuralleRuntimeLike, { sessionId: `bench-${String(Date.now())}` });
+}
+
+function makeSession(sttName: string, ttsName: string, reasoner: "aisdk" | "kuralle" = "aisdk"): VoiceAgentSession {
   const stt = STT[sttName];
   const tts = TTS[ttsName];
   if (!stt || !tts) throw new Error(`unknown combo ${sttName}+${ttsName}`);
@@ -85,9 +106,7 @@ function makeSession(sttName: string, ttsName: string): VoiceAgentSession {
   });
   const plugins: Record<string, VoicePlugin> = {
     stt: stt.plugin(),
-    bridge: new ReasoningBridge(
-      fromStreamText({ model: openai("gpt-4.1-mini"), system: "You are a terse voice assistant. One short sentence." }),
-    ),
+    bridge: new ReasoningBridge(makeReasoner(reasoner)),
     tts: tts.plugin(),
   };
   for (const [n, p] of Object.entries(plugins)) session.registerPlugin(n, p);
@@ -115,7 +134,7 @@ async function main(): Promise<void> {
 
   const results: unknown[] = [];
   for (const combo of combos) {
-    const [sttName = "", ttsName = ""] = combo.split("+");
+    const [sttName = "", ttsName = "", reasonerName = "aisdk"] = combo.split("+");
     const missing = [STT[sttName]?.needs, TTS[ttsName]?.needs].filter((k): k is string => Boolean(k) && !k.split("|").some((one) => env(one) !== ""));
     if (!STT[sttName] || !TTS[ttsName]) { results.push({ combo, skipped: "unknown provider" }); continue; }
     if (missing.length > 0) { results.push({ combo, skipped: `missing ${missing.join(",")}` }); continue; }
@@ -127,7 +146,7 @@ async function main(): Promise<void> {
         let latency: Record<string, unknown> | undefined;
         const r = await driveTurn({
           session: () => {
-            const sess = makeSession(sttName, ttsName);
+            const sess = makeSession(sttName, ttsName, reasonerName === "kuralle" ? "kuralle" : "aisdk");
             // The engine's OWN decomposition. The runner's ttsTTFBMs is
             // firstAudio - firstLlmDelta, which silently folds the engine's text
             // aggregation into the provider's synthesis time; this separates them.
