@@ -68,6 +68,7 @@ import {
 } from "./packets.js";
 import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
+import { takeFirstFragment } from "./voice-text.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
@@ -118,6 +119,17 @@ export interface VoiceAgentSessionConfig {
    * Default: 7000 (endpointing + 2s grace)
    */
   sttForceFinalizeTimeoutMs?: number;
+  /**
+   * Minimum characters before the FIRST spoken chunk of a turn may be dispatched at
+   * a clause boundary rather than waiting for a full sentence. Only the first
+   * dispatch gates time-to-first-audio. 0 disables (always wait for a sentence).
+   *
+   * Default 25. An earlier default of 45 was measured against real replies and
+   * never fired: it starts the scan PAST the clause boundary in a typical
+   * sentence ("The deadline is March first," is 28 chars). Set 0 for HTTP-per-request TTS, where
+   * an extra chunk means an extra synthesis call and can hurt continuity.
+   */
+  firstFragmentMinChars?: number;
   /**
    * Minimum sustained user-speech duration (ms) during assistant playback before a
    * barge-in is committed. Filters transient noise, clicks, and very short blips that
@@ -300,6 +312,8 @@ type EventHandler<T> = (event: T) => void;
 interface TtsTextBuffer {
   pending: string;
   emitted: string;
+  /** Whether anything has been dispatched for this turn yet — the first chunk is the only one that gates TTFA. */
+  dispatched?: boolean;
 }
 
 interface TurnTiming {
@@ -409,6 +423,7 @@ export class VoiceAgentSession {
   private readonly delayCueAfterMs: number;
   private pendingToolCues = new Map<string, Map<string, string>>();
   private readonly endpointingOwner: "provider_stt" | "smart_turn" | "timer";
+  private readonly firstFragmentMinChars: number;
   private readonly fullDuplex: boolean;
   private readonly emitsBackchannel: boolean;
   private userSpeaking = false;
@@ -426,6 +441,7 @@ export class VoiceAgentSession {
       throw new Error(`Unsupported endpointingOwner: ${owner}`);
     }
     this.endpointingOwner = owner ?? "provider_stt";
+    this.firstFragmentMinChars = config.firstFragmentMinChars ?? 25;
     this.fullDuplex = config.fullDuplex === true;
     this.emitsBackchannel = config.emitsBackchannel === true;
     this.config = config;
@@ -1329,7 +1345,15 @@ export class VoiceAgentSession {
   private bufferTtsText(contextId: string, text: string, tsMs?: number): void {
     const buffer = this.ttsTextBuffers.get(contextId) ?? { pending: "", emitted: "" };
     buffer.pending += text;
-    const complete = takeCompleteVoiceText(buffer.pending);
+    let complete = takeCompleteVoiceText(buffer.pending);
+    // Only the FIRST dispatch gates time-to-first-audio — later sentences are
+    // synthesised while earlier audio is already playing. So if no sentence has
+    // completed yet and nothing has been spoken for this turn, take an earlier
+    // clause-boundary fragment instead of waiting for a terminator.
+    if (!complete.text && buffer.dispatched !== true && this.firstFragmentMinChars > 0) {
+      const fragment = takeFirstFragment(buffer.pending, this.firstFragmentMinChars);
+      if (fragment.text) complete = fragment;
+    }
     if (complete.text) {
       const timing = this.turnTimings.get(contextId);
       if (timing) timing.firstTtsTextMs ??= tsMs ?? Date.now();
@@ -1338,6 +1362,7 @@ export class VoiceAgentSession {
       const spoken = normalizeForSpeech(complete.text);
       this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), spoken));
       buffer.emitted = appendVoiceText(buffer.emitted, spoken);
+      buffer.dispatched = true;
     }
     buffer.pending = complete.remaining;
     this.ttsTextBuffers.set(contextId, buffer);

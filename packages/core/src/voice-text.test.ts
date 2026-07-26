@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from "vitest";
-import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech, stripLeakedToolCalls } from "./voice-text.js";
+import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech, stripLeakedToolCalls , takeFirstFragment } from "./voice-text.js";
 
 describe("stripLeakedToolCalls", () => {
   it("removes XML-style tool_call blocks including inner JSON", () => {
@@ -152,5 +152,42 @@ describe("appendVoiceText", () => {
 
   it("returns the existing text unchanged when the next fragment is blank", () => {
     expect(appendVoiceText("Hello", "   ")).toBe("Hello");
+  });
+});
+
+describe("takeFirstFragment — the first chunk only", () => {
+  it("splits at a clause boundary once long enough", () => {
+    const r = takeFirstFragment("The deadline is March first, but it varies by program.", 20);
+    expect(r.text).toBe("The deadline is March first,");
+    expect(r.remaining).toBe(" but it varies by program.");
+  });
+
+  it("waits when the text is still too short to be worth speaking", () => {
+    expect(takeFirstFragment("Sure, ok", 20).text).toBe("");
+  });
+
+  it("fires on real reply shapes at the shipped default", () => {
+    // A default of 45 was shipped briefly and could NEVER fire: it starts the scan
+    // past the comma in a normal sentence. Checked against actual agent replies.
+    expect(takeFirstFragment("The deadline is March first, but it varies by program.", 25).text)
+      .toBe("The deadline is March first,");
+    expect(takeFirstFragment("For most computer science masters programs, the deadline is in December.", 25).text)
+      .toBe("For most computer science masters programs,");
+    // No clause boundary exists here — waiting for the sentence is correct.
+    expect(takeFirstFragment("Please specify the university or program you are referring to.", 25).text).toBe("");
+  });
+
+  it("never splits mid-word — punctuation must be followed by whitespace", () => {
+    // "1,500" is a thousands separator, not a clause boundary.
+    expect(takeFirstFragment("The fee is about 1,500 dollars per term overall", 12).text).toBe("");
+  });
+
+  it("does not fire on a decimal or abbreviation dot, which are not clauses", () => {
+    expect(takeFirstFragment("It costs 12.50 for each of the many items listed", 10).text).toBe("");
+    expect(takeFirstFragment("Contact Dr. Smith about the application deadline", 10).text).toBe("");
+  });
+
+  it("returns nothing when there is no clause boundary at all", () => {
+    expect(takeFirstFragment("a".repeat(80), 20).text).toBe("");
   });
 });

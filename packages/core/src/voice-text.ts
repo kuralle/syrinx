@@ -209,3 +209,36 @@ function createSentenceSegmenter(): { segment(text: string): Iterable<SentenceSe
     return null;
   }
 }
+
+/**
+ * The FIRST spoken fragment of a turn, taken earlier than a full sentence.
+ *
+ * Only the first dispatch gates time-to-first-audio: every later sentence is
+ * synthesised while earlier audio is already playing, so its buffering is free.
+ * But the sentence rule charges the first chunk the full wait for a terminator —
+ * measured at ~200ms of a ~950ms TTFA.
+ *
+ * This takes a leading fragment at a CLAUSE boundary (comma, semicolon, colon,
+ * dash) once it is long enough to be worth speaking. Never mid-word: the split is
+ * always at punctuation followed by whitespace.
+ *
+ * Deliberately conservative about the cases `isCompleteVoiceText` guards — it will
+ * not split on a decimal point or an abbreviation dot, because those are not
+ * clause boundaries and never match here.
+ *
+ * Returns empty when no safe early split exists, in which case the caller keeps
+ * waiting for a full sentence.
+ */
+export function takeFirstFragment(text: string, minChars: number): { text: string; remaining: string } {
+  if (text.length < minChars) return { text: "", remaining: text };
+  // Scan for a clause boundary at or after minChars so the fragment is substantial
+  // enough to carry prosody on its own.
+  for (let i = minChars - 1; i < text.length - 1; i += 1) {
+    const ch = text[i];
+    if (ch !== "," && ch !== ";" && ch !== ":" && ch !== "—") continue;
+    const next = text[i + 1];
+    if (next !== " " && next !== "\n") continue;
+    return { text: text.slice(0, i + 1).trimEnd(), remaining: text.slice(i + 1) };
+  }
+  return { text: "", remaining: text };
+}
