@@ -59,19 +59,36 @@ export class SileroVADPlugin implements VoicePlugin {
     this.resetModelState();
     this.machine.noteModelReset();
 
-    // Awaited deliberately, not fire-and-forget: the inference is stateful, so
-    // frames must be processed in order. Measured 2026-07-26 with
-    // busConfig.onQueueDelay: this pushes worst-case event-loop delay from 27ms to
-    // 163ms (p99 23ms) and delays stt.audio packets up to 29ms. Two orders of
-    // magnitude below a blocking HTTP handler, and the ordering requirement makes
-    // `{ concurrent: true }` incorrect here rather than merely risky.
+    // Inference is STATEFUL, so frames must be processed in order — but awaiting
+    // the handler also parks the Main drain loop, so every packet behind it (STT
+    // audio included) is delivered late. Measured 2026-07-26: worst-case loop delay
+    // 27ms -> 163ms, stt.audio delayed up to 29ms.
+    //
+    // Return immediately and chain on an internal queue: ordering is preserved by
+    // the chain, and the bus is free to dispatch between frames. `{ concurrent:
+    // true }` alone would run inferences in parallel and corrupt the model state.
+    //
+    // After: loop p99 23ms -> 13ms, max 163ms -> 81ms, utilization 0.15 -> 0.042,
+    // and stt.audio queueing disappeared entirely. The residual 81ms is ONNX
+    // compute blocking the loop inline; removing that needs a worker thread, which
+    // is a larger change than this one and is NOT done here.
     this.disposers.push(
-      bus.on("vad.audio", async (pkt: unknown) => {
-        const audioPkt = pkt as { audio: Uint8Array; contextId: string };
-        await this.processAudio(audioPkt.audio, audioPkt.contextId);
-      }),
+      bus.on(
+        "vad.audio",
+        (pkt: unknown) => {
+          const audioPkt = pkt as { audio: Uint8Array; contextId: string };
+          this.frameQueue = this.frameQueue.then(
+            () => this.processAudio(audioPkt.audio, audioPkt.contextId),
+            () => this.processAudio(audioPkt.audio, audioPkt.contextId),
+          );
+        },
+        { concurrent: true },
+      ),
     );
   }
+
+  /** Serialises inference without holding the bus. See the vad.audio registration. */
+  private frameQueue: Promise<void> = Promise.resolve();
 
   async processAudio(audio: Uint8Array, contextId: string): Promise<void> {
     if (!this.bus || !this.session || !this.ort || !this.machine) return;
