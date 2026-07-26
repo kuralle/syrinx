@@ -78,15 +78,33 @@ export async function startStreamingTtsSession(
   });
   await conn.connect();
 
+  // Text frames must reach the provider in order, but awaiting the handler parks
+  // the Main drain loop: onText -> trySend -> `await transport.ensureReady()`, so a
+  // reconnect stalls every packet behind it, inbound caller audio included. Chain
+  // on an internal queue instead — order preserved, bus free. `{ concurrent: true }`
+  // alone would let two frames race and reorder the spoken text.
+  let queue: Promise<void> = Promise.resolve();
+  const chain = (work: () => Promise<void>): void => {
+    queue = queue.then(work, work);
+  };
+
   const disposers: Array<() => void> = [
-    bus.on("tts.text", async (pkt: unknown) => {
-      const textPkt = pkt as { text: string; contextId: string };
-      await engine.onText(textPkt.text, textPkt.contextId);
-    }),
-    bus.on("tts.done", async (pkt: unknown) => {
-      const donePkt = pkt as { contextId: string };
-      await engine.onDone(donePkt.contextId);
-    }),
+    bus.on(
+      "tts.text",
+      (pkt: unknown) => {
+        const textPkt = pkt as { text: string; contextId: string };
+        chain(() => engine.onText(textPkt.text, textPkt.contextId));
+      },
+      { concurrent: true },
+    ),
+    bus.on(
+      "tts.done",
+      (pkt: unknown) => {
+        const donePkt = pkt as { contextId: string };
+        chain(() => engine.onDone(donePkt.contextId));
+      },
+      { concurrent: true },
+    ),
     bus.on("interrupt.tts", () => {
       engine.onInterrupt().catch(() => {
         // Best-effort interruption.
