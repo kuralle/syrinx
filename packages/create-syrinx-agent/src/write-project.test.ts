@@ -21,7 +21,6 @@ describe("buildFileMap — the cascade slice (deepgram/aisdk/cartesia/browser)",
       "package.json",
       "scripts/dev-server.ts",
       "src/agent.ts",
-      "test/fixtures/smoke.wav",
       "tsconfig.json",
     ]);
   });
@@ -37,6 +36,7 @@ describe("buildFileMap — the cascade slice (deepgram/aisdk/cartesia/browser)",
         "@kuralle-syrinx/cli",
         "@kuralle-syrinx/core",
         "@kuralle-syrinx/deepgram",
+        "dotenv",
         "@kuralle-syrinx/server-websocket",
         "ai",
         "ws",
@@ -148,7 +148,7 @@ describe("writeProject", () => {
     await rm(root, { recursive: true, maxRetries: 3, force: true }).catch(() => {});
   });
 
-  it("writes every file, including a binary fixture, to the target directory", async () => {
+  it("writes every file to the target directory", async () => {
     const opts = resolveOptions({ stt: "deepgram", reasoner: "aisdk", tts: "cartesia", transport: "browser" }, ["x"]);
     const files = buildFileMap(opts);
     const targetDir = join(root, "generated");
@@ -157,7 +157,39 @@ describe("writeProject", () => {
 
     const pkgRaw = await readFile(join(targetDir, "package.json"), "utf8");
     expect(JSON.parse(pkgRaw)).toHaveProperty("name");
-    const wav = await readFile(join(targetDir, "test/fixtures/smoke.wav"));
-    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    // Nested paths are created, not silently flattened.
+    const agent = await readFile(join(targetDir, "src/agent.ts"), "utf8");
+    expect(agent).toContain("createAgent");
+  });
+});
+
+describe("the shipped checks must be runnable as generated", () => {
+  const files = buildFileMap(
+    resolveOptions({ stt: "deepgram", reasoner: "aisdk", tts: "cartesia", transport: "browser" }, ["x"]),
+  );
+  const pkg = JSON.parse(
+    files.find((f) => f.relPath === "package.json")?.content as string,
+  ) as { scripts: Record<string, string>; dependencies: Record<string, string> };
+
+  it("runs the CLI under tsx, because a .ts --agent target needs it", () => {
+    // `syrinx` is a plain-node bin; a .ts agent importing a Syrinx package resolves
+    // to raw TS under node_modules, which node refuses to strip. Verified against a
+    // real scaffolded project installed from npm.
+    expect(pkg.scripts["check:text"]).toContain("tsx ");
+    expect(pkg.scripts["check:turn"]).toContain("tsx ");
+  });
+
+  it("ships no check that can never pass", () => {
+    // check:turn previously pointed at a generated 0.5s silence WAV. Silence yields
+    // no transcript, so it could only ever time out. The default check is now a
+    // typed turn, which needs no recording at all.
+    expect(pkg.scripts["check:text"]).toBeDefined();
+    expect(files.some((f) => f.relPath.endsWith("smoke.wav"))).toBe(false);
+  });
+
+  it("loads .env, since the project ships a .env.example", () => {
+    const agent = files.find((f) => f.relPath === "src/agent.ts")?.content as string;
+    expect(agent).toContain("loadEnv()");
+    expect(pkg.dependencies["dotenv"]).toBeDefined();
   });
 });

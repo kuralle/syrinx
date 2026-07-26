@@ -42,7 +42,12 @@ function mergeImports(lines: readonly string[]): string[] {
     const match = IMPORT_RE.exec(line);
     const names = match?.[1];
     const from = match?.[2];
-    if (names === undefined || from === undefined) continue; // every entry here is an import line
+    if (names === undefined || from === undefined) {
+      // Silently skipping here emits an agent module missing an import, which fails
+      // only in the GENERATED project — far from the cause. It happened: a two-line
+      // entry never matched this single-line-anchored regex and vanished.
+      throw new Error(`agent-module: import line not in the expected shape: ${line}`);
+    }
     let bucket = namesBySource.get(from);
     if (bucket === undefined) {
       bucket = [];
@@ -87,6 +92,7 @@ function buildCascadeAgentModule(opts: Extract<ResolvedOptions, { mode: "cascade
 
   const imports = [
     `import { VoiceAgentSession, type VoicePlugin } from "@kuralle-syrinx/core";`,
+    `import { config as loadEnv } from "dotenv";`,
     `import { ReasoningBridge } from "@kuralle-syrinx/aisdk";`,
     importLine(stt.className, stt.importFrom ?? stt.packageName),
     importLine(tts.className, tts.importFrom ?? tts.packageName),
@@ -125,6 +131,10 @@ function buildCascadeAgentModule(opts: Extract<ResolvedOptions, { mode: "cascade
 // (examples/02-hello-voice-headless/scripts/dev-server.ts).
 
 ${mergeImports(imports).join("\n")}
+
+// This project ships a .env.example. Without this call nothing ever reads the
+// .env you make from it, and every provider fails on a missing api_key.
+loadEnv();
 
 const ${SYSTEM_PROMPT_CONST} = ${JSON.stringify(SYSTEM_PROMPT)};
 

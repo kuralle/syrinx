@@ -14,7 +14,6 @@ import { buildPackageJson } from "./templates/package-json.js";
 import { buildEnvExample } from "./templates/env-example.js";
 import { buildAgentsMd } from "./templates/agents-md.js";
 import { buildTsconfig } from "./templates/tsconfig.js";
-import { buildSmokeWav } from "./templates/fixture.js";
 import { buildCloudflareWorkerSource, buildWranglerJsonc } from "./templates/cloudflare-worker.js";
 
 export interface ProjectFile {
@@ -30,7 +29,6 @@ export function buildFileMap(opts: ResolvedOptions): readonly ProjectFile[] {
     { relPath: "AGENTS.md", content: buildAgentsMd(opts) },
     { relPath: "src/agent.ts", content: buildAgentModule(opts) },
     { relPath: "scripts/dev-server.ts", content: buildDevServer(opts.transport) },
-    { relPath: "test/fixtures/smoke.wav", content: buildSmokeWav() },
   ];
 
   if (opts.runtime === "cloudflare") {
