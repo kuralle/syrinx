@@ -59,6 +59,12 @@ export class SileroVADPlugin implements VoicePlugin {
     this.resetModelState();
     this.machine.noteModelReset();
 
+    // Awaited deliberately, not fire-and-forget: the inference is stateful, so
+    // frames must be processed in order. Measured 2026-07-26 with
+    // busConfig.onQueueDelay: this pushes worst-case event-loop delay from 27ms to
+    // 163ms (p99 23ms) and delays stt.audio packets up to 29ms. Two orders of
+    // magnitude below a blocking HTTP handler, and the ordering requirement makes
+    // `{ concurrent: true }` incorrect here rather than merely risky.
     this.disposers.push(
       bus.on("vad.audio", async (pkt: unknown) => {
         const audioPkt = pkt as { audio: Uint8Array; contextId: string };

@@ -32,6 +32,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { ElevenLabsTTSPlugin } from "@kuralle-syrinx/elevenlabs";
 import { OpenAICompatibleTTSPlugin } from "@kuralle-syrinx/openai-tts";
+import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
 import { driveTurn } from "@kuralle-syrinx/cli/turn-runner";
 import { ensureRepoRootDotenv, coerceGoogleGenAiKey } from "../src/run-one-turn.js";
 
@@ -47,6 +48,7 @@ function build(stamps: Stamp[]): VoiceAgentSession {
     busConfig: { onQueueDelay: (kind, ms) => { if (ms >= 5) queueDelays.push({ kind, ms }); } },
     plugins: {
       stt: { api_key: env("DEEPGRAM_API_KEY"), model: "nova-3", sample_rate: 16000, emit_eos_on_final: true },
+      vad: {},
       bridge: {},
       tts: useOpenAiTts
         ? { api_key: env("OPENAI_API_KEY"), model: "gpt-4o-mini-tts", voice: "alloy" }
@@ -80,6 +82,7 @@ function build(stamps: Stamp[]): VoiceAgentSession {
   (session as unknown as { __queueDelays: unknown }).__queueDelays = queueDelays;
 
   const plugins: Record<string, VoicePlugin> = {
+    vad: new SileroVADPlugin(),
     stt: new DeepgramSTTPlugin(),
     bridge: new ReasoningBridge(
       fromStreamText({ model: openai("gpt-4.1-mini"), system: "You are a terse voice assistant. One short sentence." }),
