@@ -95,6 +95,24 @@ function makeReasoner(kind: "aisdk" | "kuralle"): ConstructorParameters<typeof R
   return fromKuralleRuntime(runtime as unknown as KuralleRuntimeLike, { sessionId: `bench-${String(Date.now())}` });
 }
 
+/**
+ * Splits llmTtft into the part that is OURS and the part that is the provider's.
+ *
+ * `llmTtftMs` runs from the eos packet to the first llm.delta on the bus, so it
+ * contains both the engine deciding to call and the model's time to first token.
+ * Attributing all of it to the provider was an assumption, never a measurement.
+ */
+const dispatchSamples: number[] = [];
+let lastEosAtMs = 0;
+function timedReasoner<T extends { stream: (turn: never) => AsyncIterable<unknown> }>(inner: T): T {
+  const orig = inner.stream.bind(inner);
+  (inner as { stream: unknown }).stream = (turn: never) => {
+    if (lastEosAtMs > 0) dispatchSamples.push(Date.now() - lastEosAtMs);
+    return orig(turn);
+  };
+  return inner;
+}
+
 function makeSession(sttName: string, ttsName: string, reasoner: "aisdk" | "kuralle" = "aisdk"): VoiceAgentSession {
   const stt = STT[sttName];
   const tts = TTS[ttsName];
@@ -106,7 +124,7 @@ function makeSession(sttName: string, ttsName: string, reasoner: "aisdk" | "kura
   });
   const plugins: Record<string, VoicePlugin> = {
     stt: stt.plugin(),
-    bridge: new ReasoningBridge(makeReasoner(reasoner)),
+    bridge: new ReasoningBridge(timedReasoner(makeReasoner(reasoner) as never) as never),
     tts: tts.plugin(),
   };
   for (const [n, p] of Object.entries(plugins)) session.registerPlugin(n, p);
@@ -150,6 +168,7 @@ async function main(): Promise<void> {
             // The engine's OWN decomposition. The runner's ttsTTFBMs is
             // firstAudio - firstLlmDelta, which silently folds the engine's text
             // aggregation into the provider's synthesis time; this separates them.
+            sess.bus.on("eos.turn_complete", () => { lastEosAtMs = Date.now(); });
             sess.on("turn_latency", (e) => {
               latency = {
                 ttfaMs: e.ttfaMs, anchor: e.anchor, eouDelayMs: e.eouDelayMs,
@@ -191,7 +210,16 @@ async function main(): Promise<void> {
       turns: rows,
     });
   }
-  console.log(JSON.stringify({ fixture: wav, pacing: "realtime-1x", results }, null, 2));
+  const warmDispatch = dispatchSamples.slice(1);
+  console.log(JSON.stringify({
+    fixture: wav, pacing: "realtime-1x",
+    // eos -> reasoner.stream() invoked. This is engine dispatch overhead; whatever
+    // remains of llmTtft after subtracting it is the model.
+    engineDispatchMs: warmDispatch.length > 0
+      ? { median: pct(warmDispatch, 50), min: Math.min(...warmDispatch), max: Math.max(...warmDispatch), n: warmDispatch.length }
+      : null,
+    results,
+  }, null, 2));
 }
 
 void main().catch((e: unknown) => {
