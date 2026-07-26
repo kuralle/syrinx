@@ -154,7 +154,7 @@ async function main(): Promise<void> {
               latency = {
                 ttfaMs: e.ttfaMs, anchor: e.anchor, eouDelayMs: e.eouDelayMs,
                 llmTtftMs: e.llmTtftMs, textAggregationMs: e.textAggregationMs,
-                ttsTtfbMs: e.ttsTtfbMs, unattributedMs: e.unattributedMs,
+                ttsTtfbMs: e.ttsTtfbMs, unattributedMs: e.unattributedMs, queuedMs: e.queuedMs,
               };
             });
             return sess;

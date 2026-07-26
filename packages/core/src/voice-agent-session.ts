@@ -275,6 +275,13 @@ export interface VoiceAgentSessionEvents {
     llmTtftMs?: number;
     textAggregationMs?: number;
     ttsTtfbMs?: number;
+    /**
+     * Time this turn's latency-critical packets spent waiting to be dispatched.
+     * Every other stage is derived from packet timestamps stamped at CREATION, so
+     * none of them can see a handler parking the drain loop. Non-zero here means
+     * some of the stages above are reporting less than the caller experienced.
+     */
+    queuedMs?: number;
     unattributedMs: number;
     llmCallCount?: number;
     llmPassTtftMs?: readonly number[];
@@ -308,6 +315,9 @@ export interface SessionStageUsage {
 }
 
 type EventHandler<T> = (event: T) => void;
+
+/** Packet kinds that sit on the time-to-first-audio path. */
+const TTFA_PATH_KINDS = new Set(["stt.audio", "stt.result", "eos.turn_complete", "llm.delta", "tts.text", "tts.audio"]);
 
 interface TtsTextBuffer {
   pending: string;
@@ -387,6 +397,10 @@ export class VoiceAgentSession {
   // before any audio plays — still abort the turn (thinking-phase barge-in, B3).
   private generatingContextIds = new Set<string>();
   private ttsTextBuffers = new Map<string, TtsTextBuffer>();
+  /** Dispatch lag accumulated by this turn's latency-critical packets. See emitTurnLatency. */
+  private turnQueuedMs = new Map<string, number>();
+  /** The turn currently accruing queue delay. Packets do not carry it themselves. */
+  private currentLatencyContextId = "";
   private readonly minInterruptionMs: number;
   private readonly primarySpeakerGate: PrimarySpeakerGate;
   private readonly ruleBasedPolicy!: RuleBasedInteractionPolicy;
@@ -479,6 +493,14 @@ export class VoiceAgentSession {
     // PipelineBus
     this.bus = new PipelineBusImpl({
       ...config.busConfig,
+      onQueueDelay: (kind, delayMs) => {
+        // Only the kinds on the time-to-first-audio path, and only real waits.
+        if (delayMs >= 2 && TTFA_PATH_KINDS.has(kind)) {
+          const ctx = this.currentLatencyContextId;
+          if (ctx) this.turnQueuedMs.set(ctx, (this.turnQueuedMs.get(ctx) ?? 0) + delayMs);
+        }
+        config.busConfig?.onQueueDelay?.(kind, delayMs);
+      },
       onPacket: (route, packet) => {
         this.debugPush({
           component: "bus",
@@ -1091,6 +1113,7 @@ export class VoiceAgentSession {
     if (!previous) return;
     this.turnTimings.delete(previousContextId);
     const current = this.turnTimings.get(contextId);
+    this.currentLatencyContextId = contextId;
     this.turnTimings.set(contextId, { ...previous, ...current });
   }
 
@@ -1140,6 +1163,13 @@ export class VoiceAgentSession {
       .filter((value): value is number => value !== undefined)
       .reduce((sum, value) => sum + value, 0);
     const ttfaMs = firstAudioMs - anchorMs;
+    // Every stage above is derived from packet timestamps, which are stamped when a
+    // packet is CREATED. A packet delayed behind a handler that parks the drain loop
+    // still reports its original time, so parking is invisible to all of them — that
+    // blindness hid three real defects. This is the time the turn's latency-critical
+    // packets actually spent waiting to be dispatched.
+    const queuedMs = this.turnQueuedMs.get(contextId);
+    this.turnQueuedMs.delete(contextId);
     const unattributedMs = ttfaMs - attributedMs;
     if (unattributedMs >= 500) this.markInfrastructureBreach(contextId);
     const fillerUsed = timing.fillerUsed === true;
@@ -1149,6 +1179,7 @@ export class VoiceAgentSession {
       turnId: contextId,
       ttfaMs,
       anchor,
+      ...(queuedMs !== undefined && queuedMs > 0 ? { queuedMs } : {}),
       ...(eouDelayMs !== undefined ? { eouDelayMs } : {}),
       ...(llmTtftMs !== undefined ? { llmTtftMs } : {}),
       ...(textAggregationMs !== undefined ? { textAggregationMs } : {}),
@@ -1360,6 +1391,9 @@ export class VoiceAgentSession {
       // Strip markdown before it reaches TTS, and track the SPOKEN form as the heard
       // prefix so barge-in truncation reconciles against what was actually said.
       const spoken = normalizeForSpeech(complete.text);
+      // Stamped here, at the moment we hand the text to the bus. The packet's own
+      // timestampMs is also creation-time, so neither sees dispatch lag — that is
+      // what `queuedMs` below accounts for.
       this.bus.push(Route.Main, make.ttsText(contextId, Date.now(), spoken));
       buffer.emitted = appendVoiceText(buffer.emitted, spoken);
       buffer.dispatched = true;
