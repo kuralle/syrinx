@@ -45,6 +45,13 @@ export interface PerTurnMetrics {
   readonly inputAudioMs: number;
   readonly speechEndToFinalTranscriptMs: number;
   readonly speechEndToFirstAudioMs: number;
+  /**
+   * What `speechEndToFirstAudioMs` is measured FROM. "speech_end" is the acoustic
+   * end of speech (VAD) and is the number a caller experiences; "eos" is the
+   * endpoint decision, which excludes endpointing entirely and is therefore
+   * smaller. Reporting a TTFA without its anchor conflates the two.
+   */
+  readonly ttfaAnchor?: "speech_end" | "eos";
   readonly endpointingMs: number;
   readonly llmTTFTMs: number;
   readonly ttsTTFBMs: number;
@@ -242,6 +249,10 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
   const on = <K extends keyof VoiceAgentSessionEvents>(event: K, handler: VoiceAgentSessionEvents[K]): void => {
     session.on(event, handler);
   };
+  // The engine declares what its TTFA is anchored to; carry it out rather than
+  // letting a caller assume.
+  let ttfaAnchor: "speech_end" | "eos" | undefined;
+  on("turn_latency", (event) => { ttfaAnchor = event.anchor; });
   on("user_input_final", (event) => {
     finalTranscript = event.text;
     timeline.finalTranscriptMs = event.tsMs;
@@ -319,6 +330,7 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
       timeline.speechEndMs > 0 && timeline.firstTtsAudioMs > 0
         ? Math.max(0, timeline.firstTtsAudioMs - timeline.speechEndMs)
         : 0,
+    ...(ttfaAnchor !== undefined ? { ttfaAnchor } : {}),
     endpointingMs:
       timeline.feedStartMs > 0 && timeline.finalTranscriptMs > 0
         ? Math.max(0, timeline.finalTranscriptMs - timeline.feedStartMs)
