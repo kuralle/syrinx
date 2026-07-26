@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/kuralle",
-  "version": "4.4.0",
+  "version": "4.4.1",
   "private": false,
   "description": "kuralle-agents bridge for Syrinx — run a kuralle runtime as the voice pipeline's reasoner",
   "keywords": [

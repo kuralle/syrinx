@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/silero-vad",
-  "version": "4.4.0",
+  "version": "4.4.1",
   "private": false,
   "description": "Silero VAD plugin for Syrinx — ONNX voice activity detection for Node and Workers",
   "keywords": [

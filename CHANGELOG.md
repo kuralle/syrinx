@@ -2,6 +2,43 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.4.1 — 2026-07-26
+
+### Fixed — a scaffolded project now runs out of the box
+
+Found by doing what an evaluator does: `npx create-syrinx-agent@4.4.0` into a temp
+directory, `npm install`, and run the checks it ships with. Five defects, all on the
+first-five-minutes path, none visible from reading the code.
+
+- **`check:turn` could not run at all.** It invoked `syrinx` directly, and that bin runs
+  under plain `node`: a `.ts` `--agent` target importing any Syrinx package resolves to raw
+  TypeScript under `node_modules`, which Node refuses to strip. Both generated checks now go
+  through `tsx`.
+- **The default check could never pass.** It replayed a generated 0.5 s *silence* WAV — no
+  speech, so no transcript, so it could only ever time out. A check that ships red teaches
+  you to ignore it. The default is now `check:text` (a typed turn, no recording needed);
+  `check:turn` remains for a fixture you record in the Studio, where it asserts the
+  transcript and fails on drift.
+- **`.env` was never read.** The project shipped a `.env.example`, you made a `.env` from it,
+  and nothing loaded it — every provider died on a missing `api_key`.
+- **Generated projects pinned `^4.3.0`** from a frozen literal, so every future release would
+  scaffold against an ever-staler floor. It follows the generator's own version now, with a
+  test asserting the two cannot drift — they already had.
+- **`mergeImports` silently dropped malformed entries**, behind a comment asserting that
+  could not happen. It did: a two-line entry vanished and emitted an agent module missing its
+  core import, which failed only in the *generated* project, far from the cause. It throws now.
+
+Verified end to end from a clean temp dir — scaffold, `npm install`, drop in `.env`,
+`npm run check:text` → `{"ok":true,"reply":"Hello! How can I assist you today?"}`. No manual
+exports, no workarounds.
+
+### Known, unfixed
+
+Packages still ship raw TypeScript, so `import("@kuralle-syrinx/core")` fails on plain Node
+("Stripping types is currently unsupported for files under node_modules"). Generated projects
+work only because every script runs under `tsx`. That is a workaround the scaffolder papers
+over, not a fix, and it remains the top open packaging defect.
+
 ## 4.4.0 — 2026-07-26
 
 Local development tooling. Before this release you could build a Syrinx agent and had no
