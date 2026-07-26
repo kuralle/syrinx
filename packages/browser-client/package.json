@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/browser-client",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Browser client for the Syrinx WebSocket audio protocol — mic capture, opus, jitter buffer, playout progress reporting, reconnect",
+  "description": "Browser client for the Syrinx WebSocket audio protocol \u2014 mic capture, opus, jitter buffer, playout progress reporting, reconnect",
   "keywords": [
     "voice",
     "voice-agent",
@@ -35,18 +35,55 @@
   },
   "scripts": {
     "dev": "vite --port 5173",
-    "build": "vite build",
+    "build": "tsc -p tsconfig.build.json",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
     "@evan/opus": "1.0.3"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.4.3",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./record": {
+        "types": "./dist/session-record.d.ts",
+        "default": "./dist/session-record.js"
+      },
+      "./agent-state": {
+        "types": "./dist/agent-state.d.ts",
+        "default": "./dist/agent-state.js"
+      },
+      "./turn-timeline": {
+        "types": "./dist/turn-timeline.d.ts",
+        "default": "./dist/turn-timeline.js"
+      },
+      "./session-metrics": {
+        "types": "./dist/session-metrics.d.ts",
+        "default": "./dist/session-metrics.js"
+      },
+      "./turn-recorder": {
+        "types": "./dist/turn-recorder.d.ts",
+        "default": "./dist/turn-recorder.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

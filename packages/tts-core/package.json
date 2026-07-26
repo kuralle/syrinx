@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/tts-core",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Shared streaming-TTS lifecycle engine for Syrinx TTS adapters — carry, refcount, finish-timeout, cancel",
+  "description": "Shared streaming-TTS lifecycle engine for Syrinx TTS adapters \u2014 carry, refcount, finish-timeout, cancel",
   "keywords": [
     "voice",
     "voice-agent",
@@ -26,14 +26,26 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
     "@kuralle-syrinx/ws": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/core",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Voice pipeline kernel for Syrinx — pipeline bus, turn arbitration, playout clock, packets, and the framework-agnostic Reasoner seam",
+  "description": "Voice pipeline kernel for Syrinx \u2014 pipeline bus, turn arbitration, playout clock, packets, and the framework-agnostic Reasoner seam",
   "keywords": [
     "voice",
     "voice-agent",
@@ -31,11 +31,33 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {},
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./audio": {
+        "types": "./dist/audio/index.d.ts",
+        "default": "./dist/audio/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

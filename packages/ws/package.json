@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/ws",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Reconnecting WebSocket connection manager for Syrinx provider sockets — verify-before-trust reconnects, ordered replay, keepalive; Node and Workers",
+  "description": "Reconnecting WebSocket connection manager for Syrinx provider sockets \u2014 verify-before-trust reconnects, ordered replay, keepalive; Node and Workers",
   "keywords": [
     "voice",
     "voice-agent",
@@ -33,15 +33,49 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      },
+      "./realtime": {
+        "types": "./dist/realtime-socket.d.ts",
+        "default": "./dist/realtime-socket.js"
+      },
+      "./web": {
+        "types": "./dist/web-socket.d.ts",
+        "default": "./dist/web-socket.js"
+      },
+      "./workers": {
+        "types": "./dist/workers.d.ts",
+        "default": "./dist/workers.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

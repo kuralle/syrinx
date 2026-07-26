@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/pipecat-smart-turn",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Pipecat Smart Turn v3 semantic endpointing for Syrinx — local ONNX end-of-turn analysis",
+  "description": "Pipecat Smart Turn v3 semantic endpointing for Syrinx \u2014 local ONNX end-of-turn analysis",
   "keywords": [
     "voice",
     "voice-agent",
@@ -32,7 +32,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -40,7 +42,27 @@
     "onnxruntime-node": "1.24.3"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./eos": {
+        "types": "./dist/eos-plugin.d.ts",
+        "default": "./dist/eos-plugin.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

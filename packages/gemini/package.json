@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/gemini",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
   "description": "Google Gemini TTS adapter for Syrinx",
   "keywords": [
@@ -26,14 +26,26 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
     "@google/genai": "^1.0.0"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

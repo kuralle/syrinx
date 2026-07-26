@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/cf-agents",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "withVoice(Agent) — add a Syrinx realtime or cascaded voice pipeline to a Cloudflare agents SDK Agent",
+  "description": "withVoice(Agent) \u2014 add a Syrinx realtime or cascaded voice pipeline to a Cloudflare agents SDK Agent",
   "keywords": [
     "kuralle",
     "syrinx",
@@ -34,7 +34,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -50,8 +52,28 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",
+    "@types/node": "^22.0.0",
     "agents": "0.14.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./r2-recorder": {
+        "types": "./dist/r2-recorder.d.ts",
+        "default": "./dist/r2-recorder.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

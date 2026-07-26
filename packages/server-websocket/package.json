@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/server-websocket",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Node WebSocket voice host for Syrinx — browser transport plus Twilio/Telnyx/SmartPBX telephony adapters, background audio, admission control",
+  "description": "Node WebSocket voice host for Syrinx \u2014 browser transport plus Twilio/Telnyx/SmartPBX telephony adapters, background audio, admission control",
   "keywords": [
     "voice",
     "voice-agent",
@@ -34,7 +34,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --fileParallelism=false"
+    "test": "vitest run --fileParallelism=false",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -47,5 +49,36 @@
     "@types/ws": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./edge": {
+        "types": "./dist/edge.d.ts",
+        "default": "./dist/edge.js"
+      },
+      "./edge-twilio": {
+        "types": "./dist/edge-twilio.d.ts",
+        "default": "./dist/edge-twilio.js"
+      },
+      "./edge-telnyx": {
+        "types": "./dist/edge-telnyx.d.ts",
+        "default": "./dist/edge-telnyx.js"
+      },
+      "./session-store": {
+        "types": "./dist/session-store.d.ts",
+        "default": "./dist/session-store.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

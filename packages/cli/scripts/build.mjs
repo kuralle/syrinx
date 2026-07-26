@@ -2,9 +2,14 @@
 //
 // Bundles src/index.ts into a single self-contained dist/index.js the "bin"
 // field points at, so `syrinx` runs with plain node — no ts-node/tsx, no raw
-// TS shipped as the executable (LDT-20 decision #1). The only workspace
-// dependency this CLI has is @kuralle-syrinx/core, which ships raw TypeScript
-// as its "main"; bundling is what turns that into runnable JS here.
+// TS shipped as the executable (LDT-20 decision #1). Bundling also keeps the bin
+// self-contained and fast to start. (It originally existed because core shipped
+// raw TypeScript as its "main"; core builds to dist now, so that reason is gone —
+// the self-contained bin is why it stays.)
+//
+// `./turn-runner` is a second entry: it is a LIBRARY subpath the example package
+// imports, and it must resolve to JS for the same reason the bin does. Types come
+// from tsc --emitDeclarationOnly, since esbuild emits none.
 //
 // This CLI has no provider dependencies (Deepgram/Cartesia/OpenAI/silero-vad/
 // ...) — see agent-resolve.ts's --agent seam — so there is no native addon to
@@ -23,6 +28,18 @@ await build({
   target: "node22",
   sourcemap: true,
   banner: { js: "#!/usr/bin/env node" },
+  logLevel: "info",
+});
+
+await build({
+  entryPoints: ["src/turn-runner.ts"],
+  outfile: "dist/turn-runner.js",
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node22",
+  sourcemap: true,
+  external: ["@kuralle-syrinx/*"],
   logLevel: "info",
 });
 

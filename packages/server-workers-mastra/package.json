@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/server-workers-mastra",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
   "description": "Cloudflare Workers voice host template wiring Syrinx to a Mastra reasoner",
   "keywords": [
@@ -28,7 +28,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:edge": "SYRINX_MASTRA_EDGE_TEST=1 vitest run",
-    "wrangler:dry-run": "wrangler deploy --dry-run"
+    "wrangler:dry-run": "wrangler deploy --dry-run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
@@ -41,9 +43,19 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.0",
+    "@types/node": "^22.0.0",
     "miniflare": "^4.20260601.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6",
     "wrangler": "^4.19.0"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/worker.js",
+    "types": "./dist/worker.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

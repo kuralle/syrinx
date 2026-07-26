@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/cli",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Agent-facing CLI for Syrinx — run a turn or a text exchange with deterministic, machine-readable (--json) output and exit codes. Not a console: no REPL, no chat loop, no microphone.",
+  "description": "Agent-facing CLI for Syrinx \u2014 run a turn or a text exchange with deterministic, machine-readable (--json) output and exit codes. Not a console: no REPL, no chat loop, no microphone.",
   "keywords": [
     "voice",
     "voice-agent",
@@ -35,9 +35,10 @@
     "./turn-runner": "./src/turn-runner.ts"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "node scripts/build.mjs && tsc -p tsconfig.build.json --emitDeclarationOnly"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -49,5 +50,13 @@
     "esbuild": "^0.28.1",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
+  },
+  "publishConfig": {
+    "exports": {
+      "./turn-runner": {
+        "types": "./dist/turn-runner.d.ts",
+        "default": "./dist/turn-runner.js"
+      }
+    }
   }
 }

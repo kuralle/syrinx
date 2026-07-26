@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/elevenlabs",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "ElevenLabs adapters for Syrinx — multi-context WebSocket TTS and Scribe v2 Realtime STT",
+  "description": "ElevenLabs adapters for Syrinx \u2014 multi-context WebSocket TTS and Scribe v2 Realtime STT",
   "keywords": [
     "voice",
     "voice-agent",
@@ -32,7 +32,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -41,9 +43,33 @@
     "@kuralle-syrinx/ws": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6",
     "ws": "^8.21.0"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./stt": {
+        "types": "./dist/stt.d.ts",
+        "default": "./dist/stt.js"
+      },
+      "./tts": {
+        "types": "./dist/tts.d.ts",
+        "default": "./dist/tts.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

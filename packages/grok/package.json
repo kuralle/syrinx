@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/grok",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "xAI Grok adapters for Syrinx — STT, TTS, and realtime",
+  "description": "xAI Grok adapters for Syrinx \u2014 STT, TTS, and realtime",
   "keywords": [
     "voice",
     "voice-agent",
@@ -33,7 +33,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@kuralle-syrinx/core": "workspace:*",
@@ -43,9 +45,37 @@
     "@kuralle-syrinx/ws": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6",
     "ws": "^8.21.0"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./stt": {
+        "types": "./dist/stt.d.ts",
+        "default": "./dist/stt.js"
+      },
+      "./tts": {
+        "types": "./dist/tts.d.ts",
+        "default": "./dist/tts.js"
+      },
+      "./realtime": {
+        "types": "./dist/from-grok-realtime.d.ts",
+        "default": "./dist/from-grok-realtime.js"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

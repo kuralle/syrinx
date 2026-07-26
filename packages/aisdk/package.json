@@ -1,8 +1,8 @@
 {
   "name": "@kuralle-syrinx/aisdk",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
-  "description": "Vercel AI SDK bridge for Syrinx — drive any ai@6 model or agent as the voice pipeline's reasoner, with opt-in speculative generation",
+  "description": "Vercel AI SDK bridge for Syrinx \u2014 drive any ai@6 model or agent as the voice pipeline's reasoner, with opt-in speculative generation",
   "keywords": [
     "voice",
     "voice-agent",
@@ -26,7 +26,9 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
@@ -35,7 +37,17 @@
     "zod": "^4.1.8"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

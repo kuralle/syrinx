@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/test",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": false,
   "description": "Scripted fake STT/TTS/LLM plugins for testing Syrinx voice pipelines",
   "keywords": [
@@ -28,7 +28,21 @@
     "@kuralle-syrinx/core": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.6"
-  }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ]
 }

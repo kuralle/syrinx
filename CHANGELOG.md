@@ -2,6 +2,38 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.5.0 — 2026-07-26
+
+### Fixed — packages now import on plain Node
+
+`npm i @kuralle-syrinx/core` then `import("@kuralle-syrinx/core")` failed on plain Node with
+*"Stripping types is currently unsupported for files under node_modules"*. This was the top
+open packaging defect and the first thing an evaluator hit.
+
+The diagnosis had been wrong. It was never that we ship TypeScript — `@livekit/agents` ships
+266 `.ts` files alongside its JS and imports fine. The difference is one line: their `main`
+points at `dist/index.js`; ours pointed **at** `./src/index.ts`, so Node was asked to resolve
+a `.ts` file inside `node_modules`, which it refuses to do.
+
+- Every publishable package now builds to `dist` (JS + `.d.ts`) and declares
+  `publishConfig.main/types/exports` pointing there. pnpm swaps those in at publish time, so
+  **the workspace still resolves to `src`** — no build step in the dev loop, no change to how
+  tests or typecheck run.
+- `src/` still ships alongside `dist/`, exactly as LiveKit does. Nothing resolves to it.
+- All 27 subpath exports preserved and verified (`core/audio`, `browser-client/record`,
+  `ws/node`, `ws/workers`, `server-websocket/edge`, `grok/realtime`, and the rest).
+- `@kuralle-syrinx/cli` gained a real `./turn-runner` build; it was still exporting raw TS.
+
+**Verified**: all 27 packages packed, installed into a clean project, and imported on plain
+Node — 23 of 23 library packages import cleanly. (`server-workers` imports `cloudflare:workers`
+and is Workers-only by design; `cli` is a `bin` with no root export.)
+
+### Fixed — undeclared ambient types
+
+`core` and 21 other packages used Node/web globals (`TextEncoder`, `ReadableStream`,
+`performance`) without declaring `@types/node`. `pnpm -r typecheck` passed only because test
+files happened to drag those types in; excluding tests from the build surfaced it immediately.
+
 ## 4.4.1 — 2026-07-26
 
 ### Fixed — a scaffolded project now runs out of the box
