@@ -230,6 +230,15 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
     });
   });
 
+  // `await ttsEnd` sits far below, after the whole feed loop. Anything that throws
+  // before it is reached — a plugin failing to initialize, a provider erroring —
+  // leaves this promise rejected with nothing attached, and Node reports it as an
+  // unhandled rejection with a stack trace, on top of whatever the caller already
+  // printed. Marking it handled here changes nothing for `await ttsEnd`, which
+  // still observes the rejection: `.catch()` returns a new promise rather than
+  // consuming this one. (Same defect and same fix as driveText.)
+  void ttsEnd.catch(() => {});
+
   const on = <K extends keyof VoiceAgentSessionEvents>(event: K, handler: VoiceAgentSessionEvents[K]): void => {
     session.on(event, handler);
   };
