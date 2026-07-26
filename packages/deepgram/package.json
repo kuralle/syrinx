@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/deepgram",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "private": false,
   "description": "Deepgram adapters for Syrinx \u2014 nova-3 STT, Flux turn-aware STT (semantic end-of-turn), and Aura TTS",
   "keywords": [

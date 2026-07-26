@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/pipecat-smart-turn",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "private": false,
   "description": "Pipecat Smart Turn v3 semantic endpointing for Syrinx \u2014 local ONNX end-of-turn analysis",
   "keywords": [

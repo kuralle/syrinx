@@ -49,10 +49,14 @@ the unsigned bundled fixture).
 
 ## \`tsx\` vs plain \`node\`
 
-\`--agent\` pointed at a \`.ts\` module (as in the scripts above) needs \`tsx\` — Node's built-in type
-stripping does not do TypeScript's \`.js\`-import-resolves-to-\`.ts\` remapping that this project's
-imports rely on. Built JS (after a bundler step) runs fine under plain \`node\`. Every script this
-generator wrote already invokes \`tsx\`; if you write your own, do the same for a \`.ts\` --agent target.
+As of Syrinx 4.5.0 the Syrinx packages themselves ship compiled JS, so \`node_modules\` no longer
+contains TypeScript that Node refuses to load. A **single-file** \`.ts\` agent therefore runs under
+plain \`node\` — Node strips the types of the entry file itself.
+
+The moment you split the agent across files it stops working, because TypeScript's convention is
+to import \`./greeting.js\` for a file named \`greeting.ts\`, and Node does not do that remapping:
+it looks for a literal \`greeting.js\` and fails. That is why every script here invokes \`tsx\`, and
+why you should too. Compiled JS runs under plain \`node\` either way.
 
 ## Layout
 

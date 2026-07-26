@@ -2,6 +2,17 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.5.1 — 2026-07-26
+
+### Fixed
+
+- The generated `AGENTS.md` still told you `--agent` on a `.ts` module needs `tsx` because of
+  raw TypeScript under `node_modules`. 4.5.0 removed that. Measured the new boundary rather
+  than guessing: a **single-file** `.ts` agent now runs under plain `node`; a **multi-file** one
+  does not, because TypeScript imports `./greeting.js` for `greeting.ts` and Node looks for a
+  literal `.js`. Generated scripts keep using `tsx` — correct, since you will add files — but
+  the stated reason is now the real one.
+
 ## 4.5.0 — 2026-07-26
 
 ### Fixed — packages now import on plain Node
