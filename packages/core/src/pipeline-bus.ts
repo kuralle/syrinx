@@ -82,6 +82,12 @@ export interface PipelineBusConfig {
   criticalBatchSize?: number;
   /** Called when a Background packet is dropped. For metrics emission. */
   onBackgroundDrop?: (dropped: VoicePacket) => void;
+  /**
+   * Observe how long each packet waited between push and dispatch. Diagnostic only —
+   * a handler awaiting long I/O parks the drain loop, and packet `timestampMs` is
+   * stamped at creation, so nothing downstream can otherwise see the delay.
+   */
+  onQueueDelay?: (kind: string, delayMs: number) => void;
   /** Called for every packet pushed into the bus. */
   onPacket?: (route: Route, packet: VoicePacket) => void;
 }
@@ -109,6 +115,19 @@ export class PipelineBusImpl implements PipelineBus {
   private readonly bgCapacity: number;
   private readonly criticalBatchSize: number;
   private readonly onBgDrop: ((dropped: VoicePacket) => void) | undefined;
+  /**
+   * Opt-in queue-delay observer: how long a packet waited between being pushed and
+   * being dispatched to handlers.
+   *
+   * Without this, a handler that awaits long I/O parks the drain loop and every
+   * packet behind it is delivered late — but each packet carries its OWN
+   * `timestampMs`, stamped at creation, so latency metrics derived from packet
+   * timestamps cannot see the delay at all. That blindness hid a real defect in the
+   * openai-tts plugin. Off unless a callback is supplied; the WeakMap is only
+   * written when observing, so the hot path is untouched otherwise.
+   */
+  private readonly onQueueDelay: ((kind: string, delayMs: number) => void) | undefined;
+  private readonly enqueuedAt = new WeakMap<VoicePacket, number>();
   private readonly onPacket: ((route: Route, packet: VoicePacket) => void) | undefined;
 
   constructor(config?: PipelineBusConfig) {
@@ -116,6 +135,7 @@ export class PipelineBusImpl implements PipelineBus {
     this.bgCapacity = config?.bgCapacity ?? 2048;
     this.criticalBatchSize = config?.criticalBatchSize ?? 4;
     this.onBgDrop = config?.onBackgroundDrop;
+    this.onQueueDelay = config?.onQueueDelay;
     this.onPacket = config?.onPacket;
     this.allPackets = new ReadableStream<{ route: Route; packet: VoicePacket }>({
       start: (controller) => {
@@ -158,6 +178,7 @@ export class PipelineBusImpl implements PipelineBus {
         }
         // Critical is never bounded
       }
+      if (this.onQueueDelay) this.enqueuedAt.set(p, Date.now());
       q.push(p);
       if (droppedForMetric) {
         this.enqueueBackgroundDropMetric(droppedForMetric);
@@ -307,6 +328,13 @@ export class PipelineBusImpl implements PipelineBus {
 
   /** Dispatch one packet to registered handlers. */
   private async dispatch(pkt: VoicePacket): Promise<void> {
+    if (this.onQueueDelay) {
+      const at = this.enqueuedAt.get(pkt);
+      if (at !== undefined) {
+        this.enqueuedAt.delete(pkt);
+        this.onQueueDelay(pkt.kind, Date.now() - at);
+      }
+    }
     const matches = this.handlers.get(pkt.kind);
     if (!matches || matches.size === 0) return;
 

@@ -109,6 +109,8 @@ export interface VoiceAgentSessionConfig {
     mainCapacity?: number;
     bgCapacity?: number;
     criticalBatchSize?: number;
+    /** Diagnostic: how long each packet waited between push and dispatch. */
+    onQueueDelay?: (kind: string, delayMs: number) => void;
   };
   /**
    * Maximum ms to wait for an STT final transcript after audio injection stops.

@@ -47,6 +47,20 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
   private extraBody: Record<string, unknown> | undefined;
   private disposers: Array<() => void> = [];
   private inflight = new Set<AbortController>();
+  /**
+   * Serialises synthesis without holding the bus.
+   *
+   * `synth()` reads the whole HTTP response to completion and emits `tts.audio`
+   * from inside that loop. Awaiting it directly in the `tts.text` handler parks the
+   * Main drain loop (pipeline-bus.ts: non-concurrent handlers are awaited in order),
+   * so the audio this very handler is producing queues behind the handler itself —
+   * first audio only reaches the transport once synthesis has fully finished.
+   *
+   * Registering `{ concurrent: true }` alone would fix the parking and break
+   * ordering: two sentences would synthesise in parallel and interleave their audio.
+   * So the handler returns immediately and work is chained here instead.
+   */
+  private synthQueue: Promise<void> = Promise.resolve();
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
@@ -69,10 +83,18 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
     this.extraBody = readPlainObject(config["extra_body"]);
 
     this.disposers.push(
-      bus.on("tts.text", async (pkt: unknown) => {
-        const textPkt = pkt as { text: string; contextId: string };
-        await this.synth(textPkt.text, textPkt.contextId);
-      }),
+      bus.on(
+        "tts.text",
+        (pkt: unknown) => {
+          const textPkt = pkt as { text: string; contextId: string };
+          // Chain, do not await: keeps sentence order while freeing the drain loop.
+          this.synthQueue = this.synthQueue.then(
+            () => this.synth(textPkt.text, textPkt.contextId),
+            () => this.synth(textPkt.text, textPkt.contextId),
+          );
+        },
+        { concurrent: true },
+      ),
       bus.on("interrupt.tts", () => {
         this.abortInflight();
       }),
