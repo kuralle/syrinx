@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/tts-core",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "private": false,
   "description": "Shared streaming-TTS lifecycle engine for Syrinx TTS adapters — carry, refcount, finish-timeout, cancel",
   "keywords": [

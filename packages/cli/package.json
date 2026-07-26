@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/cli",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "private": false,
   "description": "Agent-facing CLI for Syrinx — run a turn or a text exchange with deterministic, machine-readable (--json) output and exit codes. Not a console: no REPL, no chat loop, no microphone.",
   "keywords": [

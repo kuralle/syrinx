@@ -2,6 +2,74 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.4.0 — 2026-07-26
+
+Local development tooling. Before this release you could build a Syrinx agent and had no
+supported way to talk to it, watch what it did, or turn a bad turn into a test. The gap was
+a front door, not a capability: the server already sent twenty message types and the studio
+rendered five.
+
+### Added — the studio actually drives your agent
+
+- **`examples/02` `dev:server`** replaces `review:studio`, which hard-coded one demo agent.
+  Takes `--agent <module>#<export>` and passes the factory straight to
+  `createVoiceWebSocketServer`. Refuses to start on an unresolvable export, listing the
+  callable exports it found — a dev server that quietly runs a different agent than you asked
+  for is worse than one that will not boot. `SYRINX_REVIEW_PORT`/`HOST` → `SYRINX_DEV_PORT`/`HOST`.
+- **`browser-client`**: four new Node-safe subpath exports, all pure and DOM-free so a UI can
+  be rendered from a recorded fixture in CI rather than a live provider — `./record`
+  (`SessionRecord`, a bounded reducer over the message stream), `./agent-state`
+  (`idle → listening → endpointing → thinking → speaking → interrupted`, with stall detection),
+  `./turn-timeline` (per-turn latency waterfall), `./session-metrics` (nearest-rank
+  percentiles, so every number reported is a measurement that occurred), `./turn-recorder`
+  (per-turn uplink audio → WAV, bounded, with a pre-roll so the speech onset is not clipped).
+- **`apps/studio`**: text mode, connection-failure states that name the cause, microphone
+  permission/device states with specific recovery, persistent per-turn agent errors, a session
+  info panel, event log, transcript, timeline and metrics — all folded from the one record.
+- **`@kuralle-syrinx/cli`** (new): `syrinx turn --in <fixture> --agent <m>#<x>`,
+  `syrinx text`, `syrinx doctor`. `--json` is a first-class mode, exit codes are the contract,
+  never interactive, never touches a microphone. Depends on `core` and a WAV reader only —
+  the agent brings its own providers through the same `--agent` seam.
+- **`create-syrinx-agent`** (new): scaffolds a project from composable flags rather than
+  enumerated templates. Refuses incoherent combinations, warns on deploy-unverified ones, and
+  emits an `AGENTS.md` that states what a coding agent *cannot* verify.
+- **Save a turn as a fixture** from the studio — a WAV plus a sidecar carrying the capture
+  config, not just the expected transcript. `syrinx turn --in <sidecar>` replays it and exits
+  non-zero on drift. Capture in a browser, assert from a CLI.
+
+### Fixed
+
+- **`metrics` never reached the Cloudflare path.** The DO runner never wired
+  `TurnMetricsTracker`, so latency panels could not render on Workers at all. Both runtimes now
+  emit through one shared builder. Edge playout is client-paced, so `firstAudioPlayedMs` is
+  taken from the first client progress report and the `tts.end` floor stands down when a client
+  is reporting — otherwise the fix for runtime drift would have reintroduced it.
+- **The turn timeline and the metrics panel disagreed**: `textReady → firstAudioByte` was
+  labelled "Thinking" in one and "Voice (to first audio)" in the other. Thinking has finished
+  by `textReady`.
+- **`ready` parity**: Node states `audio.targetFrameDurationMs`, the Workers host does not.
+  The session-info panel now surfaces the field (as *not stated* on Cloudflare) instead of
+  omitting the row, so the drift canary can see the one divergence that exists.
+- **Load-induced test flakes.** Three genuine races fixed at the root — a fixed sleep racing a
+  mock's own delay (deepgram), two bursts racing the playout pacer (twilio), and a sleep racing
+  Node's timers-before-poll ordering (smartpbx, now proven by a protocol round-trip instead of a
+  clock). The larger cause was the runner: 26 packages × a per-package worker pool on 8 cores.
+  `workspaceConcurrency: 2` takes the full suite from 3-of-5 green to 8-of-8.
+
+### Added — turn-taking observability
+
+- The **endpointing decision is on the wire**: which owner ended the turn (`provider_stt`,
+  `smart_turn`, `timer`) and why (`end_of_speech`, `force_finalized`, `typed`), carried on the
+  existing `metrics` message and rendered as a plain-language marker. A typed turn is never
+  labelled with a speech owner — nothing endpointed it — and an unknown owner renders as
+  unknown rather than a guess.
+
+### Notes
+
+- Additive throughout. No wire-format field changed name, type or meaning.
+- `--agent` pointed at a `.ts` module needs `tsx`: Node's type stripping does not do
+  TypeScript's `.js`→`.ts` import remapping. Built JS runs under plain `node`.
+
 ## 4.3.0 — 2026-07-25
 
 ### Added — Telnyx transport on the Cloudflare Workers edge
