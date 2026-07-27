@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/elevenlabs",
-  "version": "4.6.0",
+  "version": "4.6.1",
   "private": false,
   "description": "ElevenLabs adapters for Syrinx \u2014 multi-context WebSocket TTS and Scribe v2 Realtime STT",
   "keywords": [

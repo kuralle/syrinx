@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/stt-core",
-  "version": "4.6.0",
+  "version": "4.6.1",
   "private": false,
   "description": "Shared streaming-STT lifecycle engine for Syrinx STT adapters \u2014 connection, transcript funnel, usage delta-billing",
   "keywords": [

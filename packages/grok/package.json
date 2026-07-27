@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/grok",
-  "version": "4.6.0",
+  "version": "4.6.1",
   "private": false,
   "description": "xAI Grok adapters for Syrinx \u2014 STT, TTS, and realtime",
   "keywords": [

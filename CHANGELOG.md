@@ -2,6 +2,31 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.6.1 — 2026-07-27
+
+### Fixed — a README example that could not work
+
+The `@kuralle-syrinx/test` README showed the fakes taking constructor arguments:
+
+```ts
+new FakeSTT({ script: ['…'] })      // wrong — the argument is ignored
+new FakeBridge({ reply: '…' })
+```
+
+They take **none**. Their scripts arrive through the session's `plugins` config, like
+every other plugin's `api_key`, and the real keys are `scriptedEvents` /
+`scriptedAudioBatches` / `scriptedSpeechProbabilities`. As written, the fakes would
+silently do nothing and the reader would have no idea why.
+
+I invented those arguments instead of reading the constructors — the same failure this
+repo's docs had before, now caught by checking every README example against the source.
+The corrected version is taken from a passing test (`cli/src/turn-runner.test.ts`)
+rather than written fresh.
+
+Audited the rest the same way: every imported symbol across all 12 new READMEs
+resolves, and the config keys in the Cartesia, Deepgram, recorder and S3 examples match
+what the code actually reads.
+
 ## 4.6.0 — 2026-07-27
 
 ### Added — recordings can land in any S3-compatible bucket
