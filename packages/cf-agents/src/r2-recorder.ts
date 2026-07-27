@@ -34,6 +34,12 @@ export interface R2EdgeRecorderOptions {
    * by streaming, not by retention, so any length records without OOM.
    */
   readonly maxBytesPerStream?: number;
+  /**
+   * Storage class for the written objects. Recordings are write-once and rarely
+   * read back, which is exactly what InfrequentAccess is priced for. Defaults to
+   * the bucket's own default so this is never a surprise cost change.
+   */
+  readonly storageClass?: "Standard" | "InfrequentAccess";
   /** Injectable clock (test seam). Defaults to Date.now. */
   readonly now?: () => number;
 }
@@ -44,6 +50,13 @@ const PART_SIZE_BYTES = 5 * 1024 * 1024;
 // Emit long silence gaps in small slices so a multi-minute gap never allocates its full
 // wall-clock length at once (that was the OOM).
 const SILENCE_SLICE_BYTES = 64 * 1024;
+// Ceiling on a single silence gap: 10 minutes at 48 kHz mono PCM16. A gap is derived
+// from wall clock, so a bad `startedAtMs`, a clock jump, or a resumed DO whose clock
+// moved can make it absurd — and the filler will faithfully allocate every byte. A
+// test that passed `startedAtMs: 0` against a real clock asked for the whole Unix
+// epoch in 64 KiB slices and killed the worker process. No real conversation has a
+// ten-minute gap inside one stem; anything larger is a clock fault, not audio.
+const MAX_GAP_BYTES = 10 * 60 * 48_000 * 2;
 
 /** A FIFO byte queue that hands back exact-length runs without holding the whole call. */
 class PartBuffer {
@@ -100,6 +113,7 @@ interface Stem {
   dataBytes: number; // actual audio bytes captured (for the cap)
   sampleRateHz: number;
   truncated: boolean;
+  clockSkewed?: boolean;
 }
 
 export class R2EdgeRecorder implements EdgeRecorder {
@@ -130,6 +144,31 @@ export class R2EdgeRecorder implements EdgeRecorder {
     if (this.#finalized) return;
     this.#finalized = true;
     if (this.#user.dataBytes === 0 && this.#assistant.dataBytes === 0) return;
+    try {
+      await this.#finalizeInner(meta);
+    } catch (err) {
+      // An open multipart upload is billed until R2 auto-aborts it at 7 days, so a
+      // failure part-way through finalize must not just propagate. Abort what we
+      // opened, then rethrow the original cause.
+      await this.#abortOpenUploads();
+      throw err;
+    }
+  }
+
+  /** Abort every multipart this recorder opened. Best-effort: never mask the real error. */
+  async #abortOpenUploads(): Promise<void> {
+    for (const stem of [this.#user, this.#assistant]) {
+      if (!stem.multipart || stem.uploadId === null) continue;
+      try {
+        await this.opts.bucket.resumeMultipartUpload(stem.key, stem.uploadId).abort();
+      } catch {
+        // The upload may already be gone, or the bucket unreachable. R2 auto-aborts
+        // after 7 days regardless; failing here would hide the actual failure.
+      }
+    }
+  }
+
+  async #finalizeInner(meta: { sessionId: string; closedAtMs: number }): Promise<void> {
 
     const rate = this.#user.sampleRateHz; // conversation timeline runs at the user (input) rate
 
@@ -163,7 +202,20 @@ export class R2EdgeRecorder implements EdgeRecorder {
 
     await this.opts.bucket.put(`${this.#prefix}/manifest.json`, JSON.stringify(manifest, null, 2), {
       httpMetadata: { contentType: "application/json" },
+      ...this.#storage(),
+      // Surfaced on the object so `bucket.list()` can show a recording's identity and
+      // length without fetching and parsing every manifest.
+      customMetadata: {
+        sessionId: meta.sessionId,
+        startedAtMs: String(this.opts.startedAtMs),
+        durationMs: String(Math.max(this.#describe(this.#user).durationMs, this.#describe(this.#assistant).durationMs)),
+      },
     });
+  }
+
+  /** Storage-class options, omitted entirely when unset so the bucket default applies. */
+  #storage(): { storageClass?: "Standard" | "InfrequentAccess" } {
+    return this.opts.storageClass !== undefined ? { storageClass: this.opts.storageClass } : {};
   }
 
   #emptyStem(key: string): Stem {
@@ -194,7 +246,9 @@ export class R2EdgeRecorder implements EdgeRecorder {
     // incrementally so the timeline is never materialised whole.
     const wallOffset = this.#wallOffsetBytes(sampleRateHz);
     const offsetBytes = Math.max(stem.cursorBytes, wallOffset);
-    const gap = offsetBytes - stem.cursorBytes;
+    const rawGap = offsetBytes - stem.cursorBytes;
+    const gap = Math.min(rawGap, MAX_GAP_BYTES);
+    if (rawGap > MAX_GAP_BYTES) stem.clockSkewed = true;
     if (gap > 0) this.#emitSilence(stem, gap);
     this.#emit(stem, audio.slice());
     stem.cursorBytes = offsetBytes + audio.byteLength;
@@ -248,6 +302,7 @@ export class R2EdgeRecorder implements EdgeRecorder {
     if (!stem.multipart) {
       const mono = stem.buf.drain();
       await this.opts.bucket.put(stem.key, pcm16ToWav(mono, stem.sampleRateHz, 1), {
+        ...this.#storage(),
         httpMetadata: { contentType: "audio/wav" },
       });
       return mono;
@@ -272,6 +327,7 @@ export class R2EdgeRecorder implements EdgeRecorder {
         : resamplePcm16(assistantMono, this.#assistant.sampleRateHz, rate);
     const stereo = interleaveStereoPcm16(userPcm, assistantPcm);
     await this.opts.bucket.put(`${this.#prefix}/conversation.wav`, pcm16ToWav(stereo, rate, 2), {
+      ...this.#storage(),
       httpMetadata: { contentType: "audio/wav" },
     });
     return {
@@ -300,6 +356,9 @@ export class R2EdgeRecorder implements EdgeRecorder {
       byteLength: stem.cursorBytes,
       durationMs: stem.sampleRateHz > 0 ? Math.round((stem.cursorBytes / 2 / stem.sampleRateHz) * 1000) : 0,
       truncated: stem.truncated,
+      // Surfaced rather than silently swallowed: a capped gap means this stem's
+      // timeline is shorter than wall clock claims, so alignment cannot be trusted.
+      ...(stem.clockSkewed === true ? { clockSkewed: true } : {}),
     };
   }
 }

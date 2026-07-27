@@ -13,10 +13,12 @@ interface MpuRec {
   parts: { partNumber: number; size: number }[];
   first?: Uint8Array; // retained bytes of part 1 (the header-bearing part)
   completed: boolean;
+  aborted?: boolean;
 }
 
 function fakeBucket() {
   const puts: PutCall[] = [];
+  const putOpts: (Record<string, unknown> | undefined)[] = [];
   const mpus = new Map<string, MpuRec>();
   let seq = 0;
 
@@ -35,19 +37,20 @@ function fakeBucket() {
         return { key: rec.key } as unknown;
       },
       async abort() {
-        /* no-op */
+        rec.aborted = true;
       },
     };
   }
 
   const bucket = {
-    async put(key: string, body: Uint8Array | string) {
+    async put(key: string, body: Uint8Array | string, opts?: Record<string, unknown>) {
       puts.push({ key, body: typeof body === "string" ? body : body.slice() });
+      putOpts.push(opts);
       return {} as unknown;
     },
     async createMultipartUpload(key: string) {
       const uploadId = `u${++seq}`;
-      mpus.set(uploadId, { key, parts: [], completed: false });
+      mpus.set(uploadId, { key, parts: [], completed: false, aborted: false });
       return handle(uploadId);
     },
     resumeMultipartUpload(_key: string, uploadId: string) {
@@ -55,7 +58,7 @@ function fakeBucket() {
     },
   } as unknown as R2Bucket;
 
-  return { bucket, puts, mpus };
+  return { bucket, puts, mpus, putOpts };
 }
 
 function asString(body: Uint8Array | string): string {
@@ -181,5 +184,66 @@ describe("R2EdgeRecorder", () => {
     expect(manifest.user.truncated).toBe(false);
     expect(manifest.conversation.omitted).toBe(true);
     expect(puts.some((p) => p.key.endsWith("conversation.wav"))).toBe(false);
+  });
+});
+
+describe("R2EdgeRecorder — failure handling", () => {
+  it("aborts an open multipart when finalize fails, instead of leaking it", async () => {
+    // An abandoned multipart is billed until R2 auto-aborts it at 7 days, so a
+    // mid-finalize failure must not simply propagate.
+    const { bucket, mpus } = fakeBucket();
+    const failing = {
+      ...bucket,
+      async put() {
+        throw new Error("bucket unavailable");
+      },
+    } as unknown as R2Bucket;
+
+    const rec = new R2EdgeRecorder({ bucket: failing, sessionId: "s1", startedAtMs: 0, now: () => 0 });
+    // Enough audio to cross the 5 MiB threshold and open a real multipart.
+    const chunk = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < 8; i += 1) rec.onUserAudio("c", chunk, 16000);
+
+    await expect(rec.finalize({ sessionId: "s1", closedAtMs: 1000 })).rejects.toThrow(/bucket unavailable/);
+    const opened = [...mpus.values()];
+    expect(opened.length).toBeGreaterThan(0);
+    expect(opened.every((m) => m.aborted === true || m.completed)).toBe(true);
+  });
+
+  it("passes the storage class through when set, and omits it when not", async () => {
+    const a = fakeBucket();
+    const withClass = new R2EdgeRecorder({
+      bucket: a.bucket, sessionId: "s", startedAtMs: 0, now: () => 0, storageClass: "InfrequentAccess",
+    });
+    withClass.onUserAudio("c", new Uint8Array(320), 16000);
+    await withClass.finalize({ sessionId: "s", closedAtMs: 1 });
+    expect(a.putOpts.some((o) => o?.["storageClass"] === "InfrequentAccess")).toBe(true);
+
+    const b = fakeBucket();
+    const rec = new R2EdgeRecorder({ bucket: b.bucket, sessionId: "s", startedAtMs: 0, now: () => 0 });
+    rec.onUserAudio("c", new Uint8Array(320), 16000);
+    await rec.finalize({ sessionId: "s", closedAtMs: 1 });
+    // Unset must not send the field at all — the bucket default should win rather
+    // than being silently overridden with "Standard".
+    expect(b.putOpts.some((o) => o && "storageClass" in o)).toBe(false);
+  });
+});
+
+describe("R2EdgeRecorder — clock faults", () => {
+  it("caps an absurd wall-clock gap instead of allocating it", async () => {
+    // startedAtMs far in the past against a live-ish clock: the derived gap is the
+    // whole interval. Unbounded, the silence filler allocates every byte of it —
+    // this exact shape killed a worker process.
+    const { bucket, puts } = fakeBucket();
+    const rec = new R2EdgeRecorder({
+      bucket, sessionId: "skew", startedAtMs: 0, now: () => 1_700_000_000_000,
+    });
+    rec.onUserAudio("c", new Uint8Array(320), 16000);
+    await rec.finalize({ sessionId: "skew", closedAtMs: 1_700_000_000_100 });
+
+    const manifest = puts.find((p) => p.key.endsWith("manifest.json"));
+    expect(manifest).toBeDefined();
+    const parsed = JSON.parse(asString(manifest!.body)) as { user: { clockSkewed?: boolean } };
+    expect(parsed.user.clockSkewed).toBe(true);
   });
 });
