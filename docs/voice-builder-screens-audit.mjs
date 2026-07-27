@@ -114,6 +114,20 @@ const after = await page.locator("#allowedOut").innerText();
 rec("R03 build-screen tool toggle still works (double-bind regression)",
   before !== after && after.includes("create_draft"));
 
+// ---- P: prompt sections and tool references (2nd walkthrough findings) ----
+await page.click('.rail-item[data-panel="instructions"]');
+await page.waitForTimeout(120);
+const sectionTitles = await page.locator('[data-panel="instructions"] .prompt-title').allInnerTexts();
+rec("P01 default sections match the convergent observed structure",
+  JSON.stringify(sectionTitles) === JSON.stringify(["Identity", "Voice & persona", "Language", "Task flow", "Hard rules"]),
+  sectionTitles.join(" / "));
+rec("P02 tool mentions render as bound references, not plain text",
+  (await page.locator('[data-panel="instructions"] .prompt-text .tref').count()) >= 2);
+rec("P03 a dangling tool reference is surfaced, not silent",
+  (await page.locator(".tref-broken").count()) === 1);
+rec("P04 broken reference raises the section's rail state",
+  (await page.getAttribute('.rail-item[data-panel="instructions"] .state', "class")).includes("state-warn"));
+
 await page.click('.tab[data-screen="calls"]');
 await page.waitForTimeout(300);
 const wavePx = await canvasDrew("#wave");

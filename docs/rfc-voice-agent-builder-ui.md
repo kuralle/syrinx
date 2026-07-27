@@ -55,6 +55,56 @@ it explicit.
 
 ---
 
+## 1a. Second walkthrough — what independent observation confirmed and changed
+
+A third recording (a separate builder, working alone, building a telecom support agent)
+was reviewed on 2026-07-27. Its value is that the overlaps are now **convergent evidence
+from two independent users**, not one reviewer's habits.
+
+**Confirmed, unchanged:** guardrails as name + description (`no-PII` → *"never collect
+payment details, account number, or payment card details over the phone"*); welcome
+message with an interrupt toggle; voice picker with preview; pronunciation overrides
+(*"GIF" vs "gif"*); key terms for product names; language auto vs pinned; speaking speed;
+draft → publish; conversation history with transcript, recording and tool calls, valued
+explicitly *"so you can make debugging so much easier"*; the connector catalogue; web
+search restricted to named domains; X search from named handles; number import from
+Twilio; SDK export in TypeScript, Python and Go.
+
+Two things changed the design.
+
+### 1a.1 The prompt sections converge on a different default
+
+Both builders independently structured the prompt as: **identity → how it should sound →
+task flow → hard rules.** The second added an explicit persona block (*"calm, warm and
+unhurried — like someone who has handled this exact call two hundred times a day"*) and a
+language block (*"start replies with yeah, okay, right"*, *"always use contractions"*).
+
+My original default sections — Greeting / Resolve / Wrap up — describe only the task flow,
+which is one of four things people actually write. **Default sections are now Identity,
+Voice & persona, Language, Task flow, Hard rules.** Defaults are the highest-leverage
+control in an authoring UI; most agents will ship close to whatever we seed.
+
+### 1a.2 Tool names are typed twice, and drift silently
+
+The clearest defect in the observed product. The builder said it twice while working:
+*"just to make it the same name as I put it inside the prompt"*, and again
+*"just to match it again the name exactly the same as the prompt."*
+
+The prompt references a tool by a **string the user retypes**. Rename the tool and the
+prompt still names the old one — the agent simply stops calling it, mid-call, with no
+error anywhere. It is a recall burden that produces a silent production failure.
+
+**Requirement:** a tool mention in the prompt is a **reference bound to the tool**, not
+text. Renaming rewrites every mention; a dangling reference is surfaced on the section and
+blocks publish. This is cheap for us and materially better than what was observed.
+
+### 1a.3 One more piece of evidence for the allow-list decision
+
+Connecting Google Calendar took one click and *"I'll just select all."* Three seconds, no
+reading. That is the observed default path, and it grants everything. It does not weaken
+§1.2 — it is the reason for it. The safe option has to also be the easy one, which is why
+tools arrive off and the allow-list is written out where a person can read it.
+
 ## 2. Information architecture
 
 ```

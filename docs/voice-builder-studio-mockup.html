@@ -971,6 +971,25 @@
     white-space: pre-wrap;
   }
 
+  /* A tool reference is bound to the tool, not typed as text — renaming the tool
+     rewrites every mention, and a dangling reference is caught before publish. */
+  .tref {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 1px 6px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--border);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  .tref-broken {
+    background: var(--crit-bg);
+    color: var(--crit);
+    box-shadow: inset 0 0 0 1px var(--crit);
+  }
+
   .compiled {
     margin-top: 12px;
     border: 1px dashed var(--border-strong);
@@ -2205,7 +2224,7 @@
           <span class="state state-done">✓</span><span>Identity</span><span></span>
         </button>
         <button class="rail-item" aria-current="true" data-panel="instructions">
-          <span class="state state-done">✓</span><span>Instructions</span><span class="rail-count">3</span>
+          <span class="state state-warn">!</span><span>Instructions</span><span class="rail-count">5</span>
         </button>
         <button class="rail-item" data-panel="voice">
           <span class="state state-done">✓</span><span>Voice &amp; speech</span><span></span>
@@ -2279,38 +2298,64 @@
           <div class="panel" data-panel="instructions">
             <div class="panel-head">
               <h2>Instructions</h2>
-              <p>Written as ordered sections, not one block of prose. Sections compile to a single
-                <code class="mono">instructions</code> string — and you can read exactly what gets sent.</p>
+              <p>Ordered sections, not one block of prose. The five below are the default because two
+                independent builders, working separately, arrived at the same shape — identity, then how
+                it sounds, then what it does, then what it must not do.</p>
             </div>
 
             <div class="card prompt-block">
               <div class="prompt-head">
                 <span class="grip" aria-hidden="true">⠿</span>
-                <span class="prompt-title">Greeting</span>
-                <span class="spacer" style="margin-left:auto"></span>
-                <button class="btn btn-sm btn-ghost">Edit</button>
-              </div>
-              <div class="prompt-text">Welcome the caller by name if you have it. Ask for their order number before anything else — you cannot look up a booking without it.</div>
-            </div>
-
-            <div class="card prompt-block">
-              <div class="prompt-head">
-                <span class="grip" aria-hidden="true">⠿</span>
-                <span class="prompt-title">Resolve</span>
+                <span class="prompt-title">Identity</span>
                 <span style="margin-left:auto"></span>
                 <button class="btn btn-sm btn-ghost">Edit</button>
               </div>
-              <div class="prompt-text">Look up the booking and fix the issue on the call. If you need to reschedule, offer two concrete times rather than asking what works.</div>
+              <div class="prompt-text">You are Remy, a customer support specialist on the phone line for Nimbus Mobile, a mobile and home broadband provider. You help existing customers with plan questions, billing, coverage and connection problems.</div>
             </div>
 
             <div class="card prompt-block">
               <div class="prompt-head">
                 <span class="grip" aria-hidden="true">⠿</span>
-                <span class="prompt-title">Wrap up</span>
+                <span class="prompt-title">Voice &amp; persona</span>
                 <span style="margin-left:auto"></span>
                 <button class="btn btn-sm btn-ghost">Edit</button>
               </div>
-              <div class="prompt-text">Recap what changed in one sentence and confirm the caller is happy before ending.</div>
+              <div class="prompt-text">Calm, warm and unhurried — like someone who has handled this exact call two hundred times a day and still sounds glad to help. If the caller is frustrated, slow down. If they are cheerful, lift slightly.</div>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Language</span>
+                <span style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">Open replies with “yeah”, “okay”, “right” or “so”. Always use contractions. Say “let me just check that” before looking something up.</div>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Task flow</span>
+                <span style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">1. Greet warmly and ask how you can help.
+2. Let them explain fully before doing anything.
+3. Echo the issue back in one plain sentence.
+4. Answer from the knowledge base. Try the quick fixes first.
+5. If someone must attend, offer a visit and call <span class="tref">book_appointment</span>.
+6. Anything outside that, call <span class="tref">transfer_to_human</span>.</div>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Hard rules</span>
+                <span style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">Only answer billing, coverage and troubleshooting questions. If the answer is not in the knowledge base, do not guess — book a visit or transfer.</div>
             </div>
 
             <div style="display:flex;gap:8px;margin-top:12px">
@@ -2318,26 +2363,60 @@
               <button class="btn btn-sm">Draft with AI</button>
             </div>
 
+            <div class="card" style="margin-top:12px">
+              <div class="card-head">
+                <h3>Tool references</h3>
+                <span class="spacer"></span>
+                <span class="chip chip-crit"><span class="dot"></span> 1 broken</span>
+              </div>
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+                <div class="sim-row">
+                  <span class="state state-done">✓</span>
+                  <span><span class="tref">book_appointment</span> → Google Calendar</span>
+                  <span class="mono" style="color:var(--ink-3)">Task flow</span>
+                </div>
+                <div class="sim-row">
+                  <span class="state state-done">✓</span>
+                  <span><span class="tref">transfer_to_human</span> → +1 (415) 555-0140</span>
+                  <span class="mono" style="color:var(--ink-3)">Task flow</span>
+                </div>
+                <div class="sim-row">
+                  <span class="state state-warn">!</span>
+                  <span><span class="tref tref-broken">check_coverage</span> no longer exists — you renamed it to <span class="tref">coverage_lookup</span></span>
+                  <span><button class="btn btn-sm">Fix</button></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="note" style="margin-top:12px">
+              <span class="dot" style="margin-top:6px"></span>
+              <div><b>Tool names are references, not typed text.</b> Both observed builders kept prompt
+                and tool names in sync by hand — “just to make it the same name as I put it inside the
+                prompt”. Rename a tool there and the agent quietly stops calling it, mid-call, with no
+                error. Here a rename rewrites every mention, and a dangling one blocks publish.</div>
+            </div>
+
             <details class="compiled">
               <summary>View compiled prompt — 1,204 characters</summary>
-<pre>## Greeting
-Welcome the caller by name if you have it. Ask for their
-order number before anything else — you cannot look up a
-booking without it.
+<pre>## Identity
+You are Remy, a customer support specialist on the phone
+line for Nimbus Mobile…
 
-## Resolve
-Look up the booking and fix the issue on the call. …
+## Task flow
+5. If someone must attend, offer a visit and call
+   book_appointment.
+6. Anything outside that, call transfer_to_human.
 
 ## Constraints
-- Do not let a caller cancel an appointment without first
-  confirming their email matches the booking.
-- Never read a stored card number back to the caller.</pre>
+- Never collect payment card details or account numbers
+  over the phone.
+- Do not let a caller cancel without confirming their email.</pre>
             </details>
 
             <div class="note note-ok" style="margin-top:12px">
               <span class="dot" style="margin-top:6px"></span>
-              <div><b>Guardrails appear here, at the tail.</b> Placement is not cosmetic — it is what
-                Phase&nbsp;0 measures. Until that experiment reports, this section is where they land.</div>
+              <div><b>Guardrails compile to the tail.</b> Placement is not cosmetic — it is what
+                Phase&nbsp;0 measures. Until that experiment reports, this is where they land.</div>
             </div>
           </div>
 
@@ -2591,11 +2670,42 @@ Look up the booking and fix the issue on the call. …
               </div>
             </div>
 
+            <div class="card">
+              <div class="card-head"><h3>Built-in tools</h3></div>
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="transfer_to_human"></button>
+                  <div>
+                    <div class="tool-name">transfer_to_human</div>
+                    <div class="tool-desc">Hand the call to a person. Target: <span class="mono">+1 (415) 555-0140</span></div>
+                  </div>
+                  <span></span>
+                </div>
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="web_search"></button>
+                  <div>
+                    <div class="tool-name">web_search</div>
+                    <div class="tool-desc">Restricted to <span class="mono">nimbusmobile.com</span> · image reading off — it adds latency to every call that uses it</div>
+                  </div>
+                  <span></span>
+                </div>
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="false" aria-label="x_search"></button>
+                  <div>
+                    <div class="tool-name">x_search</div>
+                    <div class="tool-desc">Search posts on X, from anyone or from named accounts</div>
+                  </div>
+                  <span></span>
+                </div>
+              </div>
+            </div>
+
             <div class="note" style="margin-top:12px">
               <span class="dot" style="margin-top:6px"></span>
-              <div><b>Why it is always written out.</b> Omitting this array grants every tool the
-                server exposes — including ones the provider adds next month. A live agent must not
-                gain abilities while nobody is looking.</div>
+              <div><b>Why the allow-list is always written out.</b> Omitting it grants every tool the
+                server exposes, including ones the provider adds next month. The observed default path
+                is worse than that: connecting an account took one click and “I'll just select all”,
+                three seconds, no reading. The safe thing has to be the easy thing.</div>
             </div>
           </div>
 
