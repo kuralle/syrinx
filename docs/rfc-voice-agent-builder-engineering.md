@@ -1,7 +1,9 @@
 # Voice Agent Builder — engineering plan
 
 Status: **Draft — sizing, not committed**
-Companion to [rfc-voice-agent-builder.md](./rfc-voice-agent-builder.md).
+Companions: [rfc-voice-agent-builder.md](./rfc-voice-agent-builder.md) (requirements) ·
+[rfc-voice-agent-builder-ui.md](./rfc-voice-agent-builder-ui.md) (screens and field-level
+UI spec — Phases 2, 4 and 7 render there).
 Date: 2026-07-27
 
 ---
@@ -52,8 +54,12 @@ The reviewer's claim — the same instruction is followed as a guardrail and ign
 the prompt — is the single most load-bearing observation in the RFC. Design work that
 assumes it, without testing it, is speculation.
 
-- Build a minimal harness: one S2S front, one instruction, three placements (prompt
-  body, system-channel append, post-generation validator).
+- Build a minimal harness: one S2S front, one instruction, four placements — prompt
+  body (buried mid-prompt), prompt *tail* in an imperative block, a per-response
+  instruction re-asserted each turn, and a post-generation validator.
+  These four, and not a "separate system channel", because the published xAI session
+  schema has no guardrail or system-channel field — `instructions` and per-response
+  instructions are the only surfaces that exist (RFC §3).
 - Use the observed case: *"do not let a caller cancel an appointment without first
   confirming their email matches."*
 - Run N trials per placement with adversarial callers; count violations.

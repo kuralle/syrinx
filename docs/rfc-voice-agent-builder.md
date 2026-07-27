@@ -4,7 +4,12 @@ Status: **Draft — ready for scoping**
 Date: 2026-07-27
 Source: teardown of xAI's Voice platform (`x.ai/voice`) and the Grok voice-in-browser
 pattern, from two recorded walkthroughs. Every capability below was **observed on
-video**, not inferred from marketing.
+video**, not inferred from marketing. Field-level detail was subsequently verified
+against xAI's published session schema (2026-07-27) — see §3 and the UI spec.
+
+Companions: [rfc-voice-agent-builder-engineering.md](./rfc-voice-agent-builder-engineering.md)
+(sequencing) · [rfc-voice-agent-builder-ui.md](./rfc-voice-agent-builder-ui.md) (screens
+and field-level UI spec).
 
 ---
 
@@ -68,7 +73,7 @@ it today.
 | **Agent as stored data**, not code | Syrinx agents are TypeScript factories. A builder needs a persisted, versioned config document. |
 | **Conversational builder** — describe the use case, it reads your website, drafts prompt + blueprint | No equivalent. |
 | **Connector catalogue with OAuth** — Google Calendar, Gmail, Drive, Outlook, Outlook Calendar, SharePoint, OneDrive, GitHub, Calendly, Figma, HubSpot, Linear, Notion, Stripe | No OAuth broker, no catalogue. |
-| **Per-tool toggles inside a connector** | Not modelled. Reviewer enabled only `send message` on Gmail — *"just for security and also to reduce the chance of an error with the agent."* |
+| **Per-tool toggles inside a connector** | Not modelled. Reviewer enabled only `send message` on Gmail — *"just for security and also to reduce the chance of an error with the agent."* This maps to `allowed_tools` on an `mcp` tool, where **omitting the array grants every tool the server exposes** — so our UI must always write it explicitly and default each tool off. |
 | **Guardrails as a first-class object** (name + description), separate from the prompt | Not modelled. See §3 — this one is load-bearing. |
 | **Knowledge-base upload → collection** | RAG exists; upload/ingest UX does not. |
 | **Speech settings**: voice picker, speaking rate, pronunciation overrides, key terms | `keyterms` exists in STT reconfigure; the rest is unexposed. |
@@ -89,9 +94,16 @@ The reviewer reports, about a speech-to-speech agent:
 > guardrail, it did follow them. Keep that in mind."
 
 That is a claim about **instruction adherence under S2S**, and it has a design
-consequence: guardrails cannot be prompt concatenation. If they were, the observed
-behaviour would be identical. Whatever xAI does, it is enforced at a different layer —
-plausibly a separate system channel, a post-generation check, or a constrained decode.
+consequence: guardrails cannot be naive prompt concatenation. If they were, the observed
+behaviour would be identical.
+
+**What the API schema tells us (verified 2026-07-27).** xAI's published Speech-to-Speech
+session config exposes only `instructions`, `reasoning.effort`, `voice`, `tools`,
+`turn_detection.*`, `resumption.enabled`, `audio.*` and `replace`. **There is no
+guardrail parameter.** So whatever the console does, it happens *above* the API — either
+a privileged position or format inside `instructions`, or a console-side check outside
+the model. This does not weaken the finding; it narrows the search space to something we
+can test directly, since `instructions` is the only surface the public API offers.
 
 **Requirement:** guardrails are a distinct, separately-enforced construct with their
 own storage and their own evaluation point — not appended prompt text.
