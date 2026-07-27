@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/mastra",
-  "version": "4.6.1",
+  "version": "4.6.2",
   "private": false,
   "description": "Mastra agent bridge for Syrinx \u2014 run a Mastra Agent as the voice pipeline's reasoner",
   "keywords": [

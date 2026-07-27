@@ -2,6 +2,21 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.6.2 — 2026-07-27
+
+### Fixed — stop presenting the internal fakes as the way to test an agent
+
+`@kuralle-syrinx/test` is the scripted fake set Syrinx uses on **its own** unit
+tests. Its README (added in 4.6.0) read as a general recommendation, which it is not:
+the fakes prove wiring — a turn advances, an interruption is handled, an error does
+not kill the session — and cannot tell you whether your agent understood the caller,
+because the transcript is one you wrote.
+
+The README now says what the package is for and points at the real path: capture a
+fixture in the Studio, replay it with `syrinx turn`, which runs your actual pipeline
+against real providers and fails on transcript drift. The Testing reference page
+carries the same steer.
+
 ## 4.6.1 — 2026-07-27
 
 ### Fixed — a README example that could not work

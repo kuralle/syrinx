@@ -1,40 +1,44 @@
 # @kuralle-syrinx/test
 
-Scripted fakes for testing for [Syrinx](https://github.com/kuralle/syrinx).
+Scripted fake plugins used by **Syrinx's own unit tests**.
 
 > Scripted fake STT/TTS/LLM plugins for testing Syrinx voice pipelines
 
+## This is internal tooling, not the way to test your agent
+
+These fakes exist so the engine's own test suite can assert turn-taking,
+interruption and error handling deterministically, without a provider. They are
+published because the workspace depends on them across package boundaries — not
+because they are a supported way to test an agent you are building.
+
+If you are testing your own voice agent, use fixtures instead. That path is real,
+end-to-end, and asserts the thing you actually care about:
+
 ```bash
-npm install @kuralle-syrinx/test
+# 1. Talk to your agent in the Studio, then "Save as fixture" on the turn.
+#    You get a WAV plus a sidecar carrying the expected transcript AND the
+#    capture config (sample rate, encoding) — a fixture without its config
+#    silently misleads on replay.
+
+# 2. Replay it. Exits non-zero when the transcript drifts.
+syrinx turn --in ./fixtures/my-turn.json --agent ./src/agent.ts#createAgent --json
 ```
 
-Deterministic fake plugins so a voice pipeline can be tested without calling a
-provider — no keys, no network, no per-run cost, and the same answer every time.
+That runs your real pipeline against real providers and compares against a
+transcript a real caller produced — which a scripted fake, by construction, cannot
+tell you anything about.
 
-```ts
-import { FakeSTT, FakeTTS, FakeBridge, FakeVAD } from '@kuralle-syrinx/test';
+See [Recording a call](https://syrinx.asyncdot.com/reference/recording/) and
+[Testing an agent](https://syrinx.asyncdot.com/reference/testing/).
 
-// The fakes take NO constructor arguments — their scripts come through the session's
-// `plugins` config, exactly like a real plugin's api_key does.
-const session = new VoiceAgentSession({
-  plugins: {
-    stt: { scriptedEvents: [{ kind: 'final', text: 'what is the deadline?', confidence: 0.99, ts: Date.now() }] },
-    bridge: { scriptedEvents: [{ kind: 'text', delta: 'March first.' }, { kind: 'done' }] },
-    tts: { scriptedAudioBatches: [{ frame: pcmFrame, final: true }] },
-  },
-  sttForceFinalizeTimeoutMs: 0,
-});
+## What is in here
 
-session.registerPlugin('stt', new FakeSTT());
-session.registerPlugin('bridge', new FakeBridge());
-session.registerPlugin('tts', new FakeTTS());
-```
+`FakeSTT`, `FakeTTS`, `FakeBridge`, `FakeVAD` — each a `VoicePlugin` whose script
+arrives through the session's `plugins` config (`scriptedEvents`,
+`scriptedAudioBatches`, `scriptedSpeechProbabilities`), like any other plugin's
+config. They take no constructor arguments.
 
-`FakeVAD` additionally exposes `processFrame(contextId)` so a test drives speech
-detection deliberately instead of waiting on real audio energy.
-
-Use these to assert turn-taking, interruption and error handling — the behaviours that
-are hard to trigger reliably against a live provider and expensive to retry.
+Read `packages/cli/src/turn-runner.test.ts` in the repository for a working wiring.
 
 ## License
 
