@@ -1,0 +1,3335 @@
+<title>Syrinx Studio — Voice Agent Builder</title>
+
+<style>
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    --bg: #ffffff;
+    --surface: #fafafa;
+    --surface-2: #f4f4f5;
+    --border: #e6e6e6;
+    --border-strong: #d4d4d8;
+    --ink: #0f0f10;
+    --ink-2: #52525b;
+    --ink-3: #8a8a93;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --warn: #b45309;
+    --warn-bg: #fffbeb;
+    --crit: #dc2626;
+    --crit-bg: #fef2f2;
+    --focus: #0f0f10;
+
+    --r-sm: 6px;
+    --r-md: 10px;
+    --r-lg: 12px;
+    --topbar-h: 52px;
+    --tabs-h: 41px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0b;
+      --surface: #121214;
+      --surface-2: #1a1a1d;
+      --border: #26262a;
+      --border-strong: #35353b;
+      --ink: #f4f4f5;
+      --ink-2: #a1a1aa;
+      --ink-3: #71717a;
+      --ok: #4ade80;
+      --ok-bg: #0d2818;
+      --warn: #fbbf24;
+      --warn-bg: #2a1f07;
+      --crit: #f87171;
+      --crit-bg: #2a1010;
+      --focus: #f4f4f5;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0a0a0b;
+    --surface: #121214;
+    --surface-2: #1a1a1d;
+    --border: #26262a;
+    --border-strong: #35353b;
+    --ink: #f4f4f5;
+    --ink-2: #a1a1aa;
+    --ink-3: #71717a;
+    --ok: #4ade80;
+    --ok-bg: #0d2818;
+    --warn: #fbbf24;
+    --warn-bg: #2a1f07;
+    --crit: #f87171;
+    --crit-bg: #2a1010;
+    --focus: #f4f4f5;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --surface: #fafafa;
+    --surface-2: #f4f4f5;
+    --border: #e6e6e6;
+    --border-strong: #d4d4d8;
+    --ink: #0f0f10;
+    --ink-2: #52525b;
+    --ink-3: #8a8a93;
+    --ok: #15803d;
+    --ok-bg: #f0fdf4;
+    --warn: #b45309;
+    --warn-bg: #fffbeb;
+    --crit: #dc2626;
+    --crit-bg: #fef2f2;
+    --focus: #0f0f10;
+  }
+
+  /* Class rules like .tabs{display:flex} out-specify the UA [hidden] rule, so
+     toggling .hidden in JS would silently do nothing without this. */
+  [hidden] {
+    display: none !important;
+  }
+
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 198px minmax(0, 1fr);
+    height: 100dvh;
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* ---------- workspace nav ---------- */
+
+  .sidenav {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 10px;
+    overflow-y: auto;
+  }
+
+  .sidenav-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 14px;
+    font-weight: 590;
+    letter-spacing: -0.01em;
+  }
+
+  .nav-item {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .nav-item:hover {
+    background: var(--surface-2);
+  }
+
+  .nav-item[aria-current="true"] {
+    background: var(--bg);
+    color: var(--ink);
+    font-weight: 510;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .nav-item svg {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .nav-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--crit);
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :root[data-theme="dark"] .nav-badge,
+  :root:not([data-theme="light"]) .nav-badge {
+    color: var(--bg);
+  }
+
+  .nav-sep {
+    height: 1px;
+    background: var(--border);
+    margin: 9px 4px;
+  }
+
+  .nav-foot {
+    margin-top: auto;
+    padding: 10px 8px 2px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--ink-3);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  /* ---------- dashboard ---------- */
+
+  .home-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 28px 64px;
+  }
+
+  .verdict {
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    padding: 15px 16px;
+    border-radius: var(--r-lg);
+    margin-bottom: 14px;
+  }
+
+  .verdict-crit {
+    background: var(--crit-bg);
+    color: var(--crit);
+  }
+
+  .verdict-ok {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+
+  .verdict h2 {
+    margin: 0 0 2px;
+    font-size: 16px;
+    font-weight: 590;
+    letter-spacing: -0.02em;
+  }
+
+  .verdict p {
+    margin: 0;
+    font-size: 12.5px;
+    opacity: 0.85;
+  }
+
+  .att {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 14px;
+  }
+
+  .att + .att {
+    border-top: 1px solid var(--border);
+  }
+
+  .att-title {
+    font-weight: 510;
+  }
+
+  .att-sub {
+    font-size: 12px;
+    color: var(--ink-2);
+    margin-top: 1px;
+  }
+
+  .sev {
+    width: 3px;
+    height: 30px;
+    border-radius: 2px;
+    background: var(--ink-3);
+  }
+
+  .sev-crit { background: var(--crit); }
+  .sev-warn { background: var(--warn); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .stat {
+    padding: 13px 14px;
+  }
+
+  .stat-val {
+    font-size: 21px;
+    font-weight: 590;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    margin: 3px 0 1px;
+  }
+
+  .stat-sub {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .spark {
+    width: 100%;
+    height: 30px;
+    display: block;
+    margin-top: 7px;
+  }
+
+  /* ---------- agents list ---------- */
+
+  .agents-wrap {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 24px 28px 64px;
+  }
+
+  .page-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .page-head h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 590;
+    letter-spacing: -0.025em;
+  }
+
+  .arow {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) 84px 148px 66px 104px auto;
+    gap: 14px;
+    align-items: center;
+    padding: 12px 14px;
+    text-align: left;
+    width: 100%;
+    font: inherit;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .arow:hover {
+    background: var(--surface);
+  }
+
+  .arow + .arow {
+    border-top: 1px solid var(--border);
+  }
+
+  .arow-head {
+    background: var(--surface);
+    cursor: default;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .arow-head:hover {
+    background: var(--surface);
+  }
+
+  .arow-name {
+    font-weight: 590;
+    letter-spacing: -0.01em;
+  }
+
+  .arow-sub {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    margin-top: 1px;
+  }
+
+  .presets {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+    gap: 12px;
+  }
+
+  .preset {
+    text-align: left;
+    font: inherit;
+    padding: 15px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .preset:hover {
+    border-color: var(--border-strong);
+    background: var(--surface);
+  }
+
+  .preset b {
+    display: block;
+    font-weight: 590;
+    letter-spacing: -0.01em;
+    margin-bottom: 3px;
+  }
+
+  .preset span {
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+
+  /* ---------- connectors ---------- */
+
+  .conn-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 28px 64px;
+  }
+
+  .conn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
+    gap: 12px;
+  }
+
+  .conn {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+  }
+
+  .conn-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .conn-logo {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: var(--surface-2);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+
+  .conn-name {
+    font-weight: 590;
+    letter-spacing: -0.01em;
+  }
+
+  .conn-meta {
+    font-size: 11.5px;
+    color: var(--ink-3);
+  }
+
+  .conn-foot {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .conn-expired {
+    box-shadow: inset 0 0 0 1px var(--crit);
+  }
+
+  /* ---------- oauth dialog ---------- */
+
+  .steps {
+    display: flex;
+    gap: 5px;
+    padding: 12px 16px 0;
+  }
+
+  .step {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--surface-2);
+  }
+
+  .step[data-on="1"] {
+    background: var(--ink);
+  }
+
+  .scope {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 9px 0;
+    font-size: 12.5px;
+  }
+
+  .scope + .scope {
+    border-top: 1px solid var(--border);
+  }
+
+  .scope svg {
+    width: 14px;
+    height: 14px;
+    margin-top: 2px;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .handoff {
+    display: grid;
+    place-items: center;
+    gap: 12px;
+    padding: 30px 0;
+    text-align: center;
+  }
+
+  .spinner {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    border-top-color: var(--ink);
+    animation: spin 700ms linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .dlg-step[hidden] {
+    display: none;
+  }
+
+  /* ---------- top bar ---------- */
+
+  .topbar {
+    flex: 0 0 auto;
+    height: var(--topbar-h);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 590;
+    letter-spacing: -0.01em;
+    font-size: 13px;
+  }
+
+  .brand-mark {
+    display: flex;
+    gap: 2px;
+    align-items: flex-end;
+    height: 14px;
+  }
+
+  .brand-mark i {
+    display: block;
+    width: 2px;
+    background: var(--ink);
+    border-radius: 1px;
+  }
+
+  .crumb {
+    color: var(--ink-3);
+    padding: 0 2px;
+  }
+
+  .agent-name {
+    font-weight: 510;
+    letter-spacing: -0.01em;
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ---------- primitives ---------- */
+
+  .btn {
+    font: inherit;
+    font-weight: 510;
+    border-radius: var(--r-lg);
+    padding: 6px 13px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+
+  .btn:hover {
+    background: var(--surface-2);
+  }
+
+  .btn-primary {
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+  }
+
+  .btn-primary:hover {
+    opacity: 0.86;
+    background: var(--ink);
+  }
+
+  .btn-sm {
+    padding: 4px 10px;
+    border-radius: var(--r-md);
+    font-size: 12px;
+  }
+
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-2);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 510;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
+  .chip-draft {
+    color: var(--warn);
+    background: var(--warn-bg);
+    border-color: transparent;
+  }
+
+  .chip-ok {
+    color: var(--ok);
+    background: var(--ok-bg);
+    border-color: transparent;
+  }
+
+  .chip-crit {
+    color: var(--crit);
+    background: var(--crit-bg);
+    border-color: transparent;
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: 0 0 auto;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .micro {
+    font-size: 10.5px;
+    font-weight: 590;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---------- tabs ---------- */
+
+  .tabs {
+    flex: 0 0 auto;
+    height: var(--tabs-h);
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .tab {
+    font: inherit;
+    font-weight: 510;
+    border: 0;
+    background: transparent;
+    color: var(--ink-3);
+    padding: 0 12px;
+    cursor: pointer;
+    position: relative;
+    border-radius: var(--r-sm) var(--r-sm) 0 0;
+  }
+
+  .tab:hover {
+    color: var(--ink-2);
+  }
+
+  .tab[aria-selected="true"] {
+    color: var(--ink);
+  }
+
+  .tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: -1px;
+    height: 2px;
+    background: var(--ink);
+    border-radius: 2px 2px 0 0;
+  }
+
+  /* ---------- workspace ---------- */
+
+  .workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .screen {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .screen[hidden] {
+    display: none;
+  }
+
+  .screen-build {
+    display: grid;
+    grid-template-columns: 224px minmax(0, 1fr) 344px;
+  }
+
+  .screen-test {
+    display: grid;
+    grid-template-columns: 268px minmax(0, 1fr);
+  }
+
+  .screen-calls,
+  .screen-deploy,
+  .screen-home,
+  .screen-agents,
+  .screen-connectors {
+    display: block;
+    overflow-y: auto;
+  }
+
+  /* ---------- rail ---------- */
+
+  .rail {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .rail-head {
+    padding: 0 8px 8px;
+  }
+
+  .rail-item {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .rail-item:hover {
+    background: var(--surface-2);
+  }
+
+  .rail-item[aria-current="true"] {
+    background: var(--bg);
+    color: var(--ink);
+    font-weight: 510;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .rail-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .state {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .state-done {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+
+  .state-warn {
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+
+  .state-empty {
+    box-shadow: inset 0 0 0 1.5px var(--border-strong);
+  }
+
+  .rail-legend {
+    margin-top: auto;
+    padding: 14px 8px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    border-top: 1px solid var(--border);
+  }
+
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
+  /* ---------- editor ---------- */
+
+  .editor {
+    overflow-y: auto;
+    padding: 24px 28px 64px;
+  }
+
+  .editor-inner {
+    max-width: 660px;
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .panel-head {
+    margin-bottom: 18px;
+  }
+
+  .panel-head h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    font-weight: 590;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  .panel-head p {
+    margin: 0;
+    color: var(--ink-2);
+    max-width: 58ch;
+  }
+
+  .card {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  .card + .card {
+    margin-top: 12px;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .card-head h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 590;
+    letter-spacing: -0.01em;
+  }
+
+  .card-head .spacer {
+    margin-left: auto;
+  }
+
+  .card-body {
+    padding: 14px;
+  }
+
+  /* prompt sections */
+
+  .prompt-block + .prompt-block {
+    margin-top: 10px;
+  }
+
+  .prompt-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .grip {
+    color: var(--ink-3);
+    cursor: grab;
+    font-size: 11px;
+    letter-spacing: -1px;
+  }
+
+  .prompt-title {
+    font-weight: 590;
+    font-size: 12.5px;
+  }
+
+  .prompt-text {
+    padding: 12px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+  }
+
+  .compiled {
+    margin-top: 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--r-md);
+    background: var(--surface);
+  }
+
+  .compiled > summary {
+    cursor: pointer;
+    padding: 9px 12px;
+    font-weight: 510;
+    color: var(--ink-2);
+    list-style: none;
+  }
+
+  .compiled > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .compiled > summary::before {
+    content: "▸ ";
+    color: var(--ink-3);
+  }
+
+  .compiled[open] > summary::before {
+    content: "▾ ";
+  }
+
+  .compiled pre {
+    margin: 0;
+    padding: 0 12px 12px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.65;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+
+  /* field rows */
+
+  .field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 216px;
+    gap: 16px;
+    align-items: start;
+    padding: 13px 0;
+  }
+
+  .field + .field {
+    border-top: 1px solid var(--border);
+  }
+
+  .field-label {
+    font-weight: 510;
+    display: block;
+  }
+
+  .field-help {
+    color: var(--ink-2);
+    font-size: 12px;
+    margin-top: 2px;
+    display: block;
+  }
+
+  .field-api {
+    display: inline-block;
+    margin-top: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .field-control {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--ink);
+  }
+
+  select,
+  input[type="text"] {
+    font: inherit;
+    width: 100%;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+    color: var(--ink);
+  }
+
+  .readout {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout b {
+    color: var(--ink);
+    font-weight: 590;
+    font-size: 12.5px;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+
+  /* switch */
+
+  .switch {
+    position: relative;
+    width: 30px;
+    height: 18px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    cursor: pointer;
+    padding: 0;
+    transition: background 140ms ease, border-color 140ms ease;
+  }
+
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    transition: transform 140ms ease, background 140ms ease;
+  }
+
+  .switch[aria-checked="true"] {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .switch[aria-checked="true"]::after {
+    transform: translateX(12px);
+    background: var(--bg);
+  }
+
+  /* tool toggles */
+
+  .tool-row {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 11px;
+    align-items: center;
+    padding: 10px 0;
+  }
+
+  .tool-row + .tool-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .tool-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 590;
+  }
+
+  .tool-desc {
+    color: var(--ink-2);
+    font-size: 12px;
+  }
+
+  .emitted {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--ink-2);
+    overflow-x: auto;
+  }
+
+  .emitted b {
+    color: var(--ink);
+    font-weight: 590;
+  }
+
+  .note {
+    display: flex;
+    gap: 9px;
+    padding: 10px 12px;
+    border-radius: var(--r-md);
+    font-size: 12px;
+    line-height: 1.55;
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+
+  .note-ok {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+
+  .note b {
+    font-weight: 590;
+  }
+
+  /* guardrails */
+
+  .guard {
+    padding: 13px 14px;
+  }
+
+  .guard + .guard {
+    border-top: 1px solid var(--border);
+  }
+
+  .guard-top {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 5px;
+  }
+
+  .guard-name {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 590;
+  }
+
+  .guard-rule {
+    color: var(--ink-2);
+    max-width: 56ch;
+    margin-bottom: 9px;
+  }
+
+  .guard-foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .adherence {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-2);
+  }
+
+  .meter {
+    width: 54px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .meter i {
+    display: block;
+    height: 100%;
+    background: var(--ok);
+  }
+
+  .meter-warn i {
+    background: var(--warn);
+  }
+
+  /* ---------- dock ---------- */
+
+  .dock {
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .dock-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px 10px;
+  }
+
+  .seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    margin: 0 14px 12px;
+    background: var(--surface-2);
+    border-radius: var(--r-md);
+  }
+
+  .seg button {
+    flex: 1;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 510;
+    padding: 4px 0;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ink-3);
+    cursor: pointer;
+  }
+
+  .seg button[aria-selected="true"] {
+    background: var(--bg);
+    color: var(--ink);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .dock-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .dock-pane[hidden] {
+    display: none;
+  }
+
+  .dock-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .bubble {
+    border-radius: var(--r-lg);
+    padding: 9px 11px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-width: 94%;
+  }
+
+  .bubble-caller {
+    background: var(--surface-2);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+
+  .bubble-agent {
+    background: var(--ink);
+    color: var(--bg);
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+
+  .bubble-meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    align-self: flex-end;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    margin-top: -4px;
+  }
+
+  .dock-foot {
+    flex: 0 0 auto;
+    padding: 11px 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 7px;
+  }
+
+  .dock-foot .btn {
+    flex: 1;
+  }
+
+  .mic {
+    display: grid;
+    place-items: center;
+    gap: 12px;
+    padding: 28px 0 20px;
+    text-align: center;
+  }
+
+  .mic-ring {
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .mic-ring svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .sim-row {
+    display: grid;
+    grid-template-columns: 13px minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: center;
+    padding: 8px 0;
+    font-size: 12px;
+  }
+
+  .sim-row + .sim-row {
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---------- test screen ---------- */
+
+  .fixtures {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .fixtures-head {
+    padding: 14px 14px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .fixture {
+    display: grid;
+    grid-template-columns: 13px minmax(0, 1fr);
+    gap: 9px;
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    padding: 9px 14px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+
+  .fixture:hover {
+    background: var(--surface-2);
+  }
+
+  .fixture[aria-current="true"] {
+    background: var(--bg);
+    border-left-color: var(--ink);
+    color: var(--ink);
+    font-weight: 510;
+  }
+
+  .fixture-name {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fixtures-foot {
+    margin-top: auto;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .result {
+    overflow-y: auto;
+    padding: 24px 28px 64px;
+  }
+
+  .result-inner {
+    max-width: 720px;
+  }
+
+  .diffline {
+    display: grid;
+    grid-template-columns: 74px minmax(0, 1fr);
+    gap: 12px;
+    padding: 9px 0;
+    font-size: 12.5px;
+  }
+
+  .diffline + .diffline {
+    border-top: 1px solid var(--border);
+  }
+
+  .diffline .micro {
+    padding-top: 2px;
+  }
+
+  .lat {
+    display: flex;
+    height: 26px;
+    border-radius: var(--r-sm);
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+
+  .lat span {
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--bg);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .lat-eou { background: #a1a1aa; }
+  .lat-llm { background: var(--ink); }
+  .lat-tts { background: #71717a; }
+
+  .lat-scale {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    margin-top: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- calls screen ---------- */
+
+  .calls-wrap {
+    max-width: 940px;
+    margin: 0 auto;
+    padding: 24px 28px 64px;
+  }
+
+  .call-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .call-head h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 590;
+    letter-spacing: -0.02em;
+  }
+
+  .wave-card {
+    padding: 14px;
+  }
+
+  .wave-lanes {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+  }
+
+  canvas {
+    width: 100%;
+    height: 88px;
+    display: block;
+  }
+
+  .lane-labels {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
+  .transcript {
+    margin-top: 12px;
+  }
+
+  .t-row {
+    display: grid;
+    grid-template-columns: 44px 62px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: baseline;
+    padding: 9px 14px;
+    font-size: 13px;
+  }
+
+  .t-row + .t-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .t-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .t-who {
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
+  .t-lat {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .t-row-sys {
+    background: var(--surface);
+  }
+
+  .t-sys-text {
+    grid-column: 2 / -1;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+    color: var(--ink-2);
+  }
+
+  /* ---------- deploy ---------- */
+
+  .deploy-wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 28px 64px;
+  }
+
+  .num {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 14px;
+  }
+
+  .num + .num {
+    border-top: 1px solid var(--border);
+  }
+
+  .num-digits {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    font-weight: 590;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- dialog ---------- */
+
+  dialog {
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    width: min(460px, calc(100vw - 32px));
+  }
+
+  dialog::backdrop {
+    background: rgba(0, 0, 0, 0.32);
+  }
+
+  .dlg-head {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dlg-head h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 590;
+    letter-spacing: -0.01em;
+  }
+
+  .dlg-body {
+    padding: 6px 16px 14px;
+  }
+
+  .dlg-row {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 11px;
+    padding: 9px 0;
+    font-size: 12.5px;
+    align-items: baseline;
+  }
+
+  .dlg-row + .dlg-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .dlg-foot {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .add {
+    color: var(--ok);
+  }
+
+  .rm {
+    color: var(--crit);
+  }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 1180px) {
+    .screen-build {
+      grid-template-columns: 200px minmax(0, 1fr);
+    }
+
+    .dock {
+      display: none;
+    }
+  }
+
+  @media (max-width: 940px) {
+    .arow {
+      grid-template-columns: minmax(0, 1fr) 84px auto;
+    }
+
+    .arow > .arow-hide {
+      display: none;
+    }
+  }
+
+  @media (max-width: 820px) {
+    body {
+      overflow: auto;
+    }
+
+    .app {
+      height: auto;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidenav {
+      flex-direction: row;
+      overflow-x: auto;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 10px;
+    }
+
+    .sidenav-brand,
+    .nav-foot,
+    .nav-sep {
+      display: none;
+    }
+
+    .nav-item {
+      grid-template-columns: 16px auto auto;
+      width: auto;
+      white-space: nowrap;
+    }
+
+    .home-wrap,
+    .agents-wrap,
+    .conn-wrap {
+      padding: 18px 16px 48px;
+    }
+
+    .screen-build,
+    .screen-test {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .rail,
+    .fixtures {
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .field {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
+
+    .editor,
+    .result,
+    .calls-wrap,
+    .deploy-wrap {
+      padding: 18px 16px 48px;
+    }
+
+    .t-row {
+      grid-template-columns: 40px minmax(0, 1fr);
+    }
+
+    .t-who,
+    .t-lat {
+      display: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+</style>
+
+<div class="app">
+
+  <aside class="sidenav" aria-label="Workspace">
+    <div class="sidenav-brand">
+      <span class="brand-mark" aria-hidden="true">
+        <i style="height:6px"></i><i style="height:12px"></i><i style="height:9px"></i><i style="height:14px"></i><i style="height:5px"></i>
+      </span>
+      Syrinx
+    </div>
+
+    <button class="nav-item" aria-current="true" data-nav="home">
+      <svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+      <span>Home</span><span></span>
+    </button>
+    <button class="nav-item" data-nav="agents">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+      <span>Agents</span><span class="rail-count">3</span>
+    </button>
+    <button class="nav-item" data-nav="connectors">
+      <svg viewBox="0 0 24 24"><path d="M9 15l-2.5 2.5a3.5 3.5 0 0 1-5-5L4 10"/><path d="M15 9l2.5-2.5a3.5 3.5 0 0 1 5 5L20 14"/><path d="M9.5 14.5l5-5"/></svg>
+      <span>Connectors</span><span class="nav-badge">1</span>
+    </button>
+
+    <div class="nav-sep"></div>
+
+    <button class="nav-item" data-nav="stub" data-stub="Voices">
+      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+      <span>Voices</span><span></span>
+    </button>
+    <button class="nav-item" data-nav="stub" data-stub="Knowledge">
+      <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M8 7h7"/><path d="M8 11h7"/></svg>
+      <span>Knowledge</span><span></span>
+    </button>
+    <button class="nav-item" data-nav="stub" data-stub="Usage">
+      <svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg>
+      <span>Usage</span><span></span>
+    </button>
+
+    <div class="nav-foot">
+      <div>Sunrise Dental Group</div>
+      <div class="mono">$41.20 credit</div>
+    </div>
+  </aside>
+
+  <div class="main">
+
+  <header class="topbar">
+    <div class="brand" id="wsTitle" hidden>Home</div>
+
+    <span id="agentCtx" style="display:flex;align-items:center;gap:14px">
+      <span class="crumb" style="cursor:pointer" data-nav="agents">Agents</span>
+      <span class="crumb">/</span>
+      <span class="agent-name">Sunrise Dental</span>
+      <span class="chip chip-draft"><span class="dot"></span> Draft · 3 changes</span>
+    </span>
+
+    <div class="topbar-right">
+      <button class="btn btn-sm btn-ghost" id="themeBtn">Theme</button>
+      <span id="agentActions" style="display:flex;gap:8px">
+        <button class="btn btn-sm">Discard</button>
+        <button class="btn btn-sm btn-primary" id="publishBtn">Publish</button>
+      </span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Agent lifecycle" id="agentTabs">
+    <button class="tab" role="tab" aria-selected="true" data-screen="build">Build</button>
+    <button class="tab" role="tab" aria-selected="false" data-screen="test">Test</button>
+    <button class="tab" role="tab" aria-selected="false" data-screen="calls">Calls</button>
+    <button class="tab" role="tab" aria-selected="false" data-screen="deploy">Deploy</button>
+  </nav>
+
+  <main class="workspace">
+
+    <!-- ============ HOME ============ -->
+    <div class="screen screen-home" data-screen="home">
+      <div class="home-wrap">
+
+        <div class="verdict verdict-crit">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex:0 0 auto;margin-top:1px">
+            <path d="M12 8v5"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+          <div>
+            <h2>Two things need you</h2>
+            <p>Everything else ran clean overnight — 47 calls, no other failures.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="att">
+            <span class="sev sev-crit"></span>
+            <div>
+              <div class="att-title">Google Calendar stopped working 2 hours ago</div>
+              <div class="att-sub">Authorization expired. <b>4 callers</b> asked to book and the agent could not — it apologised and took a message instead.</div>
+            </div>
+            <button class="btn btn-sm btn-primary" data-nav="connectors">Reconnect</button>
+          </div>
+
+          <div class="att">
+            <span class="sev sev-crit"></span>
+            <div>
+              <div class="att-title">A guardrail was broken on call #4471</div>
+              <div class="att-sub"><span class="mono">no-pii-readback</span> — the agent read part of a stored card number aloud.</div>
+            </div>
+            <button class="btn btn-sm" data-goto="calls">Listen</button>
+          </div>
+
+          <div class="att">
+            <span class="sev sev-warn"></span>
+            <div>
+              <div class="att-title">A test has been failing since your last edit</div>
+              <div class="att-sub"><span class="mono">cancel-wrong-email.wav</span> · Sunrise Dental draft, not published — no callers affected yet.</div>
+            </div>
+            <button class="btn btn-sm" data-goto="test">Open test</button>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="card stat">
+            <div class="micro">Calls today</div>
+            <div class="stat-val">47</div>
+            <div class="stat-sub">41 resolved · 6 transferred</div>
+            <canvas class="spark" data-spark="calls" width="400" height="60" aria-label="Calls per day over the last 7 days, trending up"></canvas>
+          </div>
+          <div class="card stat">
+            <div class="micro">Median response</div>
+            <div class="stat-val">792 ms</div>
+            <div class="stat-sub">budget 900 ms · under</div>
+            <canvas class="spark" data-spark="lat" width="400" height="60" aria-label="Median response time over the last 7 days, flat"></canvas>
+          </div>
+          <div class="card stat">
+            <div class="micro">Spend today</div>
+            <div class="stat-val">$5.18</div>
+            <div class="stat-sub">$41.20 credit remaining</div>
+            <canvas class="spark" data-spark="cost" width="400" height="60" aria-label="Daily spend over the last 7 days"></canvas>
+          </div>
+        </div>
+
+        <div class="page-head" style="margin-top:22px;margin-bottom:10px">
+          <h2 style="font-size:14px">Recent calls</h2>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm" data-goto="calls">View all</button>
+        </div>
+
+        <div class="card">
+          <div class="att">
+            <span class="sev sev-crit"></span>
+            <div>
+              <div class="att-title">#4471 · +1 (628) 555-0114 · 2:14</div>
+              <div class="att-sub">Cancelled an appointment · guardrail violation</div>
+            </div>
+            <span class="mono" style="color:var(--ink-3)">14 min ago</span>
+          </div>
+          <div class="att">
+            <span class="sev"></span>
+            <div>
+              <div class="att-title">#4470 · +1 (415) 555-0198 · 1:02</div>
+              <div class="att-sub">Asked about opening hours · resolved</div>
+            </div>
+            <span class="mono" style="color:var(--ink-3)">31 min ago</span>
+          </div>
+          <div class="att">
+            <span class="sev"></span>
+            <div>
+              <div class="att-title">#4469 · +1 (510) 555-0143 · 3:47</div>
+              <div class="att-sub">Booked with Dr. Okafor · transferred to reception</div>
+            </div>
+            <span class="mono" style="color:var(--ink-3)">52 min ago</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============ AGENTS ============ -->
+    <div class="screen screen-agents" data-screen="agents" hidden>
+      <div class="agents-wrap">
+
+        <div class="page-head">
+          <h2>Agents</h2>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm btn-ghost" id="emptyToggle">Preview empty state</button>
+          <button class="btn btn-sm btn-primary" id="newAgentBtn">New agent</button>
+        </div>
+
+        <div id="agentsFull">
+          <div class="card">
+            <div class="arow arow-head">
+              <span class="micro">Agent</span>
+              <span class="micro">Status</span>
+              <span class="micro arow-hide">Number</span>
+              <span class="micro arow-hide">Calls today</span>
+              <span class="micro arow-hide">Guardrails</span>
+              <span></span>
+            </div>
+
+            <button class="arow" data-open-agent="1">
+              <span>
+                <span class="arow-name">Sunrise Dental</span>
+                <span class="arow-sub">Appointment setter · edited 8 min ago</span>
+              </span>
+              <span class="chip chip-draft"><span class="dot"></span> Draft</span>
+              <span class="mono arow-hide">+1 (415) 555-0132</span>
+              <span class="mono arow-hide">47</span>
+              <span class="arow-hide"><span class="adherence"><span class="meter meter-warn"><i style="width:92%"></i></span> 29/30</span></span>
+              <span class="mono" style="color:var(--ink-3)">→</span>
+            </button>
+
+            <button class="arow">
+              <span>
+                <span class="arow-name">Northside Vets — after hours</span>
+                <span class="arow-sub">Triage and callback · edited 2 days ago</span>
+              </span>
+              <span class="chip chip-ok"><span class="dot"></span> Live</span>
+              <span class="mono arow-hide">+1 (628) 555-0177</span>
+              <span class="mono arow-hide">12</span>
+              <span class="arow-hide"><span class="adherence"><span class="meter"><i style="width:100%"></i></span> 12/12</span></span>
+              <span class="mono" style="color:var(--ink-3)">→</span>
+            </button>
+
+            <button class="arow">
+              <span>
+                <span class="arow-name">Winter promo outbound</span>
+                <span class="arow-sub">Campaign ended 14 Jul · edited 3 weeks ago</span>
+              </span>
+              <span class="chip"><span class="dot" style="color:var(--ink-3)"></span> Paused</span>
+              <span class="mono arow-hide" style="color:var(--ink-3)">None</span>
+              <span class="mono arow-hide" style="color:var(--ink-3)">—</span>
+              <span class="arow-hide" style="color:var(--ink-3)">—</span>
+              <span class="mono" style="color:var(--ink-3)">→</span>
+            </button>
+          </div>
+
+          <p style="color:var(--ink-2);font-size:12.5px;margin:12px 2px 0;max-width:64ch">
+            Guardrail health sits in the list because the question people open this page to answer is
+            “is anything misbehaving”, not “when did I last edit this”.
+          </p>
+        </div>
+
+        <div id="agentsEmpty" hidden>
+          <div style="max-width:600px;margin-bottom:18px">
+            <h3 style="font-size:15px;font-weight:590;letter-spacing:-0.02em;margin:0 0 4px">Start from something that already works</h3>
+            <p style="margin:0;color:var(--ink-2)">Each preset is a complete agent — prompt, tools and a test fixture — that takes a real call
+              right away. You will rewrite most of it, and that is the point: editing beats staring at an empty box.</p>
+          </div>
+
+          <div class="presets">
+            <button class="preset"><b>Customer support</b><span>Looks up orders, resolves issues, escalates to a person when it should.</span></button>
+            <button class="preset"><b>Appointment setter</b><span>Checks a calendar, offers two times, confirms by email.</span></button>
+            <button class="preset"><b>Sales associate</b><span>Qualifies inbound callers and books a follow-up.</span></button>
+            <button class="preset"><b>Start blank</b><span>An empty prompt and nothing else. You will need the others' patterns anyway.</span></button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============ CONNECTORS ============ -->
+    <div class="screen screen-connectors" data-screen="connectors" hidden>
+      <div class="conn-wrap">
+
+        <div class="page-head">
+          <h2>Connectors</h2>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm">Add custom MCP server</button>
+          <button class="btn btn-sm">Add HTTP tool</button>
+        </div>
+
+        <div class="note" style="margin-bottom:16px">
+          <span class="dot" style="margin-top:6px"></span>
+          <div><b>Google Calendar needs reconnecting.</b> Its authorization expired at 08:14 today.
+            Two agents use it, and their booking tools have been failing mid-call since — callers hear
+            an apology instead of a booking.</div>
+        </div>
+
+        <div class="conn-grid">
+
+          <div class="card conn conn-expired">
+            <div class="conn-top">
+              <span class="conn-logo">GC</span>
+              <span>
+                <span class="conn-name">Google Calendar</span>
+                <span class="conn-meta" style="display:block">ops@sunrise.com</span>
+              </span>
+            </div>
+            <span class="chip chip-crit"><span class="dot"></span> Authorization expired</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm btn-primary conn-connect" data-provider="Google Calendar">Reconnect</button>
+              <button class="btn btn-sm">Remove</button>
+            </div>
+          </div>
+
+          <div class="card conn">
+            <div class="conn-top">
+              <span class="conn-logo">GM</span>
+              <span>
+                <span class="conn-name">Gmail</span>
+                <span class="conn-meta" style="display:block">ops@sunrise.com</span>
+              </span>
+            </div>
+            <span class="chip chip-ok"><span class="dot"></span> 2 of 5 tools enabled</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm">Manage tools</button>
+              <button class="btn btn-sm">Revoke</button>
+            </div>
+          </div>
+
+          <div class="card conn">
+            <div class="conn-top">
+              <span class="conn-logo">CL</span>
+              <span>
+                <span class="conn-name">Calendly</span>
+                <span class="conn-meta" style="display:block">Not connected</span>
+              </span>
+            </div>
+            <span class="conn-meta">Scheduling links, event types, invitee management.</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm conn-connect" data-provider="Calendly">Connect</button>
+            </div>
+          </div>
+
+          <div class="card conn">
+            <div class="conn-top">
+              <span class="conn-logo">HS</span>
+              <span>
+                <span class="conn-name">HubSpot</span>
+                <span class="conn-meta" style="display:block">Not connected</span>
+              </span>
+            </div>
+            <span class="conn-meta">Contacts, deals, notes on a call.</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm conn-connect" data-provider="HubSpot">Connect</button>
+            </div>
+          </div>
+
+          <div class="card conn">
+            <div class="conn-top">
+              <span class="conn-logo">NO</span>
+              <span>
+                <span class="conn-name">Notion</span>
+                <span class="conn-meta" style="display:block">Not connected</span>
+              </span>
+            </div>
+            <span class="conn-meta">Read pages and databases as knowledge.</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm conn-connect" data-provider="Notion">Connect</button>
+            </div>
+          </div>
+
+          <div class="card conn">
+            <div class="conn-top">
+              <span class="conn-logo">ST</span>
+              <span>
+                <span class="conn-name">Stripe</span>
+                <span class="conn-meta" style="display:block">Not connected</span>
+              </span>
+            </div>
+            <span class="conn-meta">Look up a customer, issue a refund.</span>
+            <div class="conn-foot">
+              <button class="btn btn-sm conn-connect" data-provider="Stripe">Connect</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ STUB (IA complete, screen not designed yet) ============ -->
+    <div class="screen screen-connectors" data-screen="stub" hidden>
+      <div class="conn-wrap">
+        <div class="page-head"><h2 id="stubTitle">Voices</h2></div>
+        <div class="card">
+          <div class="card-body">
+            <p style="margin:0 0 6px">Not drawn in this mockup.</p>
+            <p style="margin:0;color:var(--ink-2);max-width:60ch">It sits in the navigation because the object is
+              workspace-scoped and shared across agents — leaving it out would teach the wrong structure. The screen
+              itself lands with its phase.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ BUILD ============ -->
+    <div class="screen screen-build" data-screen="build" hidden>
+
+      <aside class="rail">
+        <div class="rail-head micro">Configuration</div>
+
+        <button class="rail-item" data-panel="identity">
+          <span class="state state-done">✓</span><span>Identity</span><span></span>
+        </button>
+        <button class="rail-item" aria-current="true" data-panel="instructions">
+          <span class="state state-done">✓</span><span>Instructions</span><span class="rail-count">3</span>
+        </button>
+        <button class="rail-item" data-panel="voice">
+          <span class="state state-done">✓</span><span>Voice &amp; speech</span><span></span>
+        </button>
+        <button class="rail-item" data-panel="turn">
+          <span class="state state-warn">!</span><span>Turn-taking</span><span></span>
+        </button>
+        <button class="rail-item" data-panel="knowledge">
+          <span class="state state-done">✓</span><span>Knowledge</span><span class="rail-count">2</span>
+        </button>
+        <button class="rail-item" data-panel="tools">
+          <span class="state state-warn">!</span><span>Tools</span><span class="rail-count">4</span>
+        </button>
+        <button class="rail-item" data-panel="guardrails">
+          <span class="state state-empty"></span><span>Guardrails</span><span class="rail-count">2</span>
+        </button>
+        <button class="rail-item" data-panel="deployment">
+          <span class="state state-done">✓</span><span>Deployment</span><span></span>
+        </button>
+
+        <div class="rail-legend">
+          <div class="legend-row"><span class="state state-done">✓</span> Configured</div>
+          <div class="legend-row"><span class="state state-warn">!</span> Default that will bite</div>
+          <div class="legend-row"><span class="state state-empty"></span> Empty</div>
+        </div>
+      </aside>
+
+      <section class="editor">
+        <div class="editor-inner">
+
+          <!-- identity -->
+          <div class="panel" data-panel="identity" hidden>
+            <div class="panel-head">
+              <h2>Identity</h2>
+              <p>How this agent introduces itself, and what callers hear before it starts listening.</p>
+            </div>
+            <div class="card">
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+                <div class="field">
+                  <div>
+                    <span class="field-label">Agent name</span>
+                    <span class="field-help">Internal only. Callers never hear it.</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="text" value="Sunrise Dental" aria-label="Agent name">
+                  </div>
+                </div>
+                <div class="field">
+                  <div>
+                    <span class="field-label">Welcome message</span>
+                    <span class="field-help">Spoken the moment the call connects.</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="text" value="Hi, you've reached Sunrise Dental!" aria-label="Welcome message">
+                  </div>
+                </div>
+                <div class="field">
+                  <div>
+                    <span class="field-label">Caller can interrupt the welcome</span>
+                    <span class="field-help">Off means the caller waits through the greeting before the agent listens.</span>
+                  </div>
+                  <div class="field-control" style="align-items:flex-start">
+                    <button class="switch" role="switch" aria-checked="true" aria-label="Caller can interrupt the welcome"></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- instructions -->
+          <div class="panel" data-panel="instructions">
+            <div class="panel-head">
+              <h2>Instructions</h2>
+              <p>Written as ordered sections, not one block of prose. Sections compile to a single
+                <code class="mono">instructions</code> string — and you can read exactly what gets sent.</p>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Greeting</span>
+                <span class="spacer" style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">Welcome the caller by name if you have it. Ask for their order number before anything else — you cannot look up a booking without it.</div>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Resolve</span>
+                <span style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">Look up the booking and fix the issue on the call. If you need to reschedule, offer two concrete times rather than asking what works.</div>
+            </div>
+
+            <div class="card prompt-block">
+              <div class="prompt-head">
+                <span class="grip" aria-hidden="true">⠿</span>
+                <span class="prompt-title">Wrap up</span>
+                <span style="margin-left:auto"></span>
+                <button class="btn btn-sm btn-ghost">Edit</button>
+              </div>
+              <div class="prompt-text">Recap what changed in one sentence and confirm the caller is happy before ending.</div>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-sm">Add section</button>
+              <button class="btn btn-sm">Draft with AI</button>
+            </div>
+
+            <details class="compiled">
+              <summary>View compiled prompt — 1,204 characters</summary>
+<pre>## Greeting
+Welcome the caller by name if you have it. Ask for their
+order number before anything else — you cannot look up a
+booking without it.
+
+## Resolve
+Look up the booking and fix the issue on the call. …
+
+## Constraints
+- Do not let a caller cancel an appointment without first
+  confirming their email matches the booking.
+- Never read a stored card number back to the caller.</pre>
+            </details>
+
+            <div class="note note-ok" style="margin-top:12px">
+              <span class="dot" style="margin-top:6px"></span>
+              <div><b>Guardrails appear here, at the tail.</b> Placement is not cosmetic — it is what
+                Phase&nbsp;0 measures. Until that experiment reports, this section is where they land.</div>
+            </div>
+          </div>
+
+          <!-- voice -->
+          <div class="panel" data-panel="voice" hidden>
+            <div class="panel-head">
+              <h2>Voice &amp; speech</h2>
+              <p>Every control here maps to a real session field. Ranges and defaults are the API's, not ours.</p>
+            </div>
+
+            <div class="card">
+              <div class="card-head"><h3>Voice</h3><span class="spacer"></span><button class="btn btn-sm">Clone a voice</button></div>
+              <div class="card-body">
+                <div class="tags">
+                  <span class="tag" style="background:var(--ink);color:var(--bg);border-color:var(--ink)">eve · default</span>
+                  <span class="tag">ara</span>
+                  <span class="tag">rex</span>
+                  <span class="tag">sal</span>
+                  <span class="tag">leo</span>
+                </div>
+                <div class="field-api" style="margin-top:10px">voice: "eve"</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Speaking rate</span>
+                    <span class="field-help">1.1 reads as more competent to most listeners without sounding rushed.</span>
+                    <span class="field-api">audio.output.speed · 0.7–1.5</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="range" min="0.7" max="1.5" step="0.05" value="1.1" id="rate" aria-label="Speaking rate">
+                    <div class="readout"><span>0.7</span><b id="rateOut">1.10×</b><span>1.5</span></div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Spoken language</span>
+                    <span class="field-help">Pinning reduces mid-call mis-switching. Spanish and Portuguese need a region — the picker only offers valid codes.</span>
+                    <span class="field-api">audio.input.transcription.language_hint</span>
+                  </div>
+                  <div class="field-control">
+                    <select aria-label="Spoken language">
+                      <option>Detect automatically</option>
+                      <option selected>English — en</option>
+                      <option>Spanish (Mexico) — es-MX</option>
+                      <option>Spanish (Spain) — es-ES</option>
+                      <option>Portuguese (Brazil) — pt-BR</option>
+                      <option>Portuguese (Portugal) — pt-PT</option>
+                      <option>Japanese — ja</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Key terms</span>
+                    <span class="field-help">Words the transcriber should expect. Names, drugs, product lines.</span>
+                    <span class="field-api">keyterms · max 100 × 50 chars</span>
+                  </div>
+                  <div class="field-control">
+                    <div class="tags">
+                      <span class="tag">Invisalign</span>
+                      <span class="tag">Dr. Okafor</span>
+                      <span class="tag">periodontal</span>
+                      <span class="tag">+ add</span>
+                    </div>
+                    <div class="readout"><span>3 / 100 terms</span><span></span></div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Pronunciation</span>
+                    <span class="field-help">Changes the audio only — the transcript keeps the original spelling. Preview it, because spelling won't tell you.</span>
+                    <span class="field-api">replace</span>
+                  </div>
+                  <div class="field-control">
+                    <div class="emitted" style="margin-top:0">"Sunrise Dental" → <b>"Sunrize Dental"</b> <button class="btn btn-sm" style="margin-left:6px">Play</button></div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- turn-taking -->
+          <div class="panel" data-panel="turn" hidden>
+            <div class="panel-head">
+              <h2>Turn-taking</h2>
+              <p>The section most often left alone, and the one that decides whether the agent feels human.
+                Labels describe the effect; the field name sits underneath.</p>
+            </div>
+
+            <div class="note">
+              <span class="dot" style="margin-top:6px"></span>
+              <div><b>Re-engage after silence is off.</b> If a caller goes quiet, this agent waits
+                indefinitely. That is the API default, not a choice you made.</div>
+            </div>
+
+            <div class="card" style="margin-top:12px">
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">How easily a caller can interrupt</span>
+                    <span class="field-help">Lower is easier to interrupt. Raise it on noisy lines to stop the agent cutting itself off.</span>
+                    <span class="field-api">turn_detection.threshold · 0.1–0.9</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="range" min="0.1" max="0.9" step="0.05" value="0.85" id="vad" aria-label="Interrupt sensitivity">
+                    <div class="readout"><span>0.1</span><b id="vadOut">0.85</b><span>0.9</span></div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">How long a caller can pause mid-sentence</span>
+                    <span class="field-help">Raise it for callers reading out numbers from memory.</span>
+                    <span class="field-api">turn_detection.silence_duration_ms · 0–10000</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="range" min="0" max="2000" step="50" value="700" id="sil" aria-label="Pause tolerance">
+                    <div class="readout"><span>0</span><b id="silOut">700 ms</b><span>2000</span></div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Audio captured before speech starts</span>
+                    <span class="field-help">Stops the first syllable being clipped.</span>
+                    <span class="field-api">turn_detection.prefix_padding_ms · default 333</span>
+                  </div>
+                  <div class="field-control">
+                    <input type="range" min="0" max="1000" step="1" value="333" id="pad" aria-label="Lead-in capture">
+                    <div class="readout"><span>0</span><b id="padOut">333 ms</b><span>1000</span></div>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <div>
+                    <span class="field-label">Re-engage if the caller goes quiet</span>
+                    <span class="field-help">Re-arms after every reply, so it fires repeatedly until they speak.</span>
+                    <span class="field-api">turn_detection.idle_timeout_ms · default null</span>
+                  </div>
+                  <div class="field-control" style="align-items:flex-start">
+                    <button class="switch" role="switch" aria-checked="false" aria-label="Re-engage after silence"></button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+          <!-- knowledge -->
+          <div class="panel" data-panel="knowledge" hidden>
+            <div class="panel-head">
+              <h2>Knowledge</h2>
+              <p>Collections live in the workspace and are shared across agents. This agent references two.</p>
+            </div>
+            <div class="card">
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="Practice policies"></button>
+                  <div>
+                    <div style="font-weight:510">Practice policies</div>
+                    <div class="tool-desc">14 files · last ingested 3 days ago</div>
+                  </div>
+                  <span class="chip chip-ok"><span class="dot"></span> Ready</span>
+                </div>
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" aria-label="Insurance FAQ"></button>
+                  <div>
+                    <div style="font-weight:510">Insurance FAQ</div>
+                    <div class="tool-desc">Help_Center.pdf · ingesting</div>
+                  </div>
+                  <span class="chip"><span class="dot" style="color:var(--ink-3)"></span> 72%</span>
+                </div>
+              </div>
+            </div>
+            <div class="emitted">tools: [{ type: <b>"file_search"</b>, vector_store_ids: [2], max_num_results: 10 }]</div>
+          </div>
+
+          <!-- tools -->
+          <div class="panel" data-panel="tools" hidden>
+            <div class="panel-head">
+              <h2>Tools</h2>
+              <p>Connecting an account grants nothing. Each tool is enabled one at a time, and the
+                allow-list is always written out — never left implicit.</p>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h3>Gmail</h3>
+                <span class="chip chip-ok"><span class="dot"></span> ops@sunrise.com</span>
+                <span class="spacer"></span>
+                <span class="mono" id="toolCount" style="color:var(--ink-3)">2 of 5 enabled</span>
+              </div>
+              <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" data-tool="send_message" aria-label="send_message"></button>
+                  <div>
+                    <div class="tool-name">send_message</div>
+                    <div class="tool-desc">Send an email as the connected account</div>
+                  </div>
+                  <span></span>
+                </div>
+
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="true" data-tool="search_messages" aria-label="search_messages"></button>
+                  <div>
+                    <div class="tool-name">search_messages</div>
+                    <div class="tool-desc">Search the mailbox</div>
+                  </div>
+                  <span></span>
+                </div>
+
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="false" data-tool="delete_message" aria-label="delete_message"></button>
+                  <div>
+                    <div class="tool-name">delete_message</div>
+                    <div class="tool-desc">Permanently delete a message</div>
+                  </div>
+                  <span class="chip chip-crit">Destructive</span>
+                </div>
+
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="false" data-tool="modify_labels" aria-label="modify_labels"></button>
+                  <div>
+                    <div class="tool-name">modify_labels</div>
+                    <div class="tool-desc">Add or remove labels</div>
+                  </div>
+                  <span></span>
+                </div>
+
+                <div class="tool-row">
+                  <button class="switch" role="switch" aria-checked="false" data-tool="create_draft" aria-label="create_draft"></button>
+                  <div>
+                    <div class="tool-name">create_draft</div>
+                    <div class="tool-desc">Create an unsent draft</div>
+                  </div>
+                  <span></span>
+                </div>
+
+                <div class="emitted" id="allowedOut">allowed_tools: <b>["send_message", "search_messages"]</b></div>
+              </div>
+            </div>
+
+            <div class="note" style="margin-top:12px">
+              <span class="dot" style="margin-top:6px"></span>
+              <div><b>Why it is always written out.</b> Omitting this array grants every tool the
+                server exposes — including ones the provider adds next month. A live agent must not
+                gain abilities while nobody is looking.</div>
+            </div>
+          </div>
+
+          <!-- guardrails -->
+          <div class="panel" data-panel="guardrails" hidden>
+            <div class="panel-head">
+              <h2>Guardrails</h2>
+              <p>Never shown without evidence that they are holding. A guardrail that fails silently is
+                worse than none, because it is trusted.</p>
+            </div>
+
+            <div class="card">
+              <div class="guard">
+                <div class="guard-top">
+                  <span class="guard-name">verify-before-cancel</span>
+                  <span class="chip chip-ok"><span class="dot"></span> Holding</span>
+                </div>
+                <p class="guard-rule">Do not let a caller cancel an appointment without first confirming their email matches the booking.</p>
+                <div class="guard-foot">
+                  <span class="adherence"><span class="meter"><i style="width:100%"></i></span> 18 / 18 held</span>
+                  <button class="btn btn-sm">Test this guardrail</button>
+                </div>
+              </div>
+
+              <div class="guard">
+                <div class="guard-top">
+                  <span class="guard-name">no-pii-readback</span>
+                  <span class="chip chip-crit"><span class="dot"></span> 1 violation</span>
+                </div>
+                <p class="guard-rule">Never read a stored card number back to the caller.</p>
+                <div class="guard-foot">
+                  <span class="adherence"><span class="meter meter-warn"><i style="width:92%"></i></span> 11 / 12 held</span>
+                  <button class="btn btn-sm">Listen to call #4471</button>
+                  <button class="btn btn-sm">Test this guardrail</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="note" style="margin-top:12px">
+              <span class="dot" style="margin-top:6px"></span>
+              <div><b>Specified, not built.</b> The enforcement mechanism is unproven — the public API
+                has no guardrail field, so whatever works happens inside the prompt. Phase&nbsp;0 measures
+                which placement actually changes behaviour before this ships.</div>
+            </div>
+          </div>
+
+          <!-- deployment -->
+          <div class="panel" data-panel="deployment" hidden>
+            <div class="panel-head">
+              <h2>Deployment</h2>
+              <p>Where callers reach this agent. Full detail lives on the Deploy tab.</p>
+            </div>
+            <div class="card">
+              <div class="num">
+                <span class="num-digits">+1 (415) 555-0132</span>
+                <span class="chip chip-ok"><span class="dot"></span> Live</span>
+                <span style="margin-left:auto" class="mono" style="color:var(--ink-3)">San Francisco · 415</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <aside class="dock" aria-label="Test">
+        <div class="dock-head">
+          <span class="micro">Test</span>
+          <span style="margin-left:auto" class="chip"><span class="dot" style="color:var(--ok)"></span> Draft</span>
+        </div>
+
+        <div class="seg" role="tablist" aria-label="Test mode">
+          <button role="tab" aria-selected="true" data-dock="text">Text</button>
+          <button role="tab" aria-selected="false" data-dock="voice">Voice</button>
+          <button role="tab" aria-selected="false" data-dock="sim">Simulate</button>
+        </div>
+
+        <div class="dock-body">
+
+          <div class="dock-pane" data-dock="text">
+            <div class="bubble bubble-caller">I need to cancel my appointment</div>
+            <div class="bubble bubble-agent">Sure — can I get the email on the booking?</div>
+            <div class="bubble-meta"><span>412 ms</span><span class="chip chip-ok"><span class="dot"></span> verify-before-cancel held</span></div>
+            <div class="bubble bubble-caller">uh… I don't remember it</div>
+            <div class="bubble bubble-agent">No problem — I can look it up from the number you're calling from instead.</div>
+            <div class="bubble-meta"><span>389 ms</span><span class="mono">lookup_booking</span></div>
+          </div>
+
+          <div class="dock-pane" data-dock="voice" hidden>
+            <div class="mic">
+              <button class="mic-ring" aria-label="Start talking">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                  <path d="M5 11a7 7 0 0 0 14 0"></path>
+                  <path d="M12 18v4"></path>
+                </svg>
+              </button>
+              <div style="color:var(--ink-2)">Talk to the draft in your browser</div>
+              <div class="mono" style="color:var(--ink-3)">last turn 792 ms · under budget</div>
+            </div>
+          </div>
+
+          <div class="dock-pane" data-dock="sim" hidden>
+            <div class="micro" style="margin-bottom:2px">Scripted caller · 5 turns</div>
+            <div class="sim-row"><span class="state state-done">✓</span><span>Asks for hours</span><span class="mono" style="color:var(--ink-3)">804ms</span></div>
+            <div class="sim-row"><span class="state state-done">✓</span><span>Books an appointment</span><span class="mono" style="color:var(--ink-3)">771ms</span></div>
+            <div class="sim-row"><span class="state state-done">✓</span><span>Cancels with correct email</span><span class="mono" style="color:var(--ink-3)">812ms</span></div>
+            <div class="sim-row"><span class="state state-warn">!</span><span>Cancels with wrong email</span><span class="mono" style="color:var(--ink-3)">—</span></div>
+            <div class="sim-row"><span class="state state-done">✓</span><span>Asks to speak to a person</span><span class="mono" style="color:var(--ink-3)">690ms</span></div>
+          </div>
+
+        </div>
+
+        <div class="dock-foot">
+          <button class="btn btn-sm">Save as fixture</button>
+          <button class="btn btn-sm btn-primary">Run</button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ============ TEST ============ -->
+    <div class="screen screen-test" data-screen="test" hidden>
+
+      <aside class="fixtures">
+        <div class="fixtures-head">
+          <span class="micro">Fixtures</span>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm">Add</button>
+        </div>
+
+        <button class="fixture" data-fx="0"><span class="state state-done">✓</span><span class="fixture-name">books-appointment.wav</span></button>
+        <button class="fixture" data-fx="1"><span class="state state-done">✓</span><span class="fixture-name">asks-hours.wav</span></button>
+        <button class="fixture" aria-current="true" data-fx="2"><span class="state state-warn">!</span><span class="fixture-name">cancel-wrong-email.wav</span></button>
+        <button class="fixture" data-fx="3"><span class="state state-done">✓</span><span class="fixture-name">spanish-caller.wav</span></button>
+        <button class="fixture" data-fx="4"><span class="state state-done">✓</span><span class="fixture-name">noisy-line.wav</span></button>
+
+        <div class="fixtures-foot">
+          <div class="readout"><span>4 pass · 1 fail</span><span></span></div>
+          <button class="btn btn-sm btn-primary">Run all</button>
+          <button class="btn btn-sm">Copy CI command</button>
+        </div>
+      </aside>
+
+      <section class="result">
+        <div class="result-inner">
+          <div class="call-head">
+            <h2 class="mono" style="font-size:15px">cancel-wrong-email.wav</h2>
+            <span class="chip chip-ok"><span class="dot"></span> No drift</span>
+            <span style="margin-left:auto"></span>
+            <button class="btn btn-sm">Replay</button>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Transcript</h3><span class="spacer"></span><span class="mono" style="color:var(--ink-3)">byte-identical</span></div>
+            <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+              <div class="diffline">
+                <span class="micro">Expected</span>
+                <span>can you confirm the email on the booking</span>
+              </div>
+              <div class="diffline">
+                <span class="micro">Actual</span>
+                <span>can you confirm the email on the booking</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Latency</h3><span class="spacer"></span><span class="chip chip-ok"><span class="dot"></span> 792 ms · under 900 ms budget</span></div>
+            <div class="card-body">
+              <div class="lat">
+                <span class="lat-eou" style="width:22.7%">eou 180</span>
+                <span class="lat-llm" style="width:50.8%">llm ttft 402</span>
+                <span class="lat-tts" style="width:26.5%">tts 210</span>
+              </div>
+              <div class="lat-scale"><span>0</span><span>450 ms</span><span>900 ms budget</span></div>
+              <p style="color:var(--ink-2);margin:12px 0 0;max-width:58ch">A regression that says “slower” is noise. This says which stage moved,
+                so it reads as a bug report rather than a feeling.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Assertions</h3></div>
+            <div class="card-body" style="padding-top:2px;padding-bottom:2px">
+              <div class="sim-row"><span class="state state-done">✓</span><span>Guardrail <span class="mono">verify-before-cancel</span> held</span><span></span></div>
+              <div class="sim-row"><span class="state state-done">✓</span><span>Tool <span class="mono">lookup_booking(id: 4471)</span> called once</span><span></span></div>
+              <div class="sim-row"><span class="state state-done">✓</span><span>Booking was not cancelled</span><span></span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ CALLS ============ -->
+    <div class="screen screen-calls" data-screen="calls" hidden>
+      <div class="calls-wrap">
+        <div class="call-head">
+          <h2>Call #4471</h2>
+          <span class="chip"><span class="dot" style="color:var(--ink-3)"></span> +1 (415) 555-0132</span>
+          <span class="chip">2:14</span>
+          <span class="chip">$0.11</span>
+          <span style="margin-left:auto"></span>
+          <button class="btn btn-sm">Save as fixture</button>
+          <button class="btn btn-sm">Replay against draft</button>
+        </div>
+
+        <div class="card wave-card">
+          <div class="wave-lanes">
+            <div class="lane-labels">
+              <span>Caller</span>
+              <span>Agent</span>
+            </div>
+            <canvas id="wave" width="1600" height="176" aria-label="Stereo waveform: caller on the upper lane, agent on the lower lane"></canvas>
+          </div>
+          <div class="lat-scale" style="margin-top:10px">
+            <span>0:00</span><span>0:47</span><span>2:14</span>
+          </div>
+          <p style="color:var(--ink-2);margin:12px 0 0;max-width:64ch;font-size:12.5px">Separate lanes because barge-in is the hardest thing to debug from a
+            mono transcript and the easiest thing to see here — overlap is visible rather than remembered.</p>
+        </div>
+
+        <div class="card transcript">
+          <div class="t-row">
+            <span class="t-time">0:04</span><span class="t-who">Caller</span>
+            <span>Hi, I need to cancel my appointment.</span><span class="t-lat"></span>
+          </div>
+          <div class="t-row">
+            <span class="t-time">0:06</span><span class="t-who">Agent</span>
+            <span>Sure — can I get the email on the booking?</span><span class="t-lat">412 ms</span>
+          </div>
+          <div class="t-row">
+            <span class="t-time">0:11</span><span class="t-who">Caller</span>
+            <span>uh, it's… I don't remember.</span><span class="t-lat"></span>
+          </div>
+          <div class="t-row t-row-sys">
+            <span class="t-time">0:13</span>
+            <span class="t-sys-text">
+              <span class="chip chip-ok"><span class="dot"></span> Guardrail</span>
+              <span class="mono">verify-before-cancel</span>
+              held — refused to cancel without verification
+            </span>
+          </div>
+          <div class="t-row">
+            <span class="t-time">0:14</span><span class="t-who">Agent</span>
+            <span>No problem, I can look it up another way.</span><span class="t-lat">389 ms</span>
+          </div>
+          <div class="t-row t-row-sys">
+            <span class="t-time">0:18</span>
+            <span class="t-sys-text">
+              <span class="chip"><span class="dot" style="color:var(--ink-3)"></span> Tool call</span>
+              <span class="mono">lookup_booking(phone: "+14155550132") → 1 result</span>
+              <span class="mono" style="color:var(--ink-3)">120 ms</span>
+            </span>
+          </div>
+          <div class="t-row">
+            <span class="t-time">0:21</span><span class="t-who">Agent</span>
+            <span>Found it — Thursday at 7 with Dr. Okafor. Shall I cancel that one?</span><span class="t-lat">441 ms</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ DEPLOY ============ -->
+    <div class="screen screen-deploy" data-screen="deploy" hidden>
+      <div class="deploy-wrap">
+        <div class="panel-head">
+          <h2>Deploy</h2>
+          <p>Three ways callers reach this agent, plus the way you leave.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Phone numbers</h3><span class="spacer"></span><button class="btn btn-sm">Get a number</button></div>
+          <div class="num">
+            <span class="num-digits">+1 (415) 555-0132</span>
+            <span class="chip chip-ok"><span class="dot"></span> Live</span>
+            <span style="margin-left:auto" class="mono">San Francisco · 415</span>
+          </div>
+          <div class="num">
+            <span class="num-digits">+1 (628) 555-0177</span>
+            <span class="chip">Unassigned</span>
+            <span style="margin-left:auto" class="mono">San Francisco · 628</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Bring your own carrier</h3></div>
+          <div class="card-body">
+            <p style="margin:0 0 10px;color:var(--ink-2);max-width:58ch">Point a SIP trunk at this agent and keep your existing number, PBX and compliance posture.</p>
+            <div class="emitted" style="margin-top:0">sip:agent-4471@<b>sip.syrinx.dev</b></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Export to code</h3></div>
+          <div class="card-body">
+            <p style="margin:0 0 10px;color:var(--ink-2);max-width:58ch">This config compiles to the same session a developer writes by hand, so it exports to
+              a real project that runs locally and passes its own checks. One runtime, two ways in.</p>
+            <div class="emitted" style="margin-top:0">npx create-syrinx-agent <b>--from sunrise-dental</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+  </div>
+</div>
+
+<dialog id="oauthDlg">
+  <div class="steps">
+    <span class="step" data-step="1" data-on="1"></span>
+    <span class="step" data-step="2"></span>
+    <span class="step" data-step="3"></span>
+  </div>
+
+  <!-- step 1: what you are about to grant -->
+  <div class="dlg-step" data-step="1">
+    <div class="dlg-head">
+      <h3>Connect <span id="oauthProvider">Calendly</span></h3>
+    </div>
+    <div class="dlg-body">
+      <p style="margin:0 0 4px;color:var(--ink-2)">Before you sign in, here is exactly what this gives the agent.</p>
+      <div class="scope">
+        <svg viewBox="0 0 24 24" stroke="var(--ok)"><path d="M20 6L9 17l-5-5"/></svg>
+        <span><b>It can</b> read your event types and create bookings on the calendars you pick in the next step.</span>
+      </div>
+      <div class="scope">
+        <svg viewBox="0 0 24 24" stroke="var(--crit)"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+        <span><b>It cannot</b> do anything until you switch each tool on. Everything arrives off.</span>
+      </div>
+      <div class="scope">
+        <svg viewBox="0 0 24 24" stroke="var(--ink-3)"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+        <span><b>You can revoke it</b> here or from your account at any time. Live calls stop using it immediately.</span>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn btn-sm" data-oauth-close>Cancel</button>
+      <button class="btn btn-sm btn-primary" data-oauth-next="2">Continue to sign-in</button>
+    </div>
+  </div>
+
+  <!-- step 2: handoff -->
+  <div class="dlg-step" data-step="2" hidden>
+    <div class="dlg-head"><h3>Waiting for <span class="oauth-provider">Calendly</span></h3></div>
+    <div class="dlg-body">
+      <div class="handoff">
+        <div class="spinner" role="status" aria-live="polite"></div>
+        <div style="color:var(--ink-2)">A sign-in window opened. Approve access there, then come back.</div>
+        <button class="btn btn-sm" data-oauth-next="3">I've approved it</button>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn btn-sm" data-oauth-close>Cancel</button>
+      <button class="btn btn-sm btn-ghost" data-oauth-next="2">Open the window again</button>
+    </div>
+  </div>
+
+  <!-- step 3: choose tools, all off -->
+  <div class="dlg-step" data-step="3" hidden>
+    <div class="dlg-head"><h3>Choose what the agent may do</h3></div>
+    <div class="dlg-body">
+      <p style="margin:0 0 8px;color:var(--ink-2)">Connected as <b>ops@sunrise.com</b>. Everything is off — switch on only what this agent needs.</p>
+
+      <div class="tool-row">
+        <button class="switch oauth-tool" role="switch" aria-checked="false" data-otool="list_events" aria-label="list_events"></button>
+        <div><div class="tool-name">list_events</div><div class="tool-desc">See what is already booked</div></div>
+        <span></span>
+      </div>
+      <div class="tool-row">
+        <button class="switch oauth-tool" role="switch" aria-checked="false" data-otool="create_booking" aria-label="create_booking"></button>
+        <div><div class="tool-name">create_booking</div><div class="tool-desc">Book a slot for a caller</div></div>
+        <span></span>
+      </div>
+      <div class="tool-row">
+        <button class="switch oauth-tool" role="switch" aria-checked="false" data-otool="cancel_booking" aria-label="cancel_booking"></button>
+        <div><div class="tool-name">cancel_booking</div><div class="tool-desc">Cancel an existing booking</div></div>
+        <span class="chip chip-crit">Destructive</span>
+      </div>
+
+      <div class="emitted" id="oauthAllowed">allowed_tools: <b>[]</b></div>
+      <p class="mono" style="color:var(--ink-3);margin:8px 0 0;font-size:11px">Nothing enabled — the connector will be saved but the agent will not call it.</p>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn btn-sm" data-oauth-close>Finish later</button>
+      <button class="btn btn-sm btn-primary" data-oauth-close>Save connector</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="pubDlg">
+  <div class="dlg-head"><h3>Publish to +1 (415) 555-0132</h3></div>
+  <div class="dlg-body">
+    <div class="dlg-row"><span class="micro add">Added</span><span>Guardrail <span class="mono">no-pii-readback</span></span></div>
+    <div class="dlg-row"><span class="micro add">Added</span><span>Gmail tool <span class="mono">search_messages</span> — this widens what the agent can do</span></div>
+    <div class="dlg-row"><span class="micro">Changed</span><span>Speaking rate <span class="mono">1.00× → 1.10×</span></span></div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn btn-sm" value="cancel" id="dlgCancel">Keep editing</button>
+    <button class="btn btn-sm btn-primary" id="dlgOk">Publish</button>
+  </div>
+</dialog>
+
+<script>
+  // ---- router ----
+  const AGENT_SCREENS = ["build", "test", "calls", "deploy"];
+  const WS_TITLES = { home: "Home", agents: "Agents", connectors: "Connectors" };
+  const tabs = document.querySelectorAll(".tab");
+  const navItems = document.querySelectorAll(".nav-item");
+  const agentTabs = document.getElementById("agentTabs");
+  const agentCtx = document.getElementById("agentCtx");
+  const agentActions = document.getElementById("agentActions");
+  const wsTitle = document.getElementById("wsTitle");
+
+  function show(name) {
+    document.querySelectorAll(".screen").forEach((s) => {
+      s.hidden = s.dataset.screen !== name;
+    });
+
+    const inAgent = AGENT_SCREENS.includes(name);
+    agentTabs.hidden = !inAgent;
+    agentCtx.style.display = inAgent ? "flex" : "none";
+    agentActions.style.display = inAgent ? "flex" : "none";
+    wsTitle.hidden = inAgent;
+    wsTitle.textContent = WS_TITLES[name] || document.getElementById("stubTitle").textContent;
+
+    navItems.forEach((n) => {
+      const owns = inAgent ? n.dataset.nav === "agents" : n.dataset.nav === name;
+      if (owns) n.setAttribute("aria-current", "true");
+      else n.removeAttribute("aria-current");
+    });
+
+    if (inAgent) tabs.forEach((t) => t.setAttribute("aria-selected", String(t.dataset.screen === name)));
+    if (name === "calls") drawWave();
+    if (name === "home") drawSparks();
+  }
+
+  tabs.forEach((t) => t.addEventListener("click", () => show(t.dataset.screen)));
+
+  document.querySelectorAll("[data-nav]").forEach((n) => {
+    n.addEventListener("click", () => {
+      if (n.dataset.nav === "stub") {
+        document.getElementById("stubTitle").textContent = n.dataset.stub;
+        show("stub");
+      } else {
+        show(n.dataset.nav);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-goto]").forEach((b) => {
+    b.addEventListener("click", () => show(b.dataset.goto));
+  });
+
+  document.querySelectorAll("[data-open-agent]").forEach((b) => {
+    b.addEventListener("click", () => show("build"));
+  });
+
+  // ---- agents: empty-state preview ----
+  const emptyToggle = document.getElementById("emptyToggle");
+  emptyToggle.addEventListener("click", () => {
+    const empty = document.getElementById("agentsEmpty");
+    const full = document.getElementById("agentsFull");
+    const showEmpty = full.hidden === false;
+    full.hidden = showEmpty;
+    empty.hidden = !showEmpty;
+    emptyToggle.textContent = showEmpty ? "Back to my agents" : "Preview empty state";
+  });
+
+  document.getElementById("newAgentBtn").addEventListener("click", () => {
+    document.getElementById("agentsFull").hidden = true;
+    document.getElementById("agentsEmpty").hidden = false;
+    emptyToggle.textContent = "Back to my agents";
+  });
+
+  document.querySelectorAll(".preset").forEach((p) => {
+    p.addEventListener("click", () => show("build"));
+  });
+
+  // ---- oauth flow ----
+  const oauth = document.getElementById("oauthDlg");
+
+  function oauthStep(n) {
+    oauth.querySelectorAll(".dlg-step").forEach((s) => {
+      s.hidden = s.dataset.step !== String(n);
+    });
+    oauth.querySelectorAll(".step").forEach((s) => {
+      if (Number(s.dataset.step) <= n) s.dataset.on = "1";
+      else delete s.dataset.on;
+    });
+  }
+
+  document.querySelectorAll(".conn-connect").forEach((b) => {
+    b.addEventListener("click", () => {
+      const name = b.dataset.provider;
+      document.getElementById("oauthProvider").textContent = name;
+      oauth.querySelectorAll(".oauth-provider").forEach((s) => { s.textContent = name; });
+      oauth.querySelectorAll(".oauth-tool").forEach((s) => s.setAttribute("aria-checked", "false"));
+      syncOauthAllowed();
+      oauthStep(1);
+      oauth.showModal();
+    });
+  });
+
+  oauth.querySelectorAll("[data-oauth-next]").forEach((b) => {
+    b.addEventListener("click", () => oauthStep(Number(b.dataset.oauthNext)));
+  });
+
+  oauth.querySelectorAll("[data-oauth-close]").forEach((b) => {
+    b.addEventListener("click", () => oauth.close());
+  });
+
+  function syncOauthAllowed() {
+    const on = [...oauth.querySelectorAll(".oauth-tool")]
+      .filter((s) => s.getAttribute("aria-checked") === "true")
+      .map((s) => s.dataset.otool);
+    document.getElementById("oauthAllowed").innerHTML =
+      "allowed_tools: <b>[" + on.map((n) => '"' + n + '"').join(", ") + "]</b>";
+  }
+
+  oauth.querySelectorAll(".oauth-tool").forEach((sw) => {
+    sw.addEventListener("click", () => {
+      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+      syncOauthAllowed();
+    });
+  });
+
+  // ---- config rail ----
+  const railItems = document.querySelectorAll(".rail-item");
+  railItems.forEach((r) => {
+    r.addEventListener("click", () => {
+      railItems.forEach((x) => x.removeAttribute("aria-current"));
+      r.setAttribute("aria-current", "true");
+      document.querySelectorAll(".panel").forEach((p) => {
+        p.hidden = p.dataset.panel !== r.dataset.panel;
+      });
+    });
+  });
+
+  // ---- dock modes ----
+  const segs = document.querySelectorAll(".seg button");
+  segs.forEach((s) => {
+    s.addEventListener("click", () => {
+      segs.forEach((x) => x.setAttribute("aria-selected", String(x === s)));
+      document.querySelectorAll(".dock-pane").forEach((p) => {
+        p.hidden = p.dataset.dock !== s.dataset.dock;
+      });
+    });
+  });
+
+  // ---- fixtures ----
+  document.querySelectorAll(".fixture").forEach((f) => {
+    f.addEventListener("click", () => {
+      document.querySelectorAll(".fixture").forEach((x) => x.removeAttribute("aria-current"));
+      f.setAttribute("aria-current", "true");
+    });
+  });
+
+  // ---- switches (oauth ones are bound separately above) ----
+  document.querySelectorAll(".switch:not(.oauth-tool)").forEach((sw) => {
+    sw.addEventListener("click", () => {
+      sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true");
+      if (sw.dataset.tool) syncAllowed();
+    });
+  });
+
+  function syncAllowed() {
+    const all = [...document.querySelectorAll("[data-tool]")];
+    const on = all.filter((s) => s.getAttribute("aria-checked") === "true").map((s) => s.dataset.tool);
+    document.getElementById("allowedOut").innerHTML =
+      'allowed_tools: <b>[' + on.map((n) => '"' + n + '"').join(", ") + "]</b>";
+    document.getElementById("toolCount").textContent = on.length + " of " + all.length + " enabled";
+  }
+
+  // ---- sliders ----
+  const bind = (id, out, fmt) => {
+    const el = document.getElementById(id);
+    const o = document.getElementById(out);
+    const upd = () => { o.textContent = fmt(el.value); };
+    el.addEventListener("input", upd);
+    upd();
+  };
+  bind("rate", "rateOut", (v) => Number(v).toFixed(2) + "×");
+  bind("vad", "vadOut", (v) => Number(v).toFixed(2));
+  bind("sil", "silOut", (v) => v + " ms");
+  bind("pad", "padOut", (v) => v + " ms");
+
+  // ---- publish dialog ----
+  const dlg = document.getElementById("pubDlg");
+  document.getElementById("publishBtn").addEventListener("click", () => dlg.showModal());
+  document.getElementById("dlgCancel").addEventListener("click", () => dlg.close());
+  document.getElementById("dlgOk").addEventListener("click", () => dlg.close());
+
+  // ---- theme toggle ----
+  document.getElementById("themeBtn").addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = getComputedStyle(root).getPropertyValue("--bg").trim() === "#0a0a0b";
+    root.setAttribute("data-theme", dark ? "light" : "dark");
+    drawWave();
+    drawSparks();
+  });
+
+  // ---- waveform ----
+  function seeded(n) {
+    let s = n;
+    return () => {
+      s = (s * 1664525 + 1013904223) % 4294967296;
+      return s / 4294967296;
+    };
+  }
+
+  function drawWave() {
+    const c = document.getElementById("wave");
+    if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth || 900;
+    c.width = w * dpr;
+    c.height = 176 * dpr;
+    const ctx = c.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, 176);
+
+    const cs = getComputedStyle(document.documentElement);
+    const ink = cs.getPropertyValue("--ink").trim();
+    const soft = cs.getPropertyValue("--ink-3").trim();
+
+    const bar = 3, gap = 2, step = bar + gap;
+    const n = Math.floor(w / step);
+    const rnd = seeded(20260727);
+
+    // Caller speaks in bursts; agent replies in the gaps. Overlap at ~0:11 is the barge-in.
+    const callerOn = (i) => (i < n * 0.1) || (i > n * 0.28 && i < n * 0.42) || (i > n * 0.63 && i < n * 0.70);
+    const agentOn = (i) => (i > n * 0.11 && i < n * 0.27) || (i > n * 0.40 && i < n * 0.62) || (i > n * 0.72);
+
+    for (let i = 0; i < n; i++) {
+      const x = i * step;
+      const env = 0.35 + 0.65 * Math.abs(Math.sin(i * 0.11));
+
+      if (callerOn(i)) {
+        const h = Math.max(2, rnd() * 30 * env);
+        ctx.fillStyle = soft;
+        ctx.fillRect(x, 44 - h / 2, bar, h);
+      }
+      if (agentOn(i)) {
+        const h = Math.max(2, rnd() * 34 * env);
+        ctx.fillStyle = ink;
+        ctx.fillRect(x, 128 - h / 2, bar, h);
+      } else {
+        rnd();
+      }
+    }
+
+    // centre lines
+    ctx.fillStyle = cs.getPropertyValue("--border").trim();
+    ctx.fillRect(0, 43.5, w, 1);
+    ctx.fillRect(0, 127.5, w, 1);
+
+    // playhead at 0:47 of 2:14
+    const px = w * (47 / 134);
+    ctx.fillStyle = ink;
+    ctx.fillRect(px, 6, 1.5, 164);
+    ctx.beginPath();
+    ctx.arc(px, 6, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ---- sparklines ----
+  const SPARKS = {
+    calls: [31, 28, 39, 36, 44, 41, 47],
+    lat: [812, 795, 803, 788, 799, 786, 792],
+    cost: [3.4, 3.1, 4.2, 3.9, 4.8, 4.5, 5.18],
+  };
+
+  function drawSparks() {
+    document.querySelectorAll(".spark").forEach((c) => {
+      const data = SPARKS[c.dataset.spark];
+      if (!data) return;
+      const dpr = window.devicePixelRatio || 1;
+      const w = c.clientWidth || 200;
+      const h = 30;
+      c.width = w * dpr;
+      c.height = h * dpr;
+      const ctx = c.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const cs = getComputedStyle(document.documentElement);
+      const ink = cs.getPropertyValue("--ink").trim();
+      const border = cs.getPropertyValue("--border").trim();
+
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+      const span = max - min || 1;
+      const pad = 4;
+      const x = (i) => (i / (data.length - 1)) * (w - 2) + 1;
+      const y = (v) => h - pad - ((v - min) / span) * (h - pad * 2);
+
+      // baseline
+      ctx.strokeStyle = border;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, h - 0.5);
+      ctx.lineTo(w, h - 0.5);
+      ctx.stroke();
+
+      // area
+      ctx.beginPath();
+      ctx.moveTo(x(0), y(data[0]));
+      data.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+      ctx.lineTo(x(data.length - 1), h);
+      ctx.lineTo(x(0), h);
+      ctx.closePath();
+      ctx.fillStyle = border;
+      ctx.fill();
+
+      // line
+      ctx.beginPath();
+      data.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = "round";
+      ctx.stroke();
+
+      // emphasised endpoint
+      ctx.beginPath();
+      ctx.arc(x(data.length - 1), y(data[data.length - 1]), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = ink;
+      ctx.fill();
+    });
+  }
+
+  function redraw() {
+    drawWave();
+    drawSparks();
+  }
+
+  window.addEventListener("resize", redraw);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
+
+  show("home");
+</script>
