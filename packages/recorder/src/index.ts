@@ -796,3 +796,40 @@ function resampleLinear(src: Buffer, srcRate: number, dstRate: number): Buffer {
   return dst;
 }
 
+
+/**
+ * Attach the recorder to a live session in one call.
+ *
+ * Wiring it by hand means three coordinated steps — construct the plugin, add a
+ * matching `plugins` entry to the session config, and `registerPlugin` under the
+ * same key — none of which is discoverable without reading this file. (I hit that
+ * myself while profiling.) This does all three.
+ *
+ * ```ts
+ * const session = new VoiceAgentSession({ plugins: { ... } });
+ * const recording = attachRecorder(session, { outputDir: "./recordings" });
+ * // ... run the conversation ...
+ * await session.close();
+ * console.log(recording.files?.conversationAudioPath);
+ * ```
+ *
+ * Returns a handle rather than the plugin: the paths are what a caller wants, and
+ * they are only final once the session closes.
+ */
+export function attachRecorder(
+  session: {
+    registerPlugin: (name: string, plugin: VoicePlugin) => void;
+  },
+  config: VoiceSessionRecorderConfig,
+  options?: { readonly name?: string },
+): { readonly recorder: VoiceSessionRecorder; readonly files: VoiceSessionRecorderFiles | null } {
+  const recorder = createVoiceSessionRecorder(config);
+  session.registerPlugin(options?.name ?? "recorder", recorder);
+  return {
+    recorder,
+    // `null` until the session initializes the plugin; final once it closes.
+    get files(): VoiceSessionRecorderFiles | null {
+      return recorder.files;
+    },
+  };
+}
