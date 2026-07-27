@@ -2,6 +2,57 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.6.0 — 2026-07-27
+
+### Added — recordings can land in any S3-compatible bucket
+
+`S3ObjectStore` speaks the S3 REST API, so a call recording can be written to AWS S3,
+R2's S3 endpoint, MinIO, Backblaze B2 or Wasabi — not only the R2 Workers binding.
+
+Introduced behind a new `ObjectStore` seam rather than as a second recorder. Everything
+hard in the existing one is storage-agnostic — wall-clock placement, the clock-skew gap
+cap, the 64 KiB silence slicing that fixed an OOM, the deferred part 1 whose WAV header
+needs a length known only at the end. Two copies of that would drift.
+
+Signs SigV4 over `fetch` via `aws4fetch` (~65 KB) rather than bundling
+`@aws-sdk/client-s3`: this runs inside a Worker where bundle size is the constraint.
+
+**Not yet verified against a live S3 endpoint** — R2's S3 credentials cannot be minted
+with `wrangler r2`, and no local S3 server was available. The wire format is covered by
+tests through an injected `fetch`. The R2 binding path *has* been verified live.
+
+### Fixed — found by testing against a real R2 bucket
+
+- **Storage class was never applied to multipart uploads.** It is fixed at
+  `createMultipartUpload`; setting it on the parts does nothing. So every stem over
+  5 MiB silently stayed `Standard` while the small ones honoured the setting — exactly
+  the large objects the option exists to save money on. A mocked bucket could not have
+  caught this.
+- **A failed finalize leaked the multipart upload.** `finalize()` had no error handling
+  and the part-upload chain was unguarded. An abandoned upload is billed until R2
+  auto-aborts it at 7 days. It now aborts what it opened, then rethrows the original
+  cause rather than masking it.
+- **A clock-skew gap could allocate unbounded.** Chunks are placed at their wall-clock
+  offset and the intervening silence is materialised; a bad `startedAtMs` or a resumed
+  DO whose clock moved makes that gap absurd. Found by killing a vitest worker with
+  `ERR_IPC_CHANNEL_CLOSED`. Capped at 10 minutes per gap, and the stem is flagged
+  `clockSkewed` in the manifest — a capped gap means the timeline is shorter than wall
+  clock claims, so alignment cannot be trusted and must not be silent.
+
+### Added — the recorder is attachable in one call, and documented
+
+`attachRecorder(session, { outputDir })` replaces three coordinated steps that were
+only discoverable by reading the source.
+
+Eleven published packages had **no README at all** and rendered blank npm pages:
+recorder, cartesia, deepgram, gemini, google, server-websocket, server-workers,
+silero-vad, test, tts-core, ws. All 27 packages have one now, each written from that
+package's real exports rather than its name. New docs page: **Recording a call**.
+
+Recordings are verified by transcribing each channel with an independent STT rather
+than by checking levels — levels prove a file is not empty but cannot catch a channel
+swap or TTS speaking text the reasoner never produced.
+
 ## 4.5.1 — 2026-07-26
 
 ### Fixed

@@ -109,3 +109,34 @@ The client speaks Syrinx's edge voice protocol — connect a
 `wss://<worker>/agents/<agent-class-kebab>/<instance>`.
 
 See [`examples/03-cf-agent-voice`](../../examples/03-cf-agent-voice) for a runnable worker.
+
+## Recording to object storage
+
+`R2EdgeRecorder` writes a time-aligned stereo call recording to R2 while the call is
+still running — caller left, assistant right, plus per-speaker stems and a manifest.
+
+```ts
+import { R2EdgeRecorder } from '@kuralle-syrinx/cf-agents/r2-recorder';
+
+const recorder = new R2EdgeRecorder({
+  bucket: env.RECORDINGS,
+  sessionId,
+  startedAtMs: Date.now(),
+  storageClass: 'InfrequentAccess',
+});
+```
+
+For any S3-compatible bucket instead — AWS, R2's S3 endpoint, MinIO, Backblaze B2 —
+use `@kuralle-syrinx/cf-agents/s3-store`, which signs SigV4 over `fetch` rather than
+bundling an AWS SDK. Both implement the same `ObjectStore` seam
+(`./object-store`), so the timeline logic has one implementation.
+
+Two behaviours worth knowing, both learned against a real bucket:
+
+- **Storage class is fixed at `createMultipartUpload`.** Setting it on the parts does
+  nothing, so objects over 5 MiB silently stay `Standard`.
+- **A failed finalize aborts the multipart.** An abandoned upload is billed until R2
+  auto-aborts it at 7 days.
+
+See [Recording a call](https://syrinx.asyncdot.com/reference/recording/) for the full
+reference.

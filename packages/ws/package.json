@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/ws",
-  "version": "4.5.1",
+  "version": "4.6.0",
   "private": false,
   "description": "Reconnecting WebSocket connection manager for Syrinx provider sockets \u2014 verify-before-trust reconnects, ordered replay, keepalive; Node and Workers",
   "keywords": [

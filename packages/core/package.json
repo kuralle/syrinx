@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/core",
-  "version": "4.5.1",
+  "version": "4.6.0",
   "private": false,
   "description": "Voice pipeline kernel for Syrinx \u2014 pipeline bus, turn arbitration, playout clock, packets, and the framework-agnostic Reasoner seam",
   "keywords": [

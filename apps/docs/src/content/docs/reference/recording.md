@@ -90,6 +90,63 @@ spoke what the reasoner generated.
 the manifest is internally consistent. Worth running in CI: a recording that wrote zero
 bytes should fail a build rather than pass because the file exists.
 
+## Recording on Cloudflare
+
+On Workers the recorder is `R2EdgeRecorder`, which implements the same
+`EdgeRecorder` interface the edge host injects:
+
+```ts
+import { R2EdgeRecorder } from '@kuralle-syrinx/cf-agents/r2-recorder';
+
+const recorder = new R2EdgeRecorder({
+  bucket: env.RECORDINGS,          // R2 binding
+  sessionId,
+  startedAtMs: Date.now(),
+  storageClass: 'InfrequentAccess', // recordings are write-once, rarely read
+});
+```
+
+Objects land at `recordings/<sessionId>/<startedAtMs>/` — `user.wav`,
+`assistant.wav`, `conversation.wav`, `manifest.json`.
+
+:::caution[Storage class is fixed at create]
+For a multipart upload the class is set at `createMultipartUpload`; setting it on the
+parts does nothing. Measured against a real bucket: with the class applied only to
+plain puts, every stem over 5 MiB silently stayed `Standard` while the small ones
+honoured it — so the large objects the setting exists for were the ones missing it.
+:::
+
+## Any S3-compatible bucket
+
+`S3ObjectStore` speaks the S3 REST API, so recordings can land in AWS S3, R2's S3
+endpoint, MinIO, Backblaze B2 or Wasabi:
+
+```ts
+import { S3ObjectStore } from '@kuralle-syrinx/cf-agents/s3-store';
+
+const store = new S3ObjectStore({
+  bucket: 'recordings',
+  endpoint: 'https://<account-id>.r2.cloudflarestorage.com', // or s3.<region>.amazonaws.com
+  accessKeyId: env.S3_ACCESS_KEY_ID,
+  secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+  region: 'auto',        // R2 ignores it, SigV4 still signs one
+  forcePathStyle: true,  // required by R2 and MinIO
+});
+```
+
+It signs SigV4 over `fetch` rather than bundling an AWS SDK, because this runs inside
+a Worker where bundle size is the constraint.
+
+Both stores implement `ObjectStore` — five methods, no storage assumptions — so the
+timeline logic has exactly one implementation regardless of where bytes land.
+
+:::note[Not yet verified against a live S3 endpoint]
+The S3 store's wire format is covered by tests against an injected `fetch`, but it has
+not been run against a real S3 server. The R2 binding path *has* been, and that run
+found a real bug a mocked bucket could not. Treat the S3 path as less proven until
+someone points it at a live bucket.
+:::
+
 ## Building the mix yourself
 
 The `./wav` subpath exports `interleaveStereoPcm16` and `pcm16ToWav` if you would rather
