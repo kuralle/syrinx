@@ -30,7 +30,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./r2-recorder": "./src/r2-recorder.ts"
+    "./r2-recorder": "./src/r2-recorder.ts",
+    "./s3-store": "./src/s3-store.ts",
+    "./object-store": "./src/object-store.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -45,7 +47,8 @@
     "@kuralle-syrinx/kuralle": "workspace:*",
     "@kuralle-syrinx/server-websocket": "workspace:*",
     "@kuralle-syrinx/recorder": "workspace:*",
-    "@kuralle-syrinx/ws": "workspace:*"
+    "@kuralle-syrinx/ws": "workspace:*",
+    "aws4fetch": "^1.0.20"
   },
   "peerDependencies": {
     "agents": ">=0.14.0 <1.0.0"
@@ -68,6 +71,14 @@
       "./r2-recorder": {
         "types": "./dist/r2-recorder.d.ts",
         "default": "./dist/r2-recorder.js"
+      },
+      "./s3-store": {
+        "types": "./dist/s3-store.d.ts",
+        "default": "./dist/s3-store.js"
+      },
+      "./object-store": {
+        "types": "./dist/object-store.d.ts",
+        "default": "./dist/object-store.js"
       }
     }
   },
