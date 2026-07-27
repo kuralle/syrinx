@@ -2,6 +2,18 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## 4.6.3 — 2026-07-27
+
+### Fixed — the Testing page told readers to install the internal fakes
+
+`reference/testing.md` opened Level 1 with `npm install --save-dev
+@kuralle-syrinx/test`, presenting the fake set Syrinx uses on its own unit tests as
+the recommended starting point. That instruction is gone. Level 1 now says plainly
+what the fakes are for, and that Level 2 — a real fixture turn against real
+providers — is the level that actually checks your agent.
+
+The page's code example was always correct; only the framing was wrong.
+
 ## 4.6.2 — 2026-07-27
 
 ### Fixed — stop presenting the internal fakes as the way to test an agent

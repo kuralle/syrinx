@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/studio",
-  "version": "4.6.2",
+  "version": "4.6.3",
   "private": false,
   "type": "module",
   "description": "Syrinx Studio — browser voice studio for local development: mic capture, live transcript, and session debugging over the Syrinx WebSocket protocol",

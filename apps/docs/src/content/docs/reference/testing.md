@@ -9,19 +9,21 @@ So test at three levels, and be honest about what each one can and cannot prove.
 
 ## Level 1 — Provider-free unit tests
 
-:::caution[The fakes are for unit tests, not for judging your agent]
-They prove wiring: that a turn advances, that an interruption is handled, that an
-error does not kill the session. They cannot tell you whether your agent understood
-the caller, because the transcript is one you wrote. For that, capture a fixture in
-the Studio and replay it with `syrinx turn` — real audio, real providers, and a
-transcript a real caller produced.
+:::caution[Internal tooling — it cannot judge your agent]
+`@kuralle-syrinx/test` is the scripted fake set Syrinx uses on **its own** unit
+tests. It is published because the workspace depends on it across package
+boundaries, not as a supported way to test an agent you are building.
+
+The fakes prove wiring: a turn advances, an interruption is handled, an error does
+not kill the session. They cannot tell you whether your agent understood the caller,
+because the transcript is one *you* wrote — a suite of these passes happily while
+the agent is unusable. **Level 2 is the one that actually checks your agent.**
 :::
 
-Syrinx publishes the test doubles it uses on itself. `@kuralle-syrinx/test` ships scripted `FakeSTT`, `FakeTTS`, `FakeVAD`, and `FakeBridge` plugins — each takes a list of events and emits them in order, so a whole turn runs with no network and no API keys. This is the level that belongs in CI:
+`FakeSTT`, `FakeTTS`, `FakeVAD` and `FakeBridge` each take their script through the
+session's `plugins` config and emit it in order, so a whole turn runs with no network
+and no keys:
 
-```bash
-npm install --save-dev @kuralle-syrinx/test
-```
 
 ```ts
 import { VoiceAgentSession } from '@kuralle-syrinx/core';

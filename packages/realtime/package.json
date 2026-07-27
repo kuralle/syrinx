@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/realtime",
-  "version": "4.6.2",
+  "version": "4.6.3",
   "private": false,
   "description": "Realtime speech-to-speech bridge for Syrinx \u2014 OpenAI Realtime, Gemini Live, and openai-compatible adapters; the Responder-Thinker delegate seam",
   "keywords": [

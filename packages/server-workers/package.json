@@ -1,6 +1,6 @@
 {
   "name": "@kuralle-syrinx/server-workers",
-  "version": "4.6.2",
+  "version": "4.6.3",
   "private": false,
   "description": "Cloudflare Workers voice host for Syrinx \u2014 the full STT\u2192LLM\u2192TTS engine in one hibernatable Durable Object per session, with R2 call recording",
   "keywords": [
