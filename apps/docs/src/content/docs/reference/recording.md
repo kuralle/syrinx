@@ -71,6 +71,21 @@ Non-zero overlap means the two spoke at once. That is not automatically a bug �
 *should* produce overlap — but unexplained overlap on a turn where nobody interrupted is
 a real finding.
 
+### Transcribe each channel
+
+Levels prove a file is not empty; they cannot catch a channel swap or TTS speaking text
+the reasoner never produced. Transcribing each side with an **independent** STT can. On
+the recording above, whisper — which never saw the engine's output — returned:
+
+```
+LEFT  (caller)     "What's the application deadline for the computer science masters?"
+RIGHT (assistant)  "Please specify the University for the application deadline."
+```
+
+matching the engine's reported transcript and reply exactly. That is the check worth
+automating: it proves the caller landed left, the assistant landed right, and the voice
+spoke what the reasoner generated.
+
 `validateVoiceSessionRecorderManifest(manifest)` returns a list of problems, empty when
 the manifest is internally consistent. Worth running in CI: a recording that wrote zero
 bytes should fail a build rather than pass because the file exists.

@@ -79,6 +79,29 @@ wrote zero bytes should fail the build rather than pass as "a file exists".
 The `./wav` subpath exports `interleaveStereoPcm16` and `pcm16ToWav` if you want to
 build the stereo mix yourself from the stems.
 
+## Verifying a recording for real
+
+Peak levels and non-silence ratios prove a file is not empty. They cannot catch a
+channel swap, or TTS speaking text the reasoner never produced. Transcribing each
+channel with an **independent** STT can:
+
+```bash
+# split the stereo file, then transcribe each side
+python -c "from faster_whisper import WhisperModel; m=WhisperModel('base')
+print(' '.join(s.text for s in m.transcribe('left.wav')[0]))"
+```
+
+On the recording above, whisper — which never saw the engine's output — returned:
+
+```
+LEFT  (caller)     "What's the application deadline for the computer science masters?"
+RIGHT (assistant)  "Please specify the University for the application deadline."
+```
+
+matching the engine's reported transcript and reply exactly. That is the check worth
+putting in CI: it verifies the caller landed left, the assistant landed right, and the
+voice spoke the words the reasoner actually generated.
+
 ## License
 
 MIT
