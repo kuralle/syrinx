@@ -33,11 +33,16 @@ import { DeepgramSTTPlugin } from "@kuralle-syrinx/deepgram";
 import { ElevenLabsTTSPlugin } from "@kuralle-syrinx/elevenlabs";
 import { OpenAICompatibleTTSPlugin } from "@kuralle-syrinx/openai-tts";
 import { SileroVADPlugin } from "@kuralle-syrinx/silero-vad";
+import { createVoiceSessionRecorder } from "@kuralle-syrinx/recorder";
+import { UniversitySupportObserver } from "../src/university-support-observer.js";
 import { driveTurn } from "@kuralle-syrinx/cli/turn-runner";
 import { ensureRepoRootDotenv, coerceGoogleGenAiKey } from "../src/run-one-turn.js";
 
 const env = (k: string): string => process.env[k] ?? "";
 const useOpenAiTts = process.argv.includes("--openai-tts");
+// Production sessions carry these. A bare pipeline is not the thing that ships, and
+// both subscribe to the bus — the exact place three parking defects lived.
+const withObservers = process.argv.includes("--with-observers");
 
 interface Stamp { readonly label: string; readonly atMs: number }
 
@@ -50,6 +55,7 @@ function build(stamps: Stamp[]): VoiceAgentSession {
       stt: { api_key: env("DEEPGRAM_API_KEY"), model: "nova-3", sample_rate: 16000, emit_eos_on_final: true },
       vad: {},
       bridge: {},
+      ...(withObservers ? { recorder: {}, observer: {} } : {}),
       tts: useOpenAiTts
         ? { api_key: env("OPENAI_API_KEY"), model: "gpt-4o-mini-tts", voice: "alloy" }
         : { api_key: env("ELEVENLABS_API_KEY") },
@@ -82,6 +88,14 @@ function build(stamps: Stamp[]): VoiceAgentSession {
   (session as unknown as { __queueDelays: unknown }).__queueDelays = queueDelays;
 
   const plugins: Record<string, VoicePlugin> = {
+    ...(withObservers
+      ? {
+          recorder: createVoiceSessionRecorder({ outputDir: `/tmp/profile-rec/${String(Date.now())}` }),
+          // A real guardrail evaluator would call an LLM; this one is instant, so any
+          // delay measured is the SUBSCRIPTION, not the evaluator's own work.
+          observer: new UniversitySupportObserver(async () => null),
+        }
+      : {}),
     vad: new SileroVADPlugin(),
     stt: new DeepgramSTTPlugin(),
     bridge: new ReasoningBridge(

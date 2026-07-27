@@ -285,6 +285,11 @@ export class R2EdgeRecorder implements EdgeRecorder {
     stem.tail = stem.tail.then(async () => {
       const mpu = await this.opts.bucket.createMultipartUpload(stem.key, {
         httpMetadata: { contentType: "audio/wav" },
+        // Storage class is fixed at CREATE for a multipart upload — setting it on the
+        // parts or on complete() does nothing. Verified against real R2: without this,
+        // stems over 5 MiB silently stayed Standard while the small ones honoured the
+        // setting, so exactly the objects the option exists to save money on missed it.
+        ...this.#storage(),
       });
       stem.uploadId = mpu.uploadId;
     });

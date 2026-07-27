@@ -247,3 +247,31 @@ describe("R2EdgeRecorder — clock faults", () => {
     expect(parsed.user.clockSkewed).toBe(true);
   });
 });
+
+describe("R2EdgeRecorder — storage class on multipart", () => {
+  it("sets the storage class at create, not only on plain puts", async () => {
+    // Verified against real R2: a multipart upload takes its storage class from
+    // createMultipartUpload. Passing it only to put() left every stem over 5 MiB on
+    // Standard — the large objects the option exists for.
+    const opts: (Record<string, unknown> | undefined)[] = [];
+    const base = fakeBucket();
+    const bucket = {
+      ...base.bucket,
+      async createMultipartUpload(key: string, o?: Record<string, unknown>) {
+        opts.push(o);
+        return (base.bucket as unknown as { createMultipartUpload: (k: string) => Promise<unknown> })
+          .createMultipartUpload(key);
+      },
+    } as unknown as R2Bucket;
+
+    const rec = new R2EdgeRecorder({
+      bucket, sessionId: "mp", startedAtMs: 0, now: () => 0, storageClass: "InfrequentAccess",
+    });
+    const mb = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < 7; i += 1) rec.onUserAudio("c", mb, 16000);
+    await rec.finalize({ sessionId: "mp", closedAtMs: 1 });
+
+    expect(opts.length).toBeGreaterThan(0);
+    expect(opts.every((o) => o?.["storageClass"] === "InfrequentAccess")).toBe(true);
+  });
+});
