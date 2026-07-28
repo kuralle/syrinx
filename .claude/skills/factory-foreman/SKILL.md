@@ -1,1 +1,0 @@
-../../../.agents/skills/factory-foreman/SKILL.md
