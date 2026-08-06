@@ -169,6 +169,14 @@ Three rules that make it useful rather than decorative:
 - **A result file that appears is not automatically a pass.** Read its `status`;
   `blocked` is a terminal state that needs the engine, not a failure to ignore.
 - **Watch the leaf, not the wrapper** — same reason as stall detection below.
+- **Liveness is `kill -0 "$LEAF_PID"`, never `pgrep -f <worker>`.** A `pgrep`
+  pattern matches the monitor's own shell, because the loop's command text
+  contains the worker name it is searching for. The monitor then reports the
+  worker alive for as long as *the monitor* is alive — it watches itself and
+  says "still running" forever, including after the worker has died. Observed:
+  a whole dispatch monitored this way, where every liveness reading was the
+  waiter's own `/bin/zsh -c` process. Resolve the leaf PID once at dispatch
+  time and signal-test that.
 
 **Stdin delivery by worker** (wrong choice = backgrounded hang):
 
