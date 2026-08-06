@@ -95,6 +95,9 @@ import { noopMetricsExporter, type MetricsExporter } from "./observability.js";
 import { localizeTurn, type ObservabilityLayer } from "./observability.js";
 import { ObservabilityObserver } from "./observability-observer.js";
 import { TimerScheduler, type Scheduler } from "./scheduler.js";
+import { TurnSegmentation } from "./iu-segmentation.js";
+import type { IncrementalUnitId } from "./incremental-unit.js";
+import type { IuLedger } from "./iu-ledger.js";
 
 // =============================================================================
 // Types
@@ -226,9 +229,9 @@ export interface VoiceAgentSessionConfig {
 export interface VoiceAgentSessionEvents {
   user_started_speaking: (event: { tsMs: number; turnId: string }) => void;
   user_stopped_speaking: (event: { tsMs: number; turnId: string }) => void;
-  user_input_partial: (event: { tsMs: number; turnId: string; text: string }) => void;
-  user_input_final: (event: { tsMs: number; turnId: string; text: string; confidence: number }) => void;
-  agent_text_delta: (event: { tsMs: number; turnId: string; delta: string }) => void;
+  user_input_partial: (event: { tsMs: number; turnId: string; text: string; iuId: IncrementalUnitId }) => void;
+  user_input_final: (event: { tsMs: number; turnId: string; text: string; confidence: number; iuId: IncrementalUnitId }) => void;
+  agent_text_delta: (event: { tsMs: number; turnId: string; delta: string; iuId: IncrementalUnitId }) => void;
   agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
   agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
   delegate_query: (event: { tsMs: number; turnId: string; query: string; toolId?: string; toolName?: string }) => void;
@@ -289,7 +292,7 @@ export interface VoiceAgentSessionEvents {
     backchannelUsed: boolean;
   }) => void;
   agent_first_audio: (event: { tsMs: number; turnId: string }) => void;
-  agent_finished: (event: { tsMs: number; turnId: string } & Record<string, unknown>) => void;
+  agent_finished: (event: { tsMs: number; turnId: string; iuId: IncrementalUnitId } & Record<string, unknown>) => void;
   /**
    * End-of-session usage manifest — the total billable resource this session consumed,
    * summed per stage. Emitted once at close. This is the metering seam a host reads to
@@ -448,6 +451,7 @@ export class VoiceAgentSession {
     { infrastructureBreached: boolean; conversationFlagged: boolean }
   >();
   private readonly emittedTurnLocalizations = new Set<string>();
+  private readonly segmentation: TurnSegmentation;
 
   constructor(config: VoiceAgentSessionConfig) {
     const owner = config.endpointingOwner;
@@ -526,6 +530,22 @@ export class VoiceAgentSession {
       },
     });
 
+    this.segmentation = new TurnSegmentation((a) => {
+      const detail =
+        a.kind === "terminal_op"
+          ? `${a.op} on ${a.state} IU`
+          : `${a.op} on unknown IU`;
+      this.bus.push(Route.Background, {
+        kind: "llm.error",
+        contextId: a.id.contextId,
+        timestampMs: Date.now(),
+        component: "iu_ledger",
+        category: ErrorCategory.InternalFault,
+        cause: new Error(`iu_ledger anomaly: ${a.kind} ${detail}`),
+        isRecoverable: true,
+      });
+    });
+
     this.injectedInteractionPolicy = config.interactionPolicy ?? null;
     this.ruleBasedPolicy = new RuleBasedInteractionPolicy({
       bus: this.bus,
@@ -550,6 +570,11 @@ export class VoiceAgentSession {
       isTtsActive: () => this.ttsPlayout.activeContexts().length > 0,
       onBackchannelEmitted: (contextId) => {
         this.timingFor(contextId).backchannelUsed = true;
+      },
+      onDecisionApplied: (decision, obs) => {
+        if (decision.kind === "backchannel") {
+          this.segmentation.markBackchannel(obs.contextId);
+        }
       },
       endpointingOwner: this.endpointingOwner,
       wasForceFinalized: (contextId) => this.watchdogs.wasForceFinalized(contextId),
@@ -607,6 +632,11 @@ export class VoiceAgentSession {
 
   get currentContextId(): string {
     return this.currentTurnId;
+  }
+
+  /** Session-owned IU ledger — shared with plugins that segment or consume turns. */
+  get iuLedger(): IuLedger {
+    return this.segmentation.ledger;
   }
 
   /** Register a plugin. Must be called before start(). */
@@ -802,6 +832,7 @@ export class VoiceAgentSession {
       this.lastFinalizedContextId = "";
       if (pkt.previousContextId) {
         this.sttPartialWordTimings.delete(pkt.previousContextId);
+        this.segmentation.resetContext(pkt.previousContextId);
         this.carryTurnTimingAcrossContextChange(pkt.previousContextId, pkt.contextId);
       }
       this.flushPendingTurnLatency(pkt.contextId);
@@ -933,15 +964,19 @@ export class VoiceAgentSession {
     if (pkt.wordTimings) {
       this.sttPartialWordTimings.set(pkt.contextId, pkt.wordTimings);
     }
+    this.segmentation.onSttPartial(pkt.contextId);
   }
 
   private handleSttInterim(pkt: SttInterimPacket): void {
     this.observeSttForBargeIn(pkt.contextId, pkt.timestampMs, pkt.text, "stt_partial");
+    if (this.segmentation.isBackchannel(pkt.contextId)) return;
+    this.segmentation.onSttPartial(pkt.contextId);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_partial", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
       text: pkt.text,
+      iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "user"),
     });
     this.debugPush({
       component: "stt",
@@ -954,12 +989,28 @@ export class VoiceAgentSession {
   private handleSttResult(pkt: SttResultPacket): void {
     this.watchdogs.clearSttForceFinalizeIfContext(pkt.contextId);
     this.observeSttForBargeIn(pkt.contextId, pkt.timestampMs, pkt.text, "stt_final", pkt.confidence);
+    if (this.segmentation.isBackchannel(pkt.contextId)) {
+      this.debugPush({
+        component: "stt",
+        type: "final",
+        data: {
+          context_id: pkt.contextId,
+          text: pkt.text,
+          confidence: String(pkt.confidence),
+        },
+        timestampMs: pkt.timestampMs,
+      });
+      return;
+    }
+    this.segmentation.onSttPartial(pkt.contextId);
+    this.segmentation.onSttResult(pkt.contextId);
     this.currentTurnId = pkt.contextId;
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
       text: pkt.text,
       confidence: pkt.confidence,
+      iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "user"),
     });
     this.debugPush({
       component: "stt",
@@ -1028,6 +1079,7 @@ export class VoiceAgentSession {
   }
 
   private handleVadSpeechStarted(pkt: VadSpeechStartedPacket): void {
+    this.segmentation.beginTurn(pkt.contextId);
     this.lastFinalizedContextId = "";
     this.userSpeaking = true;
 
@@ -1274,11 +1326,15 @@ export class VoiceAgentSession {
     this.currentTurnId = pkt.contextId;
     this.idleTimeout.setContextId(pkt.contextId);
 
+    this.segmentation.onSttPartial(pkt.contextId);
+    this.segmentation.onSttResult(pkt.contextId);
+
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
       text: pkt.text,
       confidence: 1.0,
+      iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "user"),
     });
     this.debugPush({
       component: "eos",
@@ -1337,12 +1393,14 @@ export class VoiceAgentSession {
         deltaText = this.latencyFiller.spliceLlmDelta(pkt.contextId, deltaText);
         this.bus.push(Route.Background, make.metric(pkt.contextId, "filler.spliced", "1"));
       }
+      this.segmentation.onAssistantResponseStart(pkt.contextId);
     }
 
     this.emit("agent_text_delta", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
       delta: deltaText,
+      iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "assistant"),
     });
     this.debugPush({
       component: "llm",
@@ -1366,6 +1424,7 @@ export class VoiceAgentSession {
     this.emit("agent_finished", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
+      iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "assistant"),
     });
     this.debugPush({
       component: "llm",
@@ -1819,6 +1878,7 @@ export class VoiceAgentSession {
     this.scheduler.schedule(interactionPlayoutTimerKey(contextId), delayMs, () => {
       this.pendingInteractionPlayoutTimers.delete(contextId);
       if (this.ttsPlayout.isActive(contextId)) return;
+      this.segmentation.onPlayoutComplete(contextId);
       this.interaction.observe({
         kind: "playout_tick",
         contextId,
@@ -1836,6 +1896,9 @@ export class VoiceAgentSession {
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
     this.cancelInteractionPlayoutTick(pkt.contextId);
     this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete, pkt.playedOutMs);
+    if (pkt.complete) {
+      this.segmentation.onPlayoutComplete(pkt.contextId);
+    }
     this.interaction.observe({
       kind: "playout_tick",
       contextId: pkt.contextId,
@@ -1847,6 +1910,8 @@ export class VoiceAgentSession {
 
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.cancelInteractionPlayoutTick(pkt.contextId);
+    const playedMs = this.ttsPlayout.positionMs(pkt.contextId) ?? 0;
+    this.segmentation.onAssistantBargeIn(pkt.contextId, playedMs);
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
@@ -2052,6 +2117,7 @@ export class VoiceAgentSession {
         name,
         stage: pluginStage(name),
         run: () => {
+          plugin.bindIuLedger?.(this.segmentation.ledger);
           return plugin.initialize(this.bus, this.config.plugins[name] ?? {});
         },
         cleanup: () => plugin.close(),

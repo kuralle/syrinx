@@ -103,6 +103,11 @@ export {
   type IuLedgerAnomaly,
   InMemoryIuLedger,
 } from "./iu-ledger.js";
+export {
+  IU_LEDGER_CONFIG_KEY,
+  isIuLedger,
+  TurnSegmentation,
+} from "./iu-segmentation.js";
 
 // Pipeline packets — TTS
 export {

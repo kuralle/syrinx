@@ -60,6 +60,12 @@ export interface VoicePlugin {
   readonly sttReconfigure?: SttReconfigure;
 
   /**
+   * Receive the session-owned IU ledger before initialize when this plugin segments or
+   * consumes turns (e.g. ReasoningBridge). Optional — plugins that omit it keep a private ledger.
+   */
+  bindIuLedger?(ledger: import("./iu-ledger.js").IuLedger): void;
+
+  /**
    * Initialize the plugin. Called during the init chain.
    * Connect to provider, start streams, register bus handlers if needed.
    *

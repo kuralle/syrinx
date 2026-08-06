@@ -45,6 +45,8 @@ export class InteractionCoordinator {
       endpointingOwner?: TurnEndOwner;
       /** True when the STT force-finalize watchdog already fired for this context. */
       wasForceFinalized?: (contextId: string) => boolean;
+      /** Fired after each interaction decision is applied (backchannel exclusion, etc.). */
+      onDecisionApplied?: (decision: InteractionDecision, obs: InteractionObservation) => void;
     },
   ) {
     this.scheduler = deps.scheduler ?? new TimerScheduler();
@@ -96,6 +98,7 @@ export class InteractionCoordinator {
   }
 
   private apply(d: InteractionDecision, obs: InteractionObservation): void {
+    this.deps.onDecisionApplied?.(d, obs);
     switch (d.kind) {
       case "take_turn":
         this.armTakeTurn(obs.contextId, d.confidence, d.waitMs, obs.timestampMs);

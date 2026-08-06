@@ -28,6 +28,7 @@ import {
   ErrorCategory,
   type RetryConfig,
   InMemoryIuLedger,
+  type IuLedger,
 } from "@kuralle-syrinx/core";
 
 export {
@@ -84,6 +85,9 @@ export class ReasoningBridge implements VoicePlugin {
     id: IncrementalUnitId;
   } | null = null;
   private iuLedger!: InMemoryIuLedger;
+  private boundLedger: InMemoryIuLedger | null = null;
+  /** When true, VoiceAgentSession owns segmentation writes on this ledger. */
+  private sessionOwnsSegmentation = false;
   private readonly epochByContext = new Map<string, number>();
   private turnEpochCounter = 0;
   private retryConfig: RetryConfig = readRetryConfig({});
@@ -161,23 +165,33 @@ export class ReasoningBridge implements VoicePlugin {
     this.transientContextMessages.add(message);
   }
 
+  bindIuLedger(ledger: IuLedger): void {
+    this.boundLedger = ledger as InMemoryIuLedger;
+    this.sessionOwnsSegmentation = true;
+  }
+
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
-    this.iuLedger = new InMemoryIuLedger((a) => {
-      const detail =
-        a.kind === "terminal_op"
-          ? `${a.op} on ${a.state} IU`
-          : `${a.op} on unknown IU`;
-      this.bus?.push(Route.Background, {
-        kind: "llm.error",
-        contextId: a.id.contextId,
-        timestampMs: Date.now(),
-        component: "iu_ledger",
-        category: ErrorCategory.InternalFault,
-        cause: new Error(`iu_ledger anomaly: ${a.kind} ${detail}`),
-        isRecoverable: true,
+    if (this.boundLedger) {
+      this.iuLedger = this.boundLedger;
+    } else {
+      this.iuLedger = new InMemoryIuLedger((a) => {
+        const detail =
+          a.kind === "terminal_op"
+            ? `${a.op} on ${a.state} IU`
+            : `${a.op} on unknown IU`;
+        this.bus?.push(Route.Background, {
+          kind: "llm.error",
+          contextId: a.id.contextId,
+          timestampMs: Date.now(),
+          component: "iu_ledger",
+          category: ErrorCategory.InternalFault,
+          cause: new Error(`iu_ledger anomaly: ${a.kind} ${detail}`),
+          isRecoverable: true,
+        });
       });
-    });
+      this.sessionOwnsSegmentation = false;
+    }
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
     this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
@@ -209,9 +223,12 @@ export class ReasoningBridge implements VoicePlugin {
           draft.contextId === eos.contextId &&
           draft.userText === eos.text &&
           !draft.controller.signal.aborted &&
-          this.iuLedger.get(draft.id)?.state === "hypothesized"
+          (this.iuLedger.get(draft.id)?.state === "hypothesized" ||
+            this.iuLedger.get(draft.id)?.state === "committed")
         ) {
-          this.iuLedger.commit(draft.id);
+          if (this.iuLedger.get(draft.id)?.state === "hypothesized") {
+            this.iuLedger.commit(draft.id);
+          }
           this.speculativeDraft = null;
           this.metric(eos.contextId, "speculative.draft_promoted");
           for (const flush of draft.hold.buffered.splice(0)) flush();
@@ -287,7 +304,9 @@ export class ReasoningBridge implements VoicePlugin {
     this.discardDraft();
     this.metric(contextId, "speculative.draft_started");
     const id = this.iuIdFor(contextId);
-    this.iuLedger.add({ id, kind: "user_turn", state: "hypothesized" });
+    if (!this.sessionOwnsSegmentation || !this.iuLedger.get(id)) {
+      this.iuLedger.add({ id, kind: "user_turn", state: "hypothesized" });
+    }
     const controller = new AbortController();
     const hold: SpeculativeHold = { buffered: [] };
     this.speculativeDraft = { contextId, userText, controller, hold, id };
@@ -351,7 +370,9 @@ export class ReasoningBridge implements VoicePlugin {
     const controller = presetController ?? new AbortController();
     this.activeGeneration = { contextId, controller };
     const aid = this.assistantIuIdFor(contextId);
-    this.iuLedger.add({ id: aid, kind: "assistant_response", state: "hypothesized" });
+    if (!this.sessionOwnsSegmentation || !this.iuLedger.get(aid)) {
+      this.iuLedger.add({ id: aid, kind: "assistant_response", state: "hypothesized" });
+    }
     const signal = controller.signal;
 
     // R2: while a speculative hold is unpromoted, every push/mutation buffers.
@@ -696,7 +717,9 @@ export class ReasoningBridge implements VoicePlugin {
     const assistantMsg = { role: "assistant" as const, content: assistantText };
     this.history.push({ role: "user", content: userText }, assistantMsg);
     this.assistantMsgByContext.set(contextId, assistantMsg);
-    this.iuLedger.commit(this.assistantIuIdFor(contextId));
+    if (!this.sessionOwnsSegmentation) {
+      this.iuLedger.commit(this.assistantIuIdFor(contextId));
+    }
     this.trimHistory();
     this.persistHistory();
   }
@@ -753,10 +776,12 @@ export class ReasoningBridge implements VoicePlugin {
     const ms = this.playedOutMsByContext.get(contextId);
     const prefix = { chars: spoken.length, ms };
     const assistantIu = this.iuLedger.get(aid);
-    if (assistantIu?.state === "hypothesized") {
-      this.iuLedger.commit(aid, prefix);
-    } else if (assistantIu?.state === "committed") {
-      assistantIu.committedPrefix = prefix;
+    if (!this.sessionOwnsSegmentation) {
+      if (assistantIu?.state === "hypothesized") {
+        this.iuLedger.commit(aid, prefix);
+      } else if (assistantIu?.state === "committed") {
+        assistantIu.committedPrefix = prefix;
+      }
     }
     const existing = this.assistantMsgByContext.get(contextId);
     if (existing) {
@@ -801,7 +826,7 @@ export class ReasoningBridge implements VoicePlugin {
 
   private clearTurnState(contextId: string): void {
     const aid = this.assistantIuIdFor(contextId);
-    if (this.iuLedger.get(aid)?.state === "hypothesized") {
+    if (!this.sessionOwnsSegmentation && this.iuLedger.get(aid)?.state === "hypothesized") {
       this.iuLedger.revoke(aid);
     }
     this.spokenByContext.delete(contextId);
