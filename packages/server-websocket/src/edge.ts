@@ -463,15 +463,30 @@ function wireEdgeSessionEvents(
     }),
     session.bus.on("eos.turn_complete", (pkt) => {
       const turn = pkt as { contextId: string; text?: string };
-      sendJson(socket, { type: "turn_complete", turnId: turn.contextId, transcript: turn.text ?? "" });
+      const committedUser = session
+        .committedTranscript(turn.contextId)
+        .find((message) => message.role === "user");
+      sendJson(socket, {
+        type: "turn_complete",
+        turnId: turn.contextId,
+        transcript: committedUser?.text ?? turn.text ?? "",
+      });
     }),
     // Barge-in: tell the client to flush queued playout immediately (same wire
     // messages as the Node server path — the browser client flushes its jitter
     // buffer on either).
     session.bus.on("interrupt.detected", (pkt) => {
       const interrupt = pkt as { contextId: string };
+      const committedAssistant = [...session.committedTranscript(interrupt.contextId)]
+        .reverse()
+        .find((message) => message.role === "assistant");
       sendJson(socket, { type: "audio_clear", turnId: interrupt.contextId, reason: "barge_in" });
-      sendJson(socket, { type: "agent_interrupted", turnId: interrupt.contextId, reason: "barge_in" });
+      sendJson(socket, {
+        type: "agent_interrupted",
+        turnId: interrupt.contextId,
+        reason: "barge_in",
+        ...(committedAssistant?.text ? { text: committedAssistant.text } : {}),
+      });
     }),
   );
 }

@@ -107,7 +107,13 @@ export {
   IU_LEDGER_CONFIG_KEY,
   isIuLedger,
   TurnSegmentation,
+  type TranscriptMessage,
+  type TranscriptViews,
 } from "./iu-segmentation.js";
+export {
+  applyCommittedPrefix,
+  formatTranscriptIuId,
+} from "./transcript-views.js";
 
 // Pipeline packets — TTS
 export {

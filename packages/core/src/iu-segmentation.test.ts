@@ -11,6 +11,10 @@ import {
   type LlmErrorPacket,
   type PipelineBus,
   type PluginConfig,
+  type Reasoner,
+  type ReasonerMessage,
+  type ReasonerTurn,
+  type ReasoningPart,
   type VoicePlugin,
   type UserInputPacket,
   type LlmResponseDonePacket,
@@ -24,6 +28,7 @@ import type {
   SttPartialPacket,
   SttResultPacket,
   TextToSpeechPlayoutProgressPacket,
+  TextToSpeechWordTimestampsPacket,
 } from "./packets.js";
 
 class BackchannelPolicy implements InteractionPolicy {
@@ -49,6 +54,50 @@ class HistoryTrackingBridge implements VoicePlugin {
     bus.on("llm.done", (pkt) => {
       this.history.push({ role: "assistant", content: (pkt as LlmResponseDonePacket).text });
     });
+  }
+
+  async close(): Promise<void> {
+    // no-op
+  }
+}
+
+class CapturingReasoner implements Reasoner {
+  readonly turns: ReasonerTurn[] = [];
+
+  stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
+    this.turns.push(turn);
+    return (async function* () {
+      yield { type: "text-delta", text: "Short reply." };
+      yield { type: "finish", reason: "stop", text: "Short reply." };
+    })();
+  }
+}
+
+class ReasoningBridgePlugin implements VoicePlugin {
+  private views: import("./transcript-views.js").TranscriptViews | null = null;
+
+  constructor(private readonly reasoner: CapturingReasoner) {}
+
+  bindTranscriptViews(views: import("./transcript-views.js").TranscriptViews): void {
+    this.views = views;
+  }
+
+  async initialize(bus: PipelineBus): Promise<void> {
+    bus.on("eos.turn_complete", async (pkt) => {
+      const eos = pkt as EndOfSpeechPacket;
+      const messages: ReasonerMessage[] = this.views
+        ? [
+            ...this.views.committedTranscript().map((message) => ({
+              role: message.role,
+              content: message.text,
+            })),
+          ]
+        : [];
+      const turn: ReasonerTurn = { userText: eos.text, messages, signal: new AbortController().signal };
+      for await (const _part of this.reasoner.stream(turn)) {
+        // consume
+      }
+    }, { concurrent: true });
   }
 
   async close(): Promise<void> {
@@ -233,6 +282,190 @@ describe("iu-segmentation", () => {
       contextId: "anomaly-ctx",
     });
     expect(errors[0]?.cause.message).toContain("terminal_op");
+
+    await closeSession(session);
+  });
+});
+
+describe("transcript views", () => {
+  it("excludes revoked IUs from both speculative and committed views", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "revoked-turn",
+      timestampMs: 100,
+      text: "should vanish",
+    } satisfies SttInterimPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.iuLedger.revoke({ contextId: "revoked-turn", iuId: "revoked-turn", epoch: 1 });
+
+    expect(session.speculativeTranscript("revoked-turn")).toEqual([]);
+    expect(session.committedTranscript("revoked-turn")).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("includes hypothesized IUs only in the speculative view", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "hyp-turn",
+      timestampMs: 100,
+      text: "still forming",
+    } satisfies SttInterimPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(session.speculativeTranscript("hyp-turn")).toEqual([
+      expect.objectContaining({ role: "user", text: "still forming", state: "hypothesized" }),
+    ]);
+    expect(session.committedTranscript("hyp-turn")).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("backchannel appears in neither committed transcript nor reasoner history", async () => {
+    const reasoner = new CapturingReasoner();
+    const bridge = new ReasoningBridgePlugin(reasoner);
+    const session = new VoiceAgentSession({
+      plugins: {},
+      interactionPolicy: new BackchannelPolicy(),
+    });
+    session.registerPlugin("bridge", bridge);
+
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: "bc-turn",
+      timestampMs: 100,
+      text: "mm-hmm",
+    } satisfies SttInterimPacket);
+    session.bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: "bc-turn",
+      timestampMs: 200,
+      text: "mm-hmm",
+      confidence: 0.9,
+    } satisfies SttResultPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "next-turn",
+      timestampMs: 300,
+      text: "real question",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(session.committedTranscript()).toEqual([
+      expect.objectContaining({ role: "user", text: "real question" }),
+    ]);
+    expect(reasoner.turns.at(-1)?.messages).toEqual([
+      expect.objectContaining({ role: "user", content: "real question" }),
+    ]);
+
+    await closeSession(session);
+  });
+
+  it("barge-in committed view and reasoner messages contain the heard prefix only", async () => {
+    const reasoner = new CapturingReasoner();
+    const bridge = new ReasoningBridgePlugin(reasoner);
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    session.registerPlugin("bridge", bridge);
+
+    await session.start();
+
+    const fullReply = "Alpha beta gamma delta epsilon zeta eta theta.";
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-barge",
+      timestampMs: 100,
+      text: "question",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-barge",
+      timestampMs: 150,
+      text: fullReply,
+    } satisfies LlmDeltaPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Media, {
+      kind: "tts.audio",
+      contextId: "turn-barge",
+      timestampMs: 200,
+      audio: new Uint8Array(64000),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.word_timestamps",
+      contextId: "turn-barge",
+      timestampMs: 210,
+      words: [
+        { word: "Alpha", startMs: 0, endMs: 200 },
+        { word: "beta", startMs: 220, endMs: 400 },
+        { word: "gamma", startMs: 420, endMs: 600 },
+        { word: "delta", startMs: 620, endMs: 800 },
+        { word: "epsilon", startMs: 820, endMs: 1000 },
+        { word: "zeta", startMs: 1020, endMs: 1200 },
+        { word: "eta", startMs: 1220, endMs: 1400 },
+        { word: "theta.", startMs: 1420, endMs: 1600 },
+      ],
+    } satisfies TextToSpeechWordTimestampsPacket);
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-barge",
+      timestampMs: 250,
+      playedOutMs: 400,
+      complete: false,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.bus.push(Route.Main, {
+      kind: "interrupt.detected",
+      contextId: "turn-barge",
+      timestampMs: 260,
+      source: "client",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-barge",
+      timestampMs: 270,
+      text: fullReply,
+    } satisfies LlmDonePkt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const assistant = session.committedTranscript("turn-barge").find((message) => message.role === "assistant");
+    expect(assistant?.text).toBe("Alpha beta");
+    expect(assistant?.text.length).toBeLessThan(fullReply.length);
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-followup",
+      timestampMs: 400,
+      text: "follow up",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const priorAssistant = reasoner.turns
+      .at(-1)
+      ?.messages.find((message) => message.role === "assistant");
+    expect(priorAssistant?.content).toBe(assistant?.text);
+    expect(priorAssistant?.content.length).toBeLessThan(fullReply.length);
 
     await closeSession(session);
   });

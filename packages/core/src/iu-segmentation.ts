@@ -8,6 +8,14 @@ import {
   type IuLedger,
   type IuLedgerAnomaly,
 } from "./iu-ledger.js";
+import {
+  buildTranscriptView,
+  type TranscriptMessage,
+  type TranscriptViews,
+  iuStorageKey,
+} from "./transcript-views.js";
+
+export type { TranscriptMessage, TranscriptViews } from "./transcript-views.js";
 
 /** PluginConfig key for injecting the session-owned ledger into consumers (e.g. ReasoningBridge). */
 export const IU_LEDGER_CONFIG_KEY = "iu_ledger";
@@ -38,6 +46,8 @@ export class TurnSegmentation {
   >();
   private entryCount = 0;
   private readonly entryCountByContext = new Map<string, number>();
+  private readonly transcriptTextByKey = new Map<string, string>();
+  private readonly transcriptSequence: IncrementalUnitId[] = [];
 
   constructor(onAnomaly: (a: IuLedgerAnomaly) => void) {
     this.ledger = new InMemoryIuLedger(onAnomaly);
@@ -52,6 +62,7 @@ export class TurnSegmentation {
       this.ledger.clear(contextId);
     }
     this.transcriptIuByContext.delete(contextId);
+    this.clearTranscriptText(contextId);
   }
 
   resetContext(contextId: string): void {
@@ -138,6 +149,68 @@ export class TurnSegmentation {
     return this.entryCount;
   }
 
+  recordUserTranscript(contextId: string, text: string): void {
+    if (this.isBackchannel(contextId)) return;
+    const id = this.userIuId(contextId);
+    this.transcriptTextByKey.set(iuStorageKey(id), text);
+    this.ensureTranscriptSequence(id);
+  }
+
+  appendAssistantTranscript(contextId: string, delta: string): void {
+    if (this.isBackchannel(contextId)) return;
+    const id = this.assistantIuId(contextId);
+    const key = iuStorageKey(id);
+    this.transcriptTextByKey.set(key, (this.transcriptTextByKey.get(key) ?? "") + delta);
+    this.ensureTranscriptSequence(id);
+  }
+
+  setAssistantTranscript(contextId: string, text: string): void {
+    if (this.isBackchannel(contextId)) return;
+    this.onAssistantResponseStart(contextId);
+    const id = this.assistantIuId(contextId);
+    this.transcriptTextByKey.set(iuStorageKey(id), text);
+    this.ensureTranscriptSequence(id);
+  }
+
+  setAssistantHeardPrefix(contextId: string, heardText: string, playedMs: number): void {
+    if (this.isBackchannel(contextId)) return;
+    const id = this.assistantIuId(contextId);
+    this.transcriptTextByKey.set(iuStorageKey(id), heardText);
+    this.ensureTranscriptSequence(id);
+    const iu = this.ledger.get(id);
+    if (!iu) return;
+    iu.committedPrefix = { ms: playedMs, chars: heardText.length };
+  }
+
+  speculativeTranscript(contextId?: string): readonly TranscriptMessage[] {
+    return buildTranscriptView(
+      this.ledger,
+      this.transcriptSequence,
+      this.transcriptTextByKey,
+      (ctx) => this.isBackchannel(ctx),
+      contextId,
+      (state) => state === "hypothesized" || state === "committed",
+    );
+  }
+
+  committedTranscript(contextId?: string): readonly TranscriptMessage[] {
+    return buildTranscriptView(
+      this.ledger,
+      this.transcriptSequence,
+      this.transcriptTextByKey,
+      (ctx) => this.isBackchannel(ctx),
+      contextId,
+      (state) => state === "committed",
+    );
+  }
+
+  asTranscriptViews(): TranscriptViews {
+    return {
+      speculativeTranscript: (contextId) => this.speculativeTranscript(contextId),
+      committedTranscript: (contextId) => this.committedTranscript(contextId),
+    };
+  }
+
   private epochFor(contextId: string): number {
     let epoch = this.epochByContext.get(contextId);
     if (epoch === undefined) {
@@ -160,6 +233,24 @@ export class TurnSegmentation {
   private trackTranscript(contextId: string, role: "user" | "assistant", id: IncrementalUnitId): void {
     const existing = this.transcriptIuByContext.get(contextId) ?? {};
     this.transcriptIuByContext.set(contextId, { ...existing, [role]: id });
+    this.ensureTranscriptSequence(id);
+  }
+
+  private ensureTranscriptSequence(id: IncrementalUnitId): void {
+    const key = iuStorageKey(id);
+    if (this.transcriptSequence.some((entry) => iuStorageKey(entry) === key)) return;
+    this.transcriptSequence.push({ ...id });
+  }
+
+  private clearTranscriptText(contextId: string): void {
+    for (const [key] of this.transcriptTextByKey) {
+      if (key.startsWith(`${contextId}\0`)) this.transcriptTextByKey.delete(key);
+    }
+    for (let i = this.transcriptSequence.length - 1; i >= 0; i -= 1) {
+      if (this.transcriptSequence[i]?.contextId === contextId) {
+        this.transcriptSequence.splice(i, 1);
+      }
+    }
   }
 
 }

@@ -87,6 +87,7 @@ function fakeSession(received: UserAudioReceivedPacket[] = []): VoiceAgentSessio
   });
   return {
     bus,
+    committedTranscript: () => [],
     async start() {
       void bus.start();
     },

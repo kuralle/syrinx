@@ -66,6 +66,12 @@ export interface VoicePlugin {
   bindIuLedger?(ledger: import("./iu-ledger.js").IuLedger): void;
 
   /**
+   * Receive session transcript views before initialize when this plugin builds
+   * reasoner context from the committed ledger (e.g. ReasoningBridge).
+   */
+  bindTranscriptViews?(views: import("./transcript-views.js").TranscriptViews): void;
+
+  /**
    * Initialize the plugin. Called during the init chain.
    * Connect to provider, start streams, register bus handlers if needed.
    *

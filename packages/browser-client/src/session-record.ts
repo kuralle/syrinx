@@ -246,7 +246,13 @@ export function applyMessage(
       turn = { ...turn, ttsAudioBytes: turn.ttsAudioBytes + ((message as { byteLength?: number }).byteLength ?? 0) };
       break;
     case "agent_interrupted":
-      turn = { ...turn, interrupted: { atMs, reason: (message as { reason?: string }).reason } };
+      turn = {
+        ...turn,
+        interrupted: { atMs, reason: (message as { reason?: string }).reason },
+        ...((message as { text?: string }).text !== undefined
+          ? { agentText: (message as { text: string }).text }
+          : {}),
+      };
       break;
     case "turn_complete":
       turn = {

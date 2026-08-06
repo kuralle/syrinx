@@ -17,6 +17,7 @@ import {
   type VoicePlugin,
   type PluginConfig,
   type Reasoner,
+  type ReasonerMessage,
   type ReasonerSessionStore,
   type ReasonerTurn,
   type TtsWordTimestamp,
@@ -29,6 +30,7 @@ import {
   type RetryConfig,
   InMemoryIuLedger,
   type IuLedger,
+  type TranscriptViews,
 } from "@kuralle-syrinx/core";
 
 export {
@@ -88,6 +90,7 @@ export class ReasoningBridge implements VoicePlugin {
   private boundLedger: InMemoryIuLedger | null = null;
   /** When true, VoiceAgentSession owns segmentation writes on this ledger. */
   private sessionOwnsSegmentation = false;
+  private transcriptViews: TranscriptViews | null = null;
   private readonly epochByContext = new Map<string, number>();
   private turnEpochCounter = 0;
   private retryConfig: RetryConfig = readRetryConfig({});
@@ -170,6 +173,10 @@ export class ReasoningBridge implements VoicePlugin {
     this.sessionOwnsSegmentation = true;
   }
 
+  bindTranscriptViews(views: TranscriptViews): void {
+    this.transcriptViews = views;
+  }
+
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
     this.bus = bus;
     if (this.boundLedger) {
@@ -239,6 +246,12 @@ export class ReasoningBridge implements VoicePlugin {
         this.discardDraft();
         await this.processTurn(eos.text, eos.contextId);
       }, { concurrent: true }),
+
+      bus.on("llm.done", () => {
+        if (!this.sessionOwnsSegmentation || !this.transcriptViews) return;
+        this.trimHistory();
+        this.persistHistory();
+      }),
 
       // Track what was actually sent to TTS (fallback spoken approximation), per turn.
       bus.on("tts.text", (pkt: unknown) => {
@@ -445,8 +458,8 @@ export class ReasoningBridge implements VoicePlugin {
             : null;
           const resuming = pending !== null;
           const turn: ReasonerTurn = pending
-            ? { userText, messages: this.history, signal, resume: { runId: pending.runId, data: userText } }
-            : { userText, messages: this.history, signal };
+            ? { userText, messages: this.reasonerMessages(contextId, userText), signal, resume: { runId: pending.runId, data: userText } }
+            : { userText, messages: this.reasonerMessages(contextId, userText), signal };
 
           let finishReason: "stop" | "tool" | "length" | null = null;
 
@@ -714,14 +727,56 @@ export class ReasoningBridge implements VoicePlugin {
   }
 
   private rememberTurn(userText: string, assistantText: string, contextId: string): void {
-    const assistantMsg = { role: "assistant" as const, content: assistantText };
-    this.history.push({ role: "user", content: userText }, assistantMsg);
-    this.assistantMsgByContext.set(contextId, assistantMsg);
+    if (!this.sessionOwnsSegmentation || !this.transcriptViews) {
+      const assistantMsg = { role: "assistant" as const, content: assistantText };
+      this.history.push({ role: "user", content: userText }, assistantMsg);
+      this.assistantMsgByContext.set(contextId, assistantMsg);
+      if (!this.sessionOwnsSegmentation) {
+        this.iuLedger.commit(this.assistantIuIdFor(contextId));
+      }
+      this.trimHistory();
+      this.persistHistory();
+      return;
+    }
     if (!this.sessionOwnsSegmentation) {
       this.iuLedger.commit(this.assistantIuIdFor(contextId));
     }
-    this.trimHistory();
-    this.persistHistory();
+  }
+
+  private reasonerMessages(contextId: string, userText: string): readonly ReasonerMessage[] {
+    if (this.sessionOwnsSegmentation && this.transcriptViews) {
+      const system = this.history.filter((message) => message.role === "system");
+      const priorFromLedger = this.transcriptViews
+        .committedTranscript()
+        .filter((message) => !message.iuId.startsWith(`${contextId}:`))
+        .map((message) => ({
+          role: message.role,
+          content: message.text,
+        }));
+      if (priorFromLedger.length > 0) {
+        return [...system, ...priorFromLedger];
+      }
+      const durable = this.history.filter(
+        (message) => !this.transientContextMessages.has(message as { role: "system"; content: string }),
+      );
+      return [
+        ...system,
+        ...durable.filter((message) => !(message.role === "user" && message.content === userText)),
+      ];
+    }
+    return this.history;
+  }
+
+  private persistedMessages(): readonly ReasonerMessage[] {
+    if (this.sessionOwnsSegmentation && this.transcriptViews) {
+      return this.transcriptViews.committedTranscript().map((message) => ({
+        role: message.role,
+        content: message.text,
+      }));
+    }
+    return this.history.filter(
+      (message) => !this.transientContextMessages.has(message as { role: "system"; content: string }),
+    );
   }
 
   /** G4: persist the bounded history snapshot, best-effort off the hot path. */
@@ -733,9 +788,7 @@ export class ReasoningBridge implements VoicePlugin {
       void Promise.resolve(
         store.save(
           sessionId,
-          this.history
-            .filter((message) => !this.transientContextMessages.has(message as { role: "system"; content: string }))
-            .map((message) => ({ ...message })),
+          this.persistedMessages().map((message) => ({ ...message })),
         ),
       ).catch(
         () => undefined,
@@ -782,6 +835,18 @@ export class ReasoningBridge implements VoicePlugin {
       } else if (assistantIu?.state === "committed") {
         assistantIu.committedPrefix = prefix;
       }
+    }
+    if (this.sessionOwnsSegmentation && this.transcriptViews) {
+      this.persistHistory();
+      this.clearTurnState(contextId);
+      this.bus?.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId,
+        timestampMs: Date.now(),
+        name: "llm.history_truncated_to_spoken",
+        value: String(spoken.length),
+      });
+      return;
     }
     const existing = this.assistantMsgByContext.get(contextId);
     if (existing) {

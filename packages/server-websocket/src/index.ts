@@ -506,7 +506,14 @@ function wireBrowserSessionEvents(
   disposers.push(
     session.bus.on("eos.turn_complete", (pkt) => {
       const turn = pkt as { contextId: string; text?: string };
-      sendJson(socket, { type: "turn_complete", turnId: turn.contextId, transcript: turn.text ?? "" }, maxBufferedAmountBytes);
+      const committedUser = session
+        .committedTranscript(turn.contextId)
+        .find((message) => message.role === "user");
+      sendJson(socket, {
+        type: "turn_complete",
+        turnId: turn.contextId,
+        transcript: committedUser?.text ?? turn.text ?? "",
+      }, maxBufferedAmountBytes);
     }),
   );
   onSession("agent_text_delta", (event) => {
@@ -618,8 +625,16 @@ function wireBrowserSessionEvents(
     onInterrupt: (contextId) => {
       ttsSequences.delete(contextId);
       opusCodec?.reset();
+      const committedAssistant = [...session.committedTranscript(contextId)]
+        .reverse()
+        .find((message) => message.role === "assistant");
       sendJson(socket, { type: "audio_clear", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
-      sendJson(socket, { type: "agent_interrupted", turnId: contextId, reason: "barge_in" }, maxBufferedAmountBytes);
+      sendJson(socket, {
+        type: "agent_interrupted",
+        turnId: contextId,
+        reason: "barge_in",
+        ...(committedAssistant?.text ? { text: committedAssistant.text } : {}),
+      }, maxBufferedAmountBytes);
     },
 
     onDrain: (contextId, playout, progress) => {

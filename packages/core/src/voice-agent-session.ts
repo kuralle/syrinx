@@ -42,6 +42,8 @@ import type {
   TextToSpeechAudioPacket,
   TextToSpeechEndPacket,
   TextToSpeechPlayoutProgressPacket,
+  TextToSpeechWordTimestampsPacket,
+  TtsWordTimestamp,
   SpeechToTextAudioPacket,
   SttResultPacket,
   SttInterimPacket,
@@ -446,6 +448,8 @@ export class VoiceAgentSession {
   private userSpeaking = false;
   private lastFinalizedContextId = "";
   private readonly sttPartialWordTimings = new Map<string, readonly WordTiming[]>();
+  private readonly wordTimestampsByContext = new Map<string, TtsWordTimestamp[]>();
+  private readonly playedOutMsByContext = new Map<string, number>();
   private readonly turnLocalizationStates = new Map<
     string,
     { infrastructureBreached: boolean; conversationFlagged: boolean }
@@ -637,6 +641,14 @@ export class VoiceAgentSession {
   /** Session-owned IU ledger — shared with plugins that segment or consume turns. */
   get iuLedger(): IuLedger {
     return this.segmentation.ledger;
+  }
+
+  speculativeTranscript(contextId?: string): readonly import("./transcript-views.js").TranscriptMessage[] {
+    return this.segmentation.speculativeTranscript(contextId);
+  }
+
+  committedTranscript(contextId?: string): readonly import("./transcript-views.js").TranscriptMessage[] {
+    return this.segmentation.committedTranscript(contextId);
   }
 
   /** Register a plugin. Must be called before start(). */
@@ -856,6 +868,7 @@ export class VoiceAgentSession {
     this.bus.on("tts.audio", this.handleTtsAudio.bind(this));
     this.bus.on("tts.end", this.handleTtsEnd.bind(this));
     this.bus.on("tts.playout_progress", this.handleTtsPlayoutProgress.bind(this));
+    this.bus.on("tts.word_timestamps", this.handleTtsWordTimestamps.bind(this));
 
     // Interrupts
     this.bus.on("interrupt.detected", this.handleInterruptDetected.bind(this));
@@ -972,6 +985,7 @@ export class VoiceAgentSession {
     if (this.segmentation.isBackchannel(pkt.contextId)) return;
     this.segmentation.onSttPartial(pkt.contextId);
     this.currentTurnId = pkt.contextId;
+    this.segmentation.recordUserTranscript(pkt.contextId, pkt.text);
     this.emit("user_input_partial", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1005,6 +1019,7 @@ export class VoiceAgentSession {
     this.segmentation.onSttPartial(pkt.contextId);
     this.segmentation.onSttResult(pkt.contextId);
     this.currentTurnId = pkt.contextId;
+    this.segmentation.recordUserTranscript(pkt.contextId, pkt.text);
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1328,6 +1343,7 @@ export class VoiceAgentSession {
 
     this.segmentation.onSttPartial(pkt.contextId);
     this.segmentation.onSttResult(pkt.contextId);
+    this.segmentation.recordUserTranscript(pkt.contextId, pkt.text);
 
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
@@ -1396,6 +1412,7 @@ export class VoiceAgentSession {
       this.segmentation.onAssistantResponseStart(pkt.contextId);
     }
 
+    this.segmentation.appendAssistantTranscript(pkt.contextId, deltaText);
     this.emit("agent_text_delta", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1420,7 +1437,14 @@ export class VoiceAgentSession {
       return;
     }
 
+    const audioAlreadyPlaying = this.firstTtsAudioFired.has(pkt.contextId);
     const spokenText = this.flushTtsText(pkt.contextId, pkt.timestampMs);
+    this.segmentation.setAssistantTranscript(pkt.contextId, pkt.text);
+    // Text-only turns (no outbound audio yet): nothing will drive playout completion,
+    // but the assistant IU must commit for committedTranscript and reasoner history.
+    if (!audioAlreadyPlaying) {
+      this.segmentation.onPlayoutComplete(pkt.contextId);
+    }
     this.emit("agent_finished", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
@@ -1896,6 +1920,7 @@ export class VoiceAgentSession {
   private handleTtsPlayoutProgress(pkt: TextToSpeechPlayoutProgressPacket): void {
     this.cancelInteractionPlayoutTick(pkt.contextId);
     this.ttsPlayout.noteProgress(pkt.contextId, pkt.complete, pkt.playedOutMs);
+    this.playedOutMsByContext.set(pkt.contextId, pkt.playedOutMs);
     if (pkt.complete) {
       this.segmentation.onPlayoutComplete(pkt.contextId);
     }
@@ -1908,10 +1933,37 @@ export class VoiceAgentSession {
     });
   }
 
+  private handleTtsWordTimestamps(pkt: TextToSpeechWordTimestampsPacket): void {
+    const existing = this.wordTimestampsByContext.get(pkt.contextId);
+    if (existing) {
+      for (const word of pkt.words) existing.push(word);
+    } else {
+      this.wordTimestampsByContext.set(pkt.contextId, [...pkt.words]);
+    }
+  }
+
+  private computeHeardAssistantPrefix(contextId: string): string {
+    const words = this.wordTimestampsByContext.get(contextId);
+    const playedOutMs = this.playedOutMsByContext.get(contextId);
+    if (words && words.length > 0 && playedOutMs !== undefined && playedOutMs > 0) {
+      return words.filter((word) => word.endMs <= playedOutMs).map((word) => word.word).join(" ");
+    }
+    return (this.ttsTextBuffers.get(contextId)?.emitted ?? "").trim();
+  }
+
+  private clearAssistantTranscriptState(contextId: string): void {
+    this.wordTimestampsByContext.delete(contextId);
+    this.playedOutMsByContext.delete(contextId);
+  }
+
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.cancelInteractionPlayoutTick(pkt.contextId);
     const playedMs = this.ttsPlayout.positionMs(pkt.contextId) ?? 0;
+    const heard = this.computeHeardAssistantPrefix(pkt.contextId);
     this.segmentation.onAssistantBargeIn(pkt.contextId, playedMs);
+    if (heard) {
+      this.segmentation.setAssistantHeardPrefix(pkt.contextId, heard, playedMs);
+    }
     this.interruptedGenerationContextIds.add(pkt.contextId);
     this.failPendingToolCues(pkt.contextId); // G3: the aborted delegate's cue fails (R5)
     this.latencyFiller.cancel(pkt.contextId);
@@ -1927,6 +1979,7 @@ export class VoiceAgentSession {
     this.turnTimings.delete(pkt.contextId);
     this.firstLlmDeltaReceived.delete(pkt.contextId);
     this.ttsTextBuffers.delete(pkt.contextId);
+    this.clearAssistantTranscriptState(pkt.contextId);
     this.ttsPlayout.release(pkt.contextId);
     this.watchdogs.clearTtsStallTimerFor(pkt.contextId);
     this.debugPush({
@@ -1979,6 +2032,7 @@ export class VoiceAgentSession {
     this.turnTimings.delete(contextId);
     this.firstLlmDeltaReceived.delete(contextId);
     this.ttsTextBuffers.delete(contextId);
+    this.clearAssistantTranscriptState(contextId);
     this.ttsPlayout.release(contextId);
     this.watchdogs.clearTtsStallTimerFor(contextId);
     this.bus.push(Route.Critical, make.recordAssistantTruncate(contextId, Date.now()));
@@ -2118,6 +2172,7 @@ export class VoiceAgentSession {
         stage: pluginStage(name),
         run: () => {
           plugin.bindIuLedger?.(this.segmentation.ledger);
+          plugin.bindTranscriptViews?.(this.segmentation.asTranscriptViews());
           return plugin.initialize(this.bus, this.config.plugins[name] ?? {});
         },
         cleanup: () => plugin.close(),

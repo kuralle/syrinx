@@ -90,7 +90,7 @@ export type SyrinxStudioMessage =
   | { readonly type: "tool_call_complete"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string }
   | { readonly type: "tool_call_failed"; readonly turnId?: string; readonly toolId?: string; readonly toolName?: string }
   | { readonly type: "agent_end"; readonly turnId?: string }
-  | { readonly type: "agent_interrupted"; readonly turnId?: string; readonly reason?: string }
+  | { readonly type: "agent_interrupted"; readonly turnId?: string; readonly reason?: string; readonly text?: string }
   | { readonly type: "audio_clear"; readonly turnId?: string; readonly reason?: string }
   | { readonly type: "tts_end"; readonly turnId?: string }
   | { readonly type: "turn_complete"; readonly turnId?: string; readonly transcript: string }
