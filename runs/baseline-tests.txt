@@ -1,0 +1,61 @@
+packages/google test:    Start at  16:07:22
+packages/google test:    Duration  1.50s (transform 481ms, setup 0ms, collect 771ms, tests 420ms, environment 0ms, prepare 81ms)
+packages/grok test: Done
+packages/google test: Done
+packages/server-workers test$ vitest run
+examples/02-hello-voice-headless test$ vitest run
+examples/02-hello-voice-headless test:  RUN  v3.2.7 /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/examples/02-hello-voice-headless
+packages/server-workers test:  RUN  v3.2.7 /Users/mithushancj/Documents/asyncdot-openscoped/voice-media-transport/syrinx/packages/server-workers
+packages/server-workers test:  ✓ src/workers-ai-smart-turn.test.ts (4 tests) 6ms
+examples/02-hello-voice-headless test:  ✓ test/turn-finalize-rootfix.test.ts (1 test) 121ms
+examples/02-hello-voice-headless test:  ✓ src/custom-tts-provider/index.test.ts (13 tests) 487ms
+examples/02-hello-voice-headless test:  ✓ test/performance/ws-multi-turn-baseline.test.ts (2 tests) 178ms
+examples/02-hello-voice-headless test:  ✓ test/run-one-turn.test.ts (2 tests | 1 skipped) 69ms
+examples/02-hello-voice-headless test:  ✓ test/fly-synthetic-carrier-artifacts.test.ts (14 tests) 361ms
+examples/02-hello-voice-headless test:  ✓ test/interaction-config-sweep.test.ts (5 tests) 2ms
+examples/02-hello-voice-headless test:  ✓ test/smoke-artifact-manifest.test.ts (11 tests) 63ms
+packages/server-workers test:  ✓ src/live-realtime-session.test.ts (7 tests) 19ms
+packages/server-workers test:  ✓ src/live-session.test.ts (9 tests) 19ms
+examples/02-hello-voice-headless test:  ✓ test/telephony-review-artifacts.test.ts (5 tests) 149ms
+examples/02-hello-voice-headless test:  ✓ src/university-support-observer.test.ts (1 test) 15ms
+examples/02-hello-voice-headless test:  ✓ test/eva-examiner.test.ts (6 tests) 4ms
+examples/02-hello-voice-headless test:  ✓ src/university-support-mastra.test.ts (1 test) 15ms
+examples/02-hello-voice-headless test:  ✓ test/browser-runtime-smoke-launch.test.ts (1 test) 7ms
+examples/02-hello-voice-headless test:  ✓ test/task-success.test.ts (7 tests) 4ms
+examples/02-hello-voice-headless test:  ✓ test/browser-jitter-smoke.test.ts (3 tests) 4ms
+examples/02-hello-voice-headless test:  ✓ test/eva-bench-examiner-gate.test.ts (3 tests) 23ms
+examples/02-hello-voice-headless test:  ✓ scripts/run-interaction-thesis-matrix.test.ts (3 tests) 4ms
+examples/02-hello-voice-headless test:  ✓ test/browser-runtime-evidence.test.ts (4 tests) 3ms
+examples/02-hello-voice-headless test:  ✓ test/university-support-config.test.ts (1 test) 3ms
+examples/02-hello-voice-headless test:  ✓ test/latency-filler-smoke.test.ts (2 tests) 2ms
+examples/02-hello-voice-headless test:  ✓ test/websocket-smoke-quality-gates.test.ts (6 tests) 13ms
+packages/server-workers test: stderr | src/worker-runtime.test.ts > VoiceConversation worker runtime > boots in workerd and accepts a WebSocket upgrade
+packages/server-workers test: [Agent] VoiceConversation: sending instance name "boot-smoke" to clients via sendIdentityOnConnect (the name is not visible in the URL with custom routing). If this name is sensitive, add `static options = { sendIdentityOnConnect: false }` to opt out. Set it to true to silence this message.
+packages/server-workers test: stderr | src/worker-runtime.test.ts > TwilioVoiceConversation worker runtime > accepts a Twilio Media Streams WebSocket upgrade at /twilio
+packages/server-workers test: [Agent] TwilioVoiceConversation: sending instance name "twilio-boot" to clients via sendIdentityOnConnect (the name is not visible in the URL with custom routing). If this name is sensitive, add `static options = { sendIdentityOnConnect: false }` to opt out. Set it to true to silence this message.
+packages/server-workers test: stderr | src/worker-runtime.test.ts > TelnyxVoiceConversation worker runtime > accepts a Telnyx Media Streaming WebSocket upgrade at /telnyx
+packages/server-workers test: [Agent] TelnyxVoiceConversation: sending instance name "telnyx-boot" to clients via sendIdentityOnConnect (the name is not visible in the URL with custom routing). If this name is sensitive, add `static options = { sendIdentityOnConnect: false }` to opt out. Set it to true to silence this message.
+packages/server-workers test:  ✓ src/worker-runtime.test.ts (8 tests | 2 skipped) 16323ms
+packages/server-workers test:    ✓ VoiceConversation worker runtime > boots in workerd and accepts a WebSocket upgrade  6078ms
+packages/server-workers test:    ✓ TwilioVoiceConversation worker runtime > accepts a Twilio Media Streams WebSocket upgrade at /twilio  1859ms
+packages/server-workers test:    ✓ TwilioVoiceConversation worker runtime > returns <Connect><Stream> TwiML from /incoming-call pointing at /twilio  1884ms
+packages/server-workers test:    ✓ TelnyxVoiceConversation worker runtime > accepts a Telnyx Media Streaming WebSocket upgrade at /telnyx  2142ms
+packages/server-workers test:    ✓ TelnyxVoiceConversation worker runtime > returns TeXML <Stream> from /telnyx-stream-start pointing at /telnyx  2076ms
+packages/server-workers test:    ✓ TelnyxVoiceConversation worker runtime > returns streaming_start JSON from /telnyx-stream-start?format=streaming_start  2283ms
+packages/server-workers test:  Test Files  4 passed (4)
+packages/server-workers test:       Tests  26 passed | 2 skipped (28)
+packages/server-workers test:    Start at  16:07:24
+packages/server-workers test:    Duration  17.91s (transform 1.58s, setup 0ms, collect 5.54s, tests 16.37s, environment 1ms, prepare 839ms)
+packages/server-workers test: Done
+examples/02-hello-voice-headless test:  ✓ test/run-fullduplex-examiner.test.ts (13 tests) 48648ms
+examples/02-hello-voice-headless test:    ✓ fullduplex examiner dry mode > runs the loop with stubs and produces valid metrics  11303ms
+examples/02-hello-voice-headless test:    ✓ fullduplex examiner dry mode > judge-on + dry uses stub scores with no providers  11228ms
+examples/02-hello-voice-headless test:    ✓ fullduplex examiner dry mode > produces consistent latency ordering (firstAudio < ttsEnd)  11202ms
+examples/02-hello-voice-headless test:    ✓ fullduplex examiner dry mode > runs with check-financial-aid task  9328ms
+examples/02-hello-voice-headless test:    ✓ fullduplex examiner dry mode > respects maxTurns cap of 3  5579ms
+examples/02-hello-voice-headless test:  Test Files  21 passed (21)
+examples/02-hello-voice-headless test:       Tests  103 passed | 1 skipped (104)
+examples/02-hello-voice-headless test:    Start at  16:07:24
+examples/02-hello-voice-headless test:    Duration  51.37s (transform 3.51s, setup 0ms, collect 18.55s, tests 50.18s, environment 2ms, prepare 3.02s)
+examples/02-hello-voice-headless test: Done
+exit=0
