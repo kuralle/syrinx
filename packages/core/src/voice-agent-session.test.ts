@@ -235,6 +235,18 @@ async function closeSession(session: VoiceAgentSession): Promise<void> {
   }
 }
 
+/** Park the Main drain loop until `release()` — media packets keep dispatching. */
+function installMainDrainBlocker(bus: PipelineBus): { release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  bus.on("llm.delta", async () => {
+    await gate;
+  });
+  return { release };
+}
+
 async function enrollPrimarySpeaker(
   session: VoiceAgentSession,
   contextId = "user-enroll",
@@ -1070,6 +1082,174 @@ describe("VoiceAgentSession", () => {
 
     expect(events).toEqual([]);
     await closeSession(session);
+  });
+
+  describe("turn_latency under two-loop drain ordering", () => {
+    it("emits turn_latency when the media loop dispatches first tts.audio before the Main anchor", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: Array<Record<string, unknown>> = [];
+      session.on("turn_latency", (event) => {
+        events.push(event);
+      });
+      const { release } = installMainDrainBlocker(session.bus);
+      await session.start();
+
+      const t0 = 900_000;
+      const ctx = "media-first-turn";
+      session.bus.push(Route.Main, {
+        kind: "llm.delta",
+        contextId: ctx,
+        timestampMs: t0 - 50,
+        text: "block main drain",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: ctx, timestampMs: t0 });
+      session.bus.push(Route.Media, {
+        kind: "tts.audio",
+        contextId: ctx,
+        timestampMs: t0 + 350,
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+      });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        turnId: ctx,
+        ttfaMs: 350,
+        anchor: "speech_end",
+      });
+
+      await closeSession(session);
+    });
+
+    it("emits turn_latency exactly once when the Main anchor lands before first tts.audio", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: Array<Record<string, unknown>> = [];
+      session.on("turn_latency", (event) => {
+        events.push(event);
+      });
+      await session.start();
+
+      const t0 = 910_000;
+      const ctx = "anchor-first-turn";
+      session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: ctx, timestampMs: t0 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Main, {
+        kind: "eos.turn_complete",
+        contextId: ctx,
+        timestampMs: t0 + 100,
+        text: "hello",
+        transcripts: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Media, {
+        kind: "tts.audio",
+        contextId: ctx,
+        timestampMs: t0 + 500,
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+      });
+      session.bus.push(Route.Main, {
+        kind: "tts.end",
+        contextId: ctx,
+        timestampMs: t0 + 550,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        turnId: ctx,
+        ttfaMs: 500,
+        anchor: "speech_end",
+      });
+
+      await closeSession(session);
+    });
+
+    it("carries a pending turn_latency across contextId rotation when audio beat the anchor", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: Array<Record<string, unknown>> = [];
+      session.on("turn_latency", (event) => {
+        events.push(event);
+      });
+      const { release } = installMainDrainBlocker(session.bus);
+      await session.start();
+
+      const t0 = 920_000;
+      session.bus.push(Route.Main, {
+        kind: "llm.delta",
+        contextId: "ctx-a",
+        timestampMs: t0 - 50,
+        text: "block main drain",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Anchor is queued on the previous context; rotation and first audio follow on Main/Media.
+      session.bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "ctx-a", timestampMs: t0 + 100 });
+      session.bus.push(Route.Main, {
+        kind: "turn.change",
+        contextId: "ctx-b",
+        previousContextId: "ctx-a",
+        reason: "realtime_response_started",
+        timestampMs: t0 + 150,
+      });
+      session.bus.push(Route.Media, {
+        kind: "tts.audio",
+        contextId: "ctx-b",
+        timestampMs: t0 + 400,
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+      });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        turnId: "ctx-b",
+        ttfaMs: 300,
+        anchor: "speech_end",
+      });
+
+      await closeSession(session);
+    });
+
+    it("does not emit turn_latency for text-injected audio even when media beats Main", async () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: unknown[] = [];
+      session.on("turn_latency", (event) => {
+        events.push(event);
+      });
+      const { release } = installMainDrainBlocker(session.bus);
+      await session.start();
+
+      const t0 = 930_000;
+      session.bus.push(Route.Main, {
+        kind: "llm.delta",
+        contextId: "text-injected",
+        timestampMs: t0 - 50,
+        text: "block main drain",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.bus.push(Route.Media, {
+        kind: "tts.audio",
+        contextId: "text-injected",
+        timestampMs: t0 + 200,
+        audio: new Uint8Array(320),
+        sampleRateHz: 16000,
+      });
+      session.bus.push(Route.Main, {
+        kind: "llm.delta",
+        contextId: "text-injected",
+        timestampMs: t0 + 100,
+        text: "Injected reply with no voice anchor.",
+      });
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(events).toEqual([]);
+      await closeSession(session);
+    });
   });
 
   it("turn_latency is not emitted for an interrupted turn", async () => {
