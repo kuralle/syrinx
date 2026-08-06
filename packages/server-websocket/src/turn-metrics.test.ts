@@ -75,7 +75,7 @@ describe("turn metrics", () => {
         kind: "stt.result", contextId, timestampMs: 700, text: "hello", confidence: 0.99,
       });
       session.bus.push(Route.Main, { kind: "llm.delta", contextId, timestampMs: 900, text: "hi" });
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio", contextId, timestampMs: 1100, audio: new Uint8Array(640), sampleRateHz: 16000,
       });
     };
@@ -174,7 +174,7 @@ describe("turn metrics", () => {
       timestampMs: 900,
       text: "hi",
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-correlation",
       timestampMs: 1100,
@@ -278,7 +278,7 @@ describe("turn metrics", () => {
       timestampMs: 10_450,
       text: "hi",
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-live",
       timestampMs: 10_600,

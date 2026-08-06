@@ -100,7 +100,7 @@ export class FakeTTS implements VoicePlugin {
     const buf = new Uint8Array(batch.frame.data.buffer);
     const now = Date.now();
 
-    this.bus.push(Route.Main, {
+    this.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId,
       timestampMs: now,

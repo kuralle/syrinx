@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   const frameBytes = 640;
   for (let offset = 0; offset < enrollPcm.byteLength; offset += frameBytes) {
     const slice = enrollPcm.subarray(offset, Math.min(offset + frameBytes, enrollPcm.byteLength));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "enroll",
       timestampMs: Date.now(),
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   });
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "tts.audio",
     contextId: "assistant",
     timestampMs: Date.now(),
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     amplitude: 0.5,
   });
   for (let i = 0; i < 12; i += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "bystander",
       timestampMs: Date.now(),
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
     confidence: 0.95,
   } satisfies VadSpeechStartedPacket);
   for (let i = 0; i < 10; i += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "vad.audio",
       contextId: "bystander",
       timestampMs: t0 + 20 + i * 30,

@@ -78,11 +78,11 @@ async function main(): Promise<void> {
     turnAudioBytes = 0;
     // stream the user's question
     for (let off = 0; off < pcm.length; off += FRAME) {
-      session.bus.push(Route.Main, { kind: "user.audio_received", contextId, timestampMs: Date.now(), audio: toBytes(frameAt(pcm, off)) });
+      session.bus.push(Route.Media, { kind: "user.audio_received", contextId, timestampMs: Date.now(), audio: toBytes(frameAt(pcm, off)) });
       await sleep(20);
     }
     // trailing silence so server_vad detects end-of-turn
-    for (let p = 0; p < 40; p++) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId, timestampMs: Date.now(), audio: toBytes(new Int16Array(FRAME)) }); await sleep(20); }
+    for (let p = 0; p < 40; p++) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId, timestampMs: Date.now(), audio: toBytes(new Int16Array(FRAME)) }); await sleep(20); }
 
     // wait for the assistant reply to finish (quiescence: no new audio for 2s), bounded
     lastAudioMs = 0;

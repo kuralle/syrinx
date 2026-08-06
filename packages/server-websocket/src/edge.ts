@@ -510,7 +510,7 @@ function handleClientMessage(
     rememberContextSampleRate(contextSampleRates, nextContextId, binaryAudio.sampleRateHz);
     rememberInputSequence(session, inputSequence, nextContextId, binaryAudio.sequence);
     const audio = resampleAudioBytes(binaryAudio.audio, binaryAudio.sampleRateHz, inputSampleRateHz, streamingResamplers);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: nextContextId,
       timestampMs: Date.now(),
@@ -574,7 +574,7 @@ function handleClientMessage(
   rememberContextSampleRate(contextSampleRates, nextContextId, message.sampleRateHz);
   rememberInputSequence(session, inputSequence, nextContextId, message.sequence);
   const audio = resampleAudioBytes(decodeBase64(message.audio), message.sampleRateHz, inputSampleRateHz, streamingResamplers);
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "user.audio_received",
     contextId: nextContextId,
     timestampMs: Date.now(),

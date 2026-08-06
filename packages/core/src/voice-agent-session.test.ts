@@ -212,7 +212,7 @@ class InterruptAwareStreamingTtsPlugin implements VoicePlugin {
     if (this.interval) return;
     this.interval = setInterval(() => {
       this.emittedAudioCount++;
-      this.bus?.push(Route.Main, {
+      this.bus?.push(Route.Media, {
         kind: "tts.audio",
         contextId: this.contextId,
         timestampMs: Date.now(),
@@ -251,7 +251,7 @@ async function enrollPrimarySpeaker(
     confidence: 0.99,
   } satisfies VadSpeechStartedPacket);
   for (let i = 0; i < 12; i += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: t0 + i * 20,
@@ -276,19 +276,20 @@ describe("VoiceAgentSession", () => {
     });
     await session.start();
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "turn-policy",
       timestampMs: 1000,
       audio: new Uint8Array([0x34, 0x12, 0xcc, 0xff]),
     } satisfies UserAudioReceivedPacket);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-policy",
       timestampMs: 1100,
       audio: new Uint8Array(640),
       sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     session.bus.push(Route.Main, {
       kind: "tts.playout_progress",
       contextId: "turn-policy",
@@ -322,7 +323,7 @@ describe("VoiceAgentSession", () => {
     const session = new VoiceAgentSession({ plugins: {}, interactionPolicy: policy });
     await session.start();
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "turn-rate",
       timestampMs: 2000,
@@ -343,7 +344,7 @@ describe("VoiceAgentSession", () => {
     const session = new VoiceAgentSession({ plugins: {}, interactionPolicy: policy, scheduler });
     await session.start();
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-x",
       timestampMs: 1000,
@@ -446,7 +447,7 @@ describe("VoiceAgentSession", () => {
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
     };
-    session.bus.push(Route.Main, audioPacket);
+    session.bus.push(Route.Media, audioPacket);
 
     await new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -472,7 +473,7 @@ describe("VoiceAgentSession", () => {
       timestampMs: Date.now(),
       audio: new Uint8Array([1, 2, 3, 4]),
     };
-    session.bus.push(Route.Main, audioPacket);
+    session.bus.push(Route.Media, audioPacket);
 
     await new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -521,7 +522,7 @@ describe("VoiceAgentSession", () => {
       timestampMs: Date.now(),
       audio,
     };
-    session.bus.push(Route.Main, userAudioPacket);
+    session.bus.push(Route.Media, userAudioPacket);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -654,7 +655,7 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.bus.push(Route.Main, { kind: "llm.delta", contextId: "turn-1", timestampMs: t0 + 900, text: "The fee is ten dollars." });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-1",
       timestampMs: t0 + 1150,
@@ -735,7 +736,7 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.bus.push(Route.Main, { kind: "llm.delta", contextId: ctx, timestampMs: t0 + 300, text: "Hi." });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: ctx,
       timestampMs: t0 + 700,
@@ -785,7 +786,7 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.bus.push(Route.Main, { kind: "llm.delta", contextId: "ctx-b", timestampMs: t0 + 300, text: "Hi." });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "ctx-b",
       timestampMs: t0 + 600,
@@ -830,7 +831,8 @@ describe("VoiceAgentSession", () => {
       reason: "realtime_response_started",
       timestampMs: t0 + 1,
     });
-    session.bus.push(Route.Main, {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "native-response",
       timestampMs: t0 + 798,
@@ -885,7 +887,7 @@ describe("VoiceAgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     session.bus.push(Route.Main, { kind: "llm.delta", contextId: "native-turn", timestampMs: t0 + 100, text: "Hello." });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "native-turn",
       timestampMs: t0 + 400,
@@ -935,7 +937,7 @@ describe("VoiceAgentSession", () => {
       transcripts: [],
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-2",
       timestampMs: t0 + 400,
@@ -1000,7 +1002,8 @@ describe("VoiceAgentSession", () => {
       timestampMs: t0 + 300,
       text: "Let me check.",
     });
-    session.bus.push(Route.Main, {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "tool-turn",
       timestampMs: t0 + 400,
@@ -1056,7 +1059,7 @@ describe("VoiceAgentSession", () => {
     session.on("turn_latency", (event) => { events.push(event); });
     await session.start();
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "text-only",
       timestampMs: 500_400,
@@ -1092,7 +1095,7 @@ describe("VoiceAgentSession", () => {
       timestampMs: t0 + 100,
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-3",
       timestampMs: t0 + 300,
@@ -1624,7 +1627,7 @@ describe("VoiceAgentSession", () => {
       audio,
       sampleRateHz: 16000,
     };
-    session.bus.push(Route.Main, ttsAudioPacket);
+    session.bus.push(Route.Media, ttsAudioPacket);
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1659,7 +1662,7 @@ describe("VoiceAgentSession", () => {
     });
 
     const input = pcm16SamplesToBytes(new Int16Array(320).fill(1000));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-loudness",
       timestampMs: Date.now(),
@@ -1693,7 +1696,7 @@ describe("VoiceAgentSession", () => {
       errors.push({ stage: event.stage, message: event.message });
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-missing-rate",
       timestampMs: Date.now(),
@@ -1741,7 +1744,7 @@ describe("VoiceAgentSession", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
 
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -1791,7 +1794,7 @@ describe("VoiceAgentSession", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       // tts.audio drives extend(playoutMs); with durationMs:0 it must arm nothing.
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -1983,7 +1986,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // Assistant is speaking.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2035,7 +2038,7 @@ describe("VoiceAgentSession", () => {
       interrupts.push(pkt as InterruptTtsPacket);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2085,7 +2088,7 @@ describe("VoiceAgentSession", () => {
       interrupts.push(pkt as InterruptTtsPacket);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2115,7 +2118,7 @@ describe("VoiceAgentSession", () => {
     session.bus.on("interrupt.tts", (pkt) => {
       interrupts.push(pkt as InterruptTtsPacket);
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2163,7 +2166,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // Assistant is speaking.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2258,7 +2261,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // Assistant is speaking.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2350,7 +2353,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // 25600 bytes @ 16 kHz s16 = 800ms of playout, delivered as one burst.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2390,13 +2393,14 @@ describe("VoiceAgentSession", () => {
     });
 
     // 3200 bytes @ 16 kHz s16 = 100ms of playout.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
       audio: new Uint8Array(3200),
       sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     session.bus.push(Route.Main, {
       kind: "tts.end",
       contextId: "assistant-turn",
@@ -2431,7 +2435,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // 3200 bytes @ 16 kHz s16 = 100ms estimate.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2478,7 +2482,7 @@ describe("VoiceAgentSession", () => {
       interrupts.push(pkt as InterruptTtsPacket);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2526,7 +2530,7 @@ describe("VoiceAgentSession", () => {
       metrics.push((pkt as unknown as { name: string }).name);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2580,7 +2584,7 @@ describe("VoiceAgentSession", () => {
     } satisfies VadSpeechEndedPacket);
 
     const firstAudioMs = 1350;
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-1",
       timestampMs: firstAudioMs,
@@ -2589,7 +2593,7 @@ describe("VoiceAgentSession", () => {
     } satisfies TextToSpeechAudioPacket);
 
     // Second audio packet for same turn — must NOT emit a second latency metric.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-1",
       timestampMs: firstAudioMs + 50,
@@ -2616,7 +2620,7 @@ describe("VoiceAgentSession", () => {
       }
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2656,7 +2660,7 @@ describe("VoiceAgentSession", () => {
       if (m.name === "vaqi.interruption") metrics.push({ name: m.name, value: m.value });
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2756,7 +2760,7 @@ describe("VoiceAgentSession", () => {
       metrics.push((pkt as unknown as { name: string }).name);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -2861,7 +2865,7 @@ describe("VoiceAgentSession", () => {
     });
 
     // TTS produces one chunk then goes silent — no further audio, no tts.end.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -2885,7 +2889,7 @@ describe("VoiceAgentSession", () => {
       metrics.push((pkt as unknown as { name: string }).name);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -2927,7 +2931,7 @@ describe("VoiceAgentSession", () => {
     });
 
     try {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -2971,7 +2975,7 @@ describe("VoiceAgentSession", () => {
     });
 
     try {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -2980,7 +2984,7 @@ describe("VoiceAgentSession", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       await vi.advanceTimersByTimeAsync(1500);
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -3014,7 +3018,7 @@ describe("VoiceAgentSession", () => {
     });
 
     try {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -3040,7 +3044,7 @@ describe("VoiceAgentSession", () => {
       recorded.push(pkt as RecordAssistantAudioPacket);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3096,7 +3100,7 @@ describe("VoiceAgentSession", () => {
       metrics.push(metric.name);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3125,7 +3129,7 @@ describe("VoiceAgentSession", () => {
       timestampMs: Date.now(),
       text: "This late done must not flush TTS.",
     } satisfies LlmResponseDonePacket);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3170,7 +3174,7 @@ describe("VoiceAgentSession", () => {
 
     await enrollPrimarySpeaker(session);
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3194,7 +3198,7 @@ describe("VoiceAgentSession", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 10; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "user-barge",
         timestampMs: t0 + 20 + i * 30,
@@ -3226,7 +3230,7 @@ describe("VoiceAgentSession", () => {
 
     await enrollPrimarySpeaker(session);
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3247,7 +3251,7 @@ describe("VoiceAgentSession", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 10; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "user-barge",
         timestampMs: t0 + 20 + i * 30,
@@ -3282,7 +3286,7 @@ describe("VoiceAgentSession", () => {
       metrics.push((pkt as unknown as { name: string }).name);
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -3508,7 +3512,7 @@ describe("VoiceAgentSession", () => {
         sttPackets.push(pkt as SpeechToTextAudioPacket);
       });
 
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-default-owner",
         timestampMs: Date.now(),
@@ -3538,7 +3542,7 @@ describe("VoiceAgentSession", () => {
         userInputs.push(pkt as UserInputPacket);
       });
 
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "turn-stt",
         timestampMs: Date.now(),
@@ -3899,7 +3903,7 @@ describe("VoiceAgentSession supersede + thinking-phase barge-in", () => {
       kind: "eos.turn_complete", contextId: "turn-1", timestampMs: Date.now(), text: "one", transcripts: [],
     } satisfies EndOfSpeechPacket);
     await new Promise((r) => setTimeout(r, 5));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio", contextId: "turn-1", timestampMs: Date.now(),
       audio: new Uint8Array(16000), sampleRateHz: 16000, // ~0.5s of audio still playing
     } satisfies TextToSpeechAudioPacket);
@@ -3950,7 +3954,7 @@ describe("VoiceAgentSession supersede + thinking-phase barge-in", () => {
       kind: "eos.turn_complete", contextId: "turn-1", timestampMs: Date.now(), text: "here is the answer", transcripts: [],
     } satisfies EndOfSpeechPacket);
     await new Promise((r) => setTimeout(r, 5));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(16000), sampleRateHz: 16000,
     } satisfies TextToSpeechAudioPacket);
     await new Promise((r) => setTimeout(r, 5));
@@ -3988,7 +3992,7 @@ describe("VoiceAgentSession observability seams", () => {
       text: "hello",
       transcripts: [],
     } satisfies EndOfSpeechPacket);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "infra-turn",
       timestampMs: 1000,
@@ -4040,7 +4044,7 @@ describe("VoiceAgentSession observability seams", () => {
     session.bus.on("acoustic.signal", (pkt) => { signals.push(pkt as AcousticSignalPacket); });
     await session.start();
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: 1,

@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   const contextId = crypto.randomUUID();
   let offset = 0;
   while (offset < pcm.length) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId,
       timestampMs: Date.now(),

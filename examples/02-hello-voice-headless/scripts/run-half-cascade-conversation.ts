@@ -88,8 +88,8 @@ async function main(): Promise<void> {
 
     // 2) send the user audio to the front and capture the reply
     current = [];
-    for (let off = 0; off < userPcm16.length; off += FRAME) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: toBytes(frameAt(userPcm16, off)) }); await sleep(20); }
-    for (let p = 0; p < 40; p++) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: toBytes(new Int16Array(FRAME)) }); await sleep(20); }
+    for (let off = 0; off < userPcm16.length; off += FRAME) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: toBytes(frameAt(userPcm16, off)) }); await sleep(20); }
+    for (let p = 0; p < 40; p++) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: toBytes(new Int16Array(FRAME)) }); await sleep(20); }
     lastAudioMs = 0;
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) { await sleep(300); if (lastAudioMs > 0 && Date.now() - lastAudioMs > 2500) break; }

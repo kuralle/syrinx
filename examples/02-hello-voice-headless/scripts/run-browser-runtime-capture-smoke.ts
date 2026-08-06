@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     received.push(audio);
     if (emittedAssistantAudio || received.length < 3) return;
     emittedAssistantAudio = true;
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: audio.contextId,
       timestampMs: Date.now(),

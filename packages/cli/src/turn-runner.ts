@@ -289,7 +289,7 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
     const frame = sliceFramePcm(pcm, offset);
     const audio = pcmToBytes(frame);
     if (timeline.feedStartMs === 0) timeline.feedStartMs = Date.now();
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: Date.now(),
@@ -303,7 +303,7 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
 
   for (let pad = 0; pad < 40; pad += 1) {
     const frame = new Int16Array(SAMPLES_PER_FRAME);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: Date.now(),

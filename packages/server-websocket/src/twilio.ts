@@ -342,7 +342,7 @@ export async function createTwilioMediaStreamServer(
         const pcm8k = decodeMuLawToPcm16(ulaw);
         rememberTwilioMediaTimestamp(session, state, message.media?.timestamp, pcm8k.length, twilioSampleRateHz);
         const pcm16k = resamplePcm16Streaming(state.streamingResamplers, pcm8k, twilioSampleRateHz, inputSampleRateHz);
-        session.bus.push(Route.Main, {
+        session.bus.push(Route.Media, {
           kind: "user.audio_received",
           contextId: state.contextId,
           timestampMs: Date.now(),

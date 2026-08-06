@@ -129,7 +129,7 @@ async function main(): Promise<void> {
       timestampMs: now - 100,
       text: "ack",
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId,
       timestampMs: now,

@@ -194,7 +194,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 10));
     const outbound = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -247,7 +247,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     await started;
 
     const outbound = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -316,7 +316,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     await waitForCondition(() => session.state === "ready");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const outbound = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -354,7 +354,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     client.send(JSON.stringify(smartPbxStart("opus", 48000)));
     await new Promise((resolve) => setTimeout(resolve, 10));
     const outbound = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -471,7 +471,7 @@ describe("createSmartPbxMediaStreamServer", () => {
         payload: Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64"),
       },
     }));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -526,7 +526,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     try {
       const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "smartpbx-call-test",
         timestampMs: Date.now(),
@@ -587,7 +587,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -625,7 +625,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const secondMedia = readNthJsonMatching(client, (message) => message.event === "media", 2);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -673,7 +673,7 @@ describe("createSmartPbxMediaStreamServer", () => {
 
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 10));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -697,7 +697,7 @@ describe("createSmartPbxMediaStreamServer", () => {
       expect.objectContaining({ name: "smartpbx.interrupt_onset_to_media_silent_ms" }),
     ]);
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -800,7 +800,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     const serverSocket = [...server.wsServer.clients][0]!;
     Object.defineProperty(serverSocket, "bufferedAmount", { value: 2, configurable: true });
     const closed = new Promise<number>((resolve) => client.once("close", (code) => resolve(code)));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),
@@ -920,7 +920,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     client.send(JSON.stringify(smartPbxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "smartpbx-call-test",
       timestampMs: Date.now(),

@@ -249,7 +249,7 @@ async function pushFrames(
     if (waitMs > 0) await sleep(waitMs);
     const frame = new Int16Array(FRAME_SAMPLES);
     if (samples) frame.set(samples.subarray(i * FRAME_SAMPLES, (i + 1) * FRAME_SAMPLES));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: Date.now(),

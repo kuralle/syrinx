@@ -738,7 +738,7 @@ export class RealtimeBridge implements VoicePlugin {
       audio: frame,
       sampleRateHz: ENGINE_SAMPLE_RATE_HZ,
     };
-    bus.push(Route.Main, packet);
+    bus.push(Route.Media, packet);
   }
 
   private onError(bus: PipelineBus, cause: Error, isRecoverable: boolean): void {

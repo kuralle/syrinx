@@ -92,9 +92,9 @@ async function main(): Promise<void> {
   await session.start();
   const ctx = crypto.randomUUID();
   let off = 0;
-  while (off < pcm.length) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(sliceFrame(pcm, off)) }); off += FRAME_SAMPLES; await sleep(20); }
+  while (off < pcm.length) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(sliceFrame(pcm, off)) }); off += FRAME_SAMPLES; await sleep(20); }
   userTurnEndMs = Date.now();
-  for (let pad = 0; pad < 60; pad += 1) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)) }); await sleep(20); }
+  for (let pad = 0; pad < 60; pad += 1) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)) }); await sleep(20); }
 
   // Quiescence-based end: wait until audio started and no new audio for 2.5s (Zeta emits tts.end per segment).
   const deadline = Date.now() + 90_000;

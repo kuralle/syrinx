@@ -48,7 +48,7 @@ async function main(): Promise<void> {
     const end = Math.min(offset + FRAME_SAMPLES, pcm.length);
     const frame = new Int16Array(FRAME_SAMPLES);
     frame.set(pcm.subarray(offset, end));
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: sttCtx,
       timestampMs: Date.now(),

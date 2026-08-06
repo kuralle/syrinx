@@ -100,7 +100,7 @@ describe("ElevenLabsSTTPlugin", () => {
       model: "scribe_v2_realtime",
     });
     // 640 bytes pcm_s16le @ 16kHz = 0.02 s
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -175,7 +175,7 @@ describe("ElevenLabsSTTPlugin", () => {
       emit_eos_on_final: false,
     });
     // 320 + 320 = 0.01s + 0.01s
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-multi",
       timestampMs: Date.now(),
@@ -183,7 +183,7 @@ describe("ElevenLabsSTTPlugin", () => {
     });
     bus.push(Route.Main, { kind: "stt.finalize", contextId: "turn-multi", timestampMs: Date.now() });
     await waitFor(usage, 1);
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-multi",
       timestampMs: Date.now(),

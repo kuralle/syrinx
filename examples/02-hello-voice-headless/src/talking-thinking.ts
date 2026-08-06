@@ -91,7 +91,7 @@ const TURN_TIMEOUT_MS = 120_000;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function push(session: VoiceAgentSession, frame: Int16Array, contextId: string): void {
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "user.audio_received",
     contextId,
     timestampMs: Date.now(),

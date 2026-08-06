@@ -88,7 +88,7 @@ async function startPlugin(
   });
   await waitFor(local.sockets);
   // Feed one audio packet so the plugin learns the current contextId.
-  bus.push(Route.Main, {
+  bus.push(Route.Media, {
     kind: "stt.audio",
     contextId: "turn-1",
     timestampMs: Date.now(),

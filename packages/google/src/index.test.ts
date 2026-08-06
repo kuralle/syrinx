@@ -81,7 +81,7 @@ describe("GoogleSTTPlugin", () => {
       project_id: "test-project",
       endpoint_url: endpointUrl,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -137,7 +137,7 @@ describe("GoogleSTTPlugin", () => {
       retry_max_delay_ms: 1,
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -210,7 +210,7 @@ describe("GoogleSTTPlugin", () => {
       sample_rate: 16000,
       model: "latest_long",
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-usage",
       timestampMs: Date.now(),
@@ -260,7 +260,7 @@ describe("GoogleSTTPlugin", () => {
       endpoint_url: endpointUrl,
       model: "latest_long",
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-offset",
       timestampMs: Date.now(),
@@ -312,7 +312,7 @@ describe("GoogleSTTPlugin", () => {
       model: "latest_long",
       emit_eos_on_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-smartturn",
       timestampMs: Date.now(),
@@ -365,7 +365,7 @@ describe("GoogleSTTPlugin", () => {
       endpoint_url: endpointUrl,
       emit_eos_on_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-no-eos",
       timestampMs: Date.now(),
@@ -401,7 +401,7 @@ describe("GoogleSTTPlugin", () => {
       project_id: "test-project",
       endpoint_url: endpointUrl,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-bad",
       timestampMs: Date.now(),

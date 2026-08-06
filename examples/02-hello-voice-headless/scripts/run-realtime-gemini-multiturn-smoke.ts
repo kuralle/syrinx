@@ -101,7 +101,7 @@ async function streamPcm(
   for (let offset = 0; offset < pcm.length; offset += FRAME_SAMPLES) {
     const frame = new Int16Array(FRAME_SAMPLES);
     frame.set(pcm.subarray(offset, Math.min(pcm.length, offset + FRAME_SAMPLES)));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: transportContextId,
       timestampMs: Date.now(),
@@ -118,7 +118,7 @@ async function streamSilence(
 ): Promise<void> {
   const frames = Math.ceil(durationMs / 20);
   for (let i = 0; i < frames; i += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: transportContextId,
       timestampMs: Date.now(),

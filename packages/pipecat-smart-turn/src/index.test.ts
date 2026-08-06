@@ -146,7 +146,7 @@ describe("PipecatEOSPlugin", () => {
       timestampMs: Date.now(),
       confidence: 0.9,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "vad.audio",
       contextId,
       timestampMs: Date.now(),
@@ -164,7 +164,7 @@ describe("PipecatEOSPlugin", () => {
     expect(completions).toEqual([]);
 
     bus.push(Route.Main, { kind: "vad.speech_started", contextId, timestampMs: Date.now(), confidence: 0.9 });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "vad.audio",
       contextId,
       timestampMs: Date.now(),
@@ -204,7 +204,7 @@ describe("PipecatEOSPlugin", () => {
     expect(completions).toHaveLength(1);
 
     // Assistant responds (audio) then ends — but NO tts.playout_progress{complete} ever arrives.
-    bus.push(Route.Main, { kind: "tts.audio", contextId: ctx, timestampMs: Date.now(), audio: pcm16SamplesToBytes(new Int16Array(320)), sampleRateHz: 16000 });
+    bus.push(Route.Media, { kind: "tts.audio", contextId: ctx, timestampMs: Date.now(), audio: pcm16SamplesToBytes(new Int16Array(320)), sampleRateHz: 16000 });
     bus.push(Route.Main, { kind: "tts.end", contextId: ctx, timestampMs: Date.now() });
 
     // Wait past the estimated-playout + grace fallback release.
@@ -436,7 +436,7 @@ describe("PipecatEOSPlugin", () => {
     const oddOffsetFrame = backing.subarray(1);
     expect(oddOffsetFrame.byteOffset % 2).toBe(1);
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "vad.audio",
       contextId: "turn-odd-offset",
       timestampMs: Date.now(),
@@ -690,7 +690,7 @@ describe("PipecatEOSPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(completions).toHaveLength(1);
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "review-turn",
       timestampMs: Date.now(),
@@ -955,7 +955,7 @@ describe("PipecatEOSPlugin — absolute turn duration cap", () => {
         timestampMs: Date.now(),
         text: `still talking ${String(i)}`,
       });
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "turn-abs-cap",
         timestampMs: Date.now(),
@@ -1016,7 +1016,7 @@ describe("PipecatEOSPlugin — absolute turn duration cap", () => {
         timestampMs: Date.now(),
         text: `noise ${String(i)}`,
       });
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "turn-abs-off",
         timestampMs: Date.now(),

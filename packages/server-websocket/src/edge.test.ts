@@ -570,7 +570,7 @@ describe("edge background audio", () => {
     });
     waitForReady(socket);
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "bg-turn",
       timestampMs: Date.now(),
@@ -631,7 +631,7 @@ describe("edge turn metrics (LDT-18 parity)", () => {
       timestampMs: speechEndMs + 500,
       text: "hi there",
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "metrics-turn",
       timestampMs: speechEndMs + 700,
@@ -696,7 +696,7 @@ describe("edge turn metrics (LDT-18 parity)", () => {
       timestampMs: textReadyMs,
       text: "hi there",
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "text-turn",
       timestampMs: textReadyMs + 350,

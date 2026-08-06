@@ -644,7 +644,7 @@ function emitTelnyxMediaFrame(
 ): void {
   rememberTelnyxMediaTimestamp(session, state, frame.timestamp, frame.pcm.length, state.inboundSampleRateHz);
   const resampled = resamplePcm16Streaming(state.streamingResamplers, frame.pcm, state.inboundSampleRateHz, inputSampleRateHz);
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "user.audio_received",
     contextId: state.contextId,
     timestampMs: Date.now(),

@@ -114,7 +114,7 @@ async function main(): Promise<void> {
 
   const pcm = readFileSync(FIXTURE).subarray(44); // strip WAV header
   for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "flux-live-1",
       timestampMs: Date.now(),
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   const silence = new Uint8Array(CHUNK_BYTES);
   const silenceDeadline = Date.now() + 6000;
   while (Date.now() < silenceDeadline && !llmDoneText) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "flux-live-1",
       timestampMs: Date.now(),

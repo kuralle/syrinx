@@ -77,7 +77,7 @@ async function main(): Promise<void> {
   await session.start();
   const ctx = crypto.randomUUID();
   let off = 0;
-  while (off < pcm.length) { session.bus.push(Route.Main, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(sliceFrame(pcm, off)) }); off += FRAME_SAMPLES; await sleep(20); }
+  while (off < pcm.length) { session.bus.push(Route.Media, { kind: "user.audio_received", contextId: ctx, timestampMs: Date.now(), audio: pcmToBytes(sliceFrame(pcm, off)) }); off += FRAME_SAMPLES; await sleep(20); }
 
   // PHASE 1: buffer appended, but Syrinx has NOT signalled end-of-turn. With server VAD off,
   // the provider must NOT respond. Wait and assert silence.

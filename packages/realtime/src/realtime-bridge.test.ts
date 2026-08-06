@@ -165,7 +165,7 @@ describe("RealtimeBridge", () => {
     const started = bus.start();
     await bridge.initialize(bus, {});
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "transport-turn",
       timestampMs: Date.now(),

@@ -333,7 +333,7 @@ export async function runTelnyxEdgeWebSocketConnection(
         const encoded = base64ToBytes(payload);
         const pcmWire = decodeTelnyxInboundPayload(encoded, wireCodec, g722);
         const pcmEngine = resamplePcm16Streaming(uplinkResamplers, pcmWire, wireSampleRateHz, engineRate);
-        session.bus.push(Route.Main, {
+        session.bus.push(Route.Media, {
           kind: "user.audio_received",
           contextId,
           timestampMs: Date.now(),

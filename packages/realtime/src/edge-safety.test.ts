@@ -137,7 +137,7 @@ describe("edge safety (R-14)", () => {
     mock.inject({ type: "session.updated" });
     await initTask;
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: "transport-turn",
       timestampMs: Date.now(),

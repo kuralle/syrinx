@@ -76,7 +76,9 @@ describe("ObservabilityObserver", () => {
         transcripts: [],
       } satisfies EndOfSpeechPacket);
 
-      bus.push(Route.Main, {
+      await drainBus();
+
+      bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: SPEECH_ID,
         timestampMs: 1300,
@@ -84,7 +86,7 @@ describe("ObservabilityObserver", () => {
         sampleRateHz: 16000,
       } satisfies TextToSpeechAudioPacket);
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: SPEECH_ID,
         timestampMs: 1400,
@@ -172,14 +174,14 @@ describe("ObservabilityObserver", () => {
 
   it("emits agent_started_speaking only once per speechId", async () => {
     await withObserver(async ({ bus, boundaries }) => {
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: SPEECH_ID,
         timestampMs: 100,
         audio: new Uint8Array(4),
         sampleRateHz: 16000,
       } satisfies TextToSpeechAudioPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: SPEECH_ID,
         timestampMs: 200,
@@ -216,7 +218,7 @@ describe("ObservabilityObserver", () => {
           },
         ],
       } satisfies EndOfSpeechPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: SPEECH_ID,
         timestampMs: 1300,

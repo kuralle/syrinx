@@ -259,7 +259,7 @@ export class OpenAICompatibleTTSPlugin implements VoicePlugin {
       sampleRateHz: this.sampleRate,
       provider: { name: "openai", model: this.model, cancelled: false },
     };
-    this.bus?.push(Route.Main, packet);
+    this.bus?.push(Route.Media, packet);
   }
 
   private emitUsage(contextId: string, characters: number): void {

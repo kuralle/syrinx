@@ -169,7 +169,7 @@ describe("startStreamingSttSession", () => {
       format: { encoding: "pcm_s16le", sampleRateHz: 16000, channels: 1 },
     });
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "t1",
       timestampMs: Date.now(),

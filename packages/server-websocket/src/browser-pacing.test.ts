@@ -141,7 +141,7 @@ describe("WT-03 Browser outbound pacing", () => {
     );
 
     // Send TTS audio
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "test-turn",
       timestampMs: Date.now(),
@@ -216,7 +216,7 @@ describe("WT-03 Browser outbound pacing", () => {
     const audioSamples = new Int16Array(sampleCount).fill(1000);
     const audioBytes = pcm16SamplesToBytes(audioSamples);
 
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "test-turn",
       timestampMs: Date.now(),
@@ -270,7 +270,7 @@ describe("WT-03 Browser outbound pacing", () => {
     const audioSamples = new Int16Array(sampleCount).fill(1000);
     const audioBytes = pcm16SamplesToBytes(audioSamples);
 
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "test-turn",
       timestampMs: Date.now(),
@@ -332,7 +332,7 @@ describe("WT-03 Browser outbound pacing", () => {
       200
     );
 
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "test-turn",
       timestampMs: Date.now(),
@@ -380,7 +380,7 @@ describe("WT-03 Browser outbound pacing", () => {
       1_200, // collect for the full paced second
     );
     // A 1s burst — far beyond the old 200ms cap that used to clear-and-stop.
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "default-bound-turn",
       timestampMs: Date.now(),
@@ -423,7 +423,7 @@ describe("WT-03 Browser outbound pacing", () => {
       (m: any) => m.type === "tts_chunk",
       150,
     );
-    session!.bus.push(Route.Main, {
+    session!.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "explicit-long-queue-turn",
       timestampMs: Date.now(),

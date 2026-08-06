@@ -123,7 +123,7 @@ async function runArm(speculative: boolean): Promise<ArmResult> {
 
   const pcm = readFileSync(FIXTURE).subarray(44);
   for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: `ab-${speculative ? "on" : "off"}`,
       timestampMs: Date.now(),
@@ -134,7 +134,7 @@ async function runArm(speculative: boolean): Promise<ArmResult> {
   const silence = new Uint8Array(CHUNK_BYTES);
   const deadline = Date.now() + 12_000;
   while (Date.now() < deadline && result.doneAtMs < 0) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: `ab-${speculative ? "on" : "off"}`,
       timestampMs: Date.now(),

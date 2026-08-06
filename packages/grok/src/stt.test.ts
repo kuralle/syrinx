@@ -72,7 +72,7 @@ describe("GrokSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -141,7 +141,7 @@ describe("GrokSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-2",
       timestampMs: Date.now(),
@@ -245,7 +245,7 @@ describe("GrokSTTPlugin", () => {
     });
     // transcript.created must land before binary audio is accepted.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-usage",
       timestampMs: Date.now(),
@@ -304,7 +304,7 @@ describe("GrokSTTPlugin", () => {
       emit_eos_on_final: false,
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-smartturn",
       timestampMs: Date.now(),

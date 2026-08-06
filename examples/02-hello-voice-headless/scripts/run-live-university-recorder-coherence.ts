@@ -368,7 +368,7 @@ function sendAudioFrame(
   frame: Int16Array,
   contextId: string,
 ): void {
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "user.audio_received",
     contextId,
     timestampMs: Date.now(),

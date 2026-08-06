@@ -114,13 +114,13 @@ async function main(): Promise<void> {
   const transportContextId = crypto.randomUUID();
   let offset = 0;
   while (offset < pcm.length) {
-    session.bus.push(Route.Main, { kind: "user.audio_received", contextId: transportContextId, timestampMs: Date.now(), audio: pcmToBytes(sliceFramePcm(pcm, offset)) });
+    session.bus.push(Route.Media, { kind: "user.audio_received", contextId: transportContextId, timestampMs: Date.now(), audio: pcmToBytes(sliceFramePcm(pcm, offset)) });
     offset += FRAME_SAMPLES;
     await sleep(20);
   }
   userTurnEndMs = Date.now();
   for (let pad = 0; pad < 100; pad += 1) {
-    session.bus.push(Route.Main, { kind: "user.audio_received", contextId: transportContextId, timestampMs: Date.now(), audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)) });
+    session.bus.push(Route.Media, { kind: "user.audio_received", contextId: transportContextId, timestampMs: Date.now(), audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)) });
     await sleep(20);
   }
 

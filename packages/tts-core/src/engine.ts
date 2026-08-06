@@ -222,7 +222,7 @@ class TtsEngineImpl implements TtsEngine {
           cancelled: false,
         },
       };
-      this.deps.sink.push(Route.Main, packet);
+      this.deps.sink.push(Route.Media, packet);
     }
     this.carry.set(key, evenLen < buf.byteLength ? buf.subarray(evenLen) : EMPTY);
   }

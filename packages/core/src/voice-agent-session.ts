@@ -804,6 +804,7 @@ export class VoiceAgentSession {
         this.sttPartialWordTimings.delete(pkt.previousContextId);
         this.carryTurnTimingAcrossContextChange(pkt.previousContextId, pkt.contextId);
       }
+      this.flushPendingTurnLatency(pkt.contextId);
     });
     this.bus.on("eos.turn_complete", this.handleTurnComplete.bind(this));
     this.bus.on("eos.interim", this.handleEosInterim.bind(this));
@@ -873,14 +874,14 @@ export class VoiceAgentSession {
     }
     if (this.endpointingOwner === "provider_stt") {
       this.bus.push(
-        Route.Main,
+        Route.Media,
         make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
         make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
         make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
       );
     } else {
       this.bus.push(
-        Route.Main,
+        Route.Media,
         make.recordUserAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
         make.vadAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
         make.sttAudio(pkt.contextId, pkt.timestampMs, pkt.audio),
@@ -1096,6 +1097,7 @@ export class VoiceAgentSession {
 
     this.turnUserStoppedAtMs.set(pkt.contextId, pkt.timestampMs);
     this.timingFor(pkt.contextId).speechEndedMs = pkt.timestampMs;
+    this.flushPendingTurnLatency(pkt.contextId);
     this.watchdogs.startVaqiMissedResponseTimer(pkt.contextId, pkt.timestampMs);
   }
 
@@ -1115,6 +1117,11 @@ export class VoiceAgentSession {
     const current = this.turnTimings.get(contextId);
     this.currentLatencyContextId = contextId;
     this.turnTimings.set(contextId, { ...previous, ...current });
+    const pending = this.pendingTurnLatency.get(previousContextId);
+    if (pending !== undefined) {
+      this.pendingTurnLatency.delete(previousContextId);
+      this.pendingTurnLatency.set(contextId, pending);
+    }
   }
 
   private timingFor(contextId: string): TurnTiming {
@@ -1717,7 +1724,12 @@ export class VoiceAgentSession {
       if (this.generatingContextIds.has(pkt.contextId)) {
         this.pendingTurnLatency.set(pkt.contextId, pkt.timestampMs);
       } else {
-        this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+        const timing = this.timingFor(pkt.contextId);
+        if (timing.speechEndedMs !== undefined || timing.eosMs !== undefined) {
+          this.emitTurnLatency(pkt.contextId, pkt.timestampMs);
+        } else {
+          this.pendingTurnLatency.set(pkt.contextId, pkt.timestampMs);
+        }
       }
     }
 
@@ -1761,7 +1773,7 @@ export class VoiceAgentSession {
       timestampMs: pkt.timestampMs,
     });
 
-    this.bus.push(Route.Main, make.recordAssistantAudio(pkt.contextId, Date.now(), audio, sampleRateHz));
+    this.bus.push(Route.Media, make.recordAssistantAudio(pkt.contextId, Date.now(), audio, sampleRateHz));
   }
 
   private normalizeOutboundAudio(audio: Uint8Array): Uint8Array {

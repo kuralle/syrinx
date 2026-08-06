@@ -40,7 +40,7 @@ describe("VoiceSessionRecorder", () => {
       const recorder = new VoiceSessionRecorder();
       await recorder.initialize(bus, { output_dir: dir });
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -55,7 +55,7 @@ describe("VoiceSessionRecorder", () => {
 
       expect(lines).toHaveLength(2);
       expect(lines[0]).toMatchObject({
-        route: "Main",
+        route: "Media",
         kind: "record.user_audio",
         context_id: "turn-1",
         packet: {
@@ -84,13 +84,13 @@ describe("VoiceSessionRecorder", () => {
       await recorder.initialize(bus, { output_dir: dir });
       const start = bus.start();
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array([1, 2, 3, 4]),
       } satisfies RecordUserAudioPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -150,7 +150,7 @@ describe("VoiceSessionRecorder", () => {
       const recorder = new VoiceSessionRecorder();
       await recorder.initialize(bus, { output_dir: dir });
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -169,7 +169,7 @@ describe("VoiceSessionRecorder", () => {
       const recorder = new VoiceSessionRecorder();
       await recorder.initialize(bus, { output_dir: dir });
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -193,7 +193,7 @@ describe("VoiceSessionRecorder", () => {
       await recorder.initialize(bus, { output_dir: dir });
       const start = bus.start();
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -226,7 +226,7 @@ describe("VoiceSessionRecorder", () => {
       const recorder = new VoiceSessionRecorder();
       await recorder.initialize(bus, { output_dir: dir });
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -234,7 +234,7 @@ describe("VoiceSessionRecorder", () => {
         sampleRateHz: 16000,
         truncate: false,
       } satisfies RecordAssistantAudioPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-2",
         timestampMs: Date.now(),
@@ -263,7 +263,7 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       for (const value of [0xa1, 0xa2, 0xa3]) {
-        bus.push(Route.Main, {
+        bus.push(Route.Media, {
           kind: "record.assistant_audio",
           contextId: "turn-1",
           timestampMs: Date.now(),
@@ -315,7 +315,7 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       // Audio generated at t=0 (bursty arrival) — generation anchor is offset 0.
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -366,7 +366,7 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       // First chunk arrives at t=0 → generation offset 0.
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -379,7 +379,7 @@ describe("VoiceSessionRecorder", () => {
 
       // Second chunk arrives at t=1000ms → generation offset jumps to ~32000.
       vi.setSystemTime(1000);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -432,7 +432,7 @@ describe("VoiceSessionRecorder", () => {
 
       // The assistant's first (and only) chunk arrives 500ms into the session.
       vi.setSystemTime(500);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -486,7 +486,7 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       for (const value of [0xa1, 0xa2, 0xa3]) {
-        bus.push(Route.Main, {
+        bus.push(Route.Media, {
           kind: "record.assistant_audio",
           contextId: "turn-1",
           timestampMs: Date.now(),
@@ -590,7 +590,7 @@ describe("VoiceSessionRecorder", () => {
       });
       const start = bus.start();
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: 0,
@@ -602,7 +602,7 @@ describe("VoiceSessionRecorder", () => {
       // Advance 100ms → 3200 bytes at 16 kHz. Second chunk lands at wall-clock byteOffset=3200.
       vi.setSystemTime(100);
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-2",
         timestampMs: 100,
@@ -658,13 +658,13 @@ describe("VoiceSessionRecorder", () => {
         assistBytes.writeInt16LE(assistSample, i * 2);
       }
 
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array(userBytes),
       } satisfies RecordUserAudioPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -711,14 +711,14 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       // User: 160 samples = 10ms at 16kHz
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array(320),
       } satisfies RecordUserAudioPacket);
       // Assistant: 240 samples = 10ms at 24kHz
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
@@ -758,13 +758,13 @@ describe("VoiceSessionRecorder", () => {
       const start = bus.start();
 
       // 3200 bytes = 100ms at 16kHz
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.user_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),
         audio: new Uint8Array(3200),
       } satisfies RecordUserAudioPacket);
-      bus.push(Route.Main, {
+      bus.push(Route.Media, {
         kind: "record.assistant_audio",
         contextId: "turn-1",
         timestampMs: Date.now(),

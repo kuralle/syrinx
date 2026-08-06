@@ -138,7 +138,7 @@ describe("wireTelephonyOutboundPipeline overflow", () => {
       }
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-drain",
       timestampMs: Date.now(),
@@ -146,7 +146,7 @@ describe("wireTelephonyOutboundPipeline overflow", () => {
       sampleRateHz: 8000,
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-drain",
       timestampMs: Date.now(),
@@ -187,7 +187,7 @@ describe("wireTelephonyOutboundPipeline.drainAndClose", () => {
     const { session, handle, disposers } = wireTestPipeline(socket);
 
     const longAudio = pcm16SamplesToBytes(new Int16Array(8000 * 2));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-drain",
       timestampMs: Date.now(),
@@ -295,7 +295,7 @@ describe("installTelephonyTurnRotation", () => {
       },
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-mix",
       timestampMs: Date.now(),

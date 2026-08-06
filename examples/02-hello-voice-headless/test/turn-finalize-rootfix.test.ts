@@ -120,13 +120,13 @@ describe("turn finalization root fix replay", () => {
     });
 
     bus.push(Route.Main, { kind: "vad.speech_started", contextId: "semantic-turn", timestampMs: Date.now(), confidence: 0.9 });
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "semantic-turn", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "semantic-turn", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 10));
     bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "semantic-turn", timestampMs: Date.now() });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     bus.push(Route.Main, { kind: "vad.speech_started", contextId: "semantic-turn", timestampMs: Date.now(), confidence: 0.9 });
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "semantic-turn", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "semantic-turn", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 10));
     bus.push(Route.Main, { kind: "vad.speech_ended", contextId: "semantic-turn", timestampMs: Date.now() });
 

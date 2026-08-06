@@ -280,7 +280,7 @@ export class DeepgramTTSPlugin implements VoicePlugin {
         sampleRateHz: this.sampleRate,
         provider: { name: "deepgram", model: this.model, region: "global", cancelled: false },
       };
-      this.bus?.push(Route.Main, packet);
+      this.bus?.push(Route.Media, packet);
     }
     this.carry = evenLen < buf.byteLength ? buf.subarray(evenLen) : EMPTY;
   }

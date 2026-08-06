@@ -287,7 +287,7 @@ export async function createSmartPbxMediaStreamServer(
         const wire = decodeStrictBase64(payload, "media.payload");
         const decoded = decodeSmartPbxWireAudio(wire, state);
         const resampled = resamplePcm16Streaming(state.streamingResamplers, decoded, state.wireSampleRateHz, inputSampleRateHz);
-        session.bus.push(Route.Main, {
+        session.bus.push(Route.Media, {
           kind: "user.audio_received",
           contextId: state.contextId,
           timestampMs: Date.now(),

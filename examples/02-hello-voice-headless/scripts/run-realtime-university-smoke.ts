@@ -272,7 +272,7 @@ async function main(): Promise<void> {
   let offset = 0;
   while (offset < pcm.length) {
     const frame = sliceFramePcm(pcm, offset);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: transportContextId,
       timestampMs: Date.now(),
@@ -283,7 +283,7 @@ async function main(): Promise<void> {
   }
 
   for (let pad = 0; pad < 100; pad += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId: transportContextId,
       timestampMs: Date.now(),

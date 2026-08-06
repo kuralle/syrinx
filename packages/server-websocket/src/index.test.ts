@@ -578,7 +578,7 @@ describe("createVoiceWebSocketServer", () => {
 
     client.send(JSON.stringify({ type: "text", text: "hello", contextId: "turn-2" }));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-2",
       timestampMs: Date.now(),
@@ -682,7 +682,7 @@ describe("createVoiceWebSocketServer", () => {
       timestampMs: Date.now(),
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -729,7 +729,7 @@ describe("createVoiceWebSocketServer", () => {
       messages.push(JSON.parse(data.toString()));
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -745,7 +745,7 @@ describe("createVoiceWebSocketServer", () => {
     await waitForCondition(() => messages.some((message) => message.type === "audio_clear"));
     binaries.length = 0;
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "assistant-turn",
       timestampMs: Date.now(),
@@ -1641,7 +1641,7 @@ describe("createVoiceWebSocketServer", () => {
 
     const pcmFrame = new Uint8Array(640);
     pcmFrame.set([1, 2, 3, 4]);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
@@ -1689,7 +1689,7 @@ describe("createVoiceWebSocketServer", () => {
 
     const pcmFrame = new Uint8Array(640);
     pcmFrame.set([1, 2, 3, 4]);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
@@ -1737,7 +1737,7 @@ describe("createVoiceWebSocketServer", () => {
       });
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
@@ -1824,7 +1824,7 @@ describe("createVoiceWebSocketServer", () => {
         resolve({ code, reason: reason.toString() });
       });
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
@@ -1871,7 +1871,7 @@ describe("createVoiceWebSocketServer", () => {
       closeReason = reason.toString();
     });
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-tts",
       timestampMs: Date.now(),
@@ -1911,7 +1911,7 @@ describe("createVoiceWebSocketServer", () => {
     serverSocket.terminate();
 
     // Push tts.audio while the bus handler is still registered but socket is no longer OPEN — must not throw
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "turn-test",
       timestampMs: Date.now(),
@@ -2010,7 +2010,7 @@ describe("createVoiceWebSocketServer", () => {
     });
 
     const pcmFrame = pcm16SamplesToBytes(new Int16Array(640).fill(1000));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "metrics-turn",
       timestampMs: speechEndMs + 700,

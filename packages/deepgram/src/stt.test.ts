@@ -98,7 +98,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -205,7 +205,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 0,
       emit_eos_on_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-1",
       timestampMs: Date.now(),
@@ -273,7 +273,7 @@ describe("DeepgramSTTPlugin", () => {
       sample_rate: 16000,
       utterance_end_ms: 1000,
     });
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(turnCompletes).toEqual([{ text: "book a room", contextId: "turn-1" }]);
@@ -310,7 +310,7 @@ describe("DeepgramSTTPlugin", () => {
       sample_rate: 16000,
       model: "nova-3",
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-usage",
       timestampMs: Date.now(),
@@ -365,7 +365,7 @@ describe("DeepgramSTTPlugin", () => {
       emit_eos_on_final: false,
       finalize_on_speech_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-smartturn",
       timestampMs: Date.now(),
@@ -420,9 +420,9 @@ describe("DeepgramSTTPlugin", () => {
       emit_eos_on_final: false,
     });
     // 320 bytes then another 320 bytes = 0.01s + 0.01s = 0.02s total.
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
     await waitFor(usage);
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-multi", timestampMs: Date.now(), audio: new Uint8Array(320) });
     await waitFor(usage, 2);
 
     const total = usage.reduce((sum, u) => sum + (u.audioSeconds ?? 0), 0);
@@ -471,7 +471,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 100,
       emit_eos_on_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-2",
       timestampMs: Date.now(),
@@ -525,7 +525,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-malformed",
       timestampMs: Date.now(),
@@ -575,7 +575,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-provider-error",
       timestampMs: Date.now(),
@@ -618,7 +618,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-close",
       timestampMs: Date.now(),
@@ -685,7 +685,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-before-reconnect",
       timestampMs: Date.now(),
@@ -693,7 +693,7 @@ describe("DeepgramSTTPlugin", () => {
     });
     await waitFor(connections, 2);
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-after-reconnect",
       timestampMs: Date.now(),
@@ -812,7 +812,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 10,
       emit_eos_on_final: false,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-unconfirmed",
       timestampMs: Date.now(),
@@ -877,7 +877,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 10,
     });
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-is-final", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-is-final", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await waitFor(finals);
     plugin.forceFinalize("turn-is-final");
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -943,7 +943,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 25,
     });
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-old", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-old", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 5));
     plugin.forceFinalize("turn-old");
     bus.push(Route.Main, {
@@ -1026,7 +1026,7 @@ describe("DeepgramSTTPlugin", () => {
       provider_finalize_timeout_ms: 25,
     });
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-old-released", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-old-released", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await waitFor(finals);
     plugin.forceFinalize("turn-old-released");
     bus.push(Route.Main, {
@@ -1099,7 +1099,7 @@ describe("DeepgramSTTPlugin", () => {
     });
 
     lastAudioContext = "turn-stale";
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-stale", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-stale", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-stale");
     await waitFor(errors);
@@ -1111,7 +1111,7 @@ describe("DeepgramSTTPlugin", () => {
 
     // Next turn streams on the SAME connection and completes normally.
     lastAudioContext = "turn-fresh";
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await waitFor(finals);
 
     expect(connections).toHaveLength(1);
@@ -1167,14 +1167,14 @@ describe("DeepgramSTTPlugin", () => {
       finalize_reset_threshold: 2,
     });
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-1", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-1");
     await waitFor(errors, 1);
     // First timeout: still one connection (no reconnect yet).
     expect(connections).toHaveLength(1);
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-2", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-2", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-2");
     await waitFor(errors, 2);
@@ -1183,7 +1183,7 @@ describe("DeepgramSTTPlugin", () => {
     // Second consecutive timeout: now it reconnects and abandons the wedged socket.
     expect(connections[0]?.readyState).toBe(connections[0]?.CLOSED);
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-fresh", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await waitFor(finals);
     expect(finals).toEqual([
       expect.objectContaining({ contextId: "turn-fresh", text: "fresh confirmed text" }),
@@ -1229,7 +1229,7 @@ describe("DeepgramSTTPlugin", () => {
     });
 
     // Turn 1: one finalize timeout → counter 1 (below threshold, no reset yet).
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-before-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-before-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-before-reconnect");
     await waitFor(timeoutErrors, 1);
@@ -1242,7 +1242,7 @@ describe("DeepgramSTTPlugin", () => {
 
     // Turn 2: a single post-reconnect timeout must NOT reconnect again — the counter was
     // cleared on the reconnect, so it is 1 (< threshold 2), not a stale 2.
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-after-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-after-reconnect", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-after-reconnect");
     await waitFor(timeoutErrors, 2);
@@ -1289,7 +1289,7 @@ describe("DeepgramSTTPlugin", () => {
       finalize_timeout_fallback: true,
     });
 
-    bus.push(Route.Main, { kind: "stt.audio", contextId: "turn-timeout-fallback", timestampMs: Date.now(), audio: new Uint8Array(640) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: "turn-timeout-fallback", timestampMs: Date.now(), audio: new Uint8Array(640) });
     await new Promise((resolve) => setTimeout(resolve, 20));
     plugin.forceFinalize("turn-timeout-fallback");
     await waitFor(finals);
@@ -1352,7 +1352,7 @@ describe("DeepgramSTTPlugin", () => {
       finalize_timeout_fallback: true,
     });
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-ignore-next",
       timestampMs: Date.now(),
@@ -1410,7 +1410,7 @@ describe("DeepgramSTTPlugin", () => {
       finalize_timeout_fallback: true,
     });
 
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-empty-discard",
       timestampMs: Date.now(),
@@ -1456,7 +1456,7 @@ describe("DeepgramSTTPlugin", () => {
       endpoint_url: endpointUrl,
       sample_rate: 16000,
     });
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "turn-bad-pcm",
       timestampMs: Date.now(),

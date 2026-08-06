@@ -291,7 +291,7 @@ export async function runTwilioEdgeWebSocketConnection(
         const mulaw = base64ToBytes(payload);
         const pcm8k = decodeMuLawToPcm16(mulaw);
         const pcm16k = resamplePcm16Streaming(uplinkResamplers, pcm8k, TWILIO_SAMPLE_RATE_HZ, engineRate);
-        session.bus.push(Route.Main, {
+        session.bus.push(Route.Media, {
           kind: "user.audio_received",
           contextId,
           timestampMs: Date.now(),

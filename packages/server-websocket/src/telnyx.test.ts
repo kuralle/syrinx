@@ -612,7 +612,7 @@ describe("createTelnyxMediaStreamServer", () => {
         payload: Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64"),
       },
     }));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -672,7 +672,7 @@ describe("createTelnyxMediaStreamServer", () => {
 
     try {
       const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "telnyx-call-control-test",
         timestampMs: Date.now(),
@@ -735,7 +735,7 @@ describe("createTelnyxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -774,7 +774,7 @@ describe("createTelnyxMediaStreamServer", () => {
     const samples16k = new Int16Array(320);
     for (let i = 0; i < samples16k.length; i += 1) samples16k[i] = i % 2 === 0 ? 1200 : -1200;
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -832,7 +832,7 @@ describe("createTelnyxMediaStreamServer", () => {
     // 200ms of audio @ 16 kHz = 10 paced frames of 20ms.
     const samples = new Int16Array(3200);
     for (let i = 0; i < samples.length; i += 1) samples[i] = i % 2 === 0 ? 1200 : -1200;
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-playout",
       timestampMs: Date.now(),
@@ -879,7 +879,7 @@ describe("createTelnyxMediaStreamServer", () => {
     // 200ms @ 16 kHz = exactly 10 paced frames of 20ms; the playout clock must count all 10.
     const samples = new Int16Array(3200);
     for (let i = 0; i < samples.length; i += 1) samples[i] = i % 2 === 0 ? 1200 : -1200;
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-final-frame",
       timestampMs: Date.now(),
@@ -918,7 +918,7 @@ describe("createTelnyxMediaStreamServer", () => {
     const samples = new Int16Array(320);
     samples[0] = 0x1234;
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -953,7 +953,7 @@ describe("createTelnyxMediaStreamServer", () => {
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -974,7 +974,7 @@ describe("createTelnyxMediaStreamServer", () => {
     expect(messages.filter((message) => message.event === "mark")).toHaveLength(0);
     expect(messages.filter((message) => message.event === "clear")).toHaveLength(1);
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -1050,7 +1050,7 @@ describe("createTelnyxMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const playbackMark = readJsonMatching(client, (message) => message.event === "mark" && message.mark?.name === "telnyx-call-control-test:1");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),
@@ -1266,7 +1266,7 @@ describe("createTelnyxMediaStreamServer", () => {
     // is still exactly one backpressure event and the discarded-ms metric stays "20".
     await waitForCondition(() => {
       if (isClosed) return true;
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "telnyx-call-control-test",
         timestampMs: Date.now(),
@@ -1398,7 +1398,7 @@ describe("createTelnyxMediaStreamServer", () => {
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "telnyx-call-control-test",
       timestampMs: Date.now(),

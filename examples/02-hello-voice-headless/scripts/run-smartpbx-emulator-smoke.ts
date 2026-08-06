@@ -108,7 +108,7 @@ async function main(): Promise<void> {
         responded = true;
         setTimeout(() => {
           const timestampMs = Date.now();
-          session.bus.push(Route.Main, {
+          session.bus.push(Route.Media, {
             kind: "tts.audio",
             contextId: audio.contextId,
             timestampMs,

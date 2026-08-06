@@ -396,7 +396,7 @@ async function sendPcmFrames(
   for (let offset = 0; offset < samples.length; offset += FRAME_SAMPLES) {
     const frame = new Int16Array(FRAME_SAMPLES);
     frame.set(samples.subarray(offset, Math.min(samples.length, offset + FRAME_SAMPLES)));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: Date.now(),
@@ -417,7 +417,7 @@ async function sendSilence(
   let byteLength = 0;
   for (let i = 0; i < frames; i += 1) {
     const frame = new Int16Array(FRAME_SAMPLES);
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: Date.now(),

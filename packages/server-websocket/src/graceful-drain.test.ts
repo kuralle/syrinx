@@ -182,7 +182,7 @@ describe("graceful connection draining (WT-04)", () => {
 
     // Push audio via the bus (bus delivers asynchronously)
     const audio80ms = pcm16SamplesToBytes(new Int16Array(640)); // 80ms at 8kHz
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test",
       timestampMs: Date.now(),
@@ -222,7 +222,7 @@ describe("graceful connection draining (WT-04)", () => {
 
     // Push 30s of audio that will NOT drain before the deadline
     const longAudio = pcm16SamplesToBytes(new Int16Array(8000 * 30)); // 30s at 8kHz
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test",
       timestampMs: Date.now(),

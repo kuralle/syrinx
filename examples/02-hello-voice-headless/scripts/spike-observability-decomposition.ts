@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   await sleep(GROUND_TRUTH.llmFinal); //  post-tool generation
   await sleep(GROUND_TRUTH.ttsTtfb); //   TTS time-to-first-byte
 
-  bus.push(Route.Main, {
+  bus.push(Route.Media, {
     kind: "tts.audio",
     contextId: CTX,
     timestampMs: now(),

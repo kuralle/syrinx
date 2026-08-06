@@ -43,7 +43,7 @@ async function enrollPrimarySpeaker(
     confidence: 0.99,
   } satisfies VadSpeechStartedPacket);
   for (let i = 0; i < 12; i += 1) {
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "user.audio_received",
       contextId,
       timestampMs: t0 + i * 20,
@@ -59,7 +59,7 @@ async function enrollPrimarySpeaker(
 }
 
 function armAssistantSpeaking(session: VoiceAgentSession, contextId = "assistant-turn"): void {
-  session.bus.push(Route.Main, {
+  session.bus.push(Route.Media, {
     kind: "tts.audio",
     contextId,
     timestampMs: Date.now(),
@@ -184,7 +184,7 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 10; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "user-barge",
         timestampMs: t0 + 20 + i * 30,
@@ -304,7 +304,7 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
     expect(interrupts).toEqual([]);
     expect(metrics).not.toContain("vaqi.interruption");
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "vad.audio",
       contextId: "user-barge",
       timestampMs: t0 + 5,
@@ -342,7 +342,7 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 8; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "user-first",
         timestampMs: t0 + i * 20,
@@ -371,7 +371,7 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 10; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "user-barge",
         timestampMs: t1 + 20 + i * 30,
@@ -411,13 +411,14 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       durationMs: 32,
     });
     for (let i = 0; i < 20; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "user-enroll",
         timestampMs: 500 + i * 10,
         audio: bystander,
       });
     }
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     const t0 = 1000;
     session.bus.push(Route.Main, {
@@ -427,7 +428,7 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
     for (let i = 0; i < 12; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "user.audio_received",
         contextId: "user-enroll",
         timestampMs: t0 + 20 + i * 20,
@@ -451,8 +452,9 @@ describe("turn-taking transition table (CR-09 characterization)", () => {
       timestampMs: t1,
       confidence: 0.99,
     } satisfies VadSpeechStartedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     for (let i = 0; i < 8; i += 1) {
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "vad.audio",
         contextId: "user-barge",
         timestampMs: t1 + 20 + i * 30,

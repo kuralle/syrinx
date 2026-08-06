@@ -60,7 +60,7 @@ async function main(): Promise<void> {
     const end = Math.min(offset + FRAME_SAMPLES, pcm.length);
     const frame = new Int16Array(FRAME_SAMPLES);
     frame.set(pcm.subarray(offset, end));
-    bus.push(Route.Main, { kind: "stt.audio", contextId: sttCtx, timestampMs: Date.now(), audio: new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength) });
+    bus.push(Route.Media, { kind: "stt.audio", contextId: sttCtx, timestampMs: Date.now(), audio: new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength) });
     await sleep(20);
   }
   bus.push(Route.Main, { kind: "stt.finalize", contextId: sttCtx, timestampMs: Date.now() });

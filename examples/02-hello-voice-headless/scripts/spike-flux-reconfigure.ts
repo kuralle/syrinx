@@ -65,7 +65,7 @@ async function main(): Promise<void> {
   const reconfigureAtChunk = 6; // ~480ms in — mid-stream, socket is live
   let chunk = 0;
   for (let offset = 0; offset < pcm.length; offset += CHUNK_BYTES) {
-    bus.push(Route.Main, {
+    bus.push(Route.Media, {
       kind: "stt.audio",
       contextId: "flux-spike-1",
       timestampMs: Date.now(),

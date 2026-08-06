@@ -257,7 +257,7 @@ export class GeminiTTSPlugin implements VoicePlugin {
         const audioUint8 = new Uint8Array(audioBytes);
         assertAudioPayload(this.audioFormat, audioUint8);
 
-        this.bus?.push(Route.Main, {
+        this.bus?.push(Route.Media, {
           kind: "tts.audio",
           contextId,
           timestampMs: Date.now(),

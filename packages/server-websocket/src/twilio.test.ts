@@ -572,7 +572,7 @@ describe("createTwilioMediaStreamServer", () => {
         payload: Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64"),
       },
     }));
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -632,7 +632,7 @@ describe("createTwilioMediaStreamServer", () => {
 
     try {
       const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-      session.bus.push(Route.Main, {
+      session.bus.push(Route.Media, {
         kind: "tts.audio",
         contextId: "twilio-CA-test-call",
         timestampMs: Date.now(),
@@ -695,7 +695,7 @@ describe("createTwilioMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -763,7 +763,7 @@ describe("createTwilioMediaStreamServer", () => {
       samples16k[i] = i % 2 === 0 ? 1200 : -1200;
     }
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -819,7 +819,7 @@ describe("createTwilioMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const firstMedia = readJsonMatching(client, (message) => message.event === "media");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -842,7 +842,7 @@ describe("createTwilioMediaStreamServer", () => {
     expect(messages.filter((message) => message.event === "mark")).toHaveLength(0);
     expect(messages.filter((message) => message.event === "clear")).toHaveLength(1);
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -918,7 +918,7 @@ describe("createTwilioMediaStreamServer", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const playbackMark = readJsonMatching(client, (message) => message.event === "mark" && message.mark?.name === "twilio-CA-test-call:1");
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -986,7 +986,7 @@ describe("createTwilioMediaStreamServer", () => {
     // sleep against the real pacer/drain-loop timers: under load the first burst
     // could drain enough before the second arrived that the queue never overflowed,
     // and the test then hung until the 5s waitForCondition timeout.
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -1079,7 +1079,7 @@ describe("createTwilioMediaStreamServer", () => {
         resolve({ code, reason: reason.toString() });
       });
     });
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
@@ -1207,7 +1207,7 @@ describe("createTwilioMediaStreamServer", () => {
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    session.bus.push(Route.Main, {
+    session.bus.push(Route.Media, {
       kind: "tts.audio",
       contextId: "twilio-CA-test-call",
       timestampMs: Date.now(),
