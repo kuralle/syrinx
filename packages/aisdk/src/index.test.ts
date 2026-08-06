@@ -9,6 +9,7 @@ import type {
   LlmResponseDonePacket,
   ReasoningSuspendedPacket,
   Reasoner,
+  ReasonerPrewarmContext,
   ReasonerTurn,
   ReasoningPart,
   TextToSpeechPlayoutProgressPacket,
@@ -1116,6 +1117,75 @@ describe("ReasoningBridge speculative generation", () => {
       "speculative.draft_promoted",
     ]);
 
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+});
+
+describe("ReasoningBridge.prewarm", () => {
+  it("forwards session context to reasoner.prewarm", async () => {
+    const seen: ReasonerPrewarmContext[] = [];
+    const reasoner: Reasoner = {
+      async prewarm(ctx) {
+        seen.push(ctx);
+      },
+      stream: () =>
+        (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "finish", reason: "stop", text: "" };
+        })(),
+    };
+    const store = new InMemoryReasonerSessionStore();
+    store.save("session-1", [{ role: "system", content: "Base policy." }]);
+    const plugin = new ReasoningBridge(reasoner, { sessionStore: store, sessionId: "session-1" });
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+    await plugin.prewarm();
+    expect(seen).toEqual([
+      {
+        sessionId: "session-1",
+        systemPrompt: "Base policy.",
+        seedMessages: [{ role: "system", content: "Base policy." }],
+      },
+    ]);
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("times out a hanging reasoner prewarm", async () => {
+    const reasoner: Reasoner = {
+      prewarm: () => new Promise(() => {}),
+      stream: () =>
+        (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "finish", reason: "stop", text: "" };
+        })(),
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, { ...baseConfig(), prewarm_timeout_ms: 50 });
+    const started = Date.now();
+    await expect(plugin.prewarm()).rejects.toThrow(/timed out/);
+    expect(Date.now() - started).toBeLessThan(500);
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("skips when reasoner has no prewarm", async () => {
+    const reasoner: Reasoner = {
+      stream: () =>
+        (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "finish", reason: "stop", text: "" };
+        })(),
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+    await expect(plugin.prewarm()).resolves.toBeUndefined();
     bus.stop();
     await drain;
     await plugin.close();

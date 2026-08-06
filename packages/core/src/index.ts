@@ -333,6 +333,9 @@ export { normalizeForSpeech, stripLeakedToolCalls } from "./voice-text.js";
 // Reasoner seam (RFC §4.2)
 export {
   type Reasoner,
+  type ReasonerCapabilities,
+  type ComposedReasoner,
+  type ReasonerPrewarmContext,
   type ReasonerTurn,
   type ReasonerMessage,
   type ReasonerUsage,

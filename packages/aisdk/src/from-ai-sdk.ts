@@ -19,11 +19,45 @@ import {
   isRecoverable,
   type Reasoner,
   type ReasonerMessage,
+  type ReasonerPrewarmContext,
   type ReasonerTurn,
   type ReasonerUsage,
   type ReasoningPart,
 } from "@kuralle-syrinx/core";
 import type { AISDKStreamFactory } from "./index.js";
+
+/** Internal probe text — warms the backend without surfacing voice output. */
+const PREWARM_PROBE = "\u200b";
+
+interface AffinityState {
+  promptCacheKey: string | undefined;
+}
+
+function createAffinityState(): AffinityState {
+  return { promptCacheKey: undefined };
+}
+
+function providerOptionsForAffinity(
+  key: string | undefined,
+  base?: Parameters<typeof streamText>[0]["providerOptions"],
+): Parameters<typeof streamText>[0]["providerOptions"] {
+  if (!key) return base;
+  const openai = {
+    ...((base as { openai?: Record<string, unknown> } | undefined)?.openai ?? {}),
+    promptCacheKey: key,
+  };
+  return { ...(base ?? {}), openai } as Parameters<typeof streamText>[0]["providerOptions"];
+}
+
+async function drainPrewarmStream(source: AsyncIterable<TextStreamPart<ToolSet>>): Promise<void> {
+  for await (const part of source) {
+    if (part.type === "finish" || part.type === "error" || part.type === "abort") return;
+  }
+}
+
+function prewarmMessages(ctx: ReasonerPrewarmContext): ModelMessage[] {
+  return [...mapMessages(ctx.seedMessages ?? []), { role: "user", content: PREWARM_PROBE }];
+}
 
 export interface AiSdkAgentLike {
   stream(opts: {
@@ -42,10 +76,18 @@ export type StreamTextConfig = {
   maxRetries?: number;
   timeout?: number;
   stopWhen?: Parameters<typeof streamText>[0]["stopWhen"];
+  providerOptions?: Parameters<typeof streamText>[0]["providerOptions"];
 };
 
 export function fromAiSdkAgent(agent: AiSdkAgentLike): Reasoner {
+  const affinity = createAffinityState();
   return {
+    async prewarm(ctx: ReasonerPrewarmContext): Promise<void> {
+      affinity.promptCacheKey = ctx.sessionId;
+      const messages = prewarmMessages(ctx);
+      const result = await agent.stream({ messages, abortSignal: AbortSignal.timeout(30_000) });
+      await drainPrewarmStream(result.fullStream);
+    },
     stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
       return streamFromAgent(agent, turn);
     },
@@ -53,15 +95,35 @@ export function fromAiSdkAgent(agent: AiSdkAgentLike): Reasoner {
 }
 
 export function fromStreamText(config: StreamTextConfig): Reasoner {
+  const affinity = createAffinityState();
   return {
+    async prewarm(ctx: ReasonerPrewarmContext): Promise<void> {
+      affinity.promptCacheKey = ctx.sessionId;
+      const result = streamText({
+        ...config,
+        system: ctx.systemPrompt ?? config.system,
+        messages: prewarmMessages(ctx),
+        maxOutputTokens: 1,
+        providerOptions: providerOptionsForAffinity(ctx.sessionId, config.providerOptions),
+      });
+      await drainPrewarmStream(result.fullStream);
+    },
     stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
-      return streamFromStreamText(config, turn);
+      return streamFromStreamText(config, turn, affinity);
     },
   };
 }
 
 export function fromStreamFactory(factory: AISDKStreamFactory): Reasoner {
+  const affinity = createAffinityState();
   return {
+    async prewarm(ctx: ReasonerPrewarmContext): Promise<void> {
+      affinity.promptCacheKey = ctx.sessionId;
+      const messages = prewarmMessages(ctx);
+      await drainPrewarmStream(
+        factory({ userText: PREWARM_PROBE, signal: AbortSignal.timeout(30_000), messages }),
+      );
+    },
     stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
       return streamFromFactory(factory, turn);
     },
@@ -74,12 +136,17 @@ async function* streamFromAgent(agent: AiSdkAgentLike, turn: ReasonerTurn): Asyn
   yield* mapTextStreamParts(result.fullStream);
 }
 
-async function* streamFromStreamText(config: StreamTextConfig, turn: ReasonerTurn): AsyncGenerator<ReasoningPart> {
+async function* streamFromStreamText(
+  config: StreamTextConfig,
+  turn: ReasonerTurn,
+  affinity: AffinityState,
+): AsyncGenerator<ReasoningPart> {
   const messages = buildMessagesForTurn(turn);
   const result = streamText({
     ...config,
     messages,
     abortSignal: turn.signal,
+    providerOptions: providerOptionsForAffinity(affinity.promptCacheKey, config.providerOptions),
   });
   yield* mapTextStreamParts(result.fullStream, modelIdentity(config.model));
 }

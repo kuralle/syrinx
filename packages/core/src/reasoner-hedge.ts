@@ -2,7 +2,7 @@
 
 import { Route, type PipelineBus } from "./pipeline-bus.js";
 import * as make from "./packet-factories.js";
-import type { Reasoner, ReasonerTurn, ReasoningPart } from "./reasoner.js";
+import type { ComposedReasoner, Reasoner, ReasonerPrewarmContext, ReasonerTurn, ReasoningPart } from "./reasoner.js";
 import { TimerScheduler, type Scheduler } from "./scheduler.js";
 
 export interface HedgedReasonerOptions {
@@ -37,11 +37,18 @@ type CommitResult =
   | { readonly ok: true; readonly winner: Backend; readonly first: ReasoningPart; readonly iter: AsyncIterator<ReasoningPart> }
   | { readonly ok: false; readonly error: ReasoningPart };
 
-export class HedgedReasoner implements Reasoner {
+export class HedgedReasoner implements ComposedReasoner {
   private readonly scheduler: Scheduler;
 
   constructor(private readonly opts: HedgedReasonerOptions) {
     this.scheduler = opts.scheduler ?? new TimerScheduler();
+  }
+
+  async prewarm(ctx: ReasonerPrewarmContext): Promise<void> {
+    await Promise.allSettled([
+      this.opts.primary.prewarm?.(ctx),
+      this.opts.backup.prewarm?.(ctx),
+    ]);
   }
 
   stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {

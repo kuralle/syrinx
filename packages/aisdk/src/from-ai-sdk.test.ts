@@ -291,6 +291,24 @@ describe("from-ai-sdk adapters", () => {
     }
   });
 
+  it("fromStreamFactory prewarm invokes factory with internal probe and drains terminal finish", async () => {
+    let prewarmUserText: string | undefined;
+    let prewarmMessageCount = 0;
+    const reasoner = fromStreamFactory(async function* ({ userText, messages }) {
+      prewarmUserText = userText;
+      prewarmMessageCount = messages.length;
+      yield finish("stop");
+    });
+
+    await reasoner.prewarm?.({
+      sessionId: "s1",
+      seedMessages: [{ role: "system", content: "policy" }],
+    });
+
+    expect(prewarmUserText).toBe("\u200b");
+    expect(prewarmMessageCount).toBe(2);
+  });
+
   it("fromAiSdkAgent maps agent fullStream through the same table", async () => {
     const agent: AiSdkAgentLike = {
       async stream() {

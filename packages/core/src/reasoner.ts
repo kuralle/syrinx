@@ -6,11 +6,19 @@
 // (AI SDK ToolLoopAgent, Mastra Agent, raw streamText) become a Reasoner via
 // adapters; the bridge drives the seam, not the framework. See RFC §4.2.
 
-/** A reasoning backend reduced to one normalized pull-stream per turn. */
-export interface Reasoner {
-  /** Add transient steering context consumed by the next turn, when supported. */
-  injectContext?(text: string): void;
+export interface ReasonerPrewarmContext {
+  readonly sessionId: string;
+  readonly systemPrompt?: string;
+  readonly seedMessages?: readonly ReasonerMessage[];
+}
 
+/** The optional-capability surface. Adding here forces both wrappers to forward. */
+export interface ReasonerCapabilities {
+  prewarm?(ctx: ReasonerPrewarmContext): Promise<void>;
+}
+
+/** A reasoning backend reduced to one normalized pull-stream per turn. */
+export interface Reasoner extends ReasonerCapabilities {
   /**
    * Drive one reasoning turn. The returned async-iterable IS the response.
    * Cancellation (barge-in) is via `turn.signal` (abort) — the adapter forwards
@@ -24,6 +32,9 @@ export interface Reasoner {
    */
   stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart>;
 }
+
+/** Wrappers implement every capability as REQUIRED — this is the enforcement. */
+export type ComposedReasoner = Reasoner & Required<ReasonerCapabilities>;
 
 export interface ReasonerTurn {
   /** Finalized user transcript for this turn (from `eos.turn_complete`). */

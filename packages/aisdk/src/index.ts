@@ -18,6 +18,7 @@ import {
   type PluginConfig,
   type Reasoner,
   type ReasonerMessage,
+  type ReasonerPrewarmContext,
   type ReasonerSessionStore,
   type ReasonerTurn,
   type TtsWordTimestamp,
@@ -71,6 +72,7 @@ interface SpeculativeHold {
 export class ReasoningBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private timeoutMs: number = 30_000;
+  private prewarmTimeoutMs: number = 10_000;
   private maxHistoryTurns: number = 12;
   private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
   private readonly transientContextMessages = new Set<{
@@ -200,6 +202,7 @@ export class ReasoningBridge implements VoicePlugin {
       this.sessionOwnsSegmentation = false;
     }
     this.timeoutMs = readPositiveIntegerConfig(config["timeout_ms"], 30_000);
+    this.prewarmTimeoutMs = readPositiveIntegerConfig(config["prewarm_timeout_ms"], 10_000);
     this.maxHistoryTurns = readPositiveIntegerConfig(config["max_history_turns"], 12);
     this.retryConfig = readRetryConfig(config);
 
@@ -712,6 +715,16 @@ export class ReasoningBridge implements VoicePlugin {
     }
   }
 
+  async prewarm(): Promise<void> {
+    if (!this.reasoner.prewarm) return;
+    const ctx: ReasonerPrewarmContext = {
+      sessionId: this.opts.sessionId ?? "",
+      systemPrompt: this.history.find((message) => message.role === "system")?.content,
+      seedMessages: this.seedMessagesForPrewarm(),
+    };
+    await withPrewarmTimeout(this.reasoner.prewarm(ctx), this.prewarmTimeoutMs);
+  }
+
   async close(): Promise<void> {
     this.discardDraft();
     this.activeGeneration?.controller.abort();
@@ -724,6 +737,13 @@ export class ReasoningBridge implements VoicePlugin {
     this.playedOutMsByContext.clear();
     this.transientContextMessages.clear();
     this.bus = null;
+  }
+
+  private seedMessagesForPrewarm(): readonly ReasonerMessage[] {
+    return this.history.filter(
+      (message) =>
+        !this.transientContextMessages.has(message as { role: "system"; content: string }),
+    );
   }
 
   private rememberTurn(userText: string, assistantText: string, contextId: string): void {
@@ -907,6 +927,20 @@ function readPositiveIntegerConfig(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   const integer = Math.floor(value);
   return integer > 0 ? integer : fallback;
+}
+
+async function withPrewarmTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`reasoner prewarm timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+  });
+  try {
+    await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 async function* withStreamIdleTimeout<T>(

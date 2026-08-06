@@ -2,7 +2,7 @@
 
 import { Route, type PipelineBus } from "./pipeline-bus.js";
 import * as make from "./packet-factories.js";
-import type { Reasoner, ReasonerTurn, ReasoningPart } from "./reasoner.js";
+import type { ComposedReasoner, Reasoner, ReasonerPrewarmContext, ReasonerTurn, ReasoningPart } from "./reasoner.js";
 
 export interface ReasonerRoute {
   readonly id: string;
@@ -17,8 +17,14 @@ export interface RoutingReasonerOptions {
   readonly contextId?: string;
 }
 
-export class RoutingReasoner implements Reasoner {
+export class RoutingReasoner implements ComposedReasoner {
   constructor(private readonly opts: RoutingReasonerOptions) {}
+
+  async prewarm(ctx: ReasonerPrewarmContext): Promise<void> {
+    await Promise.allSettled(
+      this.opts.routes.map((route) => route.reasoner.prewarm?.(ctx)),
+    );
+  }
 
   stream(turn: ReasonerTurn): AsyncIterable<ReasoningPart> {
     return this.doStream(turn);
