@@ -2,16 +2,20 @@
 //
 // Syrinx Kernel v2 — Priority Pipeline Bus
 //
-// Three priority channels (Critical, Main, Background) with strict drain order.
-// All pipeline components push packets into the bus. The bus dispatches to
-// registered handlers. Handlers are registered by packet kind (discriminated string).
+// Four priority channels (Critical, Media, Main, Background) with strict drain order.
+// Media and application traffic use cooperating drain loops so a slow Main handler
+// cannot stall audio. All pipeline components push packets into the bus. The bus
+// dispatches to registered handlers. Handlers are registered by packet kind
+// (discriminated string).
 //
 // Design decisions (per RFC Q1 resolution):
-//   - Uses setTimeout(fn, 0) for the drain loop to yield to I/O between iterations.
+//   - Two cooperating await-driven loops on one event loop: drainMedia + drainRest.
 //   - Critical channel batches up to 4 packets per tick before yielding.
+//   - Media queue is bounded at 8192 packets; drops oldest on overflow (never throws).
 //   - Main queue is bounded at 4096 packets; throws on overflow.
 //   - Background queue is bounded at 2048 packets; drops oldest on overflow.
 //   - Pipeline handler errors emit VoiceErrorPacket on Critical route — bus continues.
+//   - Handlers for media kinds must not await network or model I/O — only same-tick work.
 
 import type { VoicePacket, AsyncPacket, VoiceErrorPacket } from "./packets.js";
 import { ErrorCategory, type ConversationMetricPacket, type PipelineErrorPacket } from "./packets.js";
@@ -22,20 +26,41 @@ import { ErrorCategory, type ConversationMetricPacket, type PipelineErrorPacket 
 
 export enum Route {
   Critical = 0,   // interrupts, turn changes — drained first, never bounded
-  Main = 1,       // pipeline flow: audio in, STT results, LLM deltas, TTS audio
-  Background = 2, // metrics, debug events, DB writes — drained last, droppable
+  Media = 1,      // audio path — own drain loop; never blocked by Main I/O
+  Main = 2,       // pipeline flow: STT results, LLM deltas, TTS text, tool traffic
+  Background = 3, // metrics, debug events, DB writes — drained last, droppable
 }
+
+/** Packet kinds that belong on `Route.Media` — the single kind→lane classification table. */
+export const MEDIA_KINDS: ReadonlySet<string> = new Set([
+  "user.audio_received",
+  "denoise.audio",
+  "vad.audio",
+  "stt.audio",
+  "eos.audio",
+  "tts.audio",
+  "record.user_audio",
+  "record.assistant_audio",
+]);
 
 export type PacketHandler<T extends VoicePacket = VoicePacket> = (
   pkt: T,
 ) => void | Promise<void>;
 
 export interface PipelineBus {
-  /** Push one or more packets into a priority route. */
+  /**
+   * Push one or more packets into a priority route.
+   *
+   * Media kinds (`MEDIA_KINDS`) belong on `Route.Media`. Pushing them onto `Route.Main`
+   * emits a one-time dev warning per kind until call sites are migrated.
+   */
   push<T extends readonly VoicePacket[]>(route: Route, ...packets: T): void;
 
   /**
    * Register a handler for a specific packet kind. Returns unsubscribe function.
+   *
+   * Handlers for media kinds (`MEDIA_KINDS`) must not await network or model I/O —
+   * only same-tick work. Media packets drain on a separate loop from Main.
    *
    * By default handlers are awaited in registration order (consumer semantics — the
    * handler's state mutations are visible to the next packet's handlers). Pass
@@ -53,7 +78,7 @@ export interface PipelineBus {
   /** Start draining the bus. Resolves when stop() is called and final drain completes. */
   start(): Promise<void>;
 
-  /** Stop draining. Flushes Critical+Main, discards Background. */
+  /** Stop draining. Flushes Critical+Media+Main, discards Background. */
   stop(): void;
 
   /** Readonly stream of every packet pushed into the bus, before route dispatch. */
@@ -74,6 +99,8 @@ interface QueueEntry {
  * Critical is always unbounded. Main and Background can be configured.
  */
 export interface PipelineBusConfig {
+  /** Maximum Media queue size. Default 8192. Drops oldest on overflow; never throws. */
+  mediaCapacity?: number;
   /** Maximum Main queue size. Default 4096. Throws on overflow. */
   mainCapacity?: number;
   /** Maximum Background queue size. Default 2048. Drops oldest on overflow. */
@@ -82,6 +109,8 @@ export interface PipelineBusConfig {
   criticalBatchSize?: number;
   /** Called when a Background packet is dropped. For metrics emission. */
   onBackgroundDrop?: (dropped: VoicePacket) => void;
+  /** Called when a Media packet is dropped. For metrics emission. */
+  onMediaDrop?: (dropped: VoicePacket) => void;
   /**
    * Observe how long each packet waited between push and dispatch. Diagnostic only —
    * a handler awaiting long I/O parks the drain loop, and packet `timestampMs` is
@@ -98,22 +127,27 @@ export interface PipelineBusConfig {
 
 export class PipelineBusImpl implements PipelineBus {
   private critical: VoicePacket[] = [];
+  private media: VoicePacket[] = [];
   private main: VoicePacket[] = [];
   private background: VoicePacket[] = [];
   private handlers = new Map<string, Set<PacketHandler>>();
   private concurrentHandlers = new Set<PacketHandler>();
   private running = false;
-  private resolver: (() => void) | null = null;
+  private mediaResolver: (() => void) | null = null;
+  private restResolver: (() => void) | null = null;
   private drainedCount = 0;
+  private warnedMainMediaKinds = new Set<string>();
   private allPacketsController:
     | ReadableStreamDefaultController<{ route: Route; packet: VoicePacket }>
     | null = null;
 
   readonly allPackets: ReadableStream<{ route: Route; packet: VoicePacket }>;
 
+  private readonly mediaCapacity: number;
   private readonly mainCapacity: number;
   private readonly bgCapacity: number;
   private readonly criticalBatchSize: number;
+  private readonly onMediaDrop: ((dropped: VoicePacket) => void) | undefined;
   private readonly onBgDrop: ((dropped: VoicePacket) => void) | undefined;
   /**
    * Opt-in queue-delay observer: how long a packet waited between being pushed and
@@ -131,9 +165,11 @@ export class PipelineBusImpl implements PipelineBus {
   private readonly onPacket: ((route: Route, packet: VoicePacket) => void) | undefined;
 
   constructor(config?: PipelineBusConfig) {
+    this.mediaCapacity = config?.mediaCapacity ?? 8192;
     this.mainCapacity = config?.mainCapacity ?? 4096;
     this.bgCapacity = config?.bgCapacity ?? 2048;
     this.criticalBatchSize = config?.criticalBatchSize ?? 4;
+    this.onMediaDrop = config?.onMediaDrop;
     this.onBgDrop = config?.onBackgroundDrop;
     this.onQueueDelay = config?.onQueueDelay;
     this.onPacket = config?.onPacket;
@@ -146,6 +182,7 @@ export class PipelineBusImpl implements PipelineBus {
       },
     });
 
+    if (this.mediaCapacity < 1) throw new Error("mediaCapacity must be >= 1");
     if (this.mainCapacity < 1) throw new Error("mainCapacity must be >= 1");
     if (this.bgCapacity < 1) throw new Error("bgCapacity must be >= 1");
     if (this.criticalBatchSize < 1) throw new Error("criticalBatchSize must be >= 1");
@@ -157,9 +194,13 @@ export class PipelineBusImpl implements PipelineBus {
 
   push<T extends readonly VoicePacket[]>(route: Route, ...packets: T): void {
     for (const p of packets) {
+      if (route === Route.Main && MEDIA_KINDS.has(p.kind)) {
+        this.warnMediaOnMainOnce(p.kind);
+      }
       this.publishAllPackets(route, p);
       const q = this.queueFor(route);
       let droppedForMetric: VoicePacket | null = null;
+      let droppedMediaForMetric: VoicePacket | null = null;
       if (q.length >= this.capacityFor(route)) {
         if (route === Route.Background) {
           const dropped = q.shift();
@@ -168,6 +209,15 @@ export class PipelineBusImpl implements PipelineBus {
           }
           if (dropped) {
             droppedForMetric = dropped;
+          }
+          // continue — push after dropping oldest
+        } else if (route === Route.Media) {
+          const dropped = q.shift();
+          if (dropped && this.onMediaDrop) {
+            this.onMediaDrop(dropped);
+          }
+          if (dropped) {
+            droppedMediaForMetric = dropped;
           }
           // continue — push after dropping oldest
         } else if (route === Route.Main) {
@@ -183,10 +233,11 @@ export class PipelineBusImpl implements PipelineBus {
       if (droppedForMetric) {
         this.enqueueBackgroundDropMetric(droppedForMetric);
       }
+      if (droppedMediaForMetric) {
+        this.enqueueMediaDropMetric(droppedMediaForMetric);
+      }
     }
-    // Wake the drain loop
-    this.resolver?.();
-    this.resolver = null;
+    this.wakeDrainLoop(route);
   }
 
   on<T extends VoicePacket>(
@@ -213,12 +264,82 @@ export class PipelineBusImpl implements PipelineBus {
 
   async start(): Promise<void> {
     this.running = true;
+    await Promise.all([this.drainMedia(), this.drainRest()]);
+  }
+
+  stop(): void {
+    this.running = false;
+    // Drain remaining Critical, Media, then Main (synchronous — stop is a shutdown path)
+    while (this.critical.length > 0) {
+      const pkt = this.critical.shift()!;
+      void this.dispatchSync(pkt);
+    }
+    while (this.media.length > 0) {
+      const pkt = this.media.shift()!;
+      void this.dispatchSync(pkt);
+    }
+    while (this.main.length > 0) {
+      const pkt = this.main.shift()!;
+      void this.dispatchSync(pkt);
+    }
+    // Discard Background
+    this.background.length = 0;
+    this.wakeDrainLoop(Route.Critical);
+    this.wakeDrainLoop(Route.Media);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private
+  // ---------------------------------------------------------------------------
+
+  private queueFor(r: Route): VoicePacket[] {
+    if (r === Route.Critical) return this.critical;
+    if (r === Route.Media) return this.media;
+    if (r === Route.Main) return this.main;
+    return this.background;
+  }
+
+  private wakeDrainLoop(route: Route): void {
+    if (route === Route.Media) {
+      this.mediaResolver?.();
+      this.mediaResolver = null;
+      return;
+    }
+    this.restResolver?.();
+    this.restResolver = null;
+  }
+
+  private warnMediaOnMainOnce(kind: string): void {
+    if (this.warnedMainMediaKinds.has(kind)) return;
+    this.warnedMainMediaKinds.add(kind);
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(
+        `PipelineBus: media kind "${kind}" pushed onto Route.Main — use Route.Media instead.`,
+      );
+    }
+  }
+
+  private async drainMedia(): Promise<void> {
+    while (this.running) {
+      if (this.media.length === 0) {
+        await new Promise<void>((resolve) => {
+          this.mediaResolver = resolve;
+        });
+        continue;
+      }
+
+      const pkt = this.media.shift()!;
+      await this.dispatch(pkt);
+      this.drainedCount++;
+    }
+  }
+
+  private async drainRest(): Promise<void> {
     while (this.running) {
       const batch = this.dequeueBatch();
       if (batch.length === 0) {
-        // Yield to I/O — wait for next push()
         await new Promise<void>((resolve) => {
-          this.resolver = resolve;
+          this.restResolver = resolve;
         });
         continue;
       }
@@ -228,33 +349,6 @@ export class PipelineBusImpl implements PipelineBus {
         this.drainedCount++;
       }
     }
-  }
-
-  stop(): void {
-    this.running = false;
-    // Drain remaining Critical then Main (synchronous — stop is a shutdown path)
-    while (this.critical.length > 0) {
-      const pkt = this.critical.shift()!;
-      void this.dispatchSync(pkt);
-    }
-    while (this.main.length > 0) {
-      const pkt = this.main.shift()!;
-      void this.dispatchSync(pkt);
-    }
-    // Discard Background
-    this.background.length = 0;
-    this.resolver?.();
-    this.resolver = null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private
-  // ---------------------------------------------------------------------------
-
-  private queueFor(r: Route): VoicePacket[] {
-    if (r === Route.Critical) return this.critical;
-    if (r === Route.Main) return this.main;
-    return this.background;
   }
 
   private publishAllPackets(route: Route, packet: VoicePacket): void {
@@ -270,6 +364,23 @@ export class PipelineBusImpl implements PipelineBus {
     } catch {
       this.allPacketsController = null;
     }
+  }
+
+  private enqueueMediaDropMetric(dropped: VoicePacket): void {
+    const metric: ConversationMetricPacket = {
+      kind: "metric.conversation",
+      contextId: dropped.contextId,
+      timestampMs: Date.now(),
+      name: "pipeline.bus.media.dropped",
+      value: dropped.kind,
+    };
+
+    this.publishAllPackets(Route.Background, metric);
+    if (this.background.length >= this.bgCapacity) {
+      this.background.shift();
+    }
+    this.background.push(metric);
+    this.wakeDrainLoop(Route.Background);
   }
 
   private enqueueBackgroundDropMetric(dropped: VoicePacket): void {
@@ -290,6 +401,7 @@ export class PipelineBusImpl implements PipelineBus {
 
   private capacityFor(r: Route): number {
     if (r === Route.Critical) return Infinity;
+    if (r === Route.Media) return this.mediaCapacity;
     if (r === Route.Main) return this.mainCapacity;
     return this.bgCapacity;
   }

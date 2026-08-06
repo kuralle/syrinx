@@ -189,7 +189,14 @@ export {
 } from "./observability-observer.js";
 
 // PipelineBus
-export { PipelineBusImpl, Route, type PipelineBus, type PipelineBusConfig, type PacketHandler } from "./pipeline-bus.js";
+export {
+  PipelineBusImpl,
+  Route,
+  MEDIA_KINDS,
+  type PipelineBus,
+  type PipelineBusConfig,
+  type PacketHandler,
+} from "./pipeline-bus.js";
 
 // Init chain
 export { runInitChain, runFinalizeChain, type InitStep, InitializationError } from "./init-chain.js";
