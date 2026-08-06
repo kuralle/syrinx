@@ -1,0 +1,8 @@
+{
+  "status": "done",
+  "claims": [
+    { "command": "pnpm --filter @kuralle-syrinx/core test", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 },
+    { "command": "pnpm -r test", "exit_code": 0 }
+  ]
+}
