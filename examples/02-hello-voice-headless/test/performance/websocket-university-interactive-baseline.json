@@ -1,11 +1,11 @@
 {
   "scenario": "websocket_university_student_relations_interactive",
-  "generatedAt": "2026-06-03T22:10:40.725Z",
+  "generatedAt": "2026-08-06T16:43:00.816Z",
   "fixtureProvider": "mixed-wav-fixtures",
   "sttModel": "nova-3",
   "llmModel": "gemini-3.1-flash-lite",
-  "ttsProvider": "deepgram",
-  "ttsModel": "aura-2-thalia-en",
+  "ttsProvider": "cartesia",
+  "ttsModel": "sonic-3",
   "region": "unknown",
   "transport": "websocket",
   "inputSampleRateHz": 16000,
@@ -14,24 +14,24 @@
   "postTtsDrainMs": 500,
   "turnCount": 3,
   "latencyMs": {
-    "avgSttFinalAfterSpeechEnd": 1215,
-    "avgVadSpeechEndAfterAudioEnd": 681,
-    "avgLlmTimeToFirstText": 1287,
-    "avgTtsTimeToFirstAudio": 290,
-    "avgSpeechEndToFirstAssistantAudio": 2792,
-    "avgVadSpeechEndToFirstAssistantAudio": 2111,
-    "voiceToVoiceP50Ms": 2075,
-    "voiceToVoiceP95Ms": 2198,
-    "voiceToVoiceP99Ms": 2198,
-    "sttFinalP50Ms": 528,
-    "sttFinalP95Ms": 555,
-    "sttFinalP99Ms": 555,
-    "llmTtftP50Ms": 1284,
-    "llmTtftP95Ms": 1329,
-    "llmTtftP99Ms": 1329,
-    "ttsTtfbP50Ms": 272,
-    "ttsTtfbP95Ms": 349,
-    "ttsTtfbP99Ms": 349
+    "avgSttFinalAfterSpeechEnd": 974,
+    "avgVadSpeechEndAfterAudioEnd": 604,
+    "avgLlmTimeToFirstText": -336,
+    "avgTtsTimeToFirstAudio": 1607,
+    "avgSpeechEndToFirstAssistantAudio": 2245,
+    "avgVadSpeechEndToFirstAssistantAudio": 1641,
+    "voiceToVoiceP50Ms": 643,
+    "voiceToVoiceP95Ms": 6233,
+    "voiceToVoiceP99Ms": 6233,
+    "sttFinalP50Ms": 294,
+    "sttFinalP95Ms": 530,
+    "sttFinalP99Ms": 530,
+    "llmTtftP50Ms": 1955,
+    "llmTtftP95Ms": 1955,
+    "llmTtftP99Ms": 1955,
+    "ttsTtfbP50Ms": 828,
+    "ttsTtfbP95Ms": 3748,
+    "ttsTtfbP99Ms": 3748
   },
   "turns": [
     {
@@ -39,101 +39,95 @@
       "fixtureId": "review-late-add",
       "inputText": "Hi, I'm Maya Chen, student ID S one zero zero four two. I need to know whether I can still add Biology one oh one after the deadline, and what form I should submit.",
       "sttFinal": "Hi. I'm Maya Chen. Student ID is 10042. I need to know whether I can still add biology one, o one after the deadline, and what form I should submit.",
-      "agentReply": "You can still request to add Biology 101 by submitting a Late Add Petition through the Student Relations portal. Please route this form to your instructor, the advising desk, and the registrar for their required approvals.",
+      "agentReply": "Let me check your late-add status for Biology 101.You can still add Biology 101 after the deadline by submitting a Late Add Petition. The petition requires approvals from the course instructor, your academic advisor or advising desk, and the registrar.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 8963,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 2,
-      "assistantAudioMs": 3960,
-      "audioBytes": 24481,
+      "assistantAudioMs": 15240,
+      "audioBytes": 91683,
       "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1281,
-        "vadSpeechEndAfterAudioEnd": 753,
-        "llmTimeToFirstText": 1284,
-        "ttsTimeToFirstAudio": 248,
-        "speechEndToFirstAssistantAudio": 2813,
-        "vadSpeechEndToFirstAssistantAudio": 2060,
-        "turnWallClock": 16567,
-        "voiceToVoiceMs": 2060
+        "sttFinalAfterSpeechEnd": 1275,
+        "vadSpeechEndAfterAudioEnd": 745,
+        "llmTimeToFirstText": 1955,
+        "ttsTimeToFirstAudio": 3748,
+        "speechEndToFirstAssistantAudio": 6978,
+        "vadSpeechEndToFirstAssistantAudio": 6233,
+        "turnWallClock": 31960,
+        "voiceToVoiceMs": 6233
       }
     },
     {
       "id": "interactive-02",
       "fixtureId": "02-registration-holds",
       "inputText": "Thanks, that makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late add from going through? I paid my balance yesterday, but the student portal still showed a warning this morning, and I do not want the instructor approval to expire while I wait.",
-      "sttFinal": "Thanks. That makes sense. Before I start the petition, can you check whether I have any registration holds that would block the late ad from going through? I paid my balance yesterday, but the student portal still showed a warning this morning. And I do not want the instructor approval to expire while I wait.",
-      "agentReply": "I have confirmed that you currently have no active registration holds on your account. The warning in your portal should clear shortly now that your balance has been paid.",
+      "sttFinal": "the instructor approval to expire while I wait.",
+      "agentReply": "Let me check your registration holds.You have no registration holds that would block the late add from going through. You can proceed with the Late Add Petition, and be sure to notify International Student Services while the petition is pending.",
       "toolCalls": [
         "studentRelationsLookup"
       ],
       "inputAudioMs": 16451,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 2,
-      "assistantAudioMs": 3880,
-      "audioBytes": 23877,
+      "assistantAudioMs": 12140,
+      "audioBytes": 75514,
       "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1294,
-        "vadSpeechEndAfterAudioEnd": 739,
-        "llmTimeToFirstText": 1248,
-        "ttsTimeToFirstAudio": 272,
-        "speechEndToFirstAssistantAudio": 2814,
-        "vadSpeechEndToFirstAssistantAudio": 2075,
-        "turnWallClock": 24683,
-        "voiceToVoiceMs": 2075
+        "sttFinalAfterSpeechEnd": 890,
+        "vadSpeechEndAfterAudioEnd": 596,
+        "ttsTimeToFirstAudio": 246,
+        "turnWallClock": 29149,
+        "voiceToVoiceMs": 0
       }
     },
     {
       "id": "interactive-03",
       "fixtureId": "10-lab-fee",
       "inputText": "Does Biology one oh one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition, because that changes how I plan my payment.",
-      "sttFinal": "Does BIOLLOGY one hundred and one have a separate lab fee that appears after the late add is approved? If there is a fee, I need to know whether it posts immediately or after the registrar processes the petition because that changes how I plan my payment.",
-      "agentReply": "Biology 101 does have an $85 lab fee associated with the course. This fee will post to your account only after the registrar has finished processing your Late Add Petition.",
-      "toolCalls": [
-        "studentRelationsLookup"
-      ],
+      "sttFinal": "payment.",
+      "agentReply": "Let me check for any fees related to Biology 101.Laboratory fees for Biology 101 do apply, but they will post to your student account only after the late add is approved. You will see the lab fee on your account once the registration update is finalized.",
+      "toolCalls": [],
       "inputAudioMs": 14691,
       "vadSpeechStartedCount": 1,
       "vadSpeechEndedCount": 2,
-      "assistantAudioMs": 3760,
-      "audioBytes": 23136,
+      "assistantAudioMs": 13580,
+      "audioBytes": 83378,
       "assistantAudioEncoding": "opus",
       "latencyMs": {
-        "sttFinalAfterSpeechEnd": 1070,
-        "vadSpeechEndAfterAudioEnd": 550,
-        "llmTimeToFirstText": 1329,
-        "ttsTimeToFirstAudio": 349,
-        "speechEndToFirstAssistantAudio": 2748,
-        "vadSpeechEndToFirstAssistantAudio": 2198,
-        "turnWallClock": 22533,
-        "voiceToVoiceMs": 2198
+        "sttFinalAfterSpeechEnd": 756,
+        "vadSpeechEndAfterAudioEnd": 471,
+        "ttsTimeToFirstAudio": 828,
+        "speechEndToFirstAssistantAudio": 1114,
+        "vadSpeechEndToFirstAssistantAudio": 643,
+        "turnWallClock": 30526,
+        "voiceToVoiceMs": 643
       }
     }
   ],
   "diagnostics": [
-    "voice-to-voice P50=2075ms",
-    "voice-to-voice P95=2198ms",
-    "voice-to-voice P99=2198ms",
-    "voice-to-voice P50 2075ms exceeds 800ms SLO band",
-    "voice-to-voice P95 2198ms exceeds 800ms SLO band"
+    "voice-to-voice P50=643ms",
+    "voice-to-voice P95=6233ms",
+    "voice-to-voice P99=6233ms",
+    "voice-to-voice P95 6233ms exceeds 800ms SLO band",
+    "interactive-02 STT transcript missed fixture term hold",
+    "interactive-03 STT transcript missed fixture term fee"
   ],
   "warningGate": {
     "passed": false,
     "warnings": [
-      "voice-to-voice P50 2075ms exceeds 800ms SLO band",
-      "voice-to-voice P95 2198ms exceeds 800ms SLO band",
-      "voice-to-voice P99 2198ms exceeds 800ms SLO band"
+      "voice-to-voice P95 6233ms exceeds 800ms SLO band",
+      "voice-to-voice P99 6233ms exceeds 800ms SLO band"
     ]
   },
   "artifacts": {
-    "runDir": "test/performance/runs/websocket-university-interactive-2026-06-03T22-09-33-375Z",
-    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-06-03T22-09-33-375Z/manifest.json",
-    "metricsPath": "test/performance/runs/websocket-university-interactive-2026-06-03T22-09-33-375Z/metrics.json",
-    "transcriptPath": "test/performance/runs/websocket-university-interactive-2026-06-03T22-09-33-375Z/transcript.json",
-    "eventsPath": "test/performance/runs/websocket-university-interactive-2026-06-03T22-09-33-375Z/events.json"
+    "runDir": "test/performance/runs/websocket-university-interactive-2026-08-06T16-41-25-635Z",
+    "manifestPath": "test/performance/runs/websocket-university-interactive-2026-08-06T16-41-25-635Z/manifest.json",
+    "metricsPath": "test/performance/runs/websocket-university-interactive-2026-08-06T16-41-25-635Z/metrics.json",
+    "transcriptPath": "test/performance/runs/websocket-university-interactive-2026-08-06T16-41-25-635Z/transcript.json",
+    "eventsPath": "test/performance/runs/websocket-university-interactive-2026-08-06T16-41-25-635Z/events.json"
   },
   "qualityGate": {
     "passed": true,
