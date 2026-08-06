@@ -1,0 +1,9 @@
+{
+  "status": "done",
+  "claims": [
+    { "command": "pnpm --filter @kuralle-syrinx/core test", "exit_code": 0 },
+    { "command": "pnpm -r typecheck", "exit_code": 0 },
+    { "command": "pnpm -r test", "exit_code": 0 }
+  ],
+  "notes": "Added session-owned speculativeTranscript/committedTranscript views (transcript-views.ts + TurnSegmentation text store), wired ReasoningBridge reasoner messages + durable persist to committed view, server-websocket turn_complete/agent_interrupted to committed text, and session-record agent_interrupted.text snap. Core tests 396→402 (+6). Sabotage: (1) disabled markBackchannel → iu-segmentation.test.ts:367 committedTranscript included mm-hmm; (2) disabled setAssistantHeardPrefix → iu-segmentation.test.ts:452 assistant text was full reply not Alpha beta prefix. Disclosure: voice-agent-session tracks tts.word_timestamps for heard-prefix computation; ReasoningBridge persists on llm.done after session handlers; text-only llm.done commits assistant IU when no audio was already playing."
+}

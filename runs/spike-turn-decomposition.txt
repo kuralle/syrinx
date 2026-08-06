@@ -1,54 +1,45 @@
-=== LIVE cascade turn decomposition (n=1) ===
+=== LIVE native turn decomposition (n=1) ===
 fixture: 01-late-add | prompt: strict | tools: 1
 
 agent said (first 240 chars — look for a pre-tool preamble):
-  Let me check your late add request for the Biology 101 lab.I see that you need to submit a Late Add Petition for the Biology 101 lab since the normal add deadline has passed. You will need to upload the instructor's email and lab seat confi
-speech duration: 15027ms
+  Are you still there?Let me check what your university typically allows for late adds and linked lecture-lab courses.
+speech duration: 20241ms
 
-v2v (last speech frame -> first assistant audio): 2323ms
+v2v (last speech frame -> first assistant audio): 1140ms
 
 usage manifest (the token counts the bridge used to DROP):
-  stt: input=? output=? total=?
-  llm: input=979 output=121 total=1100
-  tts: input=? output=? total=?
+  llm: input=651 output=343 total=994
 usage counters exported (name = value [tags]):
-  usage.audioSeconds = 10.28  [{"stage":"stt","provider":"deepgram","model":"nova-3"}]
-  usage.audioSeconds = 4.74  [{"stage":"stt","provider":"deepgram","model":"nova-3"}]
-  usage.inputTokens = 979  [{"stage":"llm","provider":"openai.responses","model":"gpt-4.1-mini"}]
-  usage.outputTokens = 121  [{"stage":"llm","provider":"openai.responses","model":"gpt-4.1-mini"}]
-  usage.totalTokens = 1100  [{"stage":"llm","provider":"openai.responses","model":"gpt-4.1-mini"}]
-  usage.cachedInputTokens = 0  [{"stage":"llm","provider":"openai.responses","model":"gpt-4.1-mini"}]
-  usage.reasoningTokens = 0  [{"stage":"llm","provider":"openai.responses","model":"gpt-4.1-mini"}]
-  usage.characters = 330  [{"stage":"tts","provider":"cartesia","model":"sonic-3"}]
+  (no usage counters exported)
 
 stage attribution:
-  endpoint   (speechEnd -> eos.turn_complete)     -25ms  -1.1%
-  llm        (eos -> first delta, minus tools)   1827ms  78.6%
-  tools      (1 call(s), sum of round-trips)      1ms  0.0%
-  tts_ttfb   (tts.text -> first tts.audio)        273ms  11.8%
+  endpoint   (speechEnd -> eos.turn_complete)    3693ms  323.9%
+  llm        (eos -> first delta, minus tools)      0ms  0.0%
+  tools      (1 call(s), sum of round-trips)      0ms  0.0%
+  tts_ttfb   (tts.text -> first tts.audio)       6368ms  558.6%
   ----------------------------------------------------------
-  attributed                                     2076ms  89.4%
-  UNATTRIBUTED residual                           247ms  10.6%
+  attributed                                    10061ms  882.5%
+  UNATTRIBUTED residual                         -8921ms  -782.5%
 
 per-tool:
-  studentRelationsLookup       1ms
+  ask_university               NO RESULT PACKET
 
 === what the ALREADY-SHIPPED `turn_latency` event reported ===
-  ttfaMs            2348ms   anchor=eos  (fillerUsed=false)
+  ttfaMs            565ms   anchor=speech_end  (fillerUsed=false)
   eouDelayMs        n/ams
-  llmTtftMs         1828ms
-  textAggregationMs 246ms
-  ttsTtfbMs         274ms
-  unattributedMs    0ms
-  llmCallCount      2  passTtft=[1826, 4078]
+  llmTtftMs         295ms
+  textAggregationMs n/ams
+  ttsTtfbMs         n/ams
+  unattributedMs    270ms
+  llmCallCount      n/a  passTtft=[]
 
 speculative draft churn (wasted = discarded; each discard aborted an LLM call):
   started=0  discarded=0  promoted=0
 
 raw marks (ms since speechEnd):
-  sttFinal      -4755
-  eos           -25
-  firstLlmDelta 1803
-  firstTtsText  2050
-  firstTtsAudio 2323
-  ttsEnd        12642
+  sttFinal      n/a
+  eos           3693
+  firstLlmDelta -5239
+  firstTtsText  -5228
+  firstTtsAudio 1140
+  ttsEnd        3693
