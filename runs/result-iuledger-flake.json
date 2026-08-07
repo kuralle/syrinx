@@ -1,0 +1,22 @@
+{
+  "task": "Replace the iu-ledger O(1) timing test with a deterministic instrument",
+  "status": "done",
+  "claims": [
+    {"cmd": "pnpm -C packages/core test", "exit": 0, "note": "415 tests passing after instrument rewrite"},
+    {"cmd": "pnpm -r typecheck", "exit": 0, "note": "monorepo typecheck clean"},
+    {"cmd": "pnpm -r test (run 1)", "exit": 0, "note": "full monorepo suite, no flakes"},
+    {"cmd": "pnpm -r test (run 2)", "exit": 0, "note": "full monorepo suite, no flakes"},
+    {"cmd": "pnpm -r test (run 3)", "exit": 0, "note": "full monorepo suite, no flakes"}
+  ],
+  "files_touched": [
+    "packages/core/src/iu-ledger.test.ts"
+  ],
+  "instrument": "Replaced performance.now() ratio comparison with countMapGetsDuring(), which temporarily wraps Map.prototype.get, runs commit and get once on 10-context and 1000-context ledgers, and asserts getCountLarge === getCountSmall (strict equality). Counts are structural — independent of machine speed, scheduler noise, or parallel suite load. Prototype is restored in a finally block so a failure cannot leak the patch.",
+  "sibling_sweep": {
+    "voice-agent-session.test.ts": "left alone — uses performance.now() to record absolute timestamps (vadDetectedAtMs, interruptObservedAtMs, recordedAtMs) and asserts elapsed time against a fixed 50ms threshold; does not compare two measured duration samples as a ratio",
+    "interaction-policy.test.ts": "left alone — collects 1000 single-op durations and asserts p99 <= 5ms absolute threshold; not the two-sample ratio shape that caused the iu-ledger flake",
+    "vap-policy.test.ts": "left alone — same p99 <= 5ms absolute threshold pattern as interaction-policy; not a two-sample duration ratio comparison"
+  },
+  "sabotage": "Temporarily rewrote InMemoryIuLedger.get to scan all byCtx buckets via for (const ctxMap of this.byCtx.values()) instead of indexing by contextId. Test failed with: AssertionError: expected 256 to be 11 // Object.is equality (getGetsLarge=256 bucket scans vs getGetsSmall=11). Restored get() to original O(1) implementation.",
+  "undisclosed_changes": "none"
+}

@@ -30,6 +30,21 @@ function seedContexts(ledger: InMemoryIuLedger, count: number): IncrementalUnitI
   return target;
 }
 
+/** Count Map.prototype.get calls during a synchronous op — deterministic O(1) probe. */
+function countMapGetsDuring<T>(fn: () => T): { result: T; getCount: number } {
+  let getCount = 0;
+  const originalGet = Map.prototype.get;
+  Map.prototype.get = function (this: Map<unknown, unknown>, key: unknown) {
+    getCount += 1;
+    return originalGet.call(this, key);
+  };
+  try {
+    return { result: fn(), getCount };
+  } finally {
+    Map.prototype.get = originalGet;
+  }
+}
+
 describe("InMemoryIuLedger", () => {
   describe("add", () => {
     it("registers a hypothesized IU (happy path)", () => {
@@ -248,29 +263,22 @@ describe("InMemoryIuLedger", () => {
 
   describe("O(1) per-op (structural)", () => {
     it("commit/get touch only the target ctx bucket regardless of total ctx count", () => {
-      // Map.get/set/delete are O(1); each hot-path op does at most one outer + one inner lookup.
+      // Map.get is O(1); each hot-path op does one outer + one inner lookup — independent of ctx count.
       const ledgerSmall = new InMemoryIuLedger();
       const ledgerLarge = new InMemoryIuLedger();
       const targetSmall = seedContexts(ledgerSmall, 10);
       const targetLarge = seedContexts(ledgerLarge, 1000);
 
-      ledgerSmall.commit(targetSmall);
-      ledgerLarge.commit(targetLarge);
+      const commitGetsSmall = countMapGetsDuring(() => ledgerSmall.commit(targetSmall)).getCount;
+      const commitGetsLarge = countMapGetsDuring(() => ledgerLarge.commit(targetLarge)).getCount;
+      expect(commitGetsLarge).toBe(commitGetsSmall);
 
       expect(ledgerSmall.get(targetSmall)?.state).toBe("committed");
       expect(ledgerLarge.get(targetLarge)?.state).toBe("committed");
 
-      const timeOp = (ledger: InMemoryIuLedger, id: IncrementalUnitId) => {
-        const start = performance.now();
-        for (let i = 0; i < 5000; i++) {
-          ledger.get(id);
-        }
-        return performance.now() - start;
-      };
-
-      const tSmall = timeOp(ledgerSmall, targetSmall);
-      const tLarge = timeOp(ledgerLarge, targetLarge);
-      expect(tLarge).toBeLessThan(Math.max(tSmall * 20, 1));
+      const getGetsSmall = countMapGetsDuring(() => ledgerSmall.get(targetSmall)).getCount;
+      const getGetsLarge = countMapGetsDuring(() => ledgerLarge.get(targetLarge)).getCount;
+      expect(getGetsLarge).toBe(getGetsSmall);
     });
   });
 });
