@@ -161,6 +161,16 @@ export class TurnSegmentation {
     return this.entryCount;
   }
 
+  /**
+   * The turn's user transcript so far: every committed final plus the live
+   * interim. Emitters must send this rather than the single packet they are
+   * handling -- a consumer that keeps the last message it saw is then correct
+   * by construction, instead of holding only the last endpointed segment.
+   */
+  userTranscript(contextId: string): string {
+    return this.transcriptTextByKey.get(iuStorageKey(this.userIuId(contextId))) ?? "";
+  }
+
   recordUserTranscript(contextId: string, text: string): void {
     if (this.isBackchannel(contextId)) return;
     const id = this.userIuId(contextId);

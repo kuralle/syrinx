@@ -1023,7 +1023,10 @@ export class VoiceAgentSession {
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
-      text: pkt.text,
+      // The whole turn, not this one endpointed segment. A long utterance
+      // arrives as several finals, and every consumer downstream keeps the last
+      // message it saw -- so the last message must carry everything.
+      text: this.segmentation.userTranscript(pkt.contextId) || pkt.text,
       confidence: pkt.confidence,
       iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "user"),
     });
@@ -1348,7 +1351,8 @@ export class VoiceAgentSession {
     this.emit("user_input_final", {
       tsMs: pkt.timestampMs,
       turnId: pkt.contextId,
-      text: pkt.text,
+      // See handleSttResult: emit the accumulated turn, not the last segment.
+      text: this.segmentation.userTranscript(pkt.contextId) || pkt.text,
       confidence: 1.0,
       iuId: this.segmentation.requireTranscriptIu(pkt.contextId, "user"),
     });

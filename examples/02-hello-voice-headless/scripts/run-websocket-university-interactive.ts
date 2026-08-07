@@ -608,8 +608,12 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
     if (turn.speechStartedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_started`);
     if (turn.speechEndedAtMs === 0) failures.push(`${turn.id} did not emit VAD speech_ended`);
     if (turn.speechEndedAtMs < turn.speechStartedAtMs) failures.push(`${turn.id} latest VAD speech_ended preceded first speech_started`);
+    // Transcript completeness is the direct measure of the truncation defect, so
+    // it fails the run. It was advisory for months while a two-sentence turn was
+    // being recorded as the single word "payment." -- the gate reported the miss
+    // and passed anyway.
     for (const term of turn.requiredTerms) {
-      if (!transcript.includes(term)) diagnostics.push(`${turn.id} STT transcript missed fixture term ${term}`);
+      if (!transcript.includes(term)) failures.push(`${turn.id} STT transcript missed fixture term ${term}`);
     }
     if (turn.assistantAudioEncoding === "pcm_s16le" && turn.audioBytes < 16_000) {
       failures.push(`${turn.id} returned too little TTS audio`);
@@ -617,8 +621,17 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
     if (turn.assistantAudioEncoding === "opus" && turn.audioBytes < 1_000) {
       failures.push(`${turn.id} returned too little Opus TTS audio`);
     }
+    // This was written as a proxy for truncation: finalize early, lose the rest
+    // of the turn. It is no longer one. STT and VAD endpoint independently, so a
+    // final legitimately precedes the *latest* VAD speech_ended, and the turn
+    // transcript is now the accumulation of every final rather than the last one
+    // -- observed live as complete, over-length transcripts on runs where this
+    // ordering still held. Truncation is caught directly by the fixture-term
+    // check above. The ordering does still distort voice-to-voice accounting,
+    // which is owned by "Fix the interactive smoke's latency accounting under
+    // speculative generation"; report it rather than failing the run here.
     if (turn.speechEndedAtMs > 0 && turn.sttFinalAtMs > 0 && turn.sttFinalAtMs < turn.speechEndedAtMs) {
-      failures.push(`${turn.id} STT finalized before VAD speech ended`);
+      diagnostics.push(`${turn.id} STT finalized before VAD speech ended`);
     }
     if (turn.firstAudioAtMs < turn.firstAgentAtMs) failures.push(`${turn.id} received TTS audio before agent text`);
     if (!/[.!?]\s*$/.test(turn.agentReply.trim())) diagnostics.push(`${turn.id} agent reply did not end cleanly`);
