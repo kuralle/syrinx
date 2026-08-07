@@ -16,6 +16,16 @@ import { coerceGoogleGenAiKey, ensureRepoRootDotenv, readPcm16Mono16kWav } from 
 import { createUniversitySupportSession } from "../src/university-support-agent.js";
 import { createUniversitySupportMastraSession } from "../src/university-support-mastra.js";
 import { pcm16DurationMs, writeSmokeArtifactManifest, type SmokeArtifactManifest } from "./smoke-artifact-manifest.js";
+import {
+  average,
+  buildInteractiveLatencyAggregates,
+  buildTurnLatencyMs,
+  finalizeTurnMetrics,
+  percentile,
+  respondedAfterSpeechEndMs,
+  speculativeLeadMs,
+  type TurnLatencyInput,
+} from "./interactive-latency-metrics.js";
 import type { UniversitySupportTtsProvider } from "../src/university-support-agent.js";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -51,30 +61,22 @@ const INTERACTIVE_FIXTURES = [
   },
 ] as const;
 
-interface InteractiveTurnCapture {
+interface InteractiveTurnCapture extends TurnLatencyInput {
   readonly id: string;
   readonly fixtureId: string;
   readonly inputText: string;
   readonly requiredTerms: readonly string[];
   inputAudioMs: number;
-  startedAtMs: number;
   speechStartedAtMs: number;
   speechStartedCount: number;
-  audioEndedAtMs: number;
-  speechEndedAtMs: number;
   speechEndedCount: number;
-  sttFinalAtMs: number;
-  firstAgentAtMs: number;
-  firstAudioAtMs: number;
   agentEndedAtMs: number;
-  ttsEndedAtMs: number;
   transcript: string;
   agentReply: string;
   toolCalls: string[];
   audioBytes: number;
   assistantDecodedPcmBytes?: number;
   assistantAudioEncoding: "pcm_s16le" | "opus" | "unknown";
-  metricsE2eMs: number;
   error: string;
 }
 
@@ -119,19 +121,18 @@ async function main(): Promise<void> {
     const turns = await runConversation(socket);
     socket.close();
 
-    finalizeTurnMetrics(turns);
+    const { speculativeTurnCount } = finalizeTurnMetrics(turns);
+    if (speculativeTurnCount > 0) {
+      console.log(`recorded ${String(speculativeTurnCount)} speculative lead turn(s) (assistant audio before VAD speech end)`);
+    }
     const evaluation = evaluateConversation(turns);
-    const { failures, diagnostics } = evaluation;
+    const { failures, diagnostics: qualityDiagnostics } = evaluation;
+    const { latencyMs, diagnostics: latencyDiagnostics } = buildInteractiveLatencyAggregates(turns);
+    const diagnostics = [...latencyDiagnostics, ...qualityDiagnostics];
     const manifestPath = join(runDir, "manifest.json");
     const metricsPath = join(runDir, "metrics.json");
     const transcriptPath = join(runDir, "transcript.json");
     const eventsPath = join(runDir, "events.json");
-    const sttFinalPool = positiveDeltas(turns, (turn) => turn.sttFinalAtMs - turn.speechEndedAtMs);
-    const llmTtftPool = positiveDeltas(turns, (turn) => turn.firstAgentAtMs - turn.sttFinalAtMs);
-    const ttsTtfbPool = positiveDeltas(turns, (turn) => turn.firstAudioAtMs - turn.firstAgentAtMs);
-    logStagePercentilePool("STT-final", turns, sttFinalPool);
-    logStagePercentilePool("LLM-TTFT", turns, llmTtftPool);
-    logStagePercentilePool("TTS-TTFB", turns, ttsTtfbPool);
     console.log("playout-start percentiles omitted: no playout-start timestamp captured in InteractiveTurnCapture");
     const baseline = {
       scenario: "websocket_university_student_relations_interactive",
@@ -150,26 +151,7 @@ async function main(): Promise<void> {
       trailingSilenceMs: TRAILING_SILENCE_MS,
       postTtsDrainMs: POST_TTS_DRAIN_MS,
       turnCount: turns.length,
-      latencyMs: {
-        avgSttFinalAfterSpeechEnd: average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs)),
-        avgVadSpeechEndAfterAudioEnd: average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs)),
-        avgLlmTimeToFirstText: average(turns.map((turn) => turn.firstAgentAtMs - turn.sttFinalAtMs)),
-        avgTtsTimeToFirstAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.firstAgentAtMs)),
-        avgSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs)),
-        avgVadSpeechEndToFirstAssistantAudio: average(turns.map((turn) => turn.firstAudioAtMs - turn.speechEndedAtMs)),
-        voiceToVoiceP50Ms: percentile(positiveVoiceToVoiceMs(turns), 50),
-        voiceToVoiceP95Ms: percentile(positiveVoiceToVoiceMs(turns), 95),
-        voiceToVoiceP99Ms: percentile(positiveVoiceToVoiceMs(turns), 99),
-        sttFinalP50Ms: percentile(sttFinalPool, 50),
-        sttFinalP95Ms: percentile(sttFinalPool, 95),
-        sttFinalP99Ms: percentile(sttFinalPool, 99),
-        llmTtftP50Ms: percentile(llmTtftPool, 50),
-        llmTtftP95Ms: percentile(llmTtftPool, 95),
-        llmTtftP99Ms: percentile(llmTtftPool, 99),
-        ttsTtfbP50Ms: percentile(ttsTtfbPool, 50),
-        ttsTtfbP95Ms: percentile(ttsTtfbPool, 95),
-        ttsTtfbP99Ms: percentile(ttsTtfbPool, 99),
-      },
+      latencyMs,
       turns: turns.map((turn) => ({
         id: turn.id,
         fixtureId: turn.fixtureId,
@@ -183,10 +165,7 @@ async function main(): Promise<void> {
         assistantAudioMs: assistantAudioDurationMs(turn),
         audioBytes: turn.audioBytes,
         assistantAudioEncoding: turn.assistantAudioEncoding,
-        latencyMs: {
-          ...buildTurnLatencyMs(turn),
-          voiceToVoiceMs: turn.metricsE2eMs,
-        },
+        latencyMs: buildTurnLatencyMs(turn),
       })),
       diagnostics,
       warningGate: buildWarningGate(turns),
@@ -255,13 +234,13 @@ function inferTtsProvider(): UniversitySupportTtsProvider {
 
 function buildWarningGate(turns: readonly InteractiveTurnCapture[]): { readonly passed: boolean; readonly warnings: readonly string[] } {
   const warnings: string[] = [];
-  const voiceToVoice = positiveVoiceToVoiceMs(turns);
+  const voiceToVoice = respondedAfterSpeechEndMs(turns);
   const p50 = percentile(voiceToVoice, 50);
   const p95 = percentile(voiceToVoice, 95);
   const p99 = percentile(voiceToVoice, 99);
-  if (p50 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
-  if (p95 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P95 ${String(p95)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
-  if (p99 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P99 ${String(p99)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  if (p50 !== null && p50 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  if (p95 !== null && p95 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P95 ${String(p95)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  if (p99 !== null && p99 > VOICE_TO_VOICE_SLO_MS) warnings.push(`voice-to-voice P99 ${String(p99)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
   return { passed: warnings.length === 0, warnings };
 }
 
@@ -316,10 +295,7 @@ function buildSmokeManifest(args: {
         durationMs: turn.inputAudioMs,
       },
       assistantAudio,
-      latencyMs: {
-        ...buildTurnLatencyMs(turn),
-        ...(turn.metricsE2eMs > 0 ? { voiceToVoiceMs: turn.metricsE2eMs } : {}),
-      },
+      latencyMs: buildTurnLatencyMs(turn),
       vad: {
         speechStartedCount: turn.speechStartedCount,
         speechEndedCount: turn.speechEndedCount,
@@ -409,6 +385,7 @@ async function runConversation(socket: WebSocket): Promise<InteractiveTurnCaptur
       assistantDecodedPcmBytes: 0,
       assistantAudioEncoding: "unknown",
       metricsE2eMs: 0,
+      speculativeLeadMs: 0,
       error: "",
     };
 
@@ -585,18 +562,25 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
   const avgStt = average(turns.map((turn) => turn.sttFinalAtMs - turn.audioEndedAtMs));
   const avgVadEnd = average(turns.map((turn) => turn.speechEndedAtMs - turn.audioEndedAtMs));
   const avgE2e = average(turns.map((turn) => turn.firstAudioAtMs - turn.audioEndedAtMs));
-  const voiceToVoice = turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
+  const voiceToVoice = respondedAfterSpeechEndMs(turns);
+  const speculative = speculativeLeadMs(turns);
   const p50 = percentile(voiceToVoice, 50);
   const p95 = percentile(voiceToVoice, 95);
   const p99 = percentile(voiceToVoice, 99);
-  if (p50 > 0) diagnostics.push(`voice-to-voice P50=${String(p50)}ms`);
-  if (p95 > 0) diagnostics.push(`voice-to-voice P95=${String(p95)}ms`);
-  if (p99 > 0) diagnostics.push(`voice-to-voice P99=${String(p99)}ms`);
-  if (p50 > VOICE_TO_VOICE_SLO_MS) {
+  // Sample counts are emitted by buildInteractiveLatencyAggregates, which owns
+  // the pools. Emitting them here too duplicated every line in the run's
+  // diagnostics, since the caller concatenates both lists.
+  if (p50 !== null) diagnostics.push(`voice-to-voice P50=${String(p50)}ms`);
+  if (p95 !== null) diagnostics.push(`voice-to-voice P95=${String(p95)}ms`);
+  if (p99 !== null) diagnostics.push(`voice-to-voice P99=${String(p99)}ms`);
+  if (p50 !== null && p50 > VOICE_TO_VOICE_SLO_MS) {
     diagnostics.push(`voice-to-voice P50 ${String(p50)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
   }
-  if (p95 > VOICE_TO_VOICE_SLO_MS) {
+  if (p95 !== null && p95 > VOICE_TO_VOICE_SLO_MS) {
     diagnostics.push(`voice-to-voice P95 ${String(p95)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
+  }
+  if (p99 !== null && p99 > VOICE_TO_VOICE_SLO_MS) {
+    diagnostics.push(`voice-to-voice P99 ${String(p99)}ms exceeds ${String(VOICE_TO_VOICE_SLO_MS)}ms SLO band`);
   }
   if (avgStt > 7000) failures.push(`avg STT final after speech end was ${String(avgStt)}ms, expected <= 7000ms`);
   if (avgVadEnd > 2500) failures.push(`avg VAD speech end after audio end was ${String(avgVadEnd)}ms, expected <= 2500ms`);
@@ -640,18 +624,6 @@ export function evaluateConversation(turns: readonly InteractiveTurnCapture[]): 
   return { failures, diagnostics };
 }
 
-function average(values: readonly number[]): number {
-  if (values.length === 0) return 0;
-  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
-}
-
-function percentile(values: readonly number[], pct: number): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((pct / 100) * sorted.length) - 1));
-  return sorted[index] ?? 0;
-}
-
 function rawBytes(data: RawData): Uint8Array {
   let bytes: Uint8Array;
   if (Buffer.isBuffer(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
@@ -689,69 +661,6 @@ function accumulateAssistantDecodedPcm(
   if (turn.assistantAudioEncoding === "pcm_s16le") {
     turn.assistantDecodedPcmBytes = (turn.assistantDecodedPcmBytes ?? 0) + wire.byteLength;
   }
-}
-
-function finalizeTurnMetrics(turns: readonly InteractiveTurnCapture[]): void {
-  let excludedVoiceToVoiceTurns = 0;
-  for (const turn of turns) {
-    const voiceToVoiceMs = turn.firstAudioAtMs - turn.speechEndedAtMs;
-    if (voiceToVoiceMs > 0) {
-      turn.metricsE2eMs = voiceToVoiceMs;
-      continue;
-    }
-    turn.metricsE2eMs = 0;
-    excludedVoiceToVoiceTurns += 1;
-  }
-  if (excludedVoiceToVoiceTurns > 0) {
-    console.log(
-      `excluded ${String(excludedVoiceToVoiceTurns)} turn(s) from voice-to-voice percentiles (non-positive canonical v2v)`,
-    );
-  }
-}
-
-function positiveVoiceToVoiceMs(turns: readonly InteractiveTurnCapture[]): number[] {
-  return turns.map((turn) => turn.metricsE2eMs).filter((value) => value > 0);
-}
-
-function positiveDeltas(
-  turns: readonly InteractiveTurnCapture[],
-  fn: (turn: InteractiveTurnCapture) => number,
-): number[] {
-  return turns.map(fn).filter((value) => value > 0);
-}
-
-function logStagePercentilePool(
-  stage: string,
-  turns: readonly InteractiveTurnCapture[],
-  pool: readonly number[],
-): void {
-  const excluded = turns.length - pool.length;
-  if (pool.length === 0) {
-    console.log(`excluded all ${String(turns.length)} turn(s) from ${stage} percentiles (empty positive pool)`);
-    return;
-  }
-  if (excluded > 0) {
-    console.log(`excluded ${String(excluded)} turn(s) from ${stage} percentiles (non-positive ${stage})`);
-  }
-}
-
-function buildTurnLatencyMs(turn: InteractiveTurnCapture): Record<string, number> {
-  const latencyMs: Record<string, number> = {};
-  const sttFinalAfterSpeechEnd = turn.sttFinalAtMs - turn.audioEndedAtMs;
-  const vadSpeechEndAfterAudioEnd = turn.speechEndedAtMs - turn.audioEndedAtMs;
-  const llmTimeToFirstText = turn.firstAgentAtMs - turn.sttFinalAtMs;
-  const ttsTimeToFirstAudio = turn.firstAudioAtMs - turn.firstAgentAtMs;
-  const speechEndToFirstAssistantAudio = turn.firstAudioAtMs - turn.audioEndedAtMs;
-  const vadSpeechEndToFirstAssistantAudio = turn.firstAudioAtMs - turn.speechEndedAtMs;
-  const turnWallClock = turn.ttsEndedAtMs - turn.startedAtMs;
-  if (sttFinalAfterSpeechEnd >= 0) latencyMs.sttFinalAfterSpeechEnd = sttFinalAfterSpeechEnd;
-  if (vadSpeechEndAfterAudioEnd >= 0) latencyMs.vadSpeechEndAfterAudioEnd = vadSpeechEndAfterAudioEnd;
-  if (llmTimeToFirstText >= 0) latencyMs.llmTimeToFirstText = llmTimeToFirstText;
-  if (ttsTimeToFirstAudio >= 0) latencyMs.ttsTimeToFirstAudio = ttsTimeToFirstAudio;
-  if (speechEndToFirstAssistantAudio >= 0) latencyMs.speechEndToFirstAssistantAudio = speechEndToFirstAssistantAudio;
-  if (vadSpeechEndToFirstAssistantAudio >= 0) latencyMs.vadSpeechEndToFirstAssistantAudio = vadSpeechEndToFirstAssistantAudio;
-  if (turnWallClock >= 0) latencyMs.turnWallClock = turnWallClock;
-  return latencyMs;
 }
 
 function requireEnv(name: string): void {

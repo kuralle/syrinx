@@ -1,0 +1,29 @@
+{
+  "task": "Fix the interactive smoke's latency accounting",
+  "status": "done",
+  "claims": [
+    {
+      "cmd": "pnpm -C examples/02-hello-voice-headless test",
+      "exit": 0,
+      "note": "105 passed, 1 skipped (106 total); +2 new interactive-latency-metrics tests vs prior 103 passed"
+    },
+    {
+      "cmd": "pnpm -C examples/02-hello-voice-headless typecheck",
+      "exit": 0,
+      "note": "example package compiles with extracted metrics module"
+    },
+    {
+      "cmd": "pnpm -r typecheck",
+      "exit": 0,
+      "note": "monorepo typecheck clean"
+    }
+  ],
+  "files_touched": [
+    "examples/02-hello-voice-headless/scripts/interactive-latency-metrics.ts",
+    "examples/02-hello-voice-headless/scripts/run-websocket-university-interactive.ts",
+    "examples/02-hello-voice-headless/test/interactive-latency-metrics.test.ts",
+    "examples/02-hello-voice-headless/test/websocket-smoke-quality-gates.test.ts"
+  ],
+  "sabotage": "Reverted finalizeTurnMetrics to clamp speculative turns (speculativeLeadMs=0, metricsE2eMs=0) instead of recording lead. Failure: \"expected +0 to be 235 // Object.is equality\" at interactive-latency-metrics.test.ts:75 (turns[0].speculativeLeadMs). Restored speculative lead recording.",
+  "undisclosed_changes": "Updated websocket-smoke-quality-gates.test.ts: added speculativeLeadMs to fixtures and aligned one test with ecce9bc hard-failure on missing fixture terms (failure is no longer diagnostic-only). evaluateConversation duplicate sample-count diagnostics now appear in both latency aggregates and quality evaluation output."
+}

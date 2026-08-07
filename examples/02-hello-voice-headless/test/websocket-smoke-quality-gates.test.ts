@@ -37,7 +37,11 @@ describe("websocket smoke quality gates", () => {
     expect(evaluation.failures).toContain("assistant audio output is missing or effectively silent");
   });
 
-  it("keeps interactive fixture transcript and agent wording checks diagnostic", () => {
+  // Fixture-term misses were diagnostic-only until ecce9bc. That is why a turn
+  // transcribed as the single word "payment." shipped green for months: the gate
+  // printed the miss and passed the run. Transcript completeness now fails;
+  // agent-wording checks stay diagnostic.
+  it("fails on a missed fixture term and keeps agent wording checks diagnostic", () => {
     const evaluation = evaluateInteractiveConversation([
       {
         id: "turn-1",
@@ -62,12 +66,12 @@ describe("websocket smoke quality gates", () => {
         audioBytes: 32000,
         assistantAudioEncoding: "pcm_s16le",
         metricsE2eMs: 0,
+        speculativeLeadMs: 0,
         error: "",
       },
     ]);
 
-    expect(evaluation.failures).toStrictEqual([]);
-    expect(evaluation.diagnostics).toContain("turn-1 STT transcript missed fixture term biology");
+    expect(evaluation.failures).toContain("turn-1 STT transcript missed fixture term biology");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply did not end cleanly");
     expect(evaluation.diagnostics).toContain("turn-1 agent reply was short");
   });
@@ -97,6 +101,7 @@ describe("websocket smoke quality gates", () => {
         audioBytes: 1400,
         assistantAudioEncoding: "opus",
         metricsE2eMs: 0,
+        speculativeLeadMs: 0,
         error: "",
       },
     ]);
