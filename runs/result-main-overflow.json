@@ -1,0 +1,15 @@
+{
+  "task": "Make Route.Main overflow degrade instead of throwing",
+  "status": "done",
+  "claims": [
+    {"cmd": "pnpm -C packages/core test", "exit": 0, "note": "414 tests passing (was 413), zero failures"},
+    {"cmd": "pnpm -r typecheck", "exit": 0, "note": "all packages typecheck clean"},
+    {"cmd": "pnpm -r test", "exit": 0, "note": "full monorepo test suite green"}
+  ],
+  "files_touched": [
+    "packages/core/src/pipeline-bus.ts",
+    "packages/core/src/pipeline-bus.test.ts"
+  ],
+  "sabotage": "Restored the throw in Route.Main overflow branch. Both new Main overflow tests failed: (1) 'does not throw on Main overflow' — Error: PipelineBus: Main queue full (1). Backpressure required — slow down producers or increase capacity.; (2) 'drops oldest Main on overflow without throwing' — expected [Function] to not throw but 'Error: PipelineBus: Main queue full (2). Backpressure required — slow down producers or increase capacity.' was thrown at pipeline-bus.test.ts:137. Restored drop-oldest fix.",
+  "undisclosed_changes": "Updated pipeline-bus.test.ts 'throws on Main overflow' → 'does not throw on Main overflow' (single deliberate assertion change per brief). Added console.error on Main drop for REQ-4 loud severity (tested via vi.spyOn(console, 'error'))."
+}

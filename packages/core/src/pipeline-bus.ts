@@ -12,7 +12,7 @@
 //   - Two cooperating await-driven loops on one event loop: drainMedia + drainRest.
 //   - Critical channel batches up to 4 packets per tick before yielding.
 //   - Media queue is bounded at 8192 packets; drops oldest on overflow (never throws).
-//   - Main queue is bounded at 4096 packets; throws on overflow.
+//   - Main queue is bounded at 4096 packets; drops oldest on overflow (never throws).
 //   - Background queue is bounded at 2048 packets; drops oldest on overflow.
 //   - Pipeline handler errors emit VoiceErrorPacket on Critical route — bus continues.
 //   - Handlers for media kinds must not await network or model I/O — only same-tick work.
@@ -101,7 +101,7 @@ interface QueueEntry {
 export interface PipelineBusConfig {
   /** Maximum Media queue size. Default 8192. Drops oldest on overflow; never throws. */
   mediaCapacity?: number;
-  /** Maximum Main queue size. Default 4096. Throws on overflow. */
+  /** Maximum Main queue size. Default 4096. Drops oldest on overflow; never throws. */
   mainCapacity?: number;
   /** Maximum Background queue size. Default 2048. Drops oldest on overflow. */
   bgCapacity?: number;
@@ -111,6 +111,13 @@ export interface PipelineBusConfig {
   onBackgroundDrop?: (dropped: VoicePacket) => void;
   /** Called when a Media packet is dropped. For metrics emission. */
   onMediaDrop?: (dropped: VoicePacket) => void;
+  /**
+   * Called when a Main packet is dropped. For metrics emission.
+   *
+   * Main drops are logged at error severity — unlike routine Background drops,
+   * a lost `llm.delta` or `tts.text` means the caller's turn is already broken.
+   */
+  onMainDrop?: (dropped: VoicePacket) => void;
   /**
    * Observe how long each packet waited between push and dispatch. Diagnostic only —
    * a handler awaiting long I/O parks the drain loop, and packet `timestampMs` is
@@ -148,6 +155,9 @@ export class PipelineBusImpl implements PipelineBus {
   private readonly bgCapacity: number;
   private readonly criticalBatchSize: number;
   private readonly onMediaDrop: ((dropped: VoicePacket) => void) | undefined;
+  private readonly onMainDrop: ((dropped: VoicePacket) => void) | undefined;
+  /** True while Main is in an overflow episode, so the drop is logged once rather than per packet. */
+  private mainOverflowLogged = false;
   private readonly onBgDrop: ((dropped: VoicePacket) => void) | undefined;
   /**
    * Opt-in queue-delay observer: how long a packet waited between being pushed and
@@ -170,6 +180,7 @@ export class PipelineBusImpl implements PipelineBus {
     this.bgCapacity = config?.bgCapacity ?? 2048;
     this.criticalBatchSize = config?.criticalBatchSize ?? 4;
     this.onMediaDrop = config?.onMediaDrop;
+    this.onMainDrop = config?.onMainDrop;
     this.onBgDrop = config?.onBackgroundDrop;
     this.onQueueDelay = config?.onQueueDelay;
     this.onPacket = config?.onPacket;
@@ -201,6 +212,11 @@ export class PipelineBusImpl implements PipelineBus {
       const q = this.queueFor(route);
       let droppedForMetric: VoicePacket | null = null;
       let droppedMediaForMetric: VoicePacket | null = null;
+      let droppedMainForMetric: VoicePacket | null = null;
+      if (route === Route.Main && q.length < this.capacityFor(route)) {
+        // Main has room again: the episode is over, so a later overflow logs afresh.
+        this.mainOverflowLogged = false;
+      }
       if (q.length >= this.capacityFor(route)) {
         if (route === Route.Background) {
           const dropped = q.shift();
@@ -221,10 +237,26 @@ export class PipelineBusImpl implements PipelineBus {
           }
           // continue — push after dropping oldest
         } else if (route === Route.Main) {
-          throw new Error(
-            `PipelineBus: Main queue full (${this.mainCapacity}). ` +
-              `Backpressure required — slow down producers or increase capacity.`,
-          );
+          const dropped = q.shift();
+          if (dropped) {
+            // Once Main saturates, every subsequent push drops one. Logging per
+            // drop would put a synchronous stderr write on the hot path of an
+            // already-struggling session -- thousands a second -- so log once
+            // per overflow episode and re-arm when the queue recovers below
+            // capacity. The metric and onMainDrop still fire on every drop, so
+            // nothing is lost for counting purposes.
+            if (!this.mainOverflowLogged) {
+              this.mainOverflowLogged = true;
+              console.error(
+                `PipelineBus: Main queue full (${this.mainCapacity}) — dropping oldest packets, ` +
+                  `first was "${dropped.kind}" (contextId=${dropped.contextId}). ` +
+                  `Session turn may be broken. Further drops in this episode are counted, not logged.`,
+              );
+            }
+            this.onMainDrop?.(dropped);
+            droppedMainForMetric = dropped;
+          }
+          // continue — push after dropping oldest
         }
         // Critical is never bounded
       }
@@ -235,6 +267,9 @@ export class PipelineBusImpl implements PipelineBus {
       }
       if (droppedMediaForMetric) {
         this.enqueueMediaDropMetric(droppedMediaForMetric);
+      }
+      if (droppedMainForMetric) {
+        this.enqueueMainDropMetric(droppedMainForMetric);
       }
     }
     this.wakeDrainLoop(route);
@@ -372,6 +407,23 @@ export class PipelineBusImpl implements PipelineBus {
       contextId: dropped.contextId,
       timestampMs: Date.now(),
       name: "pipeline.bus.media.dropped",
+      value: dropped.kind,
+    };
+
+    this.publishAllPackets(Route.Background, metric);
+    if (this.background.length >= this.bgCapacity) {
+      this.background.shift();
+    }
+    this.background.push(metric);
+    this.wakeDrainLoop(Route.Background);
+  }
+
+  private enqueueMainDropMetric(dropped: VoicePacket): void {
+    const metric: ConversationMetricPacket = {
+      kind: "metric.conversation",
+      contextId: dropped.contextId,
+      timestampMs: Date.now(),
+      name: "pipeline.bus.main.dropped",
       value: dropped.kind,
     };
 

@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { PipelineBusImpl, Route, type PipelineBusConfig } from "../src/pipeline-bus.js";
-import type { VoicePacket } from "../src/packets.js";
+import type { VoicePacket, ConversationMetricPacket } from "../src/packets.js";
 
 // =============================================================================
 // Helpers
@@ -94,10 +94,92 @@ describe("PipelineBusImpl", () => {
       expect(metrics).toContain("pipeline.bus.background.dropped");
     });
 
-    it("throws on Main overflow", () => {
+    it("does not throw on Main overflow", () => {
       const bus = createBus({ mainCapacity: 1 });
       bus.push(Route.Main, pkt("main.1"));
-      expect(() => bus.push(Route.Main, pkt("main.2"))).toThrow("Main queue full");
+      expect(() => bus.push(Route.Main, pkt("main.2"))).not.toThrow();
+    });
+
+    it("drops oldest Main on overflow without throwing", async () => {
+      const dropped: VoicePacket[] = [];
+      const metrics: string[] = [];
+      const dispatched: string[] = [];
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const bus = createBus({
+        mainCapacity: 2,
+        onMainDrop: (d) => {
+          dropped.push(d);
+        },
+      });
+
+      let releaseMain!: () => void;
+      const mainGate = new Promise<void>((resolve) => {
+        releaseMain = resolve;
+      });
+
+      bus.on("llm.delta", async (p) => {
+        dispatched.push(p.contextId);
+        await mainGate;
+      });
+      bus.on("metric.conversation", (p) => {
+        metrics.push((p as ConversationMetricPacket).name);
+      });
+
+      const drain = bus.start();
+      bus.push(Route.Main, pkt("llm.delta", "pkt-1"));
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(() => {
+        bus.push(Route.Main, pkt("llm.delta", "pkt-2"));
+        bus.push(Route.Main, pkt("llm.delta", "pkt-3"));
+        bus.push(Route.Main, pkt("llm.delta", "pkt-4"));
+      }).not.toThrow();
+
+      expect(dropped.some((d) => d.contextId === "pkt-2")).toBe(true);
+      expect(dropped.length).toBeGreaterThanOrEqual(1);
+      expect(errorSpy).toHaveBeenCalled();
+
+      releaseMain();
+      await new Promise((r) => setTimeout(r, 80));
+
+      expect(metrics).toContain("pipeline.bus.main.dropped");
+
+      expect(dispatched).toContain("pkt-1");
+      expect(dispatched).toContain("pkt-3");
+      expect(dispatched).toContain("pkt-4");
+      expect(dispatched).not.toContain("pkt-2");
+
+      // Session recovers — a subsequent packet dispatches normally after the stall.
+      bus.push(Route.Main, pkt("llm.delta", "pkt-recovery"));
+      await new Promise((r) => setTimeout(r, 80));
+      expect(dispatched).toContain("pkt-recovery");
+
+      bus.stop();
+      await drain;
+      errorSpy.mockRestore();
+    });
+
+    it("logs a Main overflow episode once, not per dropped packet", () => {
+      // Once Main saturates, every push drops one. A log per drop would put a
+      // synchronous stderr write on the hot path of an already-struggling
+      // session. The metric and callback still fire per drop.
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const dropped: VoicePacket[] = [];
+      const bus = createBus({
+        mainCapacity: 1,
+        onMainDrop: (d) => {
+          dropped.push(d);
+        },
+      });
+
+      bus.push(Route.Main, pkt("llm.delta", "seed"));
+      for (let i = 0; i < 25; i += 1) bus.push(Route.Main, pkt("llm.delta", `flood-${String(i)}`));
+
+      expect(dropped.length).toBe(25);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockRestore();
     });
 
     it("Critical never overflows", () => {
