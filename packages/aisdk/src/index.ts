@@ -766,9 +766,17 @@ export class ReasoningBridge implements VoicePlugin {
   }
 
   private rememberTurn(userText: string, assistantText: string, contextId: string): void {
+    // Resolve the user text now, not from the caller's closure. This is deferred
+    // into the speculative hold, so it runs at flush time -- but it was invoked
+    // with the text as it stood when the draft started, while the user was still
+    // speaking. Finals that landed since are in the accumulator and would
+    // otherwise be dropped from history, writing a truncated user turn. The
+    // discard path never hit this because it re-runs processTurn with the full
+    // text; the accepted path did.
+    const resolvedUserText = this.effectiveTurnUserText(contextId, userText);
     if (!this.sessionOwnsSegmentation || !this.transcriptViews) {
       const assistantMsg = { role: "assistant" as const, content: assistantText };
-      this.history.push({ role: "user", content: userText }, assistantMsg);
+      this.history.push({ role: "user", content: resolvedUserText }, assistantMsg);
       this.assistantMsgByContext.set(contextId, assistantMsg);
       if (!this.sessionOwnsSegmentation) {
         this.iuLedger.commit(this.assistantIuIdFor(contextId));
@@ -898,7 +906,9 @@ export class ReasoningBridge implements VoicePlugin {
     } else {
       const userText = this.turnUserText.get(contextId);
       if (userText !== undefined) {
-        this.history.push({ role: "user", content: userText });
+        // Same late-resolve as rememberTurn: this value was captured when the
+        // turn started, and a barge-in here can land after further finals.
+        this.history.push({ role: "user", content: this.effectiveTurnUserText(contextId, userText) });
         if (spoken) this.history.push({ role: "assistant", content: spoken });
         this.trimHistory();
       }

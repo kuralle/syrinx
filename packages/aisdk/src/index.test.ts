@@ -1122,6 +1122,54 @@ describe("ReasoningBridge speculative generation", () => {
     await drain;
     await plugin.close();
   });
+
+  // processTurn snapshots the turn text at entry, and startSpeculativeDraft calls
+  // it while the user is still speaking. If a later stt.result landed and the
+  // draft were still accepted, history would keep the snapshot and lose the rest
+  // of the turn.
+  it("does not lose a late final from history when a speculative draft is in flight", async () => {
+    const store = new InMemoryReasonerSessionStore();
+    const plugin = new ReasoningBridge(
+      fromStreamFactory(async function* () {
+        yield textDelta("Answer.");
+        yield finish("stop");
+      }),
+      { speculative: true, sessionStore: store, sessionId: "session-spec-late" },
+    );
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    const ctx = "turn-spec-late";
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: Date.now(),
+      text: "does biology 101 have a lab fee",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+    bus.push(Route.Main, eosInterim(ctx, "does biology 101 have a lab fee"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // A further final lands while the draft is buffered.
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: Date.now() + 1,
+      text: "and when does it post",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+    bus.push(Route.Main, turnComplete(ctx, "does biology 101 have a lab fee"));
+
+    await waitFor(() => store.load("session-spec-late").some((m) => m.role === "assistant"));
+    const userMessage = store.load("session-spec-late").find((m) => m.role === "user");
+    expect(userMessage?.content).toContain("lab fee");
+    expect(userMessage?.content).toContain("when does it post");
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
 });
 
 describe("ReasoningBridge.prewarm", () => {
