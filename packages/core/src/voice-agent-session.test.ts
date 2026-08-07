@@ -4347,3 +4347,58 @@ describe("VoiceAgentSession usage metering", () => {
     expect(manifests).toHaveLength(0);
   });
 });
+
+describe("user transcript accumulation across STT finals (session)", () => {
+  it("committed transcript spans every final in one turn", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const ctx = "ctx-session-two-finals";
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "vad.speech_started",
+      contextId: ctx,
+      timestampMs: 1000,
+      confidence: 0.99,
+    } satisfies VadSpeechStartedPacket);
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: ctx,
+      timestampMs: 1100,
+      text: "Does Biology 101 have a separate lab fee",
+    } satisfies SttInterimPacket);
+    session.bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: 1200,
+      text: "Does Biology 101 have a separate lab fee",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+
+    session.bus.push(Route.Main, {
+      kind: "stt.interim",
+      contextId: ctx,
+      timestampMs: 1300,
+      text: "because that changes how I plan my payment.",
+    } satisfies SttInterimPacket);
+    session.bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: 1400,
+      text: "because that changes how I plan my payment.",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const userText = session
+      .committedTranscript(ctx)
+      .filter((m) => m.role === "user")
+      .map((m) => m.text)
+      .join(" ");
+    expect(userText).toContain("lab fee");
+    expect(userText).toContain("payment");
+
+    await closeSession(session);
+  });
+});

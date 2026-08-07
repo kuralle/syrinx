@@ -16,6 +16,7 @@ import type {
   TextToSpeechTextPacket,
   TextToSpeechWordTimestampsPacket,
   TtsWordTimestamp,
+  SttResultPacket,
 } from "@kuralle-syrinx/core";
 import type { FinishReason, ModelMessage, TextStreamPart, ToolSet } from "ai";
 import { fromStreamFactory } from "./from-ai-sdk.js";
@@ -1186,6 +1187,47 @@ describe("ReasoningBridge.prewarm", () => {
     const drain = bus.start();
     await plugin.initialize(bus, baseConfig());
     await expect(plugin.prewarm()).resolves.toBeUndefined();
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("records accumulated user text across multiple STT finals in history", async () => {
+    const store = new InMemoryReasonerSessionStore();
+    const reasoner: Reasoner = {
+      stream: () =>
+        (async function* (): AsyncGenerator<ReasoningPart> {
+          yield { type: "text-delta", text: "Got it." };
+          yield { type: "finish", reason: "stop", text: "Got it." };
+        })(),
+    };
+    const plugin = new ReasoningBridge(reasoner, { sessionStore: store, sessionId: "session-accum" });
+    const bus = new PipelineBusImpl();
+    const drain = bus.start();
+    await plugin.initialize(bus, baseConfig());
+
+    const ctx = "turn-multi-final";
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: Date.now(),
+      text: "Does Biology 101 have a separate lab fee",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+    bus.push(Route.Main, {
+      kind: "stt.result",
+      contextId: ctx,
+      timestampMs: Date.now() + 1,
+      text: "because that changes how I plan my payment.",
+      confidence: 0.95,
+    } satisfies SttResultPacket);
+    bus.push(Route.Main, turnComplete(ctx, "because that changes how I plan my payment."));
+    await waitFor(() => store.load("session-accum").some((m) => m.role === "assistant"));
+
+    const userMessage = store.load("session-accum").find((m) => m.role === "user");
+    expect(userMessage?.content).toContain("lab fee");
+    expect(userMessage?.content).toContain("payment");
+
     bus.stop();
     await drain;
     await plugin.close();

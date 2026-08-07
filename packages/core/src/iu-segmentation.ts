@@ -47,6 +47,9 @@ export class TurnSegmentation {
   private entryCount = 0;
   private readonly entryCountByContext = new Map<string, number>();
   private readonly transcriptTextByKey = new Map<string, string>();
+  private readonly userCommittedByKey = new Map<string, string>();
+  private readonly userLiveByKey = new Map<string, string>();
+  private readonly userPendingFinalByKey = new Map<string, boolean>();
   private readonly transcriptSequence: IncrementalUnitId[] = [];
 
   constructor(onAnomaly: (a: IuLedgerAnomaly) => void) {
@@ -68,6 +71,7 @@ export class TurnSegmentation {
   resetContext(contextId: string): void {
     this.backchannelContexts.delete(contextId);
     this.transcriptIuByContext.delete(contextId);
+    this.clearTranscriptText(contextId);
   }
 
   isBackchannel(contextId: string): boolean {
@@ -79,6 +83,7 @@ export class TurnSegmentation {
     this.turnEpochCounter += 1;
     this.epochByContext.set(contextId, this.turnEpochCounter);
     this.transcriptIuByContext.delete(contextId);
+    this.clearUserTranscriptAccumulation(contextId);
   }
 
   userIuId(contextId: string): IncrementalUnitId {
@@ -99,6 +104,13 @@ export class TurnSegmentation {
 
   onSttResult(contextId: string): void {
     if (this.isBackchannel(contextId)) return;
+    // Both callers -- handleSttResult and handleTurnComplete -- run
+    // onSttPartial -> onSttResult -> recordUserTranscript(finalText), so the
+    // final text has not arrived yet. It supersedes the live interim rather
+    // than following it, so committing the interim here would double-count the
+    // segment. Mark the final as pending and let it land; the interim stays
+    // displayed until it does.
+    this.userPendingFinalByKey.set(iuStorageKey(this.userIuId(contextId)), true);
     this.ledger.commit(this.userIuId(contextId));
   }
 
@@ -152,7 +164,15 @@ export class TurnSegmentation {
   recordUserTranscript(contextId: string, text: string): void {
     if (this.isBackchannel(contextId)) return;
     const id = this.userIuId(contextId);
-    this.transcriptTextByKey.set(iuStorageKey(id), text);
+    const key = iuStorageKey(id);
+    if (this.userPendingFinalByKey.get(key)) {
+      this.appendUserCommitted(key, text);
+      this.userPendingFinalByKey.set(key, false);
+      this.userLiveByKey.set(key, "");
+    } else if (!this.isDuplicateUserFinal(key, text)) {
+      this.userLiveByKey.set(key, text);
+    }
+    this.syncUserTranscriptDisplay(key);
     this.ensureTranscriptSequence(id);
   }
 
@@ -243,6 +263,7 @@ export class TurnSegmentation {
   }
 
   private clearTranscriptText(contextId: string): void {
+    this.clearUserTranscriptAccumulation(contextId);
     for (const [key] of this.transcriptTextByKey) {
       if (key.startsWith(`${contextId}\0`)) this.transcriptTextByKey.delete(key);
     }
@@ -251,6 +272,42 @@ export class TurnSegmentation {
         this.transcriptSequence.splice(i, 1);
       }
     }
+  }
+
+  private clearUserTranscriptAccumulation(contextId: string): void {
+    const prefix = `${contextId}\0`;
+    for (const key of [...this.userCommittedByKey.keys()]) {
+      if (key.startsWith(prefix)) this.userCommittedByKey.delete(key);
+    }
+    for (const key of [...this.userLiveByKey.keys()]) {
+      if (key.startsWith(prefix)) this.userLiveByKey.delete(key);
+    }
+    for (const key of [...this.userPendingFinalByKey.keys()]) {
+      if (key.startsWith(prefix)) this.userPendingFinalByKey.delete(key);
+    }
+  }
+
+  private appendUserCommitted(key: string, text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const committed = this.userCommittedByKey.get(key) ?? "";
+    if (committed === trimmed || committed.endsWith(` ${trimmed}`) || committed.endsWith(trimmed)) return;
+    this.userCommittedByKey.set(key, committed ? `${committed} ${trimmed}` : trimmed);
+  }
+
+  private isDuplicateUserFinal(key: string, text: string): boolean {
+    const live = this.userLiveByKey.get(key) ?? "";
+    if (live === text) return true;
+    const committed = this.userCommittedByKey.get(key) ?? "";
+    const trimmed = text.trim();
+    if (!live && trimmed && (committed === trimmed || committed.endsWith(` ${trimmed}`))) return true;
+    return false;
+  }
+
+  private syncUserTranscriptDisplay(key: string): void {
+    const committed = this.userCommittedByKey.get(key) ?? "";
+    const live = this.userLiveByKey.get(key) ?? "";
+    this.transcriptTextByKey.set(key, live ? (committed ? `${committed} ${live}` : live) : committed);
   }
 
 }

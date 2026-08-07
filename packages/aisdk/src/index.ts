@@ -32,6 +32,8 @@ import {
   InMemoryIuLedger,
   type IuLedger,
   type TranscriptViews,
+  type SttInterimPacket,
+  type SttResultPacket,
 } from "@kuralle-syrinx/core";
 
 export {
@@ -108,6 +110,8 @@ export class ReasoningBridge implements VoicePlugin {
   // mid-generation interrupt still record the turn.
   private spokenByContext = new Map<string, string>();
   private turnUserText = new Map<string, string>();
+  private turnUserCommittedByContext = new Map<string, string>();
+  private turnUserLiveByContext = new Map<string, string>();
   private assistantMsgByContext = new Map<string, { role: "assistant"; content: string }>();
   // G25: word-level timestamps from TTS plugin (cumulative from context audio start).
   private wordTimestampsByContext = new Map<string, TtsWordTimestamp[]>();
@@ -297,6 +301,17 @@ export class ReasoningBridge implements VoicePlugin {
           void Promise.resolve(this.opts.runStore.discard(contextId)).catch(() => undefined);
         }
       }),
+
+      bus.on("stt.interim", (pkt: unknown) => {
+        const interim = pkt as SttInterimPacket;
+        this.turnUserLiveByContext.set(interim.contextId, interim.text.trim());
+      }),
+
+      bus.on("stt.result", (pkt: unknown) => {
+        const result = pkt as SttResultPacket;
+        this.appendTurnUserCommitted(result.contextId, result.text);
+        this.turnUserLiveByContext.delete(result.contextId);
+      }),
     );
 
     if (this.opts.speculative) {
@@ -378,7 +393,9 @@ export class ReasoningBridge implements VoicePlugin {
   ): Promise<void> {
     if (!this.bus) return;
 
-    this.turnUserText.set(contextId, userText);
+    const effectiveUserText = this.effectiveTurnUserText(contextId, userText);
+    this.turnUserText.set(contextId, effectiveUserText);
+    userText = effectiveUserText;
 
     // Handlers are concurrent, so a new turn can begin while a prior generation is
     // still in flight. Supersede it: abort the previous controller before starting.
@@ -732,6 +749,8 @@ export class ReasoningBridge implements VoicePlugin {
     for (const dispose of this.disposers.splice(0)) dispose();
     this.spokenByContext.clear();
     this.turnUserText.clear();
+    this.turnUserCommittedByContext.clear();
+    this.turnUserLiveByContext.clear();
     this.assistantMsgByContext.clear();
     this.wordTimestampsByContext.clear();
     this.playedOutMsByContext.clear();
@@ -916,9 +935,26 @@ export class ReasoningBridge implements VoicePlugin {
     }
     this.spokenByContext.delete(contextId);
     this.turnUserText.delete(contextId);
+    this.turnUserCommittedByContext.delete(contextId);
+    this.turnUserLiveByContext.delete(contextId);
     this.assistantMsgByContext.delete(contextId);
     this.wordTimestampsByContext.delete(contextId);
     this.playedOutMsByContext.delete(contextId);
+  }
+
+  private effectiveTurnUserText(contextId: string, fallback: string): string {
+    const committed = this.turnUserCommittedByContext.get(contextId) ?? "";
+    const live = this.turnUserLiveByContext.get(contextId) ?? "";
+    const accumulated = [committed, live].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    return accumulated || fallback.trim();
+  }
+
+  private appendTurnUserCommitted(contextId: string, text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const committed = this.turnUserCommittedByContext.get(contextId) ?? "";
+    if (committed === trimmed || committed.endsWith(` ${trimmed}`) || committed.endsWith(trimmed)) return;
+    this.turnUserCommittedByContext.set(contextId, committed ? `${committed} ${trimmed}` : trimmed);
   }
 }
 
