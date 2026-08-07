@@ -1,0 +1,27 @@
+{
+  "task": "Stop echoing a synthesised tool id to Gemini",
+  "status": "done",
+  "claims": [
+    {
+      "cmd": "pnpm --filter @kuralle-syrinx/realtime test",
+      "exit": 0,
+      "note": "83 passing (was 81); 2 new tool-id tests; zero failures"
+    },
+    {
+      "cmd": "pnpm -r typecheck",
+      "exit": 0,
+      "note": "All workspace packages typecheck clean"
+    },
+    {
+      "cmd": "pnpm -r test",
+      "exit": 0,
+      "note": "Full monorepo test suite passes"
+    }
+  ],
+  "files_touched": [
+    "packages/realtime/src/from-gemini-live.ts",
+    "packages/realtime/src/from-gemini-live.test.ts"
+  ],
+  "sabotage": "Restored `id: toolId` in injectToolResult (echoing the local synthesised UUID). The omit test failed: `AssertionError: expected true to be false // Object.is equality` at from-gemini-live.test.ts:432 — `expect(\"id\" in resp).toBe(false)` received true. Restored the fix.",
+  "undisclosed_changes": "none"
+}

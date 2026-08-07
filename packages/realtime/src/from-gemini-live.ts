@@ -95,7 +95,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   private openResolver: (() => void) | null = null;
   private openRejecter: ((err: Error) => void) | null = null;
   private activeResponse = false;
-  private readonly toolNames = new Map<string, string>();
+  private readonly toolNames = new Map<string, { name: string; providerId: string | undefined }>();
 
   constructor(private readonly opts: GeminiLiveOptions) {
     this.events = this.stream;
@@ -268,8 +268,8 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   }
 
   injectToolResult(toolId: string, text: string): void {
-    const name = this.toolNames.get(toolId);
-    if (!name) {
+    const entry = this.toolNames.get(toolId);
+    if (!entry) {
       this.stream.push({
         type: "error",
         cause: new Error(`unknown tool id "${toolId}" for Gemini tool response`),
@@ -279,8 +279,8 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     }
     this.requireSession().sendToolResponse({
       functionResponses: [{
-        id: toolId,
-        name,
+        ...(entry.providerId !== undefined ? { id: entry.providerId } : {}),
+        name: entry.name,
         response: { result: text },
       }],
     });
@@ -381,7 +381,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       for (const call of calls) {
         const toolId = call.id ?? crypto.randomUUID();
         const toolName = call.name ?? "unknown";
-        this.toolNames.set(toolId, toolName);
+        this.toolNames.set(toolId, { name: toolName, providerId: call.id });
         this.stream.push({
           type: "tool_call",
           toolId,

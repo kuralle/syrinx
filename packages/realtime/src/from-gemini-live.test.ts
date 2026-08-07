@@ -363,4 +363,85 @@ describe("fromGeminiLive", () => {
       emitsServerSpeechStarted: true,
     });
   });
+
+  it("echoes provider-issued tool id in functionResponses when Gemini supplies one", async () => {
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      tools: [{
+        name: "consult_knowledge",
+        description: "Answer knowledge questions.",
+        parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      }],
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    inject({
+      toolCall: {
+        functionCalls: [{
+          id: "call_provider_abc",
+          name: "consult_knowledge",
+          args: { query: "deadline" },
+        }],
+      },
+    });
+    adapter.injectToolResult("call_provider_abc", "March 15.");
+
+    expect(sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [{
+        id: "call_provider_abc",
+        name: "consult_knowledge",
+        response: { result: "March 15." },
+      }],
+    });
+
+    await adapter.close();
+  });
+
+  it("omits id from functionResponses when Gemini omits one on the tool call", async () => {
+    const uuidSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+
+    const adapter = fromGeminiLive({
+      apiKey: "test-key",
+      tools: [{
+        name: "consult_knowledge",
+        description: "Answer knowledge questions.",
+        parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      }],
+    });
+
+    await adapter.open(new AbortController().signal);
+
+    inject({
+      toolCall: {
+        functionCalls: [{
+          name: "consult_knowledge",
+          args: { query: "deadline" },
+        }],
+      },
+    });
+
+    const localToolId = "00000000-0000-4000-8000-000000000001";
+    adapter.injectToolResult(localToolId, "March 15.");
+
+    expect(sendToolResponse).toHaveBeenCalledTimes(1);
+    const frame = sendToolResponse.mock.calls[0]![0] as {
+      functionResponses: Array<Record<string, unknown>>;
+    };
+    const resp = frame.functionResponses[0]!;
+    expect("id" in resp).toBe(false);
+    expect(resp).toEqual({
+      name: "consult_knowledge",
+      response: { result: "March 15." },
+    });
+
+    const serialized = JSON.stringify(sendToolResponse.mock.calls[0]![0]);
+    expect(serialized).not.toMatch(/00000000-0000-4000-8000-000000000001/);
+    expect(serialized).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+    );
+
+    uuidSpy.mockRestore();
+    await adapter.close();
+  });
 });
