@@ -1,0 +1,28 @@
+{
+  "task": "Bound the toolNames map lifetime",
+  "status": "done",
+  "claims": [
+    {
+      "cmd": "pnpm --filter @kuralle-syrinx/realtime test",
+      "exit": 0,
+      "note": "87 tests passing (83 baseline + 4 new toolNames lifetime tests), zero failures"
+    },
+    {
+      "cmd": "pnpm -r typecheck",
+      "exit": 0,
+      "note": "Full monorepo typecheck clean"
+    },
+    {
+      "cmd": "pnpm -r test",
+      "exit": 0,
+      "note": "Full monorepo test suite clean"
+    }
+  ],
+  "files_touched": [
+    "packages/realtime/src/from-gemini-live.ts",
+    "packages/realtime/src/from-gemini-live.test.ts"
+  ],
+  "cap_chosen": "256 (MAX_TOOL_NAMES) — matches InMemoryIuLedger.maxContexts default in packages/core/src/iu-ledger.ts; enough headroom for concurrent in-flight tool calls on a long session without unbounded growth",
+  "sabotage": "Removed this.toolNames.delete(toolId) after sendToolResponse in injectToolResult. Round-trip test 'drops each entry after its tool result is sent' failed: 'Test timed out in 5000ms' — nextErrorEvent never received an error because the second injectToolResult succeeded silently (sendToolResponse called twice). Restored delete before final run.",
+  "undisclosed_changes": "none"
+}

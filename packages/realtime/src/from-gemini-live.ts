@@ -9,6 +9,8 @@ import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "./realtime
 const DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const OUTPUT_SAMPLE_RATE_HZ = 24_000;
+/** In-flight tool-call ids awaiting a client result. Oldest evicted at cap (iu-ledger pattern). */
+const MAX_TOOL_NAMES = 256;
 
 export interface GeminiLiveTranscriptionOptions {
   /**
@@ -284,6 +286,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
         response: { result: text },
       }],
     });
+    this.toolNames.delete(toolId);
   }
 
   async close(): Promise<void> {
@@ -292,7 +295,19 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     }
     this.session?.close();
     this.session = null;
+    this.toolNames.clear();
     this.stream.close();
+  }
+
+  private trackToolName(
+    toolId: string,
+    entry: { name: string; providerId: string | undefined },
+  ): void {
+    if (!this.toolNames.has(toolId) && this.toolNames.size >= MAX_TOOL_NAMES) {
+      const oldest = this.toolNames.keys().next().value;
+      if (oldest !== undefined) this.toolNames.delete(oldest);
+    }
+    this.toolNames.set(toolId, entry);
   }
 
   private requireSession(): Session {
@@ -381,7 +396,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       for (const call of calls) {
         const toolId = call.id ?? crypto.randomUUID();
         const toolName = call.name ?? "unknown";
-        this.toolNames.set(toolId, { name: toolName, providerId: call.id });
+        this.trackToolName(toolId, { name: toolName, providerId: call.id });
         this.stream.push({
           type: "tool_call",
           toolId,

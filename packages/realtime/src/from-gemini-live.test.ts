@@ -69,6 +69,25 @@ function inject(msg: Partial<LiveServerMessage> & Record<string, unknown>): void
   onmessage(msg as LiveServerMessage);
 }
 
+function injectToolCall(toolId: string, name = "consult_knowledge"): void {
+  inject({
+    toolCall: {
+      functionCalls: [{
+        id: toolId,
+        name,
+        args: { query: "test" },
+      }],
+    },
+  });
+}
+
+async function nextErrorEvent(events: AsyncIterable<RealtimeEvent>): Promise<RealtimeEvent> {
+  for await (const event of events) {
+    if (event.type === "error") return event;
+  }
+  throw new Error("expected error event");
+}
+
 describe("fromGeminiLive", () => {
   it("frames silent context as a user-role update because Gemini drops system history", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key" });
@@ -443,5 +462,143 @@ describe("fromGeminiLive", () => {
 
     uuidSpy.mockRestore();
     await adapter.close();
+  });
+
+  describe("toolNames map lifetime", () => {
+    it("drops each entry after its tool result is sent", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      for (const toolId of ["call_a", "call_b", "call_c"]) {
+        injectToolCall(toolId);
+        adapter.injectToolResult(toolId, "ok");
+        expect(sendToolResponse).toHaveBeenCalledWith({
+          functionResponses: [{
+            id: toolId,
+            name: "consult_knowledge",
+            response: { result: "ok" },
+          }],
+        });
+        sendToolResponse.mockClear();
+
+        const errorTask = nextErrorEvent(adapter.events);
+        adapter.injectToolResult(toolId, "again");
+        const err = await errorTask;
+        expect(err).toMatchObject({
+          type: "error",
+          cause: new Error(`unknown tool id "${toolId}" for Gemini tool response`),
+          recoverable: false,
+        });
+      }
+
+      await adapter.close();
+    });
+
+    it("evicts oldest orphaned entries at cap and keeps newer ids resolvable", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      for (let i = 0; i < 256; i++) {
+        injectToolCall(`orphan_${i}`);
+      }
+      injectToolCall("orphan_256");
+
+      const evictedErrorTask = nextErrorEvent(adapter.events);
+      adapter.injectToolResult("orphan_0", "too late");
+      expect(await evictedErrorTask).toMatchObject({
+        type: "error",
+        cause: new Error('unknown tool id "orphan_0" for Gemini tool response'),
+      });
+
+      adapter.injectToolResult("orphan_1", "still valid");
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "orphan_1",
+          name: "consult_knowledge",
+          response: { result: "still valid" },
+        }],
+      });
+
+      adapter.injectToolResult("orphan_256", "newest survives");
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "orphan_256",
+          name: "consult_knowledge",
+          response: { result: "newest survives" },
+        }],
+      });
+
+      await adapter.close();
+    });
+
+    it("clears outstanding entries on close", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("orphan_close");
+      await adapter.close();
+
+      expect(() => adapter.injectToolResult("orphan_close", "late")).not.toThrow();
+    });
+
+    it("resolves an in-flight call after unrelated oldest-first eviction", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      for (let i = 0; i < 255; i++) {
+        injectToolCall(`orphan_${i}`);
+      }
+      injectToolCall("inflight_keep");
+      injectToolCall("orphan_255");
+
+      adapter.injectToolResult("inflight_keep", "resolved after eviction");
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "inflight_keep",
+          name: "consult_knowledge",
+          response: { result: "resolved after eviction" },
+        }],
+      });
+
+      const evictedErrorTask = nextErrorEvent(adapter.events);
+      adapter.injectToolResult("orphan_0", "evicted");
+      expect(await evictedErrorTask).toMatchObject({
+        type: "error",
+        cause: new Error('unknown tool id "orphan_0" for Gemini tool response'),
+      });
+
+      await adapter.close();
+    });
   });
 });
