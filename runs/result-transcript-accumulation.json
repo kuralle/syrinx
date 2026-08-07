@@ -1,0 +1,18 @@
+{
+  "task": "Accumulate a turn's user transcript across STT finals",
+  "status": "done",
+  "claims": [
+    {"cmd": "pnpm -C packages/core test", "exit": 0, "note": "412 passed, 0 failed (was 410 with 1 red gate failure)"},
+    {"cmd": "pnpm -C packages/aisdk test", "exit": 0, "note": "56 passed (was 55)"},
+    {"cmd": "pnpm -r typecheck", "exit": 0, "note": "monorepo typecheck clean"}
+  ],
+  "files_touched": [
+    "packages/core/src/iu-segmentation.ts",
+    "packages/core/src/iu-transcript-accumulation.test.ts",
+    "packages/core/src/voice-agent-session.test.ts",
+    "packages/aisdk/src/index.ts",
+    "packages/aisdk/src/index.test.ts"
+  ],
+  "sabotage": "Restored overwrite in recordUserTranscript (plain transcriptTextByKey.set). Red gate failed: expected 'because that changes how I plan my pa…' to contain 'lab fee' (Received: 'because that changes how I plan my payment.'). Fix restored.",
+  "undisclosed_changes": "none"
+}
