@@ -1,0 +1,34 @@
+{
+  "task": "Make the Gemini Live smokes fail fast and loud",
+  "status": "done",
+  "claims": [
+    {
+      "cmd": "pnpm -C examples/02-hello-voice-headless typecheck",
+      "exit": 0,
+      "note": "Example package typechecks with shared gemini-live-smoke module and updated smokes"
+    },
+    {
+      "cmd": "pnpm -r typecheck",
+      "exit": 0,
+      "note": "Monorepo typecheck clean after from-gemini-live onclose error surfacing"
+    },
+    {
+      "cmd": "pnpm -r test",
+      "exit": 0,
+      "note": "Full test suite green including new fromGeminiLive onclose test; no twilio port-collision flake observed"
+    }
+  ],
+  "files_touched": [
+    "examples/02-hello-voice-headless/src/gemini-live-smoke.ts",
+    "examples/02-hello-voice-headless/scripts/run-realtime-gemini-sendtext-smoke.ts",
+    "examples/02-hello-voice-headless/scripts/run-realtime-gemini-bimodel-smoke.ts",
+    "examples/02-hello-voice-headless/scripts/run-realtime-gemini-bargein-smoke.ts",
+    "examples/02-hello-voice-headless/scripts/run-realtime-gemini-multiturn-smoke.ts",
+    "packages/realtime/src/from-gemini-live.ts",
+    "packages/realtime/src/from-gemini-live.test.ts"
+  ],
+  "bad_key_sendtext": "exit 1, wall 1.64s, message: API key not valid. Please pass a valid API key.",
+  "bad_key_bimodel": "exit 1, wall 5.10s, message: API key not valid. Please pass a valid API key.",
+  "shared_model_module": "examples/02-hello-voice-headless/src/gemini-live-smoke.ts — imported by run-realtime-gemini-sendtext-smoke.ts, run-realtime-gemini-bimodel-smoke.ts, run-realtime-gemini-bargein-smoke.ts, run-realtime-gemini-multiturn-smoke.ts",
+  "undisclosed_changes": "Required packages/realtime from-gemini-live onclose fix (6 lines + test): invalid API keys close the WebSocket with a provider reason but previously emitted no adapter error, so llm.error never reached the bus and smokes timed out despite listeners. Brief assumed the error was already on the bus; probe confirmed it was not until onclose pushes { type: 'error' }. Timeout choice: 20s tts.end backstop for sendtext (fail-fast path ~1–8s); bimodel keeps 180s completion backstop because a successful STT→tool_call→delegate→TTS turn routinely exceeds 20s. Also folded GEMINI_LIVE_MODEL into bargein/multiturn smokes (REQ-4 scope check)."
+}

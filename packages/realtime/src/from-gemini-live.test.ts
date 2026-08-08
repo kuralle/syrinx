@@ -16,15 +16,18 @@ const GoogleGenAI = vi.fn();
 
 let onopen: (() => void) | null = null;
 let onmessage: ((msg: LiveServerMessage) => void) | null = null;
+let onclose: ((ev: { reason?: string }) => void) | null = null;
 
 const liveConnect = vi.fn().mockImplementation(async ({ callbacks }: {
   callbacks: {
     onopen?: () => void;
     onmessage?: (msg: LiveServerMessage) => void;
+    onclose?: (ev: { reason?: string }) => void;
   };
 }) => {
   onopen = callbacks.onopen ?? null;
   onmessage = callbacks.onmessage ?? null;
+  onclose = callbacks.onclose ?? null;
   queueMicrotask(() => callbacks.onopen?.());
   return {
     sendRealtimeInput,
@@ -50,6 +53,7 @@ afterEach(() => {
   liveConnect.mockClear();
   onopen = null;
   onmessage = null;
+  onclose = null;
 });
 
 async function collectEvents(
@@ -98,6 +102,29 @@ describe("fromGeminiLive", () => {
     expect(sendClientContent).toHaveBeenCalledWith({
       turns: [{ role: "user", parts: [{ text: "[Context-only instruction]\nUse the verified deadline." }] }],
       turnComplete: false,
+    });
+
+    await adapter.close();
+  });
+
+  it("emits a nonrecoverable error when the socket closes with a reason (e.g. invalid API key)", async () => {
+    const adapter = fromGeminiLive({ apiKey: "bad-key" });
+    const errors: RealtimeEvent[] = [];
+
+    void (async () => {
+      for await (const event of adapter.events) {
+        if (event.type === "error") errors.push(event);
+      }
+    })();
+
+    await adapter.open(new AbortController().signal);
+    onclose?.({ reason: "API key not valid. Please pass a valid API key." });
+
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]).toMatchObject({
+      type: "error",
+      cause: expect.objectContaining({ message: "API key not valid. Please pass a valid API key." }),
+      recoverable: false,
     });
 
     await adapter.close();

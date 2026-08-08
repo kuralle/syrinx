@@ -22,6 +22,7 @@ import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kur
 import { RealtimeBridge, fromGeminiLive } from "@kuralle-syrinx/realtime";
 import type { RealtimeToolDef } from "@kuralle-syrinx/realtime";
 
+import { GEMINI_LIVE_MODEL } from "../src/gemini-live-smoke.js";
 import { DEFAULT_VOICE_ID, ensureRepoRootDotenv } from "../src/run-one-turn.js";
 import { createFullUniversityRuntime } from "../src/university-agent-full.js";
 
@@ -33,7 +34,6 @@ const PKG_ROOT = join(SCRIPT_DIR, "..");
 const OUTPUT_DIR = join(PKG_ROOT, "test", "performance", "runs", "realtime-gemini-multiturn-smoke");
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES = 320;
-const GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const POST_TURN_SILENCE_MS = 5000;
 
 const TURN1_TEXT = "My name is Priya and I'm applying for the computer science masters.";

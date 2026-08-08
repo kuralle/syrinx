@@ -11,13 +11,12 @@ import {
   type LlmResponseDonePacket,
   type SttResultPacket,
   type TextToSpeechAudioPacket,
-  type TextToSpeechEndPacket,
 } from "@kuralle-syrinx/core";
 import { RealtimeBridge, fromGeminiLive } from "@kuralle-syrinx/realtime";
 
+import { GEMINI_LIVE_MODEL, waitForTtsEndFailFast } from "../src/gemini-live-smoke.js";
 import { ensureRepoRootDotenv } from "../src/run-one-turn.js";
 
-const GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 const TYPED_TURN = "In one short sentence, what is the capital of France?";
 
 function sleep(ms: number): Promise<void> {
@@ -36,6 +35,14 @@ async function main(): Promise<void> {
     endpointingOwner: "timer",
   });
   session.registerPlugin("realtime", bridge);
+
+  let closed = false;
+  const closeAll = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await session.close();
+    await adapter.close();
+  };
 
   const audioByContext = new Map<string, Uint8Array[]>();
   const assistantByContext = new Map<string, string>();
@@ -57,59 +64,57 @@ async function main(): Promise<void> {
     userTranscripts.push(pkt.text);
   });
 
-  const ttsEnd = new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("typed-turn tts.end timeout (60s)")), 60_000);
-    const off = session.bus.on<TextToSpeechEndPacket>("tts.end", (pkt) => {
-      clearTimeout(timeout);
-      off();
-      resolve(pkt.contextId);
+  const ttsEndWait = waitForTtsEndFailFast(session, { model: GEMINI_LIVE_MODEL });
+
+  try {
+    await session.start();
+
+    // The whole point of #9: a typed turn, no audio frames at all.
+    session.bus.push(Route.Main, {
+      kind: "user.text_received",
+      contextId: crypto.randomUUID(),
+      timestampMs: Date.now(),
+      text: TYPED_TURN,
     });
-  });
 
-  await session.start();
+    const ctx = await ttsEndWait.promise;
+    await sleep(200);
 
-  // The whole point of #9: a typed turn, no audio frames at all.
-  session.bus.push(Route.Main, {
-    kind: "user.text_received",
-    contextId: crypto.randomUUID(),
-    timestampMs: Date.now(),
-    text: TYPED_TURN,
-  });
+    // Sum audio across every context this turn spanned (Gemini mints response_started on
+    // setupComplete and again on the first model part, so the spoken answer can land on a
+    // sibling contextId of the one that fired tts.end).
+    const audioBytes = [...audioByContext.values()]
+      .flat()
+      .reduce((sum, c) => sum + c.byteLength, 0);
+    const assistantText = [...assistantByContext.values()].join(" ").trim() || deltas.join(" ").trim();
+    const mentionsParis = assistantText.toLowerCase().includes("paris");
 
-  const ctx = await ttsEnd;
-  await sleep(200);
+    // The #9 contract: a typed turn (no audio input) makes the front model speak. Audio is the
+    // hard gate — it proves sendText (sendClientContent) reached the live model and it generated a turn.
+    if (audioBytes === 0) {
+      throw new Error(`typed turn produced no audio — sendText did not reach the model (ctx=${ctx})`);
+    }
 
-  // Sum audio across every context this turn spanned (Gemini mints response_started on
-  // setupComplete and again on the first model part, so the spoken answer can land on a
-  // sibling contextId of the one that fired tts.end).
-  const audioBytes = [...audioByContext.values()]
-    .flat()
-    .reduce((sum, c) => sum + c.byteLength, 0);
-  const assistantText = [...assistantByContext.values()].join(" ").trim() || deltas.join(" ").trim();
-  const mentionsParis = assistantText.toLowerCase().includes("paris");
+    console.log(
+      JSON.stringify({
+        ok: true,
+        model: GEMINI_LIVE_MODEL,
+        typedTurn: TYPED_TURN,
+        contextId: ctx,
+        audioBytes,
+        assistantText,
+        mentionsParis,
+        userTranscripts,
+      }),
+    );
 
-  // The #9 contract: a typed turn (no audio input) makes the front model speak. Audio is the
-  // hard gate — it proves sendText (sendClientContent) reached the live model and it generated a turn.
-  if (audioBytes === 0) {
-    throw new Error(`typed turn produced no audio — sendText did not reach the model (ctx=${ctx})`);
+    await closeAll();
+    process.exit(0);
+  } catch (err) {
+    ttsEndWait.cancel();
+    await closeAll();
+    throw err;
   }
-
-  console.log(
-    JSON.stringify({
-      ok: true,
-      model: GEMINI_LIVE_MODEL,
-      typedTurn: TYPED_TURN,
-      contextId: ctx,
-      audioBytes,
-      assistantText,
-      mentionsParis,
-      userTranscripts,
-    }),
-  );
-
-  await session.close();
-  await adapter.close();
-  process.exit(0);
 }
 
 main().catch((err: unknown) => {

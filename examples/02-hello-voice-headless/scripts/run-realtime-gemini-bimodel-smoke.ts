@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import {
   Route,
   VoiceAgentSession,
+  type LlmErrorPacket,
   type LlmToolCallPacket,
   type LlmToolResultPacket,
   type SttResultPacket,
@@ -22,6 +23,10 @@ import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kur
 import { RealtimeBridge, fromGeminiLive } from "@kuralle-syrinx/realtime";
 import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "@kuralle-syrinx/realtime";
 
+import {
+  GEMINI_LIVE_BIMODEL_TIMEOUT_MS,
+  GEMINI_LIVE_MODEL,
+} from "../src/gemini-live-smoke.js";
 import { DEFAULT_VOICE_ID, ensureRepoRootDotenv, readPcm16Mono16kWav } from "../src/run-one-turn.js";
 import { createFullUniversityRuntime } from "../src/university-agent-full.js";
 
@@ -35,7 +40,6 @@ const FIXTURE_PATH = join(PKG_ROOT, "test", "fixtures", "university-cs-masters-d
 const OUTPUT_DIR = join(PKG_ROOT, "test", "performance", "runs", "realtime-gemini-bimodel-smoke");
 const INPUT_SAMPLE_RATE_HZ = 16_000;
 const FRAME_SAMPLES = 320;
-const GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 
 const INPUT_TEXT =
   "What's the application deadline for the computer science masters?";
@@ -266,100 +270,152 @@ async function main(): Promise<void> {
     outputChunks.push(pkt.audio);
   });
 
+  let completionCancel: (() => void) | undefined;
   const completion = new Promise<void>((resolve, reject) => {
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
-    const hardTimeout = setTimeout(() => {
-      reject(new Error("realtime gemini bimodel smoke timeout"));
-    }, 180_000);
+    let settled = false;
+    let offTtsEnd: (() => void) | undefined;
+    let offLlmError: (() => void) | undefined;
+    let hardTimeout: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = (): void => {
+      if (settleTimer) clearTimeout(settleTimer);
+      if (hardTimeout !== undefined) clearTimeout(hardTimeout);
+      offTtsEnd?.();
+      offLlmError?.();
+    };
+
+    completionCancel = cleanup;
+
+    const fail = (err: Error): void => {
+      if (settled) return;
+      queueMicrotask(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      });
+    };
+
+    const succeed = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    hardTimeout = setTimeout(() => {
+      fail(
+        new Error(
+          `no bimodel completion within ${GEMINI_LIVE_BIMODEL_TIMEOUT_MS / 1000}s (model=${GEMINI_LIVE_MODEL})`,
+        ),
+      );
+    }, GEMINI_LIVE_BIMODEL_TIMEOUT_MS);
+
+    offLlmError = session.bus.on<LlmErrorPacket>("llm.error", (pkt) => {
+      fail(new Error(pkt.cause.message));
+    });
 
     const maybeSettle = (): void => {
       if (!sawToolResult) return;
       if (settleTimer) clearTimeout(settleTimer);
-      settleTimer = setTimeout(() => {
-        clearTimeout(hardTimeout);
-        resolve();
-      }, 8000);
+      settleTimer = setTimeout(() => succeed(), 8000);
     };
 
-    session.bus.on<TextToSpeechEndPacket>("tts.end", () => {
+    offTtsEnd = session.bus.on<TextToSpeechEndPacket>("tts.end", () => {
       pushTimeline("bus.tts.end");
       maybeSettle();
     });
   });
 
-  await session.start();
-
-  const pcm = readPcm16Mono16kWav(FIXTURE_PATH);
-  const transportContextId = crypto.randomUUID();
-  let offset = 0;
-  while (offset < pcm.length) {
-    const frame = sliceFramePcm(pcm, offset);
-    session.bus.push(Route.Media, {
-      kind: "user.audio_received",
-      contextId: transportContextId,
-      timestampMs: Date.now(),
-      audio: pcmToBytes(frame),
-    });
-    offset += FRAME_SAMPLES;
-    await sleep(20);
-  }
-
-  for (let pad = 0; pad < 100; pad += 1) {
-    session.bus.push(Route.Media, {
-      kind: "user.audio_received",
-      contextId: transportContextId,
-      timestampMs: Date.now(),
-      audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)),
-    });
-    await sleep(20);
-  }
-
-  pushTimeline("user.audio.done");
-
-  await completion;
-
-  if (!sawToolCall) throw new Error("ask_university tool_call was not observed");
-  if (!sawToolResult) throw new Error("delegate llm.tool_result was not observed");
-  if (!isNonSilentAudio(outputChunks)) throw new Error("captured assistant audio is silent");
-
-  const groundedText = `${reasonerAnswer} ${assistantTranscript}`.trim();
-  if (!containsMarch31(groundedText)) {
-    throw new Error(`grounded answer missing "March 31": reasoner="${reasonerAnswer}" assistant="${assistantTranscript}"`);
-  }
-
-  const outPath = join(OUTPUT_DIR, "audio-out.wav");
-  await writePcm16Wav(outPath, outputChunks, INPUT_SAMPLE_RATE_HZ);
-
-  const pass =
-    sawToolCall &&
-    sawToolResult &&
-    isNonSilentAudio(outputChunks) &&
-    containsMarch31(groundedText);
-
-  console.log(`\n=== GEMINI BI-MODEL PASS: ${pass ? "YES" : "NO"} ===`);
-  console.log(`model: ${GEMINI_LIVE_MODEL}`);
-  console.log(`grounded answer (reasoner): ${reasonerAnswer}`);
-  console.log(`assistant transcript (voiced): ${assistantTranscript}`);
-
-  const summary = {
-    ok: pass,
-    model: GEMINI_LIVE_MODEL,
-    userTranscript,
-    reasonerAnswer,
-    assistantTranscript,
-    audioBytes: mergeBytes(outputChunks).byteLength,
-    outPath,
-    timeline,
+  let closed = false;
+  const closeAll = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await session.close();
+    await adapter.close();
   };
 
-  console.log(JSON.stringify(summary, null, 2));
+  try {
+    await session.start();
 
-  await session.close();
-  await adapter.close();
-  process.exit(0);
+    const feedAudio = async (): Promise<void> => {
+      const pcm = readPcm16Mono16kWav(FIXTURE_PATH);
+      const transportContextId = crypto.randomUUID();
+      let offset = 0;
+      while (offset < pcm.length) {
+        const frame = sliceFramePcm(pcm, offset);
+        session.bus.push(Route.Media, {
+          kind: "user.audio_received",
+          contextId: transportContextId,
+          timestampMs: Date.now(),
+          audio: pcmToBytes(frame),
+        });
+        offset += FRAME_SAMPLES;
+        await sleep(20);
+      }
+
+      for (let pad = 0; pad < 100; pad += 1) {
+        session.bus.push(Route.Media, {
+          kind: "user.audio_received",
+          contextId: transportContextId,
+          timestampMs: Date.now(),
+          audio: pcmToBytes(new Int16Array(FRAME_SAMPLES)),
+        });
+        await sleep(20);
+      }
+
+      pushTimeline("user.audio.done");
+    };
+
+    await Promise.all([feedAudio(), completion]);
+
+    if (!sawToolCall) throw new Error("ask_university tool_call was not observed");
+    if (!sawToolResult) throw new Error("delegate llm.tool_result was not observed");
+    if (!isNonSilentAudio(outputChunks)) throw new Error("captured assistant audio is silent");
+
+    const groundedText = `${reasonerAnswer} ${assistantTranscript}`.trim();
+    if (!containsMarch31(groundedText)) {
+      throw new Error(`grounded answer missing "March 31": reasoner="${reasonerAnswer}" assistant="${assistantTranscript}"`);
+    }
+
+    const outPath = join(OUTPUT_DIR, "audio-out.wav");
+    await writePcm16Wav(outPath, outputChunks, INPUT_SAMPLE_RATE_HZ);
+
+    const pass =
+      sawToolCall &&
+      sawToolResult &&
+      isNonSilentAudio(outputChunks) &&
+      containsMarch31(groundedText);
+
+    console.log(`\n=== GEMINI BI-MODEL PASS: ${pass ? "YES" : "NO"} ===`);
+    console.log(`model: ${GEMINI_LIVE_MODEL}`);
+    console.log(`grounded answer (reasoner): ${reasonerAnswer}`);
+    console.log(`assistant transcript (voiced): ${assistantTranscript}`);
+
+    const summary = {
+      ok: pass,
+      model: GEMINI_LIVE_MODEL,
+      userTranscript,
+      reasonerAnswer,
+      assistantTranscript,
+      audioBytes: mergeBytes(outputChunks).byteLength,
+      outPath,
+      timeline,
+    };
+
+    console.log(JSON.stringify(summary, null, 2));
+
+    await closeAll();
+    process.exit(0);
+  } catch (err) {
+    completionCancel?.();
+    await closeAll();
+    throw err;
+  }
 }
 
-main().catch(async (err: unknown) => {
+main().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

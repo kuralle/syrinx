@@ -227,7 +227,16 @@ class GeminiLiveAdapter implements RealtimeAdapter {
           this.stream.push({ type: "error", cause, recoverable: true });
           this.rejectOpen(cause);
         },
-        onclose: () => this.stream.close(),
+        onclose: (ev) => {
+          const reason =
+            ev && typeof ev === "object" && "reason" in ev && typeof ev.reason === "string"
+              ? ev.reason.trim()
+              : "";
+          if (reason) {
+            this.stream.push({ type: "error", cause: new Error(reason), recoverable: false });
+          }
+          this.stream.close();
+        },
       },
     });
 
