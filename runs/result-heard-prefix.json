@@ -1,0 +1,32 @@
+{
+  "task": "Heard-prefix truncation degrades honestly without word timings",
+  "status": "done",
+  "claims": [
+    {
+      "cmd": "pnpm -C packages/core test",
+      "exit": 0,
+      "note": "423 passing (was 415); includes exact/estimate/0ms/clamp barge-in tests and heard-assistant-prefix unit tests"
+    },
+    {
+      "cmd": "pnpm -r typecheck",
+      "exit": 0,
+      "note": "monorepo typecheck clean"
+    },
+    {
+      "cmd": "pnpm -r test",
+      "exit": 0,
+      "note": "full monorepo test suite; no known flakes observed on this run"
+    }
+  ],
+  "files_touched": [
+    "packages/core/src/heard-assistant-prefix.ts",
+    "packages/core/src/heard-assistant-prefix.test.ts",
+    "packages/core/src/voice-agent-session.ts",
+    "packages/core/src/iu-segmentation.ts",
+    "packages/core/src/iu-segmentation.test.ts"
+  ],
+  "fallback": "Without word timings: charsHeard = min(emitted.length, floor(playedOutMs/1000 * 15)), then truncateAtWordBoundary. Rate basis: English ~150 wpm, ~6 chars/word (5 letters + space) → 150*6/60 ≈ 15 chars/s.",
+  "signal": "heard_prefix.estimated (metric.conversation on Route.Background; emitted only when estimate path runs and emitted assistant text is non-empty)",
+  "sabotage": "Replaced estimate return with `heard: emitted` (full text). Failures: heard-assistant-prefix.test.ts \"expected 46 to be less than 46\"; iu-segmentation.test.ts \"expected 'Alpha beta gamma…' to be 'Alpha' // Received: full reply\". Restored truncateAtWordBoundary path.",
+  "undisclosed_changes": "handleInterruptDetected now calls setAssistantHeardPrefix when usedEstimate is true even if heard is empty (0 ms playout), so the committed transcript is cleared instead of retaining full emitted text. Metric emission gated on non-empty emitted text to avoid noise on audio-only interrupt fixtures."
+}

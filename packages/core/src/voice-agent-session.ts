@@ -72,6 +72,10 @@ import { LatencyFillerController } from "./latency-filler.js";
 import { PrimarySpeakerGate } from "./primary-speaker-gate.js";
 import { takeFirstFragment } from "./voice-text.js";
 import { takeCompleteVoiceText, isCompleteVoiceText, appendVoiceText, normalizeForSpeech } from "./voice-text.js";
+import {
+  HEARD_PREFIX_ESTIMATED_METRIC,
+  computeHeardAssistantPrefix,
+} from "./heard-assistant-prefix.js";
 import { TtsPlayoutClock } from "./tts-playout-clock.js";
 import { TurnArbiter, isBackchannel } from "./turn-arbiter.js";
 import { InteractionCoordinator } from "./interaction-coordinator.js";
@@ -1946,13 +1950,12 @@ export class VoiceAgentSession {
     }
   }
 
-  private computeHeardAssistantPrefix(contextId: string): string {
-    const words = this.wordTimestampsByContext.get(contextId);
-    const playedOutMs = this.playedOutMsByContext.get(contextId);
-    if (words && words.length > 0 && playedOutMs !== undefined && playedOutMs > 0) {
-      return words.filter((word) => word.endMs <= playedOutMs).map((word) => word.word).join(" ");
-    }
-    return (this.ttsTextBuffers.get(contextId)?.emitted ?? "").trim();
+  private computeHeardAssistantPrefix(contextId: string): { heard: string; usedEstimate: boolean } {
+    return computeHeardAssistantPrefix({
+      emittedText: this.ttsTextBuffers.get(contextId)?.emitted ?? "",
+      playedOutMs: this.playedOutMsByContext.get(contextId),
+      wordTimestamps: this.wordTimestampsByContext.get(contextId),
+    });
   }
 
   private clearAssistantTranscriptState(contextId: string): void {
@@ -1963,9 +1966,18 @@ export class VoiceAgentSession {
   private handleInterruptDetected(pkt: InterruptionDetectedPacket): void {
     this.cancelInteractionPlayoutTick(pkt.contextId);
     const playedMs = this.ttsPlayout.positionMs(pkt.contextId) ?? 0;
-    const heard = this.computeHeardAssistantPrefix(pkt.contextId);
+    const { heard, usedEstimate } = this.computeHeardAssistantPrefix(pkt.contextId);
     this.segmentation.onAssistantBargeIn(pkt.contextId, playedMs);
-    if (heard) {
+    if (
+      usedEstimate &&
+      (this.ttsTextBuffers.get(pkt.contextId)?.emitted ?? "").trim().length > 0
+    ) {
+      this.bus.push(
+        Route.Background,
+        make.metric(pkt.contextId, HEARD_PREFIX_ESTIMATED_METRIC, String(playedMs), pkt.timestampMs),
+      );
+    }
+    if (usedEstimate || heard) {
       this.segmentation.setAssistantHeardPrefix(pkt.contextId, heard, playedMs);
     }
     this.interruptedGenerationContextIds.add(pkt.contextId);

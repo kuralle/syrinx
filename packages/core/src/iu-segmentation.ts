@@ -202,6 +202,16 @@ export class TurnSegmentation {
     this.ensureTranscriptSequence(id);
   }
 
+  /**
+   * Commit the assistant IU to what the caller actually heard at barge-in.
+   *
+   * **Exact truncation** when `tts.word_timestamps` are present (Cartesia only
+   * today). **Estimated truncation** for all other TTS providers: playout ms is
+   * mapped to characters at ~15 chars/s (150 wpm) and cut at a word boundary;
+   * the session emits `heard_prefix.estimated` on Route.Background so
+   * approximate commits are observable. See `computeHeardAssistantPrefix` in
+   * `heard-assistant-prefix.ts` for the provider table.
+   */
   setAssistantHeardPrefix(contextId: string, heardText: string, playedMs: number): void {
     if (this.isBackchannel(contextId)) return;
     const id = this.assistantIuId(contextId);

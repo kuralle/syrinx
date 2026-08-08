@@ -29,7 +29,9 @@ import type {
   SttResultPacket,
   TextToSpeechPlayoutProgressPacket,
   TextToSpeechWordTimestampsPacket,
+  ConversationMetricPacket,
 } from "./packets.js";
+import { HEARD_PREFIX_ESTIMATED_METRIC, truncateAtWordBoundary } from "./heard-assistant-prefix.js";
 
 class BackchannelPolicy implements InteractionPolicy {
   observe(obs: InteractionObservation): readonly InteractionDecision[] {
@@ -379,6 +381,10 @@ describe("transcript views", () => {
     const bridge = new ReasoningBridgePlugin(reasoner);
     const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
     session.registerPlugin("bridge", bridge);
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
 
     await session.start();
 
@@ -451,6 +457,7 @@ describe("transcript views", () => {
     const assistant = session.committedTranscript("turn-barge").find((message) => message.role === "assistant");
     expect(assistant?.text).toBe("Alpha beta");
     expect(assistant?.text.length).toBeLessThan(fullReply.length);
+    expect(metrics.some((m) => m.name === HEARD_PREFIX_ESTIMATED_METRIC)).toBe(false);
 
     session.bus.push(Route.Main, {
       kind: "eos.turn_complete",
@@ -466,6 +473,209 @@ describe("transcript views", () => {
       ?.messages.find((message) => message.role === "assistant");
     expect(priorAssistant?.content).toBe(assistant?.text);
     expect(priorAssistant?.content.length).toBeLessThan(fullReply.length);
+
+    await closeSession(session);
+  });
+
+  it("barge-in without word timings estimates a shorter heard prefix and emits heard_prefix.estimated", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await session.start();
+
+    const fullReply = "Alpha beta gamma delta epsilon zeta eta theta.";
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-estimate",
+      timestampMs: 100,
+      text: "question",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-estimate",
+      timestampMs: 150,
+      text: fullReply,
+    } satisfies LlmDeltaPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Media, {
+      kind: "tts.audio",
+      contextId: "turn-estimate",
+      timestampMs: 200,
+      audio: new Uint8Array(64000),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-estimate",
+      timestampMs: 250,
+      playedOutMs: 400,
+      complete: false,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.bus.push(Route.Main, {
+      kind: "interrupt.detected",
+      contextId: "turn-estimate",
+      timestampMs: 260,
+      source: "client",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-estimate",
+      timestampMs: 270,
+      text: fullReply,
+    } satisfies LlmDonePkt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const assistant = session.committedTranscript("turn-estimate").find((message) => message.role === "assistant");
+    const expectedHeard = truncateAtWordBoundary(fullReply, Math.floor((400 / 1000) * 15));
+    expect(assistant?.text).toBe(expectedHeard);
+    expect(assistant?.text.length).toBeLessThan(fullReply.length);
+    expect(assistant?.text).not.toBe(fullReply);
+
+    const estimateMetric = metrics.find((m) => m.name === HEARD_PREFIX_ESTIMATED_METRIC);
+    expect(estimateMetric).toEqual(
+      expect.objectContaining({ name: HEARD_PREFIX_ESTIMATED_METRIC, value: "400" }),
+    );
+
+    await closeSession(session);
+  });
+
+  it("barge-in with 0 ms playout and no word timings commits empty prefix", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+    const metrics: ConversationMetricPacket[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push(pkt as ConversationMetricPacket);
+    });
+
+    await session.start();
+
+    const fullReply = "Alpha beta gamma delta epsilon zeta eta theta.";
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-zero",
+      timestampMs: 100,
+      text: "question",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-zero",
+      timestampMs: 150,
+      text: fullReply,
+    } satisfies LlmDeltaPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Media, {
+      kind: "tts.audio",
+      contextId: "turn-zero",
+      timestampMs: 200,
+      audio: new Uint8Array(64000),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-zero",
+      timestampMs: 250,
+      playedOutMs: 0,
+      complete: false,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.bus.push(Route.Main, {
+      kind: "interrupt.detected",
+      contextId: "turn-zero",
+      timestampMs: 260,
+      source: "client",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-zero",
+      timestampMs: 270,
+      text: fullReply,
+    } satisfies LlmDonePkt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const assistant = session.committedTranscript("turn-zero").find((message) => message.role === "assistant");
+    expect(assistant?.text ?? "").toBe("");
+    expect(metrics.some((m) => m.name === HEARD_PREFIX_ESTIMATED_METRIC)).toBe(true);
+
+    await closeSession(session);
+  });
+
+  it("barge-in without word timings clamps to full text when playout exceeds estimate", async () => {
+    const session = new VoiceAgentSession({ plugins: {}, minInterruptionMs: 0 });
+
+    await session.start();
+
+    const fullReply = "Alpha beta gamma delta epsilon zeta eta theta.";
+
+    session.bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-clamp",
+      timestampMs: 100,
+      text: "question",
+      transcripts: [],
+    } satisfies EndOfSpeechPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-clamp",
+      timestampMs: 150,
+      text: fullReply,
+    } satisfies LlmDeltaPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    session.bus.push(Route.Media, {
+      kind: "tts.audio",
+      contextId: "turn-clamp",
+      timestampMs: 200,
+      audio: new Uint8Array(64000),
+      sampleRateHz: 16000,
+    });
+    session.bus.push(Route.Main, {
+      kind: "tts.playout_progress",
+      contextId: "turn-clamp",
+      timestampMs: 250,
+      playedOutMs: 600_000,
+      complete: false,
+    } satisfies TextToSpeechPlayoutProgressPacket);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    session.bus.push(Route.Main, {
+      kind: "interrupt.detected",
+      contextId: "turn-clamp",
+      timestampMs: 260,
+      source: "client",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    session.bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-clamp",
+      timestampMs: 270,
+      text: fullReply,
+    } satisfies LlmDonePkt);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const assistant = session.committedTranscript("turn-clamp").find((message) => message.role === "assistant");
+    expect(assistant?.text).toBe(fullReply);
 
     await closeSession(session);
   });
