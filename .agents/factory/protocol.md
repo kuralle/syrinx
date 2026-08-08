@@ -177,6 +177,24 @@ Three rules that make it useful rather than decorative:
   a whole dispatch monitored this way, where every liveness reading was the
   waiter's own `/bin/zsh -c` process. Resolve the leaf PID once at dispatch
   time and signal-test that.
+- **Scope the PID lookup to this workspace.** Even with the self-match avoided,
+  `pgrep -f cursor-agent | head -1` matches workers belonging to *other repos*
+  running on the same machine. `head -1` then returns whichever PID sorts
+  first, which may be an unrelated project's worker. Observed: a monitor
+  latched onto a `simplebooks` worker, that worker exited, and the monitor
+  reported "exited without sentinel" while this repo's dispatch was still
+  running normally seven minutes in. Filter by the absolute workspace path:
+
+  ```sh
+  LEAF=$(ps -eo pid,command | grep "cursor-agent" | grep "<abs-workspace-path>" \
+         | grep -v "bin/zsh" | grep -v grep | awk '{print $1}' | head -1)
+  ```
+
+  The `grep -v "bin/zsh"` drops the wrapper so the leaf is what remains.
+  **The sentinel file is what actually protects you here** — in that incident
+  the false "dead" reading was harmless only because every real completion is
+  detected by `runs/result-<task>.done`, not by liveness. Treat PID liveness as
+  the crash fallback it is, never as the primary signal.
 
 **Stdin delivery by worker** (wrong choice = backgrounded hang):
 
