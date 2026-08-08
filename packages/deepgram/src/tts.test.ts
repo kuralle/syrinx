@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as voice from "@kuralle-syrinx/core";
 import { WebSocketServer, type WebSocket } from "ws";
+import type { ManagedSocket, SocketData, SocketFactory } from "@kuralle-syrinx/ws";
 import {
   PipelineBusImpl,
   Route,
@@ -13,6 +14,57 @@ import {
 } from "@kuralle-syrinx/core";
 
 import { DeepgramTTSPlugin } from "./tts.js";
+
+class FakeSocket implements ManagedSocket {
+  isOpen = false;
+  sent: SocketData[] = [];
+  private openHandler: (() => void) | null = null;
+  private messageHandler: ((data: SocketData, isBinary: boolean) => void) | null = null;
+
+  send(data: SocketData): void {
+    if (!this.isOpen) throw new Error("WebSocket is not open");
+    this.sent.push(data);
+  }
+  keepAlivePing(): void {}
+  async verify(): Promise<boolean> {
+    return this.isOpen;
+  }
+  dispose(): void {
+    this.isOpen = false;
+  }
+  onOpen(handler: () => void): void {
+    this.openHandler = handler;
+  }
+  onMessage(handler: (data: SocketData, isBinary: boolean) => void): void {
+    this.messageHandler = handler;
+  }
+  onClose(): void {}
+  onError(): void {}
+  openNow(): void {
+    this.isOpen = true;
+    this.openHandler?.();
+  }
+  receive(data: SocketData, isBinary = false): void {
+    this.messageHandler?.(data, isBinary);
+  }
+}
+
+function makeDeepgramTtsFakeFactory(
+  onOutbound: (msg: Record<string, unknown>, socket: FakeSocket) => void,
+): SocketFactory {
+  return () => {
+    const socket = new FakeSocket();
+    const baseSend = socket.send.bind(socket);
+    socket.send = (data: SocketData) => {
+      baseSend(data);
+      if (typeof data === "string") {
+        onOutbound(JSON.parse(data) as Record<string, unknown>, socket);
+      }
+    };
+    setTimeout(() => socket.openNow(), 0);
+    return socket;
+  };
+}
 
 let servers: WebSocketServer[] = [];
 
@@ -326,28 +378,30 @@ describe("DeepgramTTSPlugin", () => {
   });
 
   it("realigns PCM split across binary frame boundaries", async () => {
-    const endpointUrl = await createLocalServer((socket) => {
-      socket.on("message", (data) => {
-        const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-        if (msg["type"] === "Speak") {
-          // Three bytes then one byte: the plugin must carry the odd byte over so
-          // every emitted chunk stays 16-bit aligned (no half-sample corruption).
-          socket.send(Buffer.from([0x11, 0x22, 0x33]), { binary: true });
-          socket.send(Buffer.from([0x44]), { binary: true });
-        }
-        if (msg["type"] === "Flush") socket.send(JSON.stringify({ type: "Flushed", sequence_id: 0 }));
-      });
+    const socketFactory = makeDeepgramTtsFakeFactory((msg, socket) => {
+      if (msg["type"] === "Speak") {
+        // Three bytes then one byte: the plugin must carry the odd byte over so
+        // every emitted chunk stays 16-bit aligned (no half-sample corruption).
+        socket.receive(new Uint8Array([0x11, 0x22, 0x33]), true);
+        socket.receive(new Uint8Array([0x44]), true);
+      }
+      if (msg["type"] === "Flush") {
+        socket.receive(JSON.stringify({ type: "Flushed", sequence_id: 0 }), false);
+      }
     });
 
     const bus = new PipelineBusImpl();
     const started = bus.start();
-    const plugin = new DeepgramTTSPlugin();
+    const plugin = new DeepgramTTSPlugin(socketFactory);
     const audio: TextToSpeechAudioPacket[] = [];
     const ends: TextToSpeechEndPacket[] = [];
     bus.on("tts.audio", (pkt) => { audio.push(pkt as TextToSpeechAudioPacket); });
     bus.on("tts.end", (pkt) => { ends.push(pkt as TextToSpeechEndPacket); });
 
-    await plugin.initialize(bus, { api_key: "test-deepgram-key", endpoint_url: endpointUrl });
+    await plugin.initialize(bus, {
+      api_key: "test-deepgram-key",
+      endpoint_url: "ws://fake.test/v1/speak",
+    });
     bus.push(Route.Main, { kind: "tts.text", contextId: "turn-a", timestampMs: Date.now(), text: "Align me." });
     bus.push(Route.Main, { kind: "tts.done", contextId: "turn-a", timestampMs: Date.now() });
     await waitForCondition(() => ends.length >= 1);

@@ -1,7 +1,12 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, mergeConfig } from "vitest/config";
 
-export default defineConfig({
-  test: {
-    fileParallelism: false,
-  },
-});
+import socketConfig from "../../vitest.socket.config.js";
+
+export default mergeConfig(
+  socketConfig,
+  defineConfig({
+    test: {
+      fileParallelism: false,
+    },
+  }),
+);
