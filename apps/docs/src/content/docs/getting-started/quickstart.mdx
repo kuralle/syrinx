@@ -1,0 +1,198 @@
+---
+title: Quickstart
+description: Install Syrinx from npm, set your provider keys, and build your first voice agent.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Syrinx is published on npm as `@kuralle-syrinx/*`. Install the packages you need, plug in your providers, and you have a voice agent — no repository to clone.
+
+## Prerequisites
+
+- Node 20+
+- A [Deepgram](https://deepgram.com) API key (STT), an OpenAI (or other) LLM key, and a [Cartesia](https://cartesia.ai) API key (TTS) — or swap in any [supported provider](/providers/overview/)
+
+## Install
+
+Syrinx supplies the voice runtime and the STT/TTS adapters. The **reasoner** — the thing that decides what to say — is your own agent framework, wired in through a bridge package. Pick one:
+
+<Tabs syncKey="reasoner">
+<TabItem label="Kuralle Agents">
+
+```bash
+npm install @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia \
+  @kuralle-syrinx/kuralle @kuralle-syrinx/aisdk @kuralle-agents/core @ai-sdk/openai
+```
+
+</TabItem>
+<TabItem label="Vercel AI SDK">
+
+```bash
+npm install @kuralle-syrinx/core @kuralle-syrinx/deepgram @kuralle-syrinx/cartesia \
+  @kuralle-syrinx/aisdk ai @ai-sdk/openai
+```
+
+</TabItem>
+</Tabs>
+
+## Set your provider keys
+
+```bash
+DEEPGRAM_API_KEY=...
+OPENAI_API_KEY=...
+CARTESIA_API_KEY=...
+
+# Optional — Cartesia falls back to a default voice when this is unset.
+CARTESIA_VOICE_ID=...
+```
+
+## Build your first agent
+
+Wire a cascade — Deepgram STT → your reasoner → Cartesia TTS — with Deepgram owning turn detection.
+
+Write it as a **factory**. A session is per-conversation, not per-process, so what you export is a function that builds a fresh one.
+
+<Tabs syncKey="reasoner">
+<TabItem label="Kuralle Agents">
+
+A Kuralle runtime brings agents, tools, flows, skills, and memory. `fromKuralleRuntime` turns one into a Syrinx `Reasoner`:
+
+```ts
+import { randomUUID } from 'node:crypto';
+import { VoiceAgentSession } from '@kuralle-syrinx/core';
+import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
+import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
+import { ReasoningBridge } from '@kuralle-syrinx/aisdk';
+import { fromKuralleRuntime } from '@kuralle-syrinx/kuralle';
+import { defineAgent, createRuntime, MemoryStore } from '@kuralle-agents/core';
+import { createOpenAI } from '@ai-sdk/openai';
+
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const agent = defineAgent({
+  id: 'assistant',
+  model: openai('gpt-4.1-mini'),
+  instructions: 'You are a helpful voice assistant. Keep your replies short.',
+});
+
+const runtime = createRuntime({
+  agents: [agent],
+  defaultAgentId: 'assistant',
+  sessionStore: new MemoryStore(),
+});
+
+export function createVoiceAgent(): VoiceAgentSession {
+  // One id per conversation: the runtime keys history and memory off it.
+  const sessionId = randomUUID();
+
+  const session = new VoiceAgentSession({
+    plugins: {
+      stt: { api_key: process.env.DEEPGRAM_API_KEY!, model: 'nova-3', sample_rate: 16000, emit_eos_on_final: true },
+      bridge: {},
+      tts: { api_key: process.env.CARTESIA_API_KEY! },
+    },
+    endpointingOwner: 'provider_stt',
+  });
+
+  session.registerPlugin('stt', new DeepgramSTTPlugin());
+  session.registerPlugin('bridge', new ReasoningBridge(
+    fromKuralleRuntime(runtime, { sessionId }),
+  ));
+  session.registerPlugin('tts', new CartesiaTTSPlugin());
+
+  // Return it unstarted — the server below calls start(), once, per connection.
+  return session;
+}
+```
+
+The agent and runtime are built once, at module scope; the session is built per connection. That split matters — the runtime holds your agents, tools, and memory store, and you want one of those, not one per caller.
+
+</TabItem>
+<TabItem label="Vercel AI SDK">
+
+`fromStreamText` turns any AI SDK model into a Syrinx `Reasoner`:
+
+```ts
+import { VoiceAgentSession } from '@kuralle-syrinx/core';
+import { DeepgramSTTPlugin } from '@kuralle-syrinx/deepgram';
+import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
+import { ReasoningBridge, fromStreamText } from '@kuralle-syrinx/aisdk';
+import { createOpenAI } from '@ai-sdk/openai';
+
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export function createVoiceAgent(): VoiceAgentSession {
+  const session = new VoiceAgentSession({
+    plugins: {
+      stt: { api_key: process.env.DEEPGRAM_API_KEY!, model: 'nova-3', sample_rate: 16000, emit_eos_on_final: true },
+      bridge: {},
+      tts: { api_key: process.env.CARTESIA_API_KEY! },
+    },
+    endpointingOwner: 'provider_stt',
+  });
+
+  session.registerPlugin('stt', new DeepgramSTTPlugin());
+  session.registerPlugin('bridge', new ReasoningBridge(fromStreamText({
+    model: openai('gpt-4.1-mini'),
+    system: 'You are a helpful voice assistant. Keep your replies short.',
+  })));
+  session.registerPlugin('tts', new CartesiaTTSPlugin());
+
+  // Return it unstarted — the server below calls start(), once, per connection.
+  return session;
+}
+```
+
+</TabItem>
+</Tabs>
+
+That's the whole agent: audio in becomes a transcript, the transcript becomes a reply, the reply becomes audio. Only the `bridge` slot changed between those two tabs — the STT and TTS wiring, the turn-taking, and everything downstream are identical. The same seam takes a [Mastra](/providers/overview/) agent, or a realtime speech-to-speech model instead of a cascade.
+
+Register every plugin before the session starts, and start it exactly once: `start()` runs the plugin init chain that opens the provider sockets, and throws if called twice.
+
+## Talk to it
+
+Serve the agent over the Syrinx WebSocket protocol. `createVoiceWebSocketServer` calls your factory once per connection and starts each session for you:
+
+```bash
+npm install @kuralle-syrinx/server-websocket
+```
+
+```ts
+import { createVoiceWebSocketServer } from '@kuralle-syrinx/server-websocket';
+import { createVoiceAgent } from './my-agent.js';
+
+await createVoiceWebSocketServer({
+  port: 4173,
+  path: '/ws',
+  createSession: () => createVoiceAgent(),
+});
+
+console.log('agent listening on ws://localhost:4173/ws');
+```
+
+That is the whole server. It owns the audio wire — resampling, Opus on the downlink, frame pacing, heartbeats, and reconnect with ordered replay.
+
+Now open **Syrinx Studio** and point it at your machine:
+
+[https://syrinx-studio.mithushancj.workers.dev/?ws=ws://localhost:4173/ws](https://syrinx-studio.mithushancj.workers.dev/?ws=ws://localhost:4173/ws)
+
+Allow the microphone and start talking. The server owns turn detection, so you speak and stop naturally — there is no push-to-talk — and it yields when you interrupt it mid-sentence. Studio shows the live transcript, per-turn timings, and how each turn resolved.
+
+:::note[Use `localhost`, not `127.0.0.1`]
+A browser applies local-network access checks when a page on a public origin reaches your machine, and the hostname form is the one that connects. If your browser blocks it anyway, serve the Studio UI from your own server instead — [Building a voice agent](/guides/building-a-voice-agent/#serve-the-studio-ui-from-the-same-server) has that version, along with the production options and the `authorize` hook you should set before exposing the port beyond loopback.
+:::
+
+## Other transports
+
+A session is idle until something pushes audio frames at it. That something is a **transport** — the browser server above is one. Swapping it does not change the agent you just wrote:
+
+- **A WAV file** — a full turn with no server and no microphone, which is what you want in tests and CI. See [Run it locally](/getting-started/run-it-locally/).
+- **Telephony** — the same agent answering a [Twilio](/telephony/twilio/) or [Telnyx](/telephony/telnyx/) phone call.
+- **Cloudflare Workers** — the whole pipeline on the edge, one hibernatable Durable Object per call. See [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).
+
+## Next
+
+- [Build a voice agent](/guides/building-a-voice-agent/) — tools, realtime, and half-cascade.
+- [Providers](/providers/overview/) — every STT, TTS, and realtime adapter, with config.
+- [How Syrinx works](/concepts/overview/) — the mental model.

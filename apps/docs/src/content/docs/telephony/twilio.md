@@ -29,6 +29,6 @@ The reference Worker binds a `TwilioVoiceConversation` Durable Object to `/twili
 
 ## Codecs
 
-Twilio Media Streams is μ-law (PCMU) at 8 kHz in both directions. Syrinx handles the transcode; there's nothing to configure. For wideband audio (G.722) you'll want [Telnyx](/telnyx/).
+Twilio Media Streams is μ-law (PCMU) at 8 kHz in both directions. Syrinx handles the transcode; there's nothing to configure. For wideband audio (G.722) you'll want [Telnyx](/telephony/telnyx/).
 
 See [Codecs, DTMF & transfer](/telephony/codecs-dtmf-transfer/) for sending DTMF and transferring calls.
