@@ -1289,6 +1289,78 @@ describe("VoiceAgentSession", () => {
     await closeSession(session);
   });
 
+  describe("session_start", () => {
+    it("decomposes startup latency and omits absent stage fields", () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: Array<Record<string, unknown>> = [];
+      session.on("session_start", (event) => {
+        events.push(event as Record<string, unknown>);
+      });
+
+      session.noteSessionStart({
+        connectedAtMs: 1000,
+        admissionStartedAtMs: 1100,
+        admissionEndedAtMs: 1400,
+        readyAtMs: 2000,
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({
+        tsMs: 2000,
+        totalMs: 1000,
+        transportMs: 100,
+        admissionMs: 300,
+        unattributedMs: 600,
+      });
+      expect(events[0]).not.toHaveProperty("pluginInitMs");
+    });
+
+    it("unattributedMs equals totalMs minus only the stages that resolved", () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      const events: Array<Record<string, unknown>> = [];
+      session.on("session_start", (event) => {
+        events.push(event as Record<string, unknown>);
+      });
+
+      session.noteSessionStart({
+        connectedAtMs: 0,
+        admissionStartedAtMs: 50,
+        admissionEndedAtMs: 150,
+        pluginInitStartedAtMs: 200,
+        readyAtMs: 500,
+      });
+
+      expect(events[0]).toEqual({
+        tsMs: 500,
+        totalMs: 500,
+        transportMs: 50,
+        admissionMs: 100,
+        pluginInitMs: 300,
+        unattributedMs: 50,
+      });
+    });
+
+    it("a second noteSessionStart call is a no-op", () => {
+      const session = new VoiceAgentSession({ plugins: {} });
+      let count = 0;
+      session.on("session_start", () => {
+        count += 1;
+      });
+
+      const boundaries = {
+        connectedAtMs: 0,
+        admissionStartedAtMs: 10,
+        admissionEndedAtMs: 20,
+        pluginInitStartedAtMs: 30,
+        readyAtMs: 100,
+      };
+      session.noteSessionStart(boundaries);
+      session.noteSessionStart(boundaries);
+
+      expect(count).toBe(1);
+    });
+  });
+
   it("IP-C3: tool_call_cue.delayed emits interaction.backchannel end-to-end", async () => {
     const session = new VoiceAgentSession({ plugins: {}, delayCueAfterMs: 30 });
     const backchannels: InteractionBackchannelPacket[] = [];

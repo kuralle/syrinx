@@ -144,6 +144,18 @@ export async function runVoiceEdgeWebSocketConnection(
   request: Request,
   options: VoiceEdgeWebSocketOptions,
 ): Promise<void> {
+  // Two limits on what session_start can mean on this host, neither visible in the
+  // local suite — workerd advances the clock normally, production does not.
+  //
+  // 1. Deployed to Cloudflare, Date.now() returns the time of the LAST I/O and does not
+  //    advance during code execution (Spectre mitigation). A stage whose two ends are
+  //    not separated by real I/O therefore reports exactly 0 — a wrong zero, not a fast
+  //    one. Only stages bracketing genuine I/O (createSession/start, the ready send)
+  //    carry a real duration here.
+  // 2. A cold Durable Object wake happens before this function is entered — the DO
+  //    constructor and onConnect have already run — so it sits OUTSIDE this window
+  //    entirely. Cold-wake cost is observable only from the client, as connect->ready.
+  const connectedAtMs = Date.now();
   const scheduler = options.scheduler ?? new TimerScheduler();
   const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
@@ -250,14 +262,18 @@ export async function runVoiceEdgeWebSocketConnection(
     const requestedSessionId = sanitizeSessionId(
       options.sessionId?.(request) ?? sessionIdFromRequest(request) ?? defaultSessionId(),
     );
+    let admissionStartedAtMs: number | undefined;
+    let admissionEndedAtMs: number | undefined;
     const leased = await withScheduledTimeout(
       options.sessionStore.lease(requestedSessionId, async () => {
+        admissionStartedAtMs = Date.now();
         const sess = await options.createSession(request);
         if (closed) {
           await sess.close().catch(() => undefined);
           throw new Error("websocket session startup aborted");
         }
         await sess.start();
+        admissionEndedAtMs = Date.now();
         if (closed) {
           await sess.close().catch(() => undefined);
           throw new Error("websocket session startup aborted");
@@ -283,6 +299,7 @@ export async function runVoiceEdgeWebSocketConnection(
       await options.sessionStore.release(leased.managed.id, 0);
       return;
     }
+    const pluginInitStartedAtMs = Date.now();
     wireEdgeSessionEvents(
       session,
       socket,
@@ -353,7 +370,15 @@ export async function runVoiceEdgeWebSocketConnection(
         maxInboundMessageBytes,
       },
     });
+    const readyAtMs = Date.now();
     ready = true;
+    session.noteSessionStart({
+      connectedAtMs,
+      ...(admissionStartedAtMs !== undefined ? { admissionStartedAtMs } : {}),
+      ...(admissionEndedAtMs !== undefined ? { admissionEndedAtMs } : {}),
+      pluginInitStartedAtMs,
+      readyAtMs,
+    });
     for (const pending of pendingMessages.splice(0)) {
       pendingMessageBytes -= pending.byteLength;
       processMessage(pending.data, pending.isBinary);

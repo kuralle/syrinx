@@ -292,6 +292,7 @@ export {
   VoiceAgentSession,
   type VoiceAgentSessionConfig,
   type VoiceAgentSessionEvents,
+  type SessionStartBoundaries,
   type SessionStageUsage,
 } from "./voice-agent-session.js";
 

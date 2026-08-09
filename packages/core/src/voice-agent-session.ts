@@ -232,6 +232,19 @@ export interface VoiceAgentSessionConfig {
   };
 }
 
+/**
+ * Boundary timestamps a transport records during session startup.
+ * An absent field means the boundary is unobservable on that host —
+ * omit it rather than passing a zero.
+ */
+export interface SessionStartBoundaries {
+  readonly connectedAtMs: number;
+  readonly admissionStartedAtMs?: number;
+  readonly admissionEndedAtMs?: number;
+  readonly pluginInitStartedAtMs?: number;
+  readonly readyAtMs: number;
+}
+
 export interface VoiceAgentSessionEvents {
   user_started_speaking: (event: { tsMs: number; turnId: string }) => void;
   user_stopped_speaking: (event: { tsMs: number; turnId: string }) => void;
@@ -261,6 +274,22 @@ export interface VoiceAgentSessionEvents {
    * these as `tool_call_*` wire messages — the standard "thinking" cue.
    */
   tool_call_cue: (event: { tsMs: number; turnId: string; phase: "started" | "delayed" | "complete" | "failed"; toolId: string; toolName: string; afterMs?: number }) => void;
+  /**
+   * Session startup latency from client connect intent to session ready to accept media.
+   * Decomposition: transportMs (connect → admission start) + admissionMs (admission start →
+   * admission end) + pluginInitMs (plugin init start → ready). A stage is omitted when the
+   * host does not observe both ends of that boundary. `unattributedMs` is the explicit
+   * residual after subtracting only the stages present. Emitted exactly once per session
+   * that reaches ready; startup failures emit nothing.
+   */
+  session_start: (event: {
+    tsMs: number;
+    totalMs: number;
+    transportMs?: number;
+    admissionMs?: number;
+    pluginInitMs?: number;
+    unattributedMs: number;
+  }) => void;
   /**
    * Per-turn latency decomposition, timestamped at the turn's first TTS audio.
    * When generation is still active at first audio, emission waits for `tts.end` so
@@ -435,6 +464,7 @@ export class VoiceAgentSession {
   private turnUserStoppedAtMs = new Map<string, number>();
   private turnTimings = new Map<string, TurnTiming>();
   private pendingTurnLatency = new Map<string, number>();
+  private sessionStartEmitted = false;
   /** Running usage totals per stage, summed across the session; emitted at close. */
   private readonly usageByStage = new Map<UsageStage, SessionStageUsage>();
   private speakerEnrollmentContextId: string | null = null;
@@ -805,6 +835,40 @@ export class VoiceAgentSession {
     handler: VoiceAgentSessionEvents[K],
   ): void {
     this.eventListeners.get(event)?.delete(handler as EventHandler<unknown>);
+  }
+
+  /**
+   * Emit a decomposed session_start event from transport-recorded boundaries.
+   * Safe to call twice — the second call is a no-op.
+   */
+  noteSessionStart(boundaries: SessionStartBoundaries): void {
+    if (this.sessionStartEmitted) return;
+    this.sessionStartEmitted = true;
+
+    const { connectedAtMs, admissionStartedAtMs, admissionEndedAtMs, pluginInitStartedAtMs, readyAtMs } =
+      boundaries;
+    const totalMs = readyAtMs - connectedAtMs;
+    const transportMs =
+      admissionStartedAtMs !== undefined ? admissionStartedAtMs - connectedAtMs : undefined;
+    const admissionMs =
+      admissionStartedAtMs !== undefined && admissionEndedAtMs !== undefined
+        ? admissionEndedAtMs - admissionStartedAtMs
+        : undefined;
+    const pluginInitMs =
+      pluginInitStartedAtMs !== undefined ? readyAtMs - pluginInitStartedAtMs : undefined;
+    const attributedMs = [transportMs, admissionMs, pluginInitMs]
+      .filter((value): value is number => value !== undefined)
+      .reduce((sum, value) => sum + value, 0);
+    const unattributedMs = totalMs - attributedMs;
+
+    this.emit("session_start", {
+      tsMs: readyAtMs,
+      totalMs,
+      ...(transportMs !== undefined ? { transportMs } : {}),
+      ...(admissionMs !== undefined ? { admissionMs } : {}),
+      ...(pluginInitMs !== undefined ? { pluginInitMs } : {}),
+      unattributedMs,
+    });
   }
 
   private emit<K extends keyof VoiceAgentSessionEvents>(

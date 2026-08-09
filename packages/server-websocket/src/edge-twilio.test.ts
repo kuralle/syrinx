@@ -71,6 +71,7 @@ function fakeSession(received: UserAudioReceivedPacket[] = []): VoiceAgentSessio
     on() {},
     off() {},
     requestClientInterrupt() {},
+    noteSessionStart() {},
   } as unknown as VoiceAgentSession;
 }
 
@@ -222,7 +223,7 @@ describe("Twilio edge ingress", () => {
       bus,
       async start() { void bus.start(); },
       async close() { closed = true; bus.stop(); },
-      on() {}, off() {}, requestClientInterrupt() {},
+      on() {}, off() {}, requestClientInterrupt() {}, noteSessionStart() {},
     } as unknown as VoiceAgentSession;
 
     await runTwilioEdgeWebSocketConnection(

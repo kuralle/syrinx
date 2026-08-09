@@ -116,6 +116,7 @@ export async function runWebSocketConnection<TState>(
   config: TransportHostConfig,
   adapter: TransportAdapter<TState>,
 ): Promise<void> {
+  const connectedAtMs = Date.now();
   const state = adapter.createState();
   const disposers: Array<() => void> = [];
   const pendingMessages: PendingMessage[] = [];
@@ -181,6 +182,7 @@ export async function runWebSocketConnection<TState>(
   });
 
   try {
+    const admissionStartedAtMs = Date.now();
     const startup = adapter.acquireSession({
       request,
       state,
@@ -189,6 +191,7 @@ export async function runWebSocketConnection<TState>(
     });
     startup.catch(() => undefined);
     const acquired = await withWebSocketStartupTimeout(startup, config.startupTimeoutMs);
+    const admissionEndedAtMs = Date.now();
     session = acquired.session;
     if (socketClosed) {
       adapter.onDisconnect(session, state, { maxSessionTimedOut });
@@ -199,9 +202,18 @@ export async function runWebSocketConnection<TState>(
       maxSessionTimedOut = true;
       adapter.onMaxSessionTimeout?.(socket, state);
     });
+    const pluginInitStartedAtMs = Date.now();
     teardown = adapter.wireSession(session, socket, state, disposers);
     adapter.sendReady?.(session, socket, state, acquired.resumed, config);
+    const readyAtMs = Date.now();
     ready = true;
+    session.noteSessionStart({
+      connectedAtMs,
+      admissionStartedAtMs,
+      admissionEndedAtMs,
+      pluginInitStartedAtMs,
+      readyAtMs,
+    });
     for (const pending of pendingMessages.splice(0)) {
       pendingMessageBytes -= pending.byteLength;
       try {

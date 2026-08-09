@@ -97,6 +97,7 @@ function fakeSession(received: UserAudioReceivedPacket[] = []): VoiceAgentSessio
     on() {},
     off() {},
     requestClientInterrupt() {},
+    noteSessionStart() {},
   } as unknown as VoiceAgentSession;
 }
 
@@ -278,6 +279,7 @@ describe("edge inbound JSON audio (sample-rate handling)", () => {
       on() {},
       off() {},
       requestClientInterrupt() {},
+      noteSessionStart() {},
     } as unknown as VoiceAgentSession;
   }
 
@@ -485,6 +487,7 @@ describe("edge client playout progress", () => {
       on() {},
       off() {},
       requestClientInterrupt() {},
+      noteSessionStart() {},
     } as unknown as VoiceAgentSession;
   }
 
@@ -556,6 +559,7 @@ describe("edge background audio", () => {
       on() {},
       off() {},
       requestClientInterrupt() {},
+      noteSessionStart() {},
     } as unknown as VoiceAgentSession;
 
     await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
