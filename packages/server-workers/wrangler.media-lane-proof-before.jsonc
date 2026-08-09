@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syrinx-media-lane-proof-before",
+  "main": "src/worker-media-lane-proof.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "MEDIA_LANE_DELAY_URL": "https://syrinx-media-lane-proof-before.mithushancj.workers.dev/delay",
+    "MEDIA_LANE_DELAY_MS": "2000"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_LANE_PROOF_CONVERSATIONS",
+        "class_name": "MediaLaneProofConversation"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MediaLaneProofConversation"]
+    }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "kuralle-university-kb"
+    }
+  ]
+}
