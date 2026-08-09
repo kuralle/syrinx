@@ -538,6 +538,22 @@ function wireBrowserSessionEvents(
   onSession("agent_finished", (event) => {
     sendJson(socket, { type: "agent_end", turnId: event.turnId }, maxBufferedAmountBytes);
   });
+  onSession("turn_latency", (event) => {
+    sendJson(socket, {
+      type: "turn_latency",
+      turnId: event.turnId,
+      ttfaMs: event.ttfaMs,
+      anchor: event.anchor,
+      unattributedMs: event.unattributedMs,
+      ...(event.eouDelayMs !== undefined ? { eouDelayMs: event.eouDelayMs } : {}),
+      ...(event.llmTtftMs !== undefined ? { llmTtftMs: event.llmTtftMs } : {}),
+      ...(event.textAggregationMs !== undefined ? { textAggregationMs: event.textAggregationMs } : {}),
+      ...(event.ttsTtfbMs !== undefined ? { ttsTtfbMs: event.ttsTtfbMs } : {}),
+      ...(event.queuedMs !== undefined ? { queuedMs: event.queuedMs } : {}),
+      ...(event.llmCallCount !== undefined ? { llmCallCount: event.llmCallCount } : {}),
+      ...(event.fillerUsed !== undefined ? { fillerUsed: event.fillerUsed } : {}),
+    }, maxBufferedAmountBytes);
+  });
   onSession("error", (event) => {
     sendJson(socket, {
       type: "error",
