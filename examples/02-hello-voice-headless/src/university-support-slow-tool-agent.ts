@@ -33,9 +33,15 @@ import {
 
 export const SLOW_TOOL_NAME = "registrationSystemSync";
 
+// The spoken preamble is load-bearing, not flavour. This fixture exists to prove that a
+// slow tool cannot gap audio that is ALREADY FLOWING — so the agent must be speaking when
+// the tool blocks. Without the preamble the model calls the tool before it says anything,
+// the tool window contains no audio frames at all, and the harness has nothing to measure.
+// Same technique the turn-decomposition spike used to move firstLlmDelta off pass-2.
 const SLOW_TOOL_PROMPT_LINES = [
-  "When a student asks about late add, registration, or course enrollment, you MUST call registrationSystemSync first to sync with the external registration system, then call studentRelationsLookup for the grounded answer.",
-  "Always call registrationSystemSync before studentRelationsLookup on the first turn about registration or late add.",
+  "Your VERY FIRST output on every turn is one short spoken sentence telling the student what you are about to check — for example: \"Let me sync with the registration system and pull up your record.\" Emit that sentence as plain text before any tool call.",
+  "Only after that sentence, call registrationSystemSync to sync with the external registration system, and then call studentRelationsLookup for the grounded answer.",
+  "Between the two tools, registrationSystemSync always precedes studentRelationsLookup. That ordering is about the tools only — it never overrides the spoken sentence, which always comes before both.",
 ] as const;
 
 export const UNIVERSITY_SUPPORT_SLOW_TOOL_SYSTEM_PROMPT = [
@@ -117,8 +123,27 @@ function buildSlowToolReasoner(
   });
 }
 
+// Defaults match how dev-server constructs the bundled demo agent, so this fixture
+// is usable as the zero-arg `--agent <module>#<export>` factory that host expects.
+const SLOW_TOOL_SESSION_DEFAULTS: UniversitySupportSlowToolSessionOptions = {
+  inputSampleRate: 16000,
+  profile: "interactive",
+  // On is the closer configuration to a realistic call, but MEASURED CAVEAT: it does not
+  // by itself put audio inside the tool window. Across six live runs against a 2006-2008ms
+  // tool — default prompt, spoken-preamble prompt, de-conflicted preamble prompt, and this
+  // filler enabled — the first audio frame arrived 1.9-4.6s AFTER the tool window closed,
+  // and the window held zero frames every time.
+  //
+  // That is structural, not a tuning failure. On a FIRST-turn tool call the cascade is
+  // sequential: STT, then LLM (which blocks in the tool), then TTS. Nothing is speaking
+  // yet, so there is no in-flight audio for the media lane to protect. Measuring the
+  // inter-frame gap inside the tool window needs a fixture where the tool fires while the
+  // assistant is already speaking — a mid-response or multi-turn tool call.
+  latencyFillerEnabled: true,
+};
+
 export function createUniversitySupportSlowToolSession(
-  options: UniversitySupportSlowToolSessionOptions,
+  options: UniversitySupportSlowToolSessionOptions = SLOW_TOOL_SESSION_DEFAULTS,
 ): VoiceAgentSession {
   const delayServerUrl = options.delayServerUrl ?? resolveDelayServerUrl();
   const ttsProvider = options.ttsProvider ?? inferTtsProvider();

@@ -253,16 +253,27 @@ async function runSingleHarnessTurn(
   let turnLatencyReceived = false;
   let sessionStart: SessionStartCapture | null = null;
   let assistantEncoding: "pcm_s16le" | "opus" | "unknown" = "unknown";
-  let nextBinaryBelongsToTurn = false;
   let ttsEndedAtMs = 0;
   let agentEndedAtMs = 0;
   let sttFinalAtMs = 0;
   let firstAudioAtMs = 0;
 
   const onMessage = (data: RawData, isBinary: boolean): void => {
+    if (process.env["SYRINX_MEDIA_LANE_TRACE"] === "1") {
+      if (isBinary) {
+        console.log(`  trace: BINARY ${String(rawBytes(data).byteLength)}B`);
+      } else {
+        const parsed = JSON.parse(data.toString()) as Record<string, unknown>;
+        const type = String(parsed["type"]);
+        console.log(type === "error" ? `  trace: ERROR ${data.toString()}` : `  trace: ${type}`);
+      }
+    }
     if (isBinary) {
-      if (!nextBinaryBelongsToTurn) return;
-      nextBinaryBelongsToTurn = false;
+      // Count EVERY outbound audio frame. The server paces binary audio on its own
+      // 20ms cadence, decoupled from the tts_chunk JSON markers — gating on those
+      // admits roughly one frame per marker and computes the inter-frame gap from a
+      // decimated series, which is the one measurement this harness exists to make.
+      // One turn per connection, so every audio frame on this socket is this turn's.
       const arrivedAtMs = Date.now();
       const wire = rawBytes(data);
       const durationMs = accumulateFrameDuration(wire, assistantEncoding, opusDecoder);
@@ -273,6 +284,18 @@ async function runSingleHarnessTurn(
 
     const msg = JSON.parse(data.toString()) as Record<string, unknown>;
     if (typeof msg["turnId"] === "string" && msg["turnId"] !== turnId && msg["type"] !== "ready" && msg["type"] !== "session_start") {
+      return;
+    }
+
+    if (msg["type"] === "ready") {
+      // The downlink encoding is declared at ready, before any tts_chunk arrives.
+      const audio = msg["audio"];
+      if (audio !== null && typeof audio === "object") {
+        const encoding = (audio as Record<string, unknown>)["encoding"];
+        if (typeof encoding === "string") {
+          assistantEncoding = encoding === "opus" ? "opus" : "pcm_s16le";
+        }
+      }
       return;
     }
 
@@ -313,7 +336,6 @@ async function runSingleHarnessTurn(
       if (typeof msg["encoding"] === "string") {
         assistantEncoding = msg["encoding"] === "opus" ? "opus" : "pcm_s16le";
       }
-      nextBinaryBelongsToTurn = true;
       return;
     }
     if (msg["type"] === "tts_end" && msg["turnId"] === turnId) {
@@ -448,7 +470,16 @@ async function waitForTurnComplete(checks: {
     }
     await sleep(100);
   }
-  throw new Error(`turn timeout: ${checks.turnId}`);
+  // Name the signals still missing. "turn timeout" alone cannot tell a server that
+  // never spoke from one whose completion message carried a different turnId, and
+  // those two have opposite fixes.
+  const missing = [
+    checks.sttFinalAtMs() > 0 ? null : "stt_output",
+    checks.agentEndedAtMs() > 0 ? null : `agent_end(turnId=${checks.turnId})`,
+    checks.firstAudioAtMs() > 0 ? null : "binary audio",
+    checks.ttsEndedAtMs() > 0 ? null : `tts_end(turnId=${checks.turnId})`,
+  ].filter((name): name is string => name !== null);
+  throw new Error(`turn timeout: ${checks.turnId} — never received: ${missing.join(", ")}`);
 }
 
 async function waitForJson(
