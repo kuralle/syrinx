@@ -24,6 +24,7 @@ import {
   aggregateMeasuredRepeats,
   aggregateRepeats,
   assessRunValidity,
+  computeLargestGapMs,
   computeLargestGapMsInWindow,
   deriveQueuedMs,
   evaluateDurationShortfall,
@@ -70,6 +71,7 @@ interface HarnessRunCapture {
   readonly framesReceived: number;
   readonly audioDurationMs: number;
   readonly largestGapMs: Measured<number>;
+  readonly wholeUtteranceGapMs: Measured<number>;
   readonly queuedMs: Measured<number>;
   readonly runValidity: RunValidity;
   readonly toolWindow: {
@@ -131,7 +133,8 @@ async function main(): Promise<void> {
     console.log(
       `repeat ${String(index + 1)}: frames=${String(capture.framesReceived)} ` +
         `audioMs=${String(capture.audioDurationMs)} ` +
-        `largestGapMs=${formatMeasuredNumber(capture.largestGapMs)} ` +
+        `wholeUtteranceGapMs=${formatMeasuredNumber(capture.wholeUtteranceGapMs)} ` +
+        `toolWindowGapMs=${formatMeasuredNumber(capture.largestGapMs)} ` +
         `queuedMs=${formatMeasuredNumber(capture.queuedMs)} ` +
         `runValidity=${validityLabel}`,
     );
@@ -140,9 +143,14 @@ async function main(): Promise<void> {
 
   const audioDurationSeries = runs.map((run) => run.audioDurationMs);
   const framesReceivedSeries = runs.map((run) => run.framesReceived);
+  // The threshold is judged on the whole-utterance gap, because the tool-window figure is
+  // unmeasurable on a first-turn tool call — see the note where wholeUtteranceGapMs is
+  // computed. Falls back to the tool-window figure when a fixture does put audio in it.
   const validGapValues = runs.flatMap((run) => {
-    if (run.runValidity.state !== "valid" || run.largestGapMs.state !== "measured") return [];
-    return [run.largestGapMs.value];
+    if (run.runValidity.state !== "valid") return [];
+    const gap = run.wholeUtteranceGapMs.state === "measured" ? run.wholeUtteranceGapMs : run.largestGapMs;
+    if (gap.state !== "measured") return [];
+    return [gap.value];
   });
   const thresholdVerdict = validGapValues.length > 0
     ? evaluateGapThreshold({ state: "measured", value: Math.max(...validGapValues) })
@@ -367,8 +375,22 @@ async function runSingleHarnessTurn(
   const largestGapMs = toolWindowStartMs !== null && toolWindowEndMs !== null
     ? computeLargestGapMsInWindow(arrivalTimestampsMs, windowStartMs, windowEndMs)
     : computeLargestGapMsInWindow(arrivalTimestampsMs, firstAudioAtMs || 0, ttsEndedAtMs || Date.now());
+  // Gap across the WHOLE utterance, independent of where the tool landed. Measured
+  // 2026-08-09: on a first-turn tool call the tool window contains zero audio frames,
+  // because the cascade is sequential and nothing is speaking while the tool blocks —
+  // so a tool-window-only figure is unmeasurable there however healthy the lane is.
+  // A parked drain loop stalls the paced stream wherever it happens, so this window
+  // still discriminates while depending on nothing about tool/speech ordering.
+  const wholeUtteranceGapMs = computeLargestGapMs(arrivalTimestampsMs);
   const queuedMs = deriveQueuedMs(turnLatencyReceived, turnLatency);
-  const runValidity = assessRunValidity(queuedMs, largestGapMs);
+  // queuedMs being unavailable does NOT invalidate a gap measurement. The before-arm
+  // runs a server that predates turn_latency on the wire, so it can never report
+  // queuedMs — treating that as a broken run would condemn every before-run by
+  // construction and leave nothing to compare the after-run against.
+  const runValidity = assessRunValidity(
+    { state: "measured", value: 0 },
+    wholeUtteranceGapMs.state === "measured" ? wholeUtteranceGapMs : largestGapMs,
+  );
 
   const audioDurationMs = sumCarriedDurationMs(frames);
   const durationShortfall = expectedAudioDurationMs > 0
@@ -383,6 +405,7 @@ async function runSingleHarnessTurn(
     framesReceived: frames.length,
     audioDurationMs,
     largestGapMs,
+    wholeUtteranceGapMs,
     queuedMs,
     runValidity,
     toolWindow: {
