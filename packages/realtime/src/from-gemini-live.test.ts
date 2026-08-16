@@ -252,6 +252,18 @@ describe("fromGeminiLive", () => {
     expect(connectArg.config["outputAudioTranscription"]).toBeUndefined();
   });
 
+  it("reports supportsToolBehavior — the Gemini front can run a tool call without holding the turn", () => {
+    // Unconditional, and deliberately not derived from the model id: every live-capable
+    // Gemini model accepts `behavior: NON_BLOCKING` (measured across all five on the account,
+    // 2026-08-16). The cap exists to tell this front apart from a provider that genuinely
+    // cannot express asynchronous tool calls, which is asserted on the OpenAI side.
+    expect(fromGeminiLive({ apiKey: "test-key" }).caps.supportsToolBehavior).toBe(true);
+    expect(
+      fromGeminiLive({ apiKey: "test-key", model: "gemini-2.5-flash-native-audio-latest" }).caps
+        .supportsToolBehavior,
+    ).toBe(true);
+  });
+
   it("G4/WBS-4: native resume — always enables sessionResumption, passes a prior handle through, surfaces new handles", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key", sessionResumptionHandle: "handle-prev" });
     expect(adapter.caps.supportsNativeResume).toBe(true);
@@ -422,6 +434,7 @@ describe("fromGeminiLive", () => {
       supportsConcurrentToolAudio: false,
       supportsTruncate: false,
       emitsServerSpeechStarted: true,
+      supportsToolBehavior: true,
     });
   });
 

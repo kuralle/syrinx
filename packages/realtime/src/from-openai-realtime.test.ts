@@ -295,6 +295,9 @@ describe("fromOpenAIRealtime", () => {
       "response.create",
     );
     expect(adapter.caps.supportsNativeResume).toBeUndefined();
+    // This provider cannot express an asynchronous tool call at all, so the cap is absent
+    // rather than false — telling it apart from the Gemini front is the flag's whole job.
+    expect(adapter.caps.supportsToolBehavior).toBeUndefined();
   });
 
   it("G4/WBS-4: replays the CURRENT resumeHistory again on reconnect (no amnesia error)", async () => {

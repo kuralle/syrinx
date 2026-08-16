@@ -93,6 +93,11 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     supportsTruncate: false,
     emitsServerSpeechStarted: true,
     supportsNativeResume: true,
+    // Every live-capable Gemini model accepts `behavior: NON_BLOCKING` — measured across all
+    // five on the account, 2026-08-16, with a behavioural differential rather than mere setup
+    // acceptance. Unconditional on purpose: if Google ever ships a live model that rejects it,
+    // this cap is where that gets expressed, not a model-id check scattered through the adapter.
+    supportsToolBehavior: true,
   } as const;
 
   readonly events: AsyncIterable<RealtimeEvent>;

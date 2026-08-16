@@ -24,6 +24,10 @@ export interface RealtimeAdapter {
     /** Half-cascade: provider can run text-only modality (`modalities:["text"]`) so Syrinx TTS
      *  drives speech from assistant transcript events. Absent/false → no text-only half-cascade. */
     readonly supportsTextOnlyModality?: boolean;
+    /** The provider can run a tool call without holding the turn (Gemini Live
+     *  `behavior: NON_BLOCKING`). Absent/false → `RealtimeToolDef.behavior` is
+     *  ignored and every tool call blocks the conversation. */
+    readonly supportsToolBehavior?: boolean;
   };
 
   open(signal: AbortSignal): Promise<void>;
