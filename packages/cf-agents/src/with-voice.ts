@@ -215,6 +215,10 @@ function isKuralleRuntime(value: unknown): value is KuralleRuntimeLike {
   );
 }
 
+/** Buffered assistant halves awaiting their turn's `eos.turn_complete`. Oldest evicted at cap
+ *  (the MAX_TOOL_NAMES pattern), so interrupted turns cannot grow the map without bound. */
+const MAX_PENDING_ASSISTANT = 64;
+
 /** One realtime turn: the bus `contextId`, plus whichever transcript halves it produced. */
 export interface RealtimeTurn {
   readonly turnId: string;
@@ -236,7 +240,15 @@ export function observeRealtimeTurns(
 ): void {
   const pendingAssistant = new Map<string, string>();
   bus.on<LlmResponseDonePacket>("llm.done", (pkt) => {
-    if (pkt.text?.trim()) pendingAssistant.set(pkt.contextId, pkt.text);
+    if (!pkt.text?.trim()) return;
+    // An interrupted turn produces llm.done with no matching eos.turn_complete, so its
+    // entry is never deleted. The map lives as long as the Durable Object session, so
+    // without a cap a long call accrues one orphan per interrupted turn.
+    if (!pendingAssistant.has(pkt.contextId) && pendingAssistant.size >= MAX_PENDING_ASSISTANT) {
+      const oldest = pendingAssistant.keys().next().value;
+      if (oldest !== undefined) pendingAssistant.delete(oldest);
+    }
+    pendingAssistant.set(pkt.contextId, pkt.text);
   });
   bus.on<EndOfSpeechPacket>("eos.turn_complete", (pkt) => {
     const assistantText = pendingAssistant.get(pkt.contextId);

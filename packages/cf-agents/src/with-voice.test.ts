@@ -866,6 +866,61 @@ describe("withVoice(Agent)", () => {
     bus.stop();
   });
 
+  it("observeRealtimeTurns bounds the pendingAssistant map — interrupted turns evict oldest-first, not grow forever", async () => {
+    // An interrupted turn is an llm.done whose eos.turn_complete never arrives, so its
+    // buffered assistant half is never deleted. The map lives for the whole Durable
+    // Object session, so unbounded growth is one orphan per interrupted turn.
+    //
+    // The map is closure-private, so eviction is asserted through behaviour: after
+    // overflowing the cap with interrupted turns, the OLDEST entry must be gone while
+    // the NEWEST survives. At HEAD nothing is evicted, so the oldest still carries its
+    // assistant text and the first expectation below fails — that is the red gate.
+    const CAP = 64;
+    const bus = new PipelineBusImpl();
+    const turns: RealtimeTurn[] = [];
+    withVoiceModule.observeRealtimeTurns(bus, (turn) => turns.push(turn));
+    void bus.start();
+
+    // CAP + 1 interrupted turns: each gets an llm.done, none gets an eos.turn_complete.
+    for (let i = 0; i < CAP + 1; i++) {
+      bus.push(Route.Main, {
+        kind: "llm.done",
+        contextId: `orphan-${i}`,
+        timestampMs: Date.now(),
+        text: `Answer ${i}.`,
+      });
+    }
+    // Nothing has completed a turn yet — an llm.done alone never reports a turn.
+    await vi.waitFor(() => expect(turns).toHaveLength(0));
+
+    // Now complete the oldest and the newest. Inserting orphan-64 pushed orphan-0 out.
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "orphan-0",
+      timestampMs: Date.now(),
+      text: "Oldest question?",
+      transcripts: [],
+    });
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: `orphan-${CAP}`,
+      timestampMs: Date.now(),
+      text: "Newest question?",
+      transcripts: [],
+    });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    // Evicted: the turn still commits, it just carries no stale assistant half.
+    expect(turns[0]).toEqual({ turnId: "orphan-0", userText: "Oldest question?" });
+    // Retained: eviction took the oldest, never the most recent.
+    expect(turns[1]).toEqual({
+      turnId: `orphan-${CAP}`,
+      userText: "Newest question?",
+      assistantText: `Answer ${CAP}.`,
+    });
+    bus.stop();
+  });
+
   it("commits the observed turn user-then-assistant when durable history is on", async () => {
     const db = sqliteFake();
     class DurableBase extends FakeAgentBase {
