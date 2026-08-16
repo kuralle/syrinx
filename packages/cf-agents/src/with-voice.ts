@@ -25,7 +25,14 @@ import {
 import { runTwilioEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-twilio";
 import { runTelnyxEdgeWebSocketConnection } from "@kuralle-syrinx/server-websocket/edge-telnyx";
 import { InMemorySessionStore } from "@kuralle-syrinx/server-websocket/session-store";
-import type { IdleTimeoutConfig, Reasoner, ReasonerMessage } from "@kuralle-syrinx/core";
+import type {
+  EndOfSpeechPacket,
+  IdleTimeoutConfig,
+  LlmResponseDonePacket,
+  PipelineBus,
+  Reasoner,
+  ReasonerMessage,
+} from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
 import {
   connectionManagedSocket,
@@ -208,6 +215,41 @@ function isKuralleRuntime(value: unknown): value is KuralleRuntimeLike {
   );
 }
 
+/** One realtime turn: the bus `contextId`, plus whichever transcript halves it produced. */
+export interface RealtimeTurn {
+  readonly turnId: string;
+  readonly userText?: string;
+  readonly assistantText?: string;
+}
+
+/**
+ * Pairs the realtime bridge's `llm.done` (assistant transcript) with the
+ * `eos.turn_complete` (user transcript) that follows it for the same `contextId`,
+ * and reports the pair once per turn — independent of any persistence flag, so a
+ * second consumer of turn-end never inherits a hidden coupling to one. The bridge
+ * pushes `llm.done` BEFORE `eos.turn_complete` for a given turn, so the assistant
+ * text is buffered until that turn's `eos.turn_complete` arrives.
+ */
+export function observeRealtimeTurns(
+  bus: PipelineBus,
+  onTurnEnd: (turn: RealtimeTurn) => void,
+): void {
+  const pendingAssistant = new Map<string, string>();
+  bus.on<LlmResponseDonePacket>("llm.done", (pkt) => {
+    if (pkt.text?.trim()) pendingAssistant.set(pkt.contextId, pkt.text);
+  });
+  bus.on<EndOfSpeechPacket>("eos.turn_complete", (pkt) => {
+    const assistantText = pendingAssistant.get(pkt.contextId);
+    pendingAssistant.delete(pkt.contextId);
+    const userText = pkt.text?.trim() ? pkt.text : undefined;
+    onTurnEnd({
+      turnId: pkt.contextId,
+      ...(userText !== undefined ? { userText } : {}),
+      ...(assistantText !== undefined ? { assistantText } : {}),
+    });
+  });
+}
+
 export function withVoice<Env, TBase extends AgentLike>(
   Base: TBase,
   options: WithVoiceOptions<Env>,
@@ -327,11 +369,15 @@ export function withVoice<Env, TBase extends AgentLike>(
         };
         const reasoner = await this.#resolveReasoner(env, ctx);
         const session = buildVoiceSession(options.pipeline, env, reasoner, ctx, wiring);
-        // Realtime pipelines have no ReasoningBridge to own history — record the
-        // transcript from the bus and persist the bounded snapshot per turn. The
-        // cascaded path persists inside ReasoningBridge instead (heard-prefix aware).
-        if (durable && options.pipeline.kind === "realtime") {
+        // Realtime pipelines have no ReasoningBridge to own history — the turn observer
+        // is wired for every realtime pipeline, independent of `durable`, so a second
+        // consumer of turn-end (e.g. a future onTurn hook) never inherits a hidden
+        // dependency on this persistence flag. Durable persistence is a subscriber of
+        // the observer, not its owner. The cascaded path persists inside ReasoningBridge
+        // instead (heard-prefix aware).
+        if (options.pipeline.kind === "realtime") {
           const persist = (): void => {
+            if (!durable) return;
             if (liveHistory.length > MAX_DURABLE_HISTORY_MESSAGES) {
               liveHistory.splice(0, liveHistory.length - MAX_DURABLE_HISTORY_MESSAGES);
             }
@@ -341,31 +387,23 @@ export function withVoice<Env, TBase extends AgentLike>(
               /* persistence must never fail the call */
             }
           };
-          // The realtime bridge pushes llm.done (assistant transcript) BEFORE
-          // eos.turn_complete (user transcript) for the same turn — buffer the
-          // assistant text and commit the pair in conversation order at turn end.
-          const pendingAssistant = new Map<string, string>();
-          session.bus.on("llm.done", (pkt) => {
-            const done = pkt as { contextId: string; text?: string };
-            if (done.text?.trim()) pendingAssistant.set(done.contextId, done.text);
+          observeRealtimeTurns(session.bus, (turn) => {
+            if (!durable) return;
+            if (turn.userText) liveHistory.push({ role: "user", content: turn.userText });
+            if (turn.assistantText) liveHistory.push({ role: "assistant", content: turn.assistantText });
+            if (turn.userText || turn.assistantText) persist();
           });
-          session.bus.on("eos.turn_complete", (pkt) => {
-            const turn = pkt as { contextId: string; text?: string };
-            const assistantText = pendingAssistant.get(turn.contextId);
-            pendingAssistant.delete(turn.contextId);
-            if (turn.text?.trim()) liveHistory.push({ role: "user", content: turn.text });
-            if (assistantText) liveHistory.push({ role: "assistant", content: assistantText });
-            if (turn.text?.trim() || assistantText) persist();
-          });
-          session.bus.on("realtime.resumption_handle", (pkt) => {
-            const handle = (pkt as { handle?: string }).handle;
-            if (!handle) return;
-            try {
-              durable.saveResumeHandle(sessionId, handle);
-            } catch {
-              /* persistence must never fail the call */
-            }
-          });
+          if (durable) {
+            session.bus.on("realtime.resumption_handle", (pkt) => {
+              const handle = (pkt as { handle?: string }).handle;
+              if (!handle) return;
+              try {
+                durable.saveResumeHandle(sessionId, handle);
+              } catch {
+                /* persistence must never fail the call */
+              }
+            });
+          }
         }
         // Surface the tool-call-start seam: VoiceAgentSession emits `agent_tool_call` the instant
         // the front model invokes the delegate tool, before the reasoner runs. A throwing app

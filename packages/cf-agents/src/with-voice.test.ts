@@ -6,15 +6,24 @@
 // Only the leaf providers (stt/tts plugins, reasoner) are stubbed.
 
 import { describe, it, expect, vi } from "vitest";
-import type { PipelineBus, Reasoner, UserAudioReceivedPacket, VoicePlugin } from "@kuralle-syrinx/core";
+import {
+  PipelineBusImpl,
+  Route,
+  type PipelineBus,
+  type Reasoner,
+  type UserAudioReceivedPacket,
+  type VoicePlugin,
+} from "@kuralle-syrinx/core";
 import { encodePcm16ToMuLaw } from "@kuralle-syrinx/core/audio";
 import type { RealtimeAdapter, RealtimeEvent } from "@kuralle-syrinx/realtime";
 import {
   withVoice,
   type DelegateQueryContext,
   type DelegateResultContext,
+  type RealtimeTurn,
   type ToolCallStartContext,
 } from "./with-voice.js";
+import * as withVoiceModule from "./with-voice.js";
 import type { VoicePipeline, VoicePipelineContext } from "./build-session.js";
 
 /**
@@ -738,6 +747,151 @@ describe("withVoice(Agent)", () => {
     second.onConnect(secondConn, ctx());
     await vi.waitFor(() => expect(jsonFrames(secondConn).some((f) => f["type"] === "ready")).toBe(true));
     expect(seenResume[1]?.providerHandle).toBe("handle-2");
+  });
+
+  it("wires the realtime turn observer's bus subscriptions regardless of durableHistory (extracted from the durable branch)", async () => {
+    // At HEAD the llm.done/eos.turn_complete subscriptions live inside
+    // `if (durable && ...)`, so with durableHistory: false neither subscription is
+    // ever created — VoiceAgentSession's own built-in "eos.turn_complete" handler
+    // (voice-agent-session.ts) is the only one registered. Spying on the bus class's
+    // own `on` method (not the with-voice module) sidesteps ESM same-module binding
+    // limits and observes real subscription registration on the real session bus.
+    const countEosSubscriptions = async (durableHistory: boolean): Promise<number> => {
+      const front = new FakeFront();
+      const onSpy = vi.spyOn(PipelineBusImpl.prototype, "on");
+      const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+        asBase(FakeAgentBase),
+        { pipeline: { kind: "realtime", front: () => front }, reasoner: () => stubReasoner(), durableHistory },
+      );
+      const agent = new VoiceAgent({});
+      const conn = fakeConnection();
+      agent.onConnect(conn, ctx());
+      await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+      const count = onSpy.mock.calls.filter((call) => call[0] === "eos.turn_complete").length;
+      onSpy.mockRestore();
+      return count;
+    };
+
+    const withDurableHistory = await countEosSubscriptions(true);
+    const withoutDurableHistory = await countEosSubscriptions(false);
+
+    // More than VoiceAgentSession's own built-in subscription — the turn observer's
+    // subscription is present too.
+    expect(withoutDurableHistory).toBeGreaterThan(1);
+    // And identical to the durableHistory: true case — proof the subscription no
+    // longer depends on the persistence flag.
+    expect(withoutDurableHistory).toBe(withDurableHistory);
+  });
+
+  it("observeRealtimeTurns pairs llm.done (assistant) with the eos.turn_complete (user) that follows it, once per turn", async () => {
+    const bus = new PipelineBusImpl();
+    const turns: RealtimeTurn[] = [];
+    withVoiceModule.observeRealtimeTurns(bus, (turn) => turns.push(turn));
+    void bus.start();
+
+    // The bridge pushes llm.done BEFORE eos.turn_complete for the same contextId —
+    // the assistant half must be buffered until the turn's eos.turn_complete arrives.
+    bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Fees are 5000 rupees.",
+    });
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "What are the fees?",
+      transcripts: [],
+    });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(turns[0]).toEqual({
+      turnId: "turn-1",
+      userText: "What are the fees?",
+      assistantText: "Fees are 5000 rupees.",
+    });
+    bus.stop();
+  });
+
+  it("observeRealtimeTurns correlates llm.done/eos.turn_complete per contextId — two interleaved turns don't cross-wire their assistant halves", async () => {
+    const bus = new PipelineBusImpl();
+    const turns: RealtimeTurn[] = [];
+    withVoiceModule.observeRealtimeTurns(bus, (turn) => turns.push(turn));
+    void bus.start();
+
+    // Both llm.done packets land before either turn's eos.turn_complete — a
+    // correlation that keys on order rather than contextId would hand turn-1 the
+    // wrong (or the last-seen) assistant text.
+    bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Answer one.",
+    });
+    bus.push(Route.Main, {
+      kind: "llm.done",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+      text: "Answer two.",
+    });
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-1",
+      timestampMs: Date.now(),
+      text: "Question one?",
+      transcripts: [],
+    });
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-2",
+      timestampMs: Date.now(),
+      text: "Question two?",
+      transcripts: [],
+    });
+    // turn-3 has no llm.done of its own (e.g. the front answered with no delegate
+    // consult in time) — its pairing must not pick up a stale assistant text.
+    bus.push(Route.Main, {
+      kind: "eos.turn_complete",
+      contextId: "turn-3",
+      timestampMs: Date.now(),
+      text: "Question three?",
+      transcripts: [],
+    });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(turns[0]).toEqual({ turnId: "turn-1", userText: "Question one?", assistantText: "Answer one." });
+    expect(turns[1]).toEqual({ turnId: "turn-2", userText: "Question two?", assistantText: "Answer two." });
+    expect(turns[2]).toEqual({ turnId: "turn-3", userText: "Question three?" });
+    bus.stop();
+  });
+
+  it("commits the observed turn user-then-assistant when durable history is on", async () => {
+    const db = sqliteFake();
+    class DurableBase extends FakeAgentBase {
+      override sql(strings?: TemplateStringsArray, ...values: unknown[]): unknown[] {
+        return db.sql(strings!, ...values);
+      }
+    }
+    const front = new FakeFront();
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(DurableBase),
+      { pipeline: { kind: "realtime", front: () => front }, reasoner: () => stubReasoner() },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "transcript", role: "user", text: "What are the fees?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "Fees are 5000 rupees.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(db.history.get("test-session")?.length).toBe(2));
+    const rows = [...db.history.get("test-session")!].sort((a, b) => a.seq - b.seq);
+    expect(rows.map((r) => r.role)).toEqual(["user", "assistant"]);
   });
 
   it("G4/WBS-4: cascaded pipeline re-seeds the ReasoningBridge from durable history after eviction", async () => {
