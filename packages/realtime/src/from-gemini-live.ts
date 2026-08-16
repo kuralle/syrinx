@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import type { Session, LiveServerMessage } from "@google/genai";
+import type { GoogleGenAI, LiveCallbacks, Session, LiveServerMessage } from "@google/genai";
 
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
@@ -11,6 +11,12 @@ const INPUT_SAMPLE_RATE_HZ = 16_000;
 const OUTPUT_SAMPLE_RATE_HZ = 24_000;
 /** In-flight tool-call ids awaiting a client result. Oldest evicted at cap (iu-ledger pattern). */
 const MAX_TOOL_NAMES = 256;
+/**
+ * How long before the `goAway` deadline the adapter forces a reconnect even if a response
+ * is still in flight. Measured against a 739ms median resumed reconnect and 50s of warning
+ * (2026-08-16 spike) — a few seconds of margin comfortably absorbs that.
+ */
+const HARD_CUTOFF_MS = 5_000;
 
 export interface GeminiLiveTranscriptionOptions {
   /**
@@ -92,21 +98,69 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   readonly events: AsyncIterable<RealtimeEvent>;
 
   private readonly stream = new RealtimeEventStream();
+  // G4/goAway: one open() can now silently span several provider sessions — a `goAway`
+  // deadline swaps `session` (and bumps `generation`) without ending `stream`. `ai`/`model`
+  // are cached from open() so a reconnect can rebuild the connect config and re-call
+  // `live.connect` without the caller re-supplying anything.
+  private ai: GoogleGenAI | null = null;
+  private model = "";
+  private audioModality = "AUDIO";
   private session: Session | null = null;
   private abortHandler: (() => void) | null = null;
   private openResolver: (() => void) | null = null;
   private openRejecter: ((err: Error) => void) | null = null;
   private activeResponse = false;
   private readonly toolNames = new Map<string, { name: string; providerId: string | undefined }>();
+  /** Bumped on every (re)connect; callbacks captured from a retired session no-op once stale. */
+  private generation = 0;
+  private closed = false;
+  private latestResumptionHandle: string | undefined;
+  private goAwayDeadlineAtMs: number | undefined;
+  private reestablishing = false;
+  private hardCutoffTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly opts: GeminiLiveOptions) {
     this.events = this.stream;
+    this.latestResumptionHandle = opts.sessionResumptionHandle;
   }
 
   async open(signal: AbortSignal): Promise<void> {
     const { GoogleGenAI, Modality } = await import("@google/genai");
-    const model = this.opts.model ?? DEFAULT_MODEL;
+    this.model = this.opts.model ?? DEFAULT_MODEL;
+    this.audioModality = Modality.AUDIO;
 
+    const config = this.buildConnectConfig();
+
+    const openPromise = new Promise<void>((resolve, reject) => {
+      this.openResolver = resolve;
+      this.openRejecter = reject;
+    });
+
+    this.ai = new GoogleGenAI({
+      apiKey: this.opts.apiKey,
+      ...(this.opts.apiVersion === undefined
+        ? {}
+        : { httpOptions: { apiVersion: this.opts.apiVersion } }),
+    });
+
+    this.session = await this.connectSession(config);
+
+    this.abortHandler = () => {
+      void this.close();
+      this.rejectOpen(new Error("Gemini Live adapter open aborted"));
+    };
+    signal.addEventListener("abort", this.abortHandler, { once: true });
+
+    await openPromise;
+  }
+
+  /**
+   * Build the LiveConnectConfig for `live.connect`, from `opts` and the latest resumption
+   * handle. Reused verbatim on the initial connect and on every goAway-triggered reconnect
+   * (WBS action item 4) so a rebuilt config differs from the original only in
+   * `sessionResumption.handle`.
+   */
+  private buildConnectConfig(): Record<string, unknown> {
     const tools = (this.opts.tools ?? []).map((t) => ({
       functionDeclarations: [{
         name: t.name,
@@ -120,9 +174,9 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       // Default preserves the prior hard-pin of AUDIO-only responses.
       responseModalities: this.opts.responseModalities
         ? [...this.opts.responseModalities]
-        : [Modality.AUDIO],
+        : [this.audioModality],
     };
-    // G4: session resumption defaults ON so the server issues handles; a prior
+    // G4: session resumption defaults ON so the server issues handles; the latest known
     // handle resumes server-side (native resume — no replay). Override via
     // sessionResumption (full object) or disable with false.
     if (!("sessionResumption" in this.opts) || this.opts.sessionResumption !== false) {
@@ -130,8 +184,8 @@ class GeminiLiveAdapter implements RealtimeAdapter {
         typeof this.opts.sessionResumption === "object" && this.opts.sessionResumption !== null
           ? { ...this.opts.sessionResumption }
           : {};
-      if (this.opts.sessionResumptionHandle !== undefined) {
-        base["handle"] = this.opts.sessionResumptionHandle;
+      if (this.latestResumptionHandle !== undefined) {
+        base["handle"] = this.latestResumptionHandle;
       }
       config["sessionResumption"] = base;
     }
@@ -203,50 +257,47 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     if (this.opts.connectConfig) {
       Object.assign(config, this.opts.connectConfig);
     }
+    return config;
+  }
 
-    const openPromise = new Promise<void>((resolve, reject) => {
-      this.openResolver = resolve;
-      this.openRejecter = reject;
-    });
-
-    const ai = new GoogleGenAI({
-      apiKey: this.opts.apiKey,
-      ...(this.opts.apiVersion === undefined
-        ? {}
-        : { httpOptions: { apiVersion: this.opts.apiVersion } }),
-    });
-
-    this.session = await ai.live.connect({
-      model,
+  /** Call `live.connect` under the current generation, so a retired session's late callbacks no-op. */
+  private async connectSession(config: Record<string, unknown>): Promise<Session> {
+    const generation = ++this.generation;
+    return this.requireAi().live.connect({
+      model: this.model,
       config,
-      callbacks: {
-        onopen: () => this.resolveOpen(),
-        onmessage: (msg) => this.handleMessage(msg),
-        onerror: (ev) => {
-          const cause = ev instanceof Error ? ev : new Error(String(ev));
-          this.stream.push({ type: "error", cause, recoverable: true });
-          this.rejectOpen(cause);
-        },
-        onclose: (ev) => {
-          const reason =
-            ev && typeof ev === "object" && "reason" in ev && typeof ev.reason === "string"
-              ? ev.reason.trim()
-              : "";
-          if (reason) {
-            this.stream.push({ type: "error", cause: new Error(reason), recoverable: false });
-          }
-          this.stream.close();
-        },
-      },
+      callbacks: this.buildCallbacks(generation),
     });
+  }
 
-    this.abortHandler = () => {
-      void this.close();
-      this.rejectOpen(new Error("Gemini Live adapter open aborted"));
+  private buildCallbacks(generation: number): LiveCallbacks {
+    return {
+      onopen: () => {
+        if (generation !== this.generation) return;
+        this.resolveOpen();
+      },
+      onmessage: (msg) => {
+        if (generation !== this.generation) return;
+        this.handleMessage(msg);
+      },
+      onerror: (ev) => {
+        if (generation !== this.generation) return;
+        const cause = ev instanceof Error ? ev : new Error(String(ev));
+        this.stream.push({ type: "error", cause, recoverable: true });
+        this.rejectOpen(cause);
+      },
+      onclose: (ev) => {
+        if (generation !== this.generation) return;
+        const reason =
+          ev && typeof ev === "object" && "reason" in ev && typeof ev.reason === "string"
+            ? ev.reason.trim()
+            : "";
+        if (reason) {
+          this.stream.push({ type: "error", cause: new Error(reason), recoverable: false });
+        }
+        this.stream.close();
+      },
     };
-    signal.addEventListener("abort", this.abortHandler, { once: true });
-
-    await openPromise;
   }
 
   sendAudio(pcm16: Uint8Array): void {
@@ -302,6 +353,12 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     if (this.abortHandler) {
       // signal may already be gone; best-effort cleanup
     }
+    this.closed = true;
+    if (this.hardCutoffTimer !== null) {
+      clearTimeout(this.hardCutoffTimer);
+      this.hardCutoffTimer = null;
+    }
+    this.generation++;
     this.session?.close();
     this.session = null;
     this.toolNames.clear();
@@ -324,6 +381,94 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     return this.session;
   }
 
+  private requireAi(): GoogleGenAI {
+    if (!this.ai) throw new Error("Gemini Live adapter is not open");
+    return this.ai;
+  }
+
+  /** goAway: parse `timeLeft` and arm a deadline. Absent/unparseable => "reconnect now". */
+  private armGoAwayDeadline(timeLeft: string | undefined): void {
+    const leftMs = parseGoAwayTimeLeftMs(timeLeft);
+    this.goAwayDeadlineAtMs = leftMs === undefined ? Date.now() : Date.now() + leftMs;
+    this.armHardCutoffTimer();
+    this.maybeReestablish();
+  }
+
+  /**
+   * A response-complete boundary is the normal trigger for `maybeReestablish`, but a session
+   * that goes idle right after `goAway` sends no more boundary events before the deadline —
+   * this timer is the fallback that still fires the swap in that case.
+   */
+  private armHardCutoffTimer(): void {
+    if (this.hardCutoffTimer !== null) {
+      clearTimeout(this.hardCutoffTimer);
+      this.hardCutoffTimer = null;
+    }
+    if (this.goAwayDeadlineAtMs === undefined) return;
+    const delay = Math.max(0, this.goAwayDeadlineAtMs - HARD_CUTOFF_MS - Date.now());
+    this.hardCutoffTimer = setTimeout(() => {
+      this.hardCutoffTimer = null;
+      this.maybeReestablish();
+    }, delay);
+  }
+
+  /** Swap at the first safe boundary (idle) or at the hard cutoff, whichever comes first. */
+  private maybeReestablish(): void {
+    if (this.goAwayDeadlineAtMs === undefined || this.reestablishing) return;
+    const atCutoff = Date.now() >= this.goAwayDeadlineAtMs - HARD_CUTOFF_MS;
+    if (this.activeResponse && !atCutoff) return;
+    this.reestablishing = true;
+    void this.reestablish();
+  }
+
+  private async reestablish(): Promise<void> {
+    if (this.hardCutoffTimer !== null) {
+      clearTimeout(this.hardCutoffTimer);
+      this.hardCutoffTimer = null;
+    }
+    const retired = this.session;
+    const retiredGeneration = this.generation;
+    const config = this.buildConnectConfig();
+    let next: Session;
+    try {
+      next = await this.connectSession(config);
+    } catch (err) {
+      // The reconnect failed, so the retired session is still the live one. connectSession
+      // has already bumped `generation`, which would silently mute that session's callbacks
+      // for the rest of the call — restore it, or the socket stays open and goes deaf.
+      this.generation = retiredGeneration;
+      this.reestablishing = false;
+      this.stream.push({
+        type: "error",
+        cause: err instanceof Error ? err : new Error(String(err)),
+        recoverable: true,
+      });
+      // The deadline has not moved, so re-arm and try again before it expires rather than
+      // leaving the call to die at a boundary we were warned about.
+      this.armHardCutoffTimer();
+      return;
+    }
+    if (this.closed) {
+      next.close();
+      return;
+    }
+    this.session = next;
+    this.activeResponse = false;
+    // The new session has no memory of a tool call the retired one issued — an id carried
+    // across would fail its lookup on a response the new session never asked for.
+    this.toolNames.clear();
+    this.goAwayDeadlineAtMs = undefined;
+    this.reestablishing = false;
+    // Reuse the OpenAI-compatible adapter's reconnect-notification shape (recoverable error)
+    // rather than a new RealtimeEvent variant — a silent swap cannot be diagnosed in production.
+    this.stream.push({
+      type: "error",
+      cause: new Error("Gemini Live session reestablished ahead of goAway"),
+      recoverable: true,
+    });
+    retired?.close();
+  }
+
   private rejectOpen(err: Error): void {
     this.openRejecter?.(err);
     this.openResolver = null;
@@ -337,10 +482,17 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   }
 
   private handleMessage(msg: LiveServerMessage): void {
-    // G4: surface fresh resumption handles so a durable host can persist the latest.
+    // G4: surface fresh resumption handles so a durable host can persist the latest, and
+    // track the latest in-memory so a goAway reconnect can use it directly.
     const resumption = msg.sessionResumptionUpdate;
     if (resumption?.resumable && resumption.newHandle) {
+      this.latestResumptionHandle = resumption.newHandle;
       this.stream.push({ type: "resumption_handle", handle: resumption.newHandle });
+    }
+
+    if (msg.goAway) {
+      this.armGoAwayDeadline(msg.goAway.timeLeft);
+      return;
     }
 
     if (msg.setupComplete) {
@@ -397,6 +549,8 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       if (content.turnComplete) {
         this.activeResponse = false;
         this.stream.push({ type: "response_done" });
+        // The response-complete boundary a scheduled goAway reconnect waits for.
+        this.maybeReestablish();
       }
     }
 
@@ -415,6 +569,18 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       }
     }
   }
+}
+
+/**
+ * Parse Gemini's protobuf-duration `timeLeft` string (e.g. `"50s"`, `"3.5s"`) into
+ * milliseconds. Absent or unparseable => `undefined`, meaning "reconnect now".
+ */
+function parseGoAwayTimeLeftMs(timeLeft: string | undefined): number | undefined {
+  if (timeLeft === undefined) return undefined;
+  const match = /^(-?\d+(?:\.\d+)?)s$/.exec(timeLeft.trim());
+  if (!match) return undefined;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds * 1000 : undefined;
 }
 
 export function fromGeminiLive(opts: GeminiLiveOptions): RealtimeAdapter {

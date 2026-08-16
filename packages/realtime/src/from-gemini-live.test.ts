@@ -92,6 +92,21 @@ async function nextErrorEvent(events: AsyncIterable<RealtimeEvent>): Promise<Rea
   throw new Error("expected error event");
 }
 
+/**
+ * Wait for the swap's observability signal (a recoverable "reestablished" error) in an
+ * already-collected event array. Unlike waiting on the `live.connect` mock's call count,
+ * this only resolves once `reestablish()`'s post-connect steps (session swap, toolNames
+ * clear, retired-session close) have actually run — those all execute synchronously right
+ * after the same push, with no `await` in between.
+ */
+async function waitForReestablish(events: readonly RealtimeEvent[]): Promise<void> {
+  await vi.waitFor(() =>
+    expect(
+      events.some((e) => e.type === "error" && /reestablished/i.test(e.cause.message)),
+    ).toBe(true),
+  );
+}
+
 describe("fromGeminiLive", () => {
   it("frames silent context as a user-role update because Gemini drops system history", async () => {
     const adapter = fromGeminiLive({ apiKey: "test-key" });
@@ -626,6 +641,310 @@ describe("fromGeminiLive", () => {
       });
 
       await adapter.close();
+    });
+  });
+
+  describe("goAway reconnect", () => {
+    it("reconnects with the latest resumption handle when idle, and it is observable", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const errors: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) {
+          if (event.type === "error") errors.push(event);
+        }
+      })();
+
+      await adapter.open(new AbortController().signal);
+      inject({ sessionResumptionUpdate: { newHandle: "handle-latest", resumable: true } });
+      inject({ goAway: { timeLeft: "50s" } });
+
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+      const reconnectArg = liveConnect.mock.calls[1]![0] as { config: Record<string, unknown> };
+      expect(
+        (reconnectArg.config["sessionResumption"] as Record<string, unknown>)["handle"],
+      ).toBe("handle-latest");
+
+      await vi.waitFor(() =>
+        expect(
+          errors.some(
+            (e) => e.type === "error" && /reestablished/i.test(e.cause.message),
+          ),
+        ).toBe(true),
+      );
+
+      await adapter.close();
+    });
+
+    it("does NOT reconnect while a response is in flight, and swaps once it completes", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      await adapter.open(new AbortController().signal);
+
+      inject({ setupComplete: {} }); // activeResponse = true
+      inject({ goAway: { timeLeft: "50s" } });
+
+      // Let any pending microtasks settle — the swap must not have started.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(liveConnect).toHaveBeenCalledTimes(1);
+
+      inject({ serverContent: { turnComplete: true } }); // response completes -> boundary
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      await adapter.close();
+    });
+
+    it("forces the swap at the hard cutoff even if the response never completes", async () => {
+      vi.useFakeTimers();
+      try {
+        const adapter = fromGeminiLive({ apiKey: "test-key" });
+        await adapter.open(new AbortController().signal);
+
+        inject({ setupComplete: {} }); // activeResponse = true, stays true — no turnComplete
+        inject({ goAway: { timeLeft: "10s" } }); // hard cutoff fires 5s before the 10s deadline
+
+        expect(liveConnect).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(liveConnect).toHaveBeenCalledTimes(2);
+
+        await adapter.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a failed reconnect leaves the live session working and retries at the next boundary", async () => {
+      // The reconnect is exactly where a flaky network hurts most. If a failed
+      // `live.connect` is not handled, two things break at once and both are silent:
+      // `generation` stays bumped, so the still-live retired session's callbacks are
+      // muted for the rest of the call (an open socket that has gone deaf), and
+      // `reestablishing` stays true, so no further attempt is ever made before the
+      // deadline. The single injection below discriminates both.
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      expect(liveConnect).toHaveBeenCalledTimes(1);
+
+      liveConnect.mockRejectedValueOnce(new Error("connect failed"));
+      inject({ goAway: { timeLeft: "50s" } }); // idle, so the swap is attempted at once
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      // The failure is surfaced rather than swallowed into an unhandled rejection.
+      await vi.waitFor(() =>
+        expect(
+          events.some((e) => e.type === "error" && /connect failed/.test(e.cause.message)),
+        ).toBe(true),
+      );
+
+      // `inject` still targets the RETIRED session's onmessage, because the failed
+      // connect never installed new callbacks. Its packet must still reach the stream
+      // (proving `generation` was restored) AND must still trigger a fresh attempt
+      // (proving the adapter is not wedged).
+      inject({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "response_done")).toBe(true));
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(3));
+
+      await adapter.close();
+    });
+
+    it("goAway with a missing timeLeft still reconnects immediately", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      await adapter.open(new AbortController().signal);
+
+      inject({ goAway: {} });
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      await adapter.close();
+    });
+
+    it("goAway with an unparseable timeLeft still reconnects immediately", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      await adapter.open(new AbortController().signal);
+
+      inject({ goAway: { timeLeft: "not-a-duration" } });
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      await adapter.close();
+    });
+
+    it("keeps adapter.events open across the swap: audio flows before and after", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      let iteratorDone = false;
+      const pump = (async () => {
+        for await (const event of adapter.events) {
+          events.push(event);
+        }
+        iteratorDone = true;
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      const before = new Uint8Array([1, 2, 3, 4]);
+      inject({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: bytesToBase64(before), mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "audio")).toBe(true));
+
+      // Audio-bearing content marks a response active — complete it first so goAway lands idle.
+      inject({ serverContent: { turnComplete: true } });
+      inject({ goAway: { timeLeft: "50s" } }); // idle -> reconnects promptly
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      const after = new Uint8Array([9, 8, 7, 6]);
+      inject({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: bytesToBase64(after), mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      });
+      await vi.waitFor(
+        () => expect(events.filter((e) => e.type === "audio")).toHaveLength(2),
+      );
+
+      const audioEvents = events.filter(
+        (e): e is Extract<RealtimeEvent, { type: "audio" }> => e.type === "audio",
+      );
+      expect(audioEvents[0]!.pcm16).toEqual(before);
+      expect(audioEvents[1]!.pcm16).toEqual(after);
+
+      expect(iteratorDone).toBe(false);
+
+      await adapter.close();
+      await pump;
+      expect(iteratorDone).toBe(true);
+    });
+
+    it("the rebuilt connect config matches the original field-by-field, except sessionResumption.handle", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        temperature: 0.4,
+        topP: 0.9,
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+        sessionResumption: { transparent: true },
+      });
+
+      await adapter.open(new AbortController().signal);
+      const original = (liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> }).config;
+
+      inject({ sessionResumptionUpdate: { newHandle: "handle-fresh", resumable: true } });
+      inject({ goAway: { timeLeft: "50s" } });
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+
+      const reconnected = (liveConnect.mock.calls[1]![0] as { config: Record<string, unknown> }).config;
+
+      const { sessionResumption: originalResumption, ...originalRest } = original;
+      const { sessionResumption: reconnectedResumption, ...reconnectedRest } = reconnected;
+
+      expect(reconnectedRest).toEqual(originalRest);
+      expect(originalResumption).toEqual({ transparent: true });
+      expect(reconnectedResumption).toEqual({ transparent: true, handle: "handle-fresh" });
+
+      await adapter.close();
+    });
+
+    it("releases a tool call outstanding across the swap instead of carrying it", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_across_swap");
+
+      inject({ goAway: { timeLeft: "50s" } });
+      await waitForReestablish(events);
+
+      sendToolResponse.mockClear();
+      adapter.injectToolResult("call_across_swap", "too late");
+
+      await vi.waitFor(() =>
+        expect(
+          events.some(
+            (e) =>
+              e.type === "error" &&
+              e.cause.message === 'unknown tool id "call_across_swap" for Gemini tool response',
+          ),
+        ).toBe(true),
+      );
+      expect(sendToolResponse).not.toHaveBeenCalled();
+
+      await adapter.close();
+    });
+
+    it("close() after a reconnect closes the current session and does not throw on the retired one", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      inject({ goAway: { timeLeft: "50s" } });
+      await waitForReestablish(events);
+
+      closeSession.mockClear();
+      await expect(adapter.close()).resolves.toBeUndefined();
+      expect(closeSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a stale callback fired late by the retired session after the swap", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      let iteratorDone = false;
+      const pump = (async () => {
+        for await (const event of adapter.events) events.push(event);
+        iteratorDone = true;
+      })();
+
+      await adapter.open(new AbortController().signal);
+      const retiredCallbacks = liveConnect.mock.calls[0]![0] as {
+        callbacks: { onclose?: (ev: { reason?: string }) => void };
+      };
+
+      inject({ goAway: { timeLeft: "50s" } });
+      await waitForReestablish(events);
+
+      // The retired session's transport fires onclose asynchronously after `.close()` — after
+      // the swap this must be a no-op: the current (new) session's stream must stay open.
+      retiredCallbacks.callbacks.onclose?.({ reason: "" });
+      await Promise.resolve();
+      expect(iteratorDone).toBe(false);
+
+      const after = new Uint8Array([5, 5, 5, 5]);
+      inject({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: bytesToBase64(after), mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "audio")).toBe(true));
+
+      await adapter.close();
+      await pump;
+      expect(iteratorDone).toBe(true);
     });
   });
 });
