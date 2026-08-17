@@ -10,6 +10,7 @@ export {
   type ToolCallStartContext,
   type DelegateQueryContext,
   type DelegateResultContext,
+  type TurnContext,
 } from "./with-voice.js";
 export type {
   VoicePipeline,

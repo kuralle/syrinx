@@ -159,6 +159,15 @@ export interface WithVoiceOptions<Env> {
    */
   readonly onDelegateResult?: (ctx: DelegateResultContext<Env>) => void | Promise<void>;
   /**
+   * Fired once per realtime conversational turn, independent of whether the turn
+   * consulted the Reasoner. `consulted` distinguishes a grounded turn (a delegate
+   * call occurred) from one the front model answered alone, without a consumer
+   * correlating `onDelegateResult` by `turnId` itself. Realtime pipelines only — a
+   * cascade pipeline has no `eos.turn_complete`/`llm.done` pairing to define a turn
+   * boundary. Throwing here never affects the call. See {@link TurnContext}.
+   */
+  readonly onTurn?: (ctx: TurnContext) => void | Promise<void>;
+  /**
    * G4 durable session state (default on). Persists the reasoner conversation to the
    * Agent's DO-SQLite so a session resumes with the same context after eviction/
    * hibernation: cascaded pipelines re-seed the ReasoningBridge; realtime pipelines
@@ -219,11 +228,30 @@ function isKuralleRuntime(value: unknown): value is KuralleRuntimeLike {
  *  (the MAX_TOOL_NAMES pattern), so interrupted turns cannot grow the map without bound. */
 const MAX_PENDING_ASSISTANT = 64;
 
+/** Turn ids recorded from `delegate_result`, awaiting the turn's commit. Same cap-plus-
+ *  oldest-first shape as MAX_PENDING_ASSISTANT, applied to the onTurn correlation set. */
+const MAX_CONSULTED_TURNS = 64;
+
 /** One realtime turn: the bus `contextId`, plus whichever transcript halves it produced. */
 export interface RealtimeTurn {
   readonly turnId: string;
   readonly userText?: string;
   readonly assistantText?: string;
+}
+
+/**
+ * One realtime conversational turn, fired once regardless of whether the front model
+ * consulted the Reasoner. See {@link WithVoiceOptions.onTurn}.
+ */
+export interface TurnContext {
+  readonly sessionId: string;
+  /** The bus `contextId` — identical to `DelegateResultContext.turnId`. */
+  readonly turnId: string;
+  readonly userText?: string;
+  readonly assistantText?: string;
+  /** True when a delegate call occurred in this turn. */
+  readonly consulted: boolean;
+  readonly ts: number;
 }
 
 /**
@@ -260,6 +288,34 @@ export function observeRealtimeTurns(
       ...(assistantText !== undefined ? { assistantText } : {}),
     });
   });
+}
+
+/**
+ * Correlates `onTurn`'s `consulted` flag: `record(turnId)` on the session's
+ * `delegate_result`, `consume(turnId)` when that turn commits — reporting (and
+ * clearing) whether it was consulted. Bounded like `pendingAssistant` above (oldest
+ * evicted at cap), because a turn that never commits (interrupted/abandoned) would
+ * otherwise leave its id in the set for the life of the Durable Object. Extracted
+ * (rather than inlined in the mixin) so the bound is testable without an auto-minted
+ * `contextId` in the way — `withVoice` cannot retroactively commit a superseded turn.
+ */
+export function createConsultedTurnTracker(cap: number = MAX_CONSULTED_TURNS): {
+  record(turnId: string): void;
+  consume(turnId: string): boolean;
+} {
+  const consultedTurns = new Set<string>();
+  return {
+    record(turnId: string): void {
+      if (!consultedTurns.has(turnId) && consultedTurns.size >= cap) {
+        const oldest = consultedTurns.values().next().value;
+        if (oldest !== undefined) consultedTurns.delete(oldest);
+      }
+      consultedTurns.add(turnId);
+    },
+    consume(turnId: string): boolean {
+      return consultedTurns.delete(turnId);
+    },
+  };
 }
 
 export function withVoice<Env, TBase extends AgentLike>(
@@ -413,6 +469,26 @@ export function withVoice<Env, TBase extends AgentLike>(
                 durable.saveResumeHandle(sessionId, handle);
               } catch {
                 /* persistence must never fail the call */
+              }
+            });
+          }
+          // Per-turn observability (onTurn): a second, independent subscription to the
+          // turn observer — fires for every realtime turn regardless of durableHistory.
+          // `consulted` is recorded from `delegate_result` (fired when the reasoner
+          // returns, well before the front's llm.done/eos.turn_complete pair for the
+          // same turn — see with-voice.test.ts for the ordering proof) and consumed
+          // when that turn commits, so a turn's flag reflects only its own consult.
+          if (options.onTurn) {
+            const consultedTurns = createConsultedTurnTracker();
+            session.on("delegate_result", (e) => consultedTurns.record(e.turnId));
+            observeRealtimeTurns(session.bus, (turn) => {
+              const consulted = consultedTurns.consume(turn.turnId);
+              try {
+                void Promise.resolve(
+                  options.onTurn!({ ...turn, sessionId, consulted, ts: Date.now() }),
+                ).catch(() => undefined);
+              } catch {
+                /* app hook threw synchronously — ignore */
               }
             });
           }

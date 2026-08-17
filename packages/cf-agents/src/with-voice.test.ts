@@ -22,6 +22,7 @@ import {
   type DelegateResultContext,
   type RealtimeTurn,
   type ToolCallStartContext,
+  type TurnContext,
 } from "./with-voice.js";
 import * as withVoiceModule from "./with-voice.js";
 import type { VoicePipeline, VoicePipelineContext } from "./build-session.js";
@@ -991,6 +992,218 @@ describe("withVoice(Agent)", () => {
       { role: "user", content: "First question" },
       { role: "assistant", content: "Answer one." },
     ]);
+  });
+
+  it("fires onTurn once with consulted: false for a turn the front answers with no delegate call", async () => {
+    const front = new FakeFront();
+    const turns: TurnContext[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => stubReasoner(),
+        onTurn: (c) => { turns.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "transcript", role: "user", text: "What time is it?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "It's 5pm.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(turns[0]).toMatchObject({
+      sessionId: "test-session",
+      userText: "What time is it?",
+      assistantText: "It's 5pm.",
+      consulted: false,
+    });
+    expect(typeof turns[0]!.turnId).toBe("string");
+    expect(typeof turns[0]!.ts).toBe("number");
+  });
+
+  it("fires onTurn once with consulted: true for a turn with a delegate call, and onDelegateResult still fires", async () => {
+    const front = new FakeFront();
+    const turns: TurnContext[] = [];
+    const results: DelegateResultContext[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => ({
+          stream: async function* () {
+            yield { type: "finish", reason: "stop", text: "5000 rupees." } as const;
+          },
+        }),
+        onDelegateResult: (c) => { results.push(c); },
+        onTurn: (c) => { turns.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "fees" } });
+    // The front only has an answer to speak once the delegate has returned it (G1:
+    // `require_repeat_verbatim`) — wait for that real dependency, same as the G1/G2 tests
+    // above, instead of firing the assistant's final transcript unconditionally.
+    await vi.waitFor(() => expect(results).toHaveLength(1));
+    front.emit({ type: "transcript", role: "user", text: "What are the fees?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "5000 rupees.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(results).toHaveLength(1); // onDelegateResult is additive, not replaced by onTurn
+    expect(turns[0]).toMatchObject({
+      sessionId: "test-session",
+      userText: "What are the fees?",
+      assistantText: "5000 rupees.",
+      consulted: true,
+    });
+    expect(turns[0]!.turnId).toBe(results[0]!.turnId);
+  });
+
+  it("proves the ordering onTurn's consulted flag depends on: delegate_result is recorded before the turn commits", async () => {
+    // `dispatchDelegate` in realtime-bridge.ts explicitly runs the reasoner OFF the serial
+    // event pump (so barge-in stays responsive during the "thinking gap") — the pump does NOT
+    // await the delegate before draining the next adapter event. So the pump alone gives no
+    // ordering guarantee: an earlier version of this test fired tool_call and the assistant's
+    // final transcript back-to-back with no wait, and observed onTurn fire with consulted:
+    // false BEFORE delegate_result — i.e. the hazard the spec warns about, reproduced.
+    //
+    // The real guarantee is a provider-protocol one, not a pump one: a real front only has an
+    // answer to VOICE once it has received the injected tool result (G1 envelope,
+    // `require_repeat_verbatim`), and injection happens synchronously right after delegate.result
+    // is pushed (realtime-bridge.ts `runDelegate`, the `bus.push(delegateResult)` /
+    // `injectToolResult` pair). A provider cannot finalize the assistant transcript for a
+    // delegate-answered turn before it has that answer to repeat. This test simulates that real
+    // dependency (wait for the delegate to resolve before the turn's assistant transcript can
+    // exist) rather than assuming pump ordering, and the resulting order proves consulted reads
+    // correctly under it.
+    const front = new FakeFront();
+    const order: string[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => ({
+          stream: async function* () {
+            yield { type: "finish", reason: "stop", text: "5000 rupees." } as const;
+          },
+        }),
+        onDelegateResult: () => { order.push("delegate_result"); },
+        onTurn: (c) => { order.push(`onTurn:${c.consulted}`); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "fees" } });
+    await vi.waitFor(() => expect(order).toContain("delegate_result"));
+    front.emit({ type: "transcript", role: "user", text: "What are the fees?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "5000 rupees.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(order).toHaveLength(2));
+    expect(order).toEqual(["delegate_result", "onTurn:true"]);
+  });
+
+  it("onTurn fires when durableHistory: false", async () => {
+    const front = new FakeFront();
+    const turns: TurnContext[] = [];
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front },
+        reasoner: () => stubReasoner(),
+        durableHistory: false,
+        onTurn: (c) => { turns.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "transcript", role: "user", text: "Hello?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "Hi there.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(turns[0]).toMatchObject({ userText: "Hello?", assistantText: "Hi there.", consulted: false });
+  });
+
+  it("a throwing onTurn, and one that rejects, neither break the call nor suppress the next turn's onTurn", async () => {
+    const front = new FakeFront();
+    const turns: TurnContext[] = [];
+    let call = 0;
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front },
+        reasoner: () => stubReasoner(),
+        onTurn: (c) => {
+          call += 1;
+          turns.push(c);
+          if (call === 1) throw new Error("onTurn hook blew up synchronously");
+          if (call === 2) return Promise.reject(new Error("onTurn hook rejected"));
+          return undefined;
+        },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    const speakTurn = (user: string, assistant: string): void => {
+      front.emit({ type: "response_started" });
+      front.emit({ type: "transcript", role: "user", text: user, final: true });
+      front.emit({ type: "transcript", role: "assistant", text: assistant, final: true });
+      front.emit({ type: "response_done" });
+    };
+
+    expect(() => speakTurn("Turn one?", "Answer one.")).not.toThrow();
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    expect(() => speakTurn("Turn two?", "Answer two.")).not.toThrow();
+    await vi.waitFor(() => expect(turns).toHaveLength(2));
+    speakTurn("Turn three?", "Answer three.");
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+
+    expect(turns.map((t) => t.userText)).toEqual(["Turn one?", "Turn two?", "Turn three?"]);
+    // The connection stays usable after both a throw and a rejection.
+    expect(() => agent.onMessage(conn, JSON.stringify({ type: "ping" }))).not.toThrow();
+  });
+
+  it("createConsultedTurnTracker bounds recorded turn ids at cap — the oldest is evicted, not O(N)", () => {
+    const CAP = 64;
+    const tracker = withVoiceModule.createConsultedTurnTracker(CAP);
+
+    // CAP + 1 recorded turns, none consumed yet — the newest insertion must evict the oldest.
+    for (let i = 0; i <= CAP; i++) tracker.record(`turn-${i}`);
+
+    // Evicted: consume() reports false (and cannot double-report on a repeat call).
+    expect(tracker.consume("turn-0")).toBe(false);
+    expect(tracker.consume("turn-0")).toBe(false);
+    // Retained: eviction took the oldest, never the most recent.
+    expect(tracker.consume(`turn-${CAP}`)).toBe(true);
+    // consume() clears on read — a second consume of the same id reports false.
+    expect(tracker.consume(`turn-${CAP}`)).toBe(false);
   });
 
   it("forceEndVoice closes the connection", () => {
