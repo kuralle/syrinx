@@ -42,6 +42,16 @@ vi.mock("@google/genai", () => ({
     live: { connect: liveConnect },
   })),
   Modality: { AUDIO: "AUDIO" },
+  // Mirrors @google/genai@2.8.0's real string enums (value === key name) so a test asserting
+  // against these imports is asserting against the same enum the adapter maps onto, not a
+  // fixture that happens to match.
+  Behavior: { UNSPECIFIED: "UNSPECIFIED", BLOCKING: "BLOCKING", NON_BLOCKING: "NON_BLOCKING" },
+  FunctionResponseScheduling: {
+    SCHEDULING_UNSPECIFIED: "SCHEDULING_UNSPECIFIED",
+    SILENT: "SILENT",
+    WHEN_IDLE: "WHEN_IDLE",
+    INTERRUPT: "INTERRUPT",
+  },
 }));
 
 afterEach(() => {
@@ -856,6 +866,202 @@ describe("fromGeminiLive", () => {
         }],
       });
       expect(events.filter((e) => e.type === "error")).toHaveLength(errorsBefore);
+
+      await adapter.close();
+    });
+  });
+
+  describe("NON_BLOCKING tool behavior and functionResponse scheduling", () => {
+    function toolDef(behavior?: "BLOCKING" | "NON_BLOCKING") {
+      return {
+        name: "consult_knowledge",
+        description: "Answer knowledge questions.",
+        parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        ...(behavior === undefined ? {} : { behavior }),
+      };
+    }
+
+    it("a tool declared NON_BLOCKING produces behavior: Behavior.NON_BLOCKING on its functionDeclarations entry", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("NON_BLOCKING")],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      expect(connectArg.config["tools"]).toEqual([{
+        functionDeclarations: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parametersJsonSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+          behavior: "NON_BLOCKING", // @google/genai@2.8.0 Behavior.NON_BLOCKING — string enum, value === key name
+        }],
+      }]);
+
+      await adapter.close();
+    });
+
+    it("a tool declared BLOCKING explicitly produces behavior: Behavior.BLOCKING, not the NON_BLOCKING branch", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("BLOCKING")],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      const decl = (
+        connectArg.config["tools"] as Array<{ functionDeclarations: Array<Record<string, unknown>> }>
+      )[0]!.functionDeclarations[0]!;
+      expect(decl["behavior"]).toBe("BLOCKING"); // @google/genai@2.8.0 Behavior.BLOCKING
+
+      await adapter.close();
+    });
+
+    it("a tool with no behavior produces a setup frame with no behavior key anywhere — the no-regression gate for every existing agent", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef()],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      const decl = (
+        connectArg.config["tools"] as Array<{ functionDeclarations: Array<Record<string, unknown>> }>
+      )[0]!.functionDeclarations[0]!;
+      expect("behavior" in decl).toBe(false);
+      expect(JSON.stringify(connectArg.config["tools"])).not.toMatch(/behavior/);
+
+      await adapter.close();
+    });
+
+    it("places scheduling at functionResponses[0].scheduling — NOT nested inside response — and maps to the real enum", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("NON_BLOCKING")],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_sched_interrupt");
+      adapter.injectToolResult("call_sched_interrupt", "answer", { scheduling: "INTERRUPT" });
+
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "call_sched_interrupt",
+          name: "consult_knowledge",
+          scheduling: "INTERRUPT", // @google/genai@2.8.0 FunctionResponseScheduling.INTERRUPT
+          response: { result: "answer" },
+        }],
+      });
+
+      // Assert both positions explicitly — the nested position is the plausible-but-wrong
+      // shape this task previously specified, and it is measurably inert on the wire
+      // (2026-08-16 live differential: nested SILENT was ignored and the model spoke anyway).
+      const frame = sendToolResponse.mock.calls[0]![0] as {
+        functionResponses: Array<Record<string, unknown>>;
+      };
+      const fr = frame.functionResponses[0]!;
+      expect(fr["scheduling"]).toBe("INTERRUPT");
+      const response = fr["response"] as Record<string, unknown>;
+      expect("scheduling" in response).toBe(false);
+
+      await adapter.close();
+    });
+
+    it("maps SILENT and WHEN_IDLE to their own distinct enum members, not a hardcoded single branch", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("NON_BLOCKING")],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      injectToolCall("call_silent");
+      adapter.injectToolResult("call_silent", "answer", { scheduling: "SILENT" });
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "call_silent",
+          name: "consult_knowledge",
+          scheduling: "SILENT", // @google/genai@2.8.0 FunctionResponseScheduling.SILENT
+          response: { result: "answer" },
+        }],
+      });
+
+      injectToolCall("call_when_idle");
+      adapter.injectToolResult("call_when_idle", "answer", { scheduling: "WHEN_IDLE" });
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "call_when_idle",
+          name: "consult_knowledge",
+          scheduling: "WHEN_IDLE", // @google/genai@2.8.0 FunctionResponseScheduling.WHEN_IDLE
+          response: { result: "answer" },
+        }],
+      });
+
+      await adapter.close();
+    });
+
+    it("a result sent without scheduling has no scheduling key anywhere in the serialised frame — not undefined, absent", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("NON_BLOCKING")],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_no_sched");
+      adapter.injectToolResult("call_no_sched", "answer");
+
+      const frame = sendToolResponse.mock.calls[0]![0] as {
+        functionResponses: Array<Record<string, unknown>>;
+      };
+      expect("scheduling" in frame.functionResponses[0]!).toBe(false);
+      expect(JSON.stringify(frame)).not.toMatch(/scheduling/);
+
+      await adapter.close();
+    });
+
+    it("barge-in on an outstanding NON_BLOCKING call: toolCallCancellation drops it from toolNames, so a late injectToolResult is a silent no-op — the same release path every tool call uses, generalised to NON_BLOCKING", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [toolDef("NON_BLOCKING")],
+      });
+
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_nb_bargein");
+
+      inject({ toolCallCancellation: { ids: ["call_nb_bargein"] } });
+      await vi.waitFor(() =>
+        expect(events.some((e) => e.type === "tool_call_cancelled")).toBe(true),
+      );
+
+      sendToolResponse.mockClear();
+      adapter.injectToolResult("call_nb_bargein", "too late — provider already discarded this", {
+        scheduling: "INTERRUPT",
+      });
+
+      // Canary round-trip proves the queue drained with no error surfaced for the cancelled id.
+      injectToolCall("call_after_nb_bargein");
+      adapter.injectToolResult("call_after_nb_bargein", "still works");
+      await vi.waitFor(() => expect(sendToolResponse).toHaveBeenCalledTimes(1));
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "call_after_nb_bargein",
+          name: "consult_knowledge",
+          response: { result: "still works" },
+        }],
+      });
+      expect(events.some((e) => e.type === "error")).toBe(false);
 
       await adapter.close();
     });

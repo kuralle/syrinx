@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-import type { GoogleGenAI, LiveCallbacks, Session, LiveServerMessage, UsageMetadata } from "@google/genai";
+import type {
+  GoogleGenAI,
+  LiveCallbacks,
+  Session,
+  LiveServerMessage,
+  UsageMetadata,
+  Behavior,
+  FunctionResponseScheduling,
+} from "@google/genai";
 
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
@@ -117,6 +125,13 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   private ai: GoogleGenAI | null = null;
   private model = "";
   private audioModality = "AUDIO";
+  /**
+   * Cached from the same dynamic `@google/genai` import as `Modality` (open()), so
+   * `buildConnectConfig()` and `injectToolResult()` map to the SDK's real enum values rather
+   * than raw string literals, without a top-level static import of the package.
+   */
+  private behaviorEnum: typeof Behavior | null = null;
+  private schedulingEnum: typeof FunctionResponseScheduling | null = null;
   private session: Session | null = null;
   private abortHandler: (() => void) | null = null;
   private openResolver: (() => void) | null = null;
@@ -150,9 +165,13 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   }
 
   async open(signal: AbortSignal): Promise<void> {
-    const { GoogleGenAI, Modality } = await import("@google/genai");
+    const { GoogleGenAI, Modality, Behavior, FunctionResponseScheduling } = await import(
+      "@google/genai"
+    );
     this.model = this.opts.model ?? DEFAULT_MODEL;
     this.audioModality = Modality.AUDIO;
+    this.behaviorEnum = Behavior;
+    this.schedulingEnum = FunctionResponseScheduling;
 
     const config = this.buildConnectConfig();
 
@@ -191,6 +210,11 @@ class GeminiLiveAdapter implements RealtimeAdapter {
         name: t.name,
         description: t.description,
         parametersJsonSchema: t.parameters,
+        // Per-tool opt-in, and only when the adapter can express it at all — an omitted
+        // `behavior` must produce a byte-identical setup frame for every existing agent.
+        ...(t.behavior !== undefined && this.caps.supportsToolBehavior
+          ? { behavior: this.mapToolBehavior(t.behavior) }
+          : {}),
       }],
     }));
 
@@ -400,7 +424,11 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     this.requireSession().sendRealtimeInput({ activityEnd: {} });
   }
 
-  injectToolResult(toolId: string, text: string): void {
+  injectToolResult(
+    toolId: string,
+    text: string,
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT" },
+  ): void {
     const entry = this.toolNames.get(toolId);
     if (!entry) {
       // The id may be missing because Gemini already cancelled it (toolCallCancellation) and
@@ -419,6 +447,13 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       functionResponses: [{
         ...(entry.providerId !== undefined ? { id: entry.providerId } : {}),
         name: entry.name,
+        // Top level, a sibling of `response` — NOT nested inside it. `FunctionResponse` in
+        // @google/genai@2.8.0 declares `scheduling` beside `response`, and a live differential
+        // (2026-08-16) confirmed the nested position is inert: the model ignored a nested
+        // `SILENT` and spoke anyway, while a top-level one correctly silenced it.
+        ...(opts?.scheduling !== undefined
+          ? { scheduling: this.mapToolScheduling(opts.scheduling) }
+          : {}),
         response: { result: text },
       }],
     });
@@ -470,6 +505,37 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   private requireAi(): GoogleGenAI {
     if (!this.ai) throw new Error("Gemini Live adapter is not open");
     return this.ai;
+  }
+
+  private requireBehaviorEnum(): typeof Behavior {
+    if (!this.behaviorEnum) throw new Error("Gemini Live adapter is not open");
+    return this.behaviorEnum;
+  }
+
+  private requireSchedulingEnum(): typeof FunctionResponseScheduling {
+    if (!this.schedulingEnum) throw new Error("Gemini Live adapter is not open");
+    return this.schedulingEnum;
+  }
+
+  /** Map the adapter-facing string literal onto the SDK's real `Behavior` enum member. */
+  private mapToolBehavior(behavior: "BLOCKING" | "NON_BLOCKING"): Behavior {
+    const enumObj = this.requireBehaviorEnum();
+    return behavior === "NON_BLOCKING" ? enumObj.NON_BLOCKING : enumObj.BLOCKING;
+  }
+
+  /** Map the adapter-facing string literal onto the SDK's real `FunctionResponseScheduling` enum member. */
+  private mapToolScheduling(
+    scheduling: "SILENT" | "WHEN_IDLE" | "INTERRUPT",
+  ): FunctionResponseScheduling {
+    const enumObj = this.requireSchedulingEnum();
+    switch (scheduling) {
+      case "SILENT":
+        return enumObj.SILENT;
+      case "WHEN_IDLE":
+        return enumObj.WHEN_IDLE;
+      case "INTERRUPT":
+        return enumObj.INTERRUPT;
+    }
   }
 
   /** goAway: parse `timeLeft` and arm a deadline. Absent/unparseable => "reconnect now". */
@@ -725,6 +791,13 @@ function toRealtimeUsage(usage: UsageMetadata): RealtimeUsage | undefined {
  */
 export function fromGeminiLive(
   opts: GeminiLiveOptions,
-): RealtimeAdapter & { startUserActivity(): void } {
+): RealtimeAdapter & {
+  startUserActivity(): void;
+  injectToolResult(
+    toolId: string,
+    text: string,
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT" },
+  ): void;
+} {
   return new GeminiLiveAdapter(opts);
 }

@@ -62,6 +62,14 @@ export interface RealtimeToolDef {
   readonly description: string;
   /** JSON Schema for the tool arguments. */
   readonly parameters: Record<string, unknown>;
+  /**
+   * Run this tool without holding the turn (Gemini Live `FunctionDeclaration.behavior`).
+   * Ignored unless the adapter's `caps.supportsToolBehavior` is true. Absent => blocking, the
+   * behavior every existing agent already gets. Per-tool opt-in on purpose: applying it to
+   * every tool made a front model emit filler ("let me look that up for you") on ordinary
+   * calls, because it knew it could keep talking.
+   */
+  readonly behavior?: "BLOCKING" | "NON_BLOCKING";
 }
 
 /** A prior-conversation message replayed into a front model on resume (G4). */
