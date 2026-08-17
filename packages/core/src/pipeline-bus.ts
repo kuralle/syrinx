@@ -32,6 +32,14 @@ export enum Route {
 }
 
 /** Packet kinds that belong on `Route.Media` — the single kind→lane classification table. */
+/**
+ * How long a non-concurrent handler may hold the drain loop before it is reported.
+ * Chosen against the voice budget: the target is ~800ms-1s voice-to-voice, so 100ms of
+ * a single handler is already an eighth of it and well outside same-tick work.
+ */
+export const SLOW_HANDLER_WARN_MS = 100;
+
+/** Packet kinds that belong on `Route.Media` — the single kind→lane classification table. */
 export const MEDIA_KINDS: ReadonlySet<string> = new Set([
   "user.audio_received",
   "denoise.audio",
@@ -144,6 +152,9 @@ export class PipelineBusImpl implements PipelineBus {
   private restResolver: (() => void) | null = null;
   private drainedCount = 0;
   private warnedMainMediaKinds = new Set<string>();
+  private warnedSlowKinds = new Set<string>();
+  /** Timing every handler costs a clock read per dispatch, so it is dev-only. */
+  private readonly timeHandlers = process.env.NODE_ENV !== "production";
   private allPacketsController:
     | ReadableStreamDefaultController<{ route: Route; packet: VoicePacket }>
     | null = null;
@@ -344,6 +355,19 @@ export class PipelineBusImpl implements PipelineBus {
     this.restResolver = null;
   }
 
+  private warnSlowHandlerOnce(kind: string): void {
+    if (this.warnedSlowKinds.has(kind)) return;
+    this.warnedSlowKinds.add(kind);
+    console.warn(
+      `PipelineBus: a non-concurrent handler for "${kind}" blocked the drain loop for ` +
+        `>=${String(SLOW_HANDLER_WARN_MS)}ms. On Workers/DO this stops inbound provider ` +
+        `events — audio stops being produced for that whole time, and the media lane ` +
+        `cannot compensate. Return immediately and chain the work (see the OpenAI TTS ` +
+        `plugin's synthQueue), or register the handler with { concurrent: true } if ` +
+        `ordering does not matter.`,
+    );
+  }
+
   private warnMediaOnMainOnce(kind: string): void {
     if (this.warnedMainMediaKinds.has(kind)) return;
     this.warnedMainMediaKinds.add(kind);
@@ -533,7 +557,19 @@ export class PipelineBusImpl implements PipelineBus {
         continue;
       }
       try {
-        await handler(pkt);
+        // MEASURED 2026-08-18 on Workers/DO: a non-concurrent handler that awaits does
+        // not merely defer later packets — it defers delivery of INBOUND socket events,
+        // so the TTS provider stops sending and audio stops being produced for the whole
+        // await. The media lane cannot compensate, because it routes audio that has
+        // already arrived. Duration is the hazard, not the promise: awaiting is legal
+        // consumer semantics (see `on`), and a brief await is harmless.
+        if (this.timeHandlers) {
+          const startedAt = Date.now();
+          await handler(pkt);
+          if (Date.now() - startedAt >= SLOW_HANDLER_WARN_MS) this.warnSlowHandlerOnce(pkt.kind);
+        } else {
+          await handler(pkt);
+        }
       } catch (err) {
         // Handler error → emit PipelineErrorPacket on Critical.
         // Continue processing other handlers — don't abort the bus.

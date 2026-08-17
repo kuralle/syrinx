@@ -205,6 +205,7 @@ export {
 // PipelineBus
 export {
   PipelineBusImpl,
+  SLOW_HANDLER_WARN_MS,
   Route,
   MEDIA_KINDS,
   type PipelineBus,
