@@ -159,6 +159,7 @@ export {
   type TurnBoundaryEventPacket,
   type ObservabilityPacket,
   type PipelineErrorPacket,
+  type HistoryCompactionPacket,
 } from "./packets.js";
 
 // Metering: price catalog + spend-cap guard (standalone; session wires later)
@@ -342,6 +343,15 @@ export {
   type ReasonerUsage,
   type ReasoningPart,
 } from "./reasoner.js";
+
+// HistoryCompactor seam — managed compaction transition (RFC: Continuous-interaction
+// architecture §2.4/§4 L3), replacing the bare trimHistory() slice() in the cascade bridge.
+export {
+  type HistoryCompactor,
+  SummarizingHistoryCompactor,
+  estimateHistoryTokens,
+  safeCompactionBoundary,
+} from "./history-compaction.js";
 
 // Hedged reasoner (Lever C — reasoner-latency RFC)
 export { HedgedReasoner, type HedgedReasonerOptions } from "./reasoner-hedge.js";

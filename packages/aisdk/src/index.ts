@@ -34,6 +34,9 @@ import {
   type TranscriptViews,
   type SttInterimPacket,
   type SttResultPacket,
+  type HistoryCompactor,
+  estimateHistoryTokens,
+  safeCompactionBoundary,
 } from "@kuralle-syrinx/core";
 
 export {
@@ -71,12 +74,27 @@ interface SpeculativeHold {
   buffered: Array<() => void>;
 }
 
+type HistoryMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
+
+/**
+ * Managed history compaction (RFC: Continuous-interaction architecture §2.4/§4 L3).
+ * Optional — absent, `trimHistory()`'s bare slice() is the only bound, unchanged.
+ */
+export interface HistoryCompactionOptions {
+  readonly compactor: HistoryCompactor;
+  /** Token-estimate (chars/4) high-water mark that triggers compaction. Default 4000. */
+  readonly highWaterTokens?: number;
+  /** Minimum most-recent messages always retained verbatim, never summarized. Default 8. */
+  readonly retainMessages?: number;
+}
+
 export class ReasoningBridge implements VoicePlugin {
   private bus: PipelineBus | null = null;
   private timeoutMs: number = 30_000;
   private prewarmTimeoutMs: number = 10_000;
   private maxHistoryTurns: number = 12;
-  private history: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string }> = [];
+  private history: HistoryMessage[] = [];
+  private compactionInFlight = false;
   private readonly transientContextMessages = new Set<{
     role: "system";
     content: string;
@@ -135,6 +153,15 @@ export class ReasoningBridge implements VoicePlugin {
        */
       sessionStore?: ReasonerSessionStore;
       sessionId?: string;
+      /**
+       * Replaces the bare trimHistory() slice() with a managed, observable
+       * transition: once history crosses `highWaterTokens`, the prefix down to a
+       * tool-pair-safe boundary is handed to `compactor` and swapped in for the
+       * NEXT turn — evaluated only after a turn completes, never mid-turn.
+       * Absent — today's silent slice() truncation, unchanged. `maxHistoryTurns`
+       * remains the hard ceiling / last-resort backstop regardless.
+       */
+      historyCompaction?: HistoryCompactionOptions;
       /**
        * Speculative generation (LiveKit preemptive-generation / Deepgram Flux
        * eager-EOT semantics): start the LLM on `eos.interim` with every side effect
@@ -254,8 +281,10 @@ export class ReasoningBridge implements VoicePlugin {
         await this.processTurn(eos.text, eos.contextId);
       }, { concurrent: true }),
 
-      bus.on("llm.done", () => {
+      bus.on("llm.done", (pkt: unknown) => {
         if (!this.sessionOwnsSegmentation || !this.transcriptViews) return;
+        const done = pkt as { contextId: string };
+        this.maybeCompactHistory(done.contextId);
         this.trimHistory();
         this.persistHistory();
       }),
@@ -781,6 +810,7 @@ export class ReasoningBridge implements VoicePlugin {
       if (!this.sessionOwnsSegmentation) {
         this.iuLedger.commit(this.assistantIuIdFor(contextId));
       }
+      this.maybeCompactHistory(contextId);
       this.trimHistory();
       this.persistHistory();
       return;
@@ -910,6 +940,7 @@ export class ReasoningBridge implements VoicePlugin {
         // turn started, and a barge-in here can land after further finals.
         this.history.push({ role: "user", content: this.effectiveTurnUserText(contextId, userText) });
         if (spoken) this.history.push({ role: "assistant", content: spoken });
+        this.maybeCompactHistory(contextId);
         this.trimHistory();
       }
     }
@@ -929,12 +960,98 @@ export class ReasoningBridge implements VoicePlugin {
     if (this.history.length > maxMessages) {
       this.history = this.history.slice(this.history.length - maxMessages);
     }
-    // Drop tracked per-turn state that has aged out of the history window.
+    this.pruneAgedOutTracking();
+  }
+
+  /** Drop tracked per-turn / transient-context state for messages no longer in history. */
+  private pruneAgedOutTracking(): void {
     for (const [ctx, msg] of this.assistantMsgByContext) {
       if (!this.history.includes(msg)) this.clearTurnState(ctx);
     }
     for (const message of this.transientContextMessages) {
       if (!this.history.includes(message)) this.transientContextMessages.delete(message);
+    }
+  }
+
+  /**
+   * History compaction (RFC: Continuous-interaction architecture §2.4/§4 L3):
+   * evaluated only after a turn has fully committed history (never mid-turn — the
+   * three trimHistory() call sites above are exactly where a turn's history
+   * contribution is finalized). Off the live path and fire-and-forget: this method
+   * never awaits anything, so it cannot add latency to the turn that triggered it,
+   * and re-entrancy is a single boolean guard — a trigger while one compaction is
+   * already in flight is a no-op (the next turn-complete re-checks).
+   */
+  private maybeCompactHistory(contextId: string): void {
+    const cfg = this.opts.historyCompaction;
+    if (!cfg || this.compactionInFlight) return;
+    const highWaterTokens = cfg.highWaterTokens ?? 4_000;
+    if (estimateHistoryTokens(this.history) < highWaterTokens) return;
+    const retainMessages = cfg.retainMessages ?? 8;
+    const target = this.history;
+    const beforeLength = target.length;
+    const boundary = safeCompactionBoundary(target, Math.max(0, target.length - retainMessages));
+    // Nothing can be safely compacted yet (e.g. one giant tool-pair spans nearly the
+    // whole window) — retry once more history has accumulated past the boundary.
+    if (boundary <= 0) return;
+    const toSummarize = target.slice(0, boundary);
+    this.compactionInFlight = true;
+    this.bus?.push(Route.Background, {
+      kind: "history_compaction",
+      contextId,
+      timestampMs: Date.now(),
+      phase: "started",
+      beforeMessages: beforeLength,
+    });
+    void this.runCompaction(cfg.compactor, target, toSummarize, boundary, beforeLength, contextId);
+  }
+
+  private async runCompaction(
+    compactor: HistoryCompactor,
+    target: HistoryMessage[],
+    toSummarize: readonly HistoryMessage[],
+    boundary: number,
+    beforeLength: number,
+    contextId: string,
+  ): Promise<void> {
+    try {
+      let afterMessages: number | undefined;
+      try {
+        const summary = await compactor.compact(toSummarize);
+        // `target` is the exact array object `this.history` referenced at trigger
+        // time; anything appended since (via push, from turns completed while this
+        // await was in flight) lives at indices >= beforeLength, past `boundary`, so
+        // splicing only [0, boundary) in place preserves it untouched. If the hard
+        // maxHistoryTurns backstop reassigned `this.history` to a NEW array while we
+        // awaited, this compaction's input is stale — skip the swap rather than
+        // resurrect messages the backstop already dropped.
+        if (this.history === target) {
+          target.splice(0, boundary, ...summary.map((message) => ({ ...message })));
+          this.pruneAgedOutTracking();
+          this.persistHistory();
+          afterMessages = this.history.length;
+        }
+      } catch (err) {
+        this.bus?.push(Route.Background, {
+          kind: "llm.error",
+          contextId,
+          timestampMs: Date.now(),
+          component: "bridge" as const,
+          category: categorizeLlmError(err),
+          cause: err instanceof Error ? err : new Error(String(err)),
+          isRecoverable: true,
+        });
+      }
+      this.bus?.push(Route.Background, {
+        kind: "history_compaction",
+        contextId,
+        timestampMs: Date.now(),
+        phase: "committed",
+        beforeMessages: beforeLength,
+        ...(afterMessages !== undefined ? { afterMessages } : {}),
+      });
+    } finally {
+      this.compactionInFlight = false;
     }
   }
 

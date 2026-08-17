@@ -669,6 +669,22 @@ export interface UsageRecordedPacket extends VoicePacket {
   readonly characters?: number;
 }
 
+/**
+ * A history compaction transition (RFC: Continuous-interaction architecture §2.4/§4
+ * L3) — replaces the bare trimHistory() slice with an observable managed swap.
+ * `started` fires synchronously when the high-water mark trips; `committed` fires
+ * once the summarized prefix has been swapped in for the next turn, carrying the
+ * message-count before/after. Absent `afterMessages` on `committed` means the
+ * compaction was superseded (e.g. the hard `maxHistoryTurns` backstop trimmed the
+ * same history first) and no swap landed.
+ */
+export interface HistoryCompactionPacket extends VoicePacket {
+  readonly kind: "history_compaction";
+  readonly phase: "started" | "committed";
+  readonly beforeMessages: number;
+  readonly afterMessages?: number;
+}
+
 export type TurnBoundaryKind =
   | "user_started_speaking"
   | "user_stopped_speaking"
@@ -766,7 +782,8 @@ export type ObservabilityPacket =
   | TurnBoundaryEventPacket
   | UsageRecordedPacket
   | AcousticSignalPacket
-  | TurnLocalizationPacket;
+  | TurnLocalizationPacket
+  | HistoryCompactionPacket;
 
 /** Delegate (Responder-Thinker) lifecycle packets (Background route). */
 export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;
