@@ -75,6 +75,13 @@ export interface GeminiLiveOptions {
   readonly thinkingConfig?: Record<string, unknown>;
   readonly enableAffectiveDialog?: boolean;
   readonly realtimeInputConfig?: Record<string, unknown>;
+  /**
+   * Disable Gemini's server VAD so Syrinx endpointing/VAD/InteractionPolicy owns the turn
+   * (REQ-6). Merges `realtimeInputConfig.automaticActivityDetection.disabled: true` into
+   * whatever `realtimeInputConfig` the caller already supplied — it does not replace it.
+   * Default false: an adapter configured as today produces a byte-identical connect config.
+   */
+  readonly manualActivityDetection?: boolean;
   readonly contextWindowCompression?: Record<string, unknown>;
   readonly proactivity?: Record<string, unknown>;
   readonly explicitVadSignal?: boolean;
@@ -132,10 +139,14 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   private goAwayDeadlineAtMs: number | undefined;
   private reestablishing = false;
   private hardCutoffTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Static for the adapter's lifetime — a caller-chosen mode, not per-session state, so it
+   *  needs no release on reconnect/close (unlike toolNames/cancelledToolIds/pendingUsage). */
+  private readonly manual: boolean;
 
   constructor(private readonly opts: GeminiLiveOptions) {
     this.events = this.stream;
     this.latestResumptionHandle = opts.sessionResumptionHandle;
+    this.manual = opts.manualActivityDetection === true;
   }
 
   async open(signal: AbortSignal): Promise<void> {
@@ -256,7 +267,19 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     if (this.opts.enableAffectiveDialog !== undefined) {
       config["enableAffectiveDialog"] = this.opts.enableAffectiveDialog;
     }
-    if (this.opts.realtimeInputConfig !== undefined) {
+    if (this.manual) {
+      // Merged, not replaced: realtimeInputConfig is already a caller-facing passthrough, so
+      // overwriting it here would silently drop a caller's sensitivity/turnCoverage settings.
+      // Built inside buildConnectConfig() (not open()) so a goAway reconnect — which rebuilds
+      // the config from scratch — re-applies manual mode instead of reverting to server VAD.
+      const callerConfig = this.opts.realtimeInputConfig ?? {};
+      const callerAad =
+        (callerConfig["automaticActivityDetection"] as Record<string, unknown> | undefined) ?? {};
+      config["realtimeInputConfig"] = {
+        ...callerConfig,
+        automaticActivityDetection: { ...callerAad, disabled: true },
+      };
+    } else if (this.opts.realtimeInputConfig !== undefined) {
       config["realtimeInputConfig"] = this.opts.realtimeInputConfig;
     }
     if (this.opts.contextWindowCompression !== undefined) {
@@ -341,6 +364,40 @@ class GeminiLiveAdapter implements RealtimeAdapter {
 
   cancelResponse(_audioEndMs: number): void {
     // Gemini handles interruption server-side via `interrupted`; no truncate API.
+  }
+
+  /**
+   * Manual-activity-detection mode ONLY. Call when Syrinx's own VAD/endpointing/
+   * InteractionPolicy detects the start of user speech. A no-op (with a surfaced error)
+   * outside manual mode: sending an activity signal while Gemini's own VAD is enabled is a
+   * client error, not a silent ignore, since it means the caller's mode wiring is wrong.
+   */
+  startUserActivity(): void {
+    if (!this.manual) {
+      this.stream.push({
+        type: "error",
+        cause: new Error(
+          "Gemini Live adapter: startUserActivity() requires manualActivityDetection",
+        ),
+        recoverable: true,
+      });
+      return;
+    }
+    this.requireSession().sendRealtimeInput({ activityStart: {} });
+  }
+
+  /**
+   * On Gemini, `activityEnd` IS the generation trigger — unlike OpenAI's `requestResponse`,
+   * which commits the audio buffer and then sends a separate `response.create`, Gemini has no
+   * second "start generating" message: ending the input activity is what asks the server to
+   * respond. Outside manual mode this is silently a no-op (server VAD already generates a
+   * response on its own) rather than a surfaced error, because `RealtimeBridge` calls
+   * `requestResponse` unconditionally on every `eos.turn_complete` — an error here would fire
+   * on every ordinary turn of a non-manual session.
+   */
+  requestResponse(): void {
+    if (!this.manual) return;
+    this.requireSession().sendRealtimeInput({ activityEnd: {} });
   }
 
   injectToolResult(toolId: string, text: string): void {
@@ -560,6 +617,15 @@ class GeminiLiveAdapter implements RealtimeAdapter {
 
     const content = msg.serverContent;
     if (content) {
+      // Whether `interrupted` still fires with automaticActivityDetection.disabled (manual
+      // mode) is undocumented and unverified live (2026-08-17 spike, see
+      // interrupted_finding in runs/result-manualvad.json) — Google's docs describe it only
+      // under automatic VAD ("when VAD detects an interruption..."), and separately state
+      // that in manual mode "any interruption of the stream is marked by an activityEnd
+      // message", without saying whether `interrupted` also fires. Left unconditional rather
+      // than guessing either way: emitting speech_started here regardless of mode is the
+      // conservative choice — dropping it in manual mode on an unverified assumption risks
+      // silently losing barge-in detection.
       if (content.interrupted) {
         this.stream.push({ type: "speech_started" });
       }
@@ -651,6 +717,14 @@ function toRealtimeUsage(usage: UsageMetadata): RealtimeUsage | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-export function fromGeminiLive(opts: GeminiLiveOptions): RealtimeAdapter {
+/**
+ * `startUserActivity` is Gemini-specific (manual-activity-detection mode) and not part of the
+ * shared `RealtimeAdapter` interface — wiring a host-side speech-start signal to it is future
+ * work (see task non-goals); this widened return type only makes the method reachable and
+ * testable now.
+ */
+export function fromGeminiLive(
+  opts: GeminiLiveOptions,
+): RealtimeAdapter & { startUserActivity(): void } {
   return new GeminiLiveAdapter(opts);
 }

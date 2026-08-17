@@ -1297,4 +1297,151 @@ describe("fromGeminiLive", () => {
       expect(iteratorDone).toBe(true);
     });
   });
+
+  describe("manualActivityDetection", () => {
+    it("unset: no realtimeInputConfig field at all — the no-regression baseline for every existing Gemini agent", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      await adapter.open(new AbortController().signal);
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      expect("realtimeInputConfig" in connectArg.config).toBe(false);
+      await adapter.close();
+    });
+
+    it("false: behaves exactly like unset — a caller-supplied realtimeInputConfig passes through verbatim, not merged", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        manualActivityDetection: false,
+        realtimeInputConfig: { turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" },
+      });
+      await adapter.open(new AbortController().signal);
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      expect(connectArg.config["realtimeInputConfig"]).toEqual({
+        turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+      });
+      await adapter.close();
+    });
+
+    it("true: disables Gemini's server VAD via realtimeInputConfig.automaticActivityDetection.disabled", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key", manualActivityDetection: true });
+      await adapter.open(new AbortController().signal);
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      expect(connectArg.config["realtimeInputConfig"]).toEqual({
+        automaticActivityDetection: { disabled: true },
+      });
+      await adapter.close();
+    });
+
+    it("merges into a caller-supplied realtimeInputConfig (including a nested automaticActivityDetection field) instead of replacing it", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        manualActivityDetection: true,
+        realtimeInputConfig: {
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+          automaticActivityDetection: { startOfSpeechSensitivity: "START_SENSITIVITY_HIGH" },
+        },
+      });
+      await adapter.open(new AbortController().signal);
+      const connectArg = liveConnect.mock.calls[0]![0] as { config: Record<string, unknown> };
+      // Both the caller's top-level field (turnCoverage) and its nested
+      // automaticActivityDetection field (startOfSpeechSensitivity) must survive alongside
+      // the forced `disabled: true` — a merge, not a replace at either level.
+      expect(connectArg.config["realtimeInputConfig"]).toEqual({
+        turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        automaticActivityDetection: {
+          startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+          disabled: true,
+        },
+      });
+      await adapter.close();
+    });
+
+    it("the merge survives a goAway reconnect — buildConnectConfig is rebuilt from opts each time, not cached from open()", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        manualActivityDetection: true,
+        realtimeInputConfig: { turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" },
+      });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      inject({ goAway: { timeLeft: "50s" } });
+      await waitForReestablish(events);
+
+      const reconnectArg = liveConnect.mock.calls[1]![0] as { config: Record<string, unknown> };
+      expect(reconnectArg.config["realtimeInputConfig"]).toEqual({
+        turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        automaticActivityDetection: { disabled: true },
+      });
+
+      await adapter.close();
+    });
+  });
+
+  describe("requestResponse and manual activity signals", () => {
+    it("requestResponse() in manual mode sends exactly one activityEnd — Gemini's generation trigger, not a separate create-response call", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key", manualActivityDetection: true });
+      await adapter.open(new AbortController().signal);
+
+      adapter.requestResponse!();
+
+      expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
+      expect(sendRealtimeInput).toHaveBeenCalledWith({ activityEnd: {} });
+
+      await adapter.close();
+    });
+
+    it("requestResponse() with manual mode off sends nothing and pushes no error — RealtimeBridge calls it unconditionally on every turn", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      adapter.requestResponse!();
+
+      // requestResponse() off-mode is a synchronous early return with no `stream.push` on any
+      // path (see RealtimeEventStream.push — synchronous, no queued microtask), so there is
+      // nothing pending to await: absence is provable immediately, not just non-throw.
+      expect(sendRealtimeInput).not.toHaveBeenCalled();
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+
+      await adapter.close();
+    });
+
+    it("a speech-start signal in manual mode sends exactly one activityStart", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key", manualActivityDetection: true });
+      await adapter.open(new AbortController().signal);
+
+      adapter.startUserActivity();
+
+      expect(sendRealtimeInput).toHaveBeenCalledTimes(1);
+      expect(sendRealtimeInput).toHaveBeenCalledWith({ activityStart: {} });
+
+      await adapter.close();
+    });
+
+    it("a speech-start signal with manual mode off sends nothing and surfaces a recoverable error", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const errorTask = nextErrorEvent(adapter.events);
+
+      await adapter.open(new AbortController().signal);
+      adapter.startUserActivity();
+
+      const err = await errorTask;
+      expect(err).toMatchObject({
+        type: "error",
+        cause: expect.objectContaining({
+          message: "Gemini Live adapter: startUserActivity() requires manualActivityDetection",
+        }),
+        recoverable: true,
+      });
+      expect(sendRealtimeInput).not.toHaveBeenCalled();
+
+      await adapter.close();
+    });
+  });
 });
