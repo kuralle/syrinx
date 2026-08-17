@@ -34,6 +34,22 @@
 // as a refutation. MEASURED on Node: a 2000ms park produced only 121-138ms of gap
 // because ~2.3-2.5s of audio was already buffered; 10000ms produced 7666ms. Hence the
 // 10s default here.
+//
+// READ THIS BEFORE TRUSTING ANY SINGLE BATCH FROM THIS HOST
+// ---------------------------------------------------------------------------------
+// The Workers/DO stall this host measures is INTERMITTENT AND TEMPORALLY CLUSTERED.
+// Across 25 runs of one identical configuration (arm=after, parkMode=main,
+// durableHistory on) it stalled 11 times, and the stalls arrive in consecutive blocks:
+// 2/3, then 5/5, then 0/3, then 4/8 (the first four, then clean), then 0/6. Same code,
+// same config, same client, same session shape.
+//
+// The practical consequence: A SINGLE BATCH OF 3-6 RUNS CANNOT ESTABLISH OR REFUTE
+// ANYTHING HERE. Two diagnosis experiments were run against this host and both are
+// void for exactly that reason — the positive control failed to reproduce the stall,
+// so their clean results carry no information. Any future attempt needs a reproducer
+// that fires on demand, or interleaved A/B arms within one batch so both arms see the
+// same platform conditions. Do not repeat the mistake of running arms sequentially in
+// separate batches.
 
 import { Agent } from "agents";
 import { withVoice } from "@kuralle-syrinx/cf-agents";
@@ -53,11 +69,30 @@ export interface Env extends LiveSessionEnv {
   MEDIA_LANE_DELAY_MS?: string;
   /** Nth tts.playout_progress that trips the park. Default 3. */
   MEDIA_LANE_BLOCK_ON?: string;
+  /**
+   * Diagnosis switch for the Workers/DO egress stall.
+   *   "main"       (default) park in a NON-concurrent handler — parks drainRest.
+   *   "concurrent" park in a `{ concurrent: true }` handler — dispatched
+   *                fire-and-forget, so NO drain loop is parked. If audio still
+   *                stalls here, drain-loop parking is not the cause and the await
+   *                itself is gating egress.
+   */
+  MEDIA_LANE_PARK_MODE?: string;
+
 }
 
 const INPUT_SAMPLE_RATE_HZ = 16000;
 const DEFAULT_DELAY_MS = 10_000;
 const DEFAULT_BLOCK_ON = 3;
+/**
+ * Diagnosis switch — set false to remove DO SQLite writes from the session.
+ *
+ * NOT a confirmed variable. Turning it off produced three clean runs, but the positive
+ * control (turning it back on) ALSO produced three clean runs, so that experiment
+ * proves nothing. Kept because the next attempt will want it, not because it is
+ * implicated. See the header note on reproducibility before drawing any conclusion.
+ */
+const DURABLE_HISTORY = true;
 
 type Arm = "after" | "before" | "control";
 
@@ -94,6 +129,7 @@ class MediaLaneProofPlugin implements VoicePlugin {
     private readonly delayUrl: string | undefined,
     private readonly delayMs: number,
     private readonly blockOn: number,
+    private readonly parkMode: "main" | "concurrent",
   ) {}
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -117,7 +153,7 @@ class MediaLaneProofPlugin implements VoicePlugin {
 
     let seen = 0;
     let fired = false;
-    bus.on("tts.playout_progress", async () => {
+    const park = async (): Promise<void> => {
       seen += 1;
       if (fired || seen < this.blockOn || this.delayMs <= 0) return;
       fired = true;
@@ -137,11 +173,12 @@ class MediaLaneProofPlugin implements VoicePlugin {
         `PROOF_BLOCK_END arm=${this.arm} heldMs=${Date.now() - startedAt} ` +
           `ttsAudioDuringPark=${audioPushed - audioAtStart} ttsAudioTotal=${audioPushed}`,
       );
-    });
+    };
+    bus.on("tts.playout_progress", park, ...(this.parkMode === "concurrent" ? [{ concurrent: true }] : []));
 
     console.log(
       `PROOF_AGENT arm=${this.arm} delayMs=${this.delayMs} blockOn=${this.blockOn} ` +
-        `ttsAudioRoute=${this.arm === "after" ? "Media" : "Main(demoted)"}`,
+        `ttsAudioRoute=${this.arm === "after" ? "Media" : "Main(demoted)"} parkMode=${this.parkMode}`,
     );
     await this.inner.initialize(bus, config);
   }
@@ -168,6 +205,7 @@ function proofPipeline(env: Env): typeof liveCascadedPipeline {
           // The control arm is the before arm with the treatment removed.
           arm === "control" ? 0 : Number.isFinite(delayMs) && delayMs > 0 ? delayMs : DEFAULT_DELAY_MS,
           Number.isFinite(blockOn) && blockOn > 0 ? blockOn : DEFAULT_BLOCK_ON,
+          env.MEDIA_LANE_PARK_MODE?.trim() === "concurrent" ? "concurrent" : "main",
         ),
       };
     },
@@ -189,6 +227,9 @@ export class MediaLaneProofConversation extends withVoice<Env, typeof Agent<Env>
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   // A playground/harness client is never nagged mid-measurement.
   idleTimeout: { durationMs: 0 },
+  // Compile-time, not env: withVoice options are evaluated at module load, where the
+  // Workers env is not yet available. Flipped by hand between diagnosis deploys.
+  durableHistory: DURABLE_HISTORY,
 }) {}
 
 export default {
