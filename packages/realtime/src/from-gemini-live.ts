@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-import type { GoogleGenAI, LiveCallbacks, Session, LiveServerMessage } from "@google/genai";
+import type { GoogleGenAI, LiveCallbacks, Session, LiveServerMessage, UsageMetadata } from "@google/genai";
 
 import { bytesToBase64, base64ToBytes } from "./base64.js";
 import { RealtimeEventStream } from "./realtime-event-stream.js";
-import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef } from "./realtime-adapter.js";
+import type { RealtimeAdapter, RealtimeEvent, RealtimeToolDef, RealtimeUsage } from "./realtime-adapter.js";
 
 const DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const INPUT_SAMPLE_RATE_HZ = 16_000;
@@ -123,6 +123,8 @@ class GeminiLiveAdapter implements RealtimeAdapter {
    * (iu-ledger pattern) so an id whose delegate turn never answers back can't leak.
    */
   private readonly cancelledToolIds = new Set<string>();
+  /** Latest `usageMetadata` for the in-flight turn, attached to `response_done` and cleared there. */
+  private pendingUsage: RealtimeUsage | undefined;
   /** Bumped on every (re)connect; callbacks captured from a retired session no-op once stale. */
   private generation = 0;
   private closed = false;
@@ -380,6 +382,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     this.session = null;
     this.toolNames.clear();
     this.cancelledToolIds.clear();
+    this.pendingUsage = undefined;
     this.stream.close();
   }
 
@@ -484,6 +487,10 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     // across would fail its lookup on a response the new session never asked for.
     this.toolNames.clear();
     this.cancelledToolIds.clear();
+    // A swap at the hard cutoff can land mid-response, after usageMetadata arrived but
+    // before its turnComplete. Carried across, the retired turn's counts would attach to
+    // the first turn the NEW session completes — a real turn billed with another's tokens.
+    this.pendingUsage = undefined;
     this.goAwayDeadlineAtMs = undefined;
     this.reestablishing = false;
     // Reuse the OpenAI-compatible adapter's reconnect-notification shape (recoverable error)
@@ -520,6 +527,12 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     if (msg.goAway) {
       this.armGoAwayDeadline(msg.goAway.timeLeft);
       return;
+    }
+
+    // Meter the native front — hold the latest usage for the in-flight turn so it can
+    // attach to response_done below; previously response_done carried no usage at all.
+    if (msg.usageMetadata) {
+      this.pendingUsage = toRealtimeUsage(msg.usageMetadata);
     }
 
     // Gemini discards a pending tool call on barge-in and names it here — release trigger 2
@@ -591,7 +604,9 @@ class GeminiLiveAdapter implements RealtimeAdapter {
 
       if (content.turnComplete) {
         this.activeResponse = false;
-        this.stream.push({ type: "response_done" });
+        const usage = this.pendingUsage;
+        this.pendingUsage = undefined;
+        this.stream.push(usage ? { type: "response_done", usage } : { type: "response_done" });
         // The response-complete boundary a scheduled goAway reconnect waits for.
         this.maybeReestablish();
       }
@@ -624,6 +639,16 @@ function parseGoAwayTimeLeftMs(timeLeft: string | undefined): number | undefined
   if (!match) return undefined;
   const seconds = Number(match[1]);
   return Number.isFinite(seconds) ? seconds * 1000 : undefined;
+}
+
+/** Map Gemini's `usageMetadata` onto `RealtimeUsage`, omitting fields the provider omitted. */
+function toRealtimeUsage(usage: UsageMetadata): RealtimeUsage | undefined {
+  const out: RealtimeUsage = {
+    ...(usage.promptTokenCount !== undefined ? { inputTokens: usage.promptTokenCount } : {}),
+    ...(usage.responseTokenCount !== undefined ? { outputTokens: usage.responseTokenCount } : {}),
+    ...(usage.totalTokenCount !== undefined ? { totalTokens: usage.totalTokenCount } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function fromGeminiLive(opts: GeminiLiveOptions): RealtimeAdapter {

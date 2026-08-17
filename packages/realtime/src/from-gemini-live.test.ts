@@ -861,6 +861,139 @@ describe("fromGeminiLive", () => {
     });
   });
 
+  describe("usageMetadata", () => {
+    it("attaches mapped usage to response_done when usageMetadata precedes turnComplete", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      inject({
+        usageMetadata: { promptTokenCount: 120, responseTokenCount: 45, totalTokenCount: 165 },
+      });
+      inject({ serverContent: { turnComplete: true } });
+
+      await vi.waitFor(() => expect(events.some((e) => e.type === "response_done")).toBe(true));
+      expect(events).toContainEqual({
+        type: "response_done",
+        usage: { inputTokens: 120, outputTokens: 45, totalTokens: 165 },
+      });
+
+      await adapter.close();
+    });
+
+    it("produces a bare response_done, with no usage key at all, when no usageMetadata arrived for the turn", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      inject({ serverContent: { turnComplete: true } });
+
+      await vi.waitFor(() => expect(events.some((e) => e.type === "response_done")).toBe(true));
+      const responseDone = events.find((e) => e.type === "response_done");
+      expect(responseDone).toEqual({ type: "response_done" });
+      expect(responseDone && "usage" in responseDone).toBe(false);
+
+      await adapter.close();
+    });
+
+    it("maps only the fields a partial usageMetadata carries, leaving the rest absent", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      inject({ usageMetadata: { promptTokenCount: 30 } });
+      inject({ serverContent: { turnComplete: true } });
+
+      await vi.waitFor(() => expect(events.some((e) => e.type === "response_done")).toBe(true));
+      const responseDone = events.find((e) => e.type === "response_done") as
+        | { type: "response_done"; usage?: Record<string, number> }
+        | undefined;
+      expect(responseDone?.usage).toEqual({ inputTokens: 30 });
+      expect(responseDone?.usage && "outputTokens" in responseDone.usage).toBe(false);
+      expect(responseDone?.usage && "totalTokens" in responseDone.usage).toBe(false);
+
+      await adapter.close();
+    });
+
+    it("does not carry a turn's usage over to the next turn when the second turn reports none", async () => {
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      inject({ usageMetadata: { promptTokenCount: 10, responseTokenCount: 5, totalTokenCount: 15 } });
+      inject({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() =>
+        expect(events.filter((e) => e.type === "response_done").length).toBe(1),
+      );
+
+      inject({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() =>
+        expect(events.filter((e) => e.type === "response_done").length).toBe(2),
+      );
+
+      const [first, second] = events.filter((e) => e.type === "response_done");
+      expect(first).toEqual({
+        type: "response_done",
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      });
+      expect(second).toEqual({ type: "response_done" });
+      expect(second && "usage" in second).toBe(false);
+
+      await adapter.close();
+    });
+
+    it("does not carry usage across a goAway session swap", async () => {
+      // A swap at the hard cutoff lands mid-response: usageMetadata has arrived but its
+      // turnComplete has not. Carried across, the retired session's counts would attach to
+      // the first turn the NEW session completes — a real turn billed with another turn's
+      // tokens, which the spend cap and the cost report would both believe.
+      const adapter = fromGeminiLive({ apiKey: "test-key" });
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      // Usage arrives for a turn that never completes before the swap.
+      inject({ setupComplete: {} }); // activeResponse = true — no turnComplete will follow
+      inject({ usageMetadata: { promptTokenCount: 999, responseTokenCount: 999, totalTokenCount: 1998 } });
+
+      // goAway with no timeLeft reconnects at once, even mid-response.
+      inject({ goAway: {} });
+      await vi.waitFor(() => expect(liveConnect).toHaveBeenCalledTimes(2));
+      await waitForReestablish(events);
+
+      // The new session completes its first turn, reporting no usage of its own.
+      inject({ serverContent: { turnComplete: true } });
+      await vi.waitFor(() =>
+        expect(events.filter((e) => e.type === "response_done").length).toBe(1),
+      );
+
+      const done = events.find((e) => e.type === "response_done");
+      expect(done).toEqual({ type: "response_done" });
+      expect(done && "usage" in done).toBe(false);
+
+      await adapter.close();
+    });
+  });
+
   describe("goAway reconnect", () => {
     it("reconnects with the latest resumption handle when idle, and it is observable", async () => {
       const adapter = fromGeminiLive({ apiKey: "test-key" });

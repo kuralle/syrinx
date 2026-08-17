@@ -22,6 +22,7 @@ import {
   type TextToSpeechAudioPacket,
   type TextToSpeechEndPacket,
   type TurnChangePacket,
+  type UsageRecordedPacket,
   type VoicePacket,
 } from "@kuralle-syrinx/core";
 
@@ -1061,6 +1062,45 @@ describe("RealtimeBridge", () => {
     await waitForCondition(() => dones.length === 1);
     expect(deltas.map((d) => d.text).join("")).toContain("The deadline is March 31.");
     expect(dones[0]!.text).toContain("The deadline is March 31.");
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("pushes exactly one usage.recorded packet on Route.Background with stage llm for a native turn carrying usage", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const bridge = new RealtimeBridge(adapter);
+    const recorded: Array<{ route: Route; packet: VoicePacket }> = [];
+    const bus = new PipelineBusImpl({
+      onPacket: (route, packet) => {
+        if (packet.kind === "usage.recorded") recorded.push({ route, packet });
+      },
+    });
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "response_done",
+      usage: { inputTokens: 120, outputTokens: 45, totalTokens: 165 },
+    });
+
+    await waitForCondition(() => recorded.length >= 1);
+    // Give any accidental second emission a chance to land before asserting the count.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.route).toBe(Route.Background);
+    expect(recorded[0]!.packet).toMatchObject({
+      kind: "usage.recorded",
+      stage: "llm",
+      inputTokens: 120,
+      outputTokens: 45,
+      totalTokens: 165,
+    } satisfies Partial<UsageRecordedPacket>);
 
     await bridge.close();
     bus.stop();
