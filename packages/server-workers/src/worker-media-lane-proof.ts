@@ -35,6 +35,34 @@
 // because ~2.3-2.5s of audio was already buffered; 10000ms produced 7666ms. Hence the
 // 10s default here.
 //
+// DIAGNOSIS (2026-08-18): THE STALL IS BLOCKED PRODUCTION, NOT HELD EGRESS
+// ---------------------------------------------------------------------------------
+// An earlier note here claimed audio was "produced and dispatched but not flushed",
+// inferring held egress from a COUNT of tts.audio dispatches during the park. That
+// inference was wrong: a count cannot distinguish frames spread through the park from
+// frames that stopped early.
+//
+// Timestamping the dispatches settles it. Across six runs the LAST dispatch offset was
+// 342, 1775, 1994, 1848, 1821 and 3703ms into a 10000ms park, and zero dispatches
+// landed in the final 500ms. Dispatch stops early in every run. If egress were being
+// held, dispatch would continue for the whole park and only delivery would lag.
+//
+// So the inbound TTS provider socket stops delivering while the handler is parked, and
+// resumes when it releases. The client-visible gap is therefore the REMAINDER of the
+// park after production stopped — which is why the fault looked intermittent: a run
+// only shows a gap when the utterance was still going when the park ended. A short
+// utterance finishes inside the park and looks clean.
+//
+// The provider-free microbench corroborates this by NOT reproducing: 220 interleaved
+// trials, zero stalls, across raw DO sockets, an agents-SDK Connection, both storage
+// probes, and concurrent-vs-parked handlers. Its frames come from a LOCAL TIMER rather
+// than an inbound socket event, and local timers are not deferred the way event
+// delivery is. That difference is the whole finding.
+//
+// Consequence: the media lane cannot fix this. The lane routes audio that has already
+// arrived; here the audio never arrives. See Cloudflare's input-gate rule — events are
+// deferred until the object "is no longer executing JavaScript code".
+//
 // READ THIS BEFORE TRUSTING ANY SINGLE BATCH FROM THIS HOST
 // ---------------------------------------------------------------------------------
 // The Workers/DO stall this host measures is INTERMITTENT AND TEMPORALLY CLUSTERED.
@@ -78,6 +106,19 @@ export interface Env extends LiveSessionEnv {
    *                itself is gating egress.
    */
   MEDIA_LANE_PARK_MODE?: string;
+  /**
+   * Storage probe fired immediately BEFORE the park. Tests the documented
+   * input-gate/output-gate interaction as the cause of the outbound stall.
+   *   "none"        (default) no probe — the pre-existing, intermittent behaviour.
+   *   "confirmed"   an un-awaited storage.put(). Output gates hold outgoing network
+   *                 messages until that write CONFIRMS; input gates defer delivery of
+   *                 non-storage events while the object is still executing JS. The park
+   *                 keeps a JS task pending, so the prediction is that the write never
+   *                 confirms and ALL outbound audio is held for the whole park.
+   *   "unconfirmed" the same put() with { allowUnconfirmed: true }, the documented
+   *                 output-gate bypass. Prediction: audio flows.
+   */
+  MEDIA_LANE_STORAGE_PROBE?: string;
 
 }
 
@@ -95,6 +136,14 @@ const DEFAULT_BLOCK_ON = 3;
 const DURABLE_HISTORY = true;
 
 type Arm = "after" | "before" | "control";
+type StorageProbe = "none" | "confirmed" | "unconfirmed";
+
+/**
+ * The live DO's storage handle. Module-level because the plugin needs it and the
+ * VoicePlugin contract has no route to the DurableObjectState — one session per object,
+ * so the last constructor to run is this session's.
+ */
+let currentStorage: DurableObjectStorage | undefined;
 
 /** The arm is the sessionId prefix; anything unprefixed is the shipped configuration. */
 export function armFromSessionId(sessionId: string): Arm {
@@ -130,6 +179,7 @@ class MediaLaneProofPlugin implements VoicePlugin {
     private readonly delayMs: number,
     private readonly blockOn: number,
     private readonly parkMode: "main" | "concurrent",
+    private readonly storageProbe: StorageProbe,
   ) {}
 
   async initialize(bus: PipelineBus, config: PluginConfig): Promise<void> {
@@ -149,7 +199,16 @@ class MediaLaneProofPlugin implements VoicePlugin {
     // but not delivered, the failure is in the lane/transport; if production stopped
     // too, the stall is upstream of the bus and the lane was never the deciding factor.
     let audioPushed = 0;
-    bus.on("tts.audio", () => { audioPushed += 1; });
+    // Timestamps, not just a count. A COUNT cannot tell "frames spread evenly through
+    // the park" (egress held) from "frames deferred, then delivered in a burst the
+    // instant the park ended" (input gate deferring EVENT delivery). Those have
+    // opposite causes, and the earlier localization rested on the count alone.
+    let parkStartedAtMs = 0;
+    const dispatchOffsetsMs: number[] = [];
+    bus.on("tts.audio", () => {
+      audioPushed += 1;
+      if (parkStartedAtMs > 0) dispatchOffsetsMs.push(Date.now() - parkStartedAtMs);
+    });
 
     let seen = 0;
     let fired = false;
@@ -158,7 +217,15 @@ class MediaLaneProofPlugin implements VoicePlugin {
       if (fired || seen < this.blockOn || this.delayMs <= 0) return;
       fired = true;
       const startedAt = Date.now();
+      // Fire the storage probe BEFORE parking, so a write is outstanding for the
+      // whole park. Deliberately NOT awaited — an awaited write would confirm before
+      // the park begins and close nothing.
+      if (this.storageProbe !== "none" && currentStorage) {
+        const options = this.storageProbe === "unconfirmed" ? { allowUnconfirmed: true } : {};
+        void currentStorage.put("media_lane_probe", seen, options);
+      }
       const audioAtStart = audioPushed;
+      parkStartedAtMs = Date.now();
       console.log(`PROOF_BLOCK_START arm=${this.arm} n=${seen} delayMs=${this.delayMs} ttsAudioSoFar=${audioAtStart}`);
       try {
         if (this.delayUrl) {
@@ -169,16 +236,22 @@ class MediaLaneProofPlugin implements VoicePlugin {
       } catch (err) {
         console.log(`PROOF_BLOCK_ERROR arm=${this.arm} err=${String(err)}`);
       }
+      const held = Date.now() - startedAt;
+      const lateWindowStart = held - 500;
+      const inLast500 = dispatchOffsetsMs.filter((offset) => offset >= lateWindowStart).length;
       console.log(
-        `PROOF_BLOCK_END arm=${this.arm} heldMs=${Date.now() - startedAt} ` +
-          `ttsAudioDuringPark=${audioPushed - audioAtStart} ttsAudioTotal=${audioPushed}`,
+        `PROOF_BLOCK_END arm=${this.arm} heldMs=${held} ` +
+          `ttsAudioDuringPark=${audioPushed - audioAtStart} ttsAudioTotal=${audioPushed} ` +
+          `firstOffset=${dispatchOffsetsMs[0] ?? -1} lastOffset=${dispatchOffsetsMs.at(-1) ?? -1} ` +
+          `inLast500ms=${inLast500}`,
       );
     };
     bus.on("tts.playout_progress", park, ...(this.parkMode === "concurrent" ? [{ concurrent: true }] : []));
 
     console.log(
       `PROOF_AGENT arm=${this.arm} delayMs=${this.delayMs} blockOn=${this.blockOn} ` +
-        `ttsAudioRoute=${this.arm === "after" ? "Media" : "Main(demoted)"} parkMode=${this.parkMode}`,
+        `ttsAudioRoute=${this.arm === "after" ? "Media" : "Main(demoted)"} parkMode=${this.parkMode} ` +
+        `storageProbe=${this.storageProbe}`,
     );
     await this.inner.initialize(bus, config);
   }
@@ -186,6 +259,11 @@ class MediaLaneProofPlugin implements VoicePlugin {
   async close(): Promise<void> {
     await this.inner.close();
   }
+}
+
+function resolveStorageProbe(raw: string | undefined): StorageProbe {
+  const value = raw?.trim();
+  return value === "confirmed" || value === "unconfirmed" ? value : "none";
 }
 
 function proofPipeline(env: Env): typeof liveCascadedPipeline {
@@ -206,6 +284,7 @@ function proofPipeline(env: Env): typeof liveCascadedPipeline {
           arm === "control" ? 0 : Number.isFinite(delayMs) && delayMs > 0 ? delayMs : DEFAULT_DELAY_MS,
           Number.isFinite(blockOn) && blockOn > 0 ? blockOn : DEFAULT_BLOCK_ON,
           env.MEDIA_LANE_PARK_MODE?.trim() === "concurrent" ? "concurrent" : "main",
+          resolveStorageProbe(env.MEDIA_LANE_STORAGE_PROBE),
         ),
       };
     },
@@ -230,7 +309,12 @@ export class MediaLaneProofConversation extends withVoice<Env, typeof Agent<Env>
   // Compile-time, not env: withVoice options are evaluated at module load, where the
   // Workers env is not yet available. Flipped by hand between diagnosis deploys.
   durableHistory: DURABLE_HISTORY,
-}) {}
+}) {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    currentStorage = ctx.storage;
+  }
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

@@ -8,7 +8,8 @@
     "MEDIA_LANE_DELAY_URL": "",
     "MEDIA_LANE_DELAY_MS": "10000",
     "MEDIA_LANE_BLOCK_ON": "3",
-    "MEDIA_LANE_PARK_MODE": "main"
+    "MEDIA_LANE_PARK_MODE": "main",
+    "MEDIA_LANE_STORAGE_PROBE": "none"
   },
   "durable_objects": {
     "bindings": [

@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "syrinx-media-lane-microbench",
+  "main": "src/worker-media-lane-microbench.ts",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MEDIA_LANE_MICROBENCH", "class_name": "MediaLaneMicrobench" },
+      { "name": "MEDIA_LANE_MICROBENCH_AGENT", "class_name": "MediaLaneMicrobenchAgent" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MediaLaneMicrobench"] },
+    { "tag": "v2", "new_sqlite_classes": ["MediaLaneMicrobenchAgent"] }
+  ]
+}
