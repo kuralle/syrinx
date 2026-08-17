@@ -239,7 +239,15 @@ export interface VoiceAgentSessionConfig {
  * omit it rather than passing a zero.
  */
 export interface SessionStartBoundaries {
-  readonly connectedAtMs: number;
+  /**
+   * Optional for the same reason every other boundary is: a host that cannot observe it
+   * must omit it. On Cloudflare Workers `Date.now()` returns the time of the last I/O and
+   * does not advance during execution, so a connect stamp taken before any I/O is the same
+   * instant as the admission stamp — passing it would report `transportMs: 0`, a wrong zero
+   * rather than a fast one. Absent, `totalMs` anchors on the earliest boundary that IS
+   * observable and `transportMs` is omitted entirely.
+   */
+  readonly connectedAtMs?: number;
   readonly admissionStartedAtMs?: number;
   readonly admissionEndedAtMs?: number;
   readonly pluginInitStartedAtMs?: number;
@@ -856,9 +864,15 @@ export class VoiceAgentSession {
 
     const { connectedAtMs, admissionStartedAtMs, admissionEndedAtMs, pluginInitStartedAtMs, readyAtMs } =
       boundaries;
-    const totalMs = readyAtMs - connectedAtMs;
+    // Anchor on the earliest boundary the host could actually observe. When `connectedAtMs`
+    // is absent the window starts at admission, so `totalMs` still measures a real span
+    // rather than silently reporting the whole startup as zero.
+    const anchorAtMs = connectedAtMs ?? admissionStartedAtMs ?? pluginInitStartedAtMs ?? readyAtMs;
+    const totalMs = readyAtMs - anchorAtMs;
     const transportMs =
-      admissionStartedAtMs !== undefined ? admissionStartedAtMs - connectedAtMs : undefined;
+      connectedAtMs !== undefined && admissionStartedAtMs !== undefined
+        ? admissionStartedAtMs - connectedAtMs
+        : undefined;
     const admissionMs =
       admissionStartedAtMs !== undefined && admissionEndedAtMs !== undefined
         ? admissionEndedAtMs - admissionStartedAtMs

@@ -144,18 +144,23 @@ export async function runVoiceEdgeWebSocketConnection(
   request: Request,
   options: VoiceEdgeWebSocketOptions,
 ): Promise<void> {
-  // Two limits on what session_start can mean on this host, neither visible in the
-  // local suite — workerd advances the clock normally, production does not.
+  // What session_start can and cannot mean on this host, MEASURED against a deployed
+  // Worker (2026-08-17, 10 sessions) rather than inferred — workerd advances the clock
+  // normally, production does not, so the local suite cannot show either limit.
   //
   // 1. Deployed to Cloudflare, Date.now() returns the time of the LAST I/O and does not
   //    advance during code execution (Spectre mitigation). A stage whose two ends are
   //    not separated by real I/O therefore reports exactly 0 — a wrong zero, not a fast
-  //    one. Only stages bracketing genuine I/O (createSession/start, the ready send)
-  //    carry a real duration here.
+  //    one. Measured: transportMs 0/10 and pluginInitMs 0/10, while admissionMs (which
+  //    brackets createSession + start, genuine provider I/O) ran 48-1943ms. The Node host
+  //    is the control: there pluginInitMs is non-zero on 3 of 5 runs, so the zero here is
+  //    the frozen clock rather than a fast path. Both wrong-zero stages are therefore
+  //    omitted below, per this event's own omit-rather-than-zero discipline.
   // 2. A cold Durable Object wake happens before this function is entered — the DO
   //    constructor and onConnect have already run — so it sits OUTSIDE this window
-  //    entirely. Cold-wake cost is observable only from the client, as connect->ready.
-  const connectedAtMs = Date.now();
+  //    entirely. Cold-wake cost is observable only from the client, as connect->ready:
+  //    measured cold 1427ms median against a server-side totalMs of 80ms median, so
+  //    roughly 1.35s of real startup is invisible from in here and always will be.
   const scheduler = options.scheduler ?? new TimerScheduler();
   const contextIdFn = options.contextId ?? defaultContextId;
   const inputSampleRateHz = positiveInteger(options.inputSampleRateHz) ?? 16000;
@@ -299,7 +304,6 @@ export async function runVoiceEdgeWebSocketConnection(
       await options.sessionStore.release(leased.managed.id, 0);
       return;
     }
-    const pluginInitStartedAtMs = Date.now();
     wireEdgeSessionEvents(
       session,
       socket,
@@ -372,11 +376,13 @@ export async function runVoiceEdgeWebSocketConnection(
     });
     const readyAtMs = Date.now();
     ready = true;
+    // connectedAtMs and pluginInitStartedAtMs are deliberately NOT passed: neither is
+    // separated from its partner boundary by real I/O on this host, so both would report
+    // a wrong zero (see the measurement note at the top of this function). totalMs then
+    // anchors on admission, which is the earliest boundary this host can honestly observe.
     session.noteSessionStart({
-      connectedAtMs,
       ...(admissionStartedAtMs !== undefined ? { admissionStartedAtMs } : {}),
       ...(admissionEndedAtMs !== undefined ? { admissionEndedAtMs } : {}),
-      pluginInitStartedAtMs,
       readyAtMs,
     });
     for (const pending of pendingMessages.splice(0)) {
