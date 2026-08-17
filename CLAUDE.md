@@ -15,3 +15,4 @@ New to this repo? Run `plandesk onboard` for the full Plan Desk + Factory model 
 
 @.agents/factory/factory.md
 <!-- plandesk-factory:end -->
+
