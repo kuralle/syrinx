@@ -82,6 +82,10 @@ export type SyrinxStudioMessage =
   | { readonly type: "agent_chunk"; readonly turnId?: string; readonly text: string }
   | { readonly type: "agent_tool_call"; readonly turnId?: string; readonly id?: string; readonly name: string; readonly args?: unknown }
   | { readonly type: "agent_tool_result"; readonly turnId?: string; readonly id?: string; readonly result?: unknown }
+  // A tool-authored payload for the UI (a card, a link, a form) — data, not speech.
+  // The wire form of a reasoner `client-message` part; ordered against `agent_chunk`
+  // for the same turn.
+  | { readonly type: "client_message"; readonly turnId?: string; readonly payload: unknown }
   // G3 typed preamble/filler lifecycle (RFC bimodel-delegate-seam): the standard
   // "thinking" cue. started = the front invoked a tool (arm an earcon/indicator);
   // delayed = still working after afterMs; complete/failed = stop the cue.
@@ -785,6 +789,13 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
       turnId: optionalString(value.turnId, "agent_tool_result.turnId"),
       id: optionalString(value.id, "agent_tool_result.id"),
       result: value.result,
+    };
+  }
+  if (type === "client_message") {
+    return {
+      type,
+      turnId: optionalString(value.turnId, "client_message.turnId"),
+      payload: value.payload,
     };
   }
   if (

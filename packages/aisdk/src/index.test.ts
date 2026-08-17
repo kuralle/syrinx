@@ -295,6 +295,92 @@ describe("ReasoningBridge", () => {
     await plugin.close();
   });
 
+  it("forwards a client-message part as one llm.client_message packet, ordered against llm.delta", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const reasoner: Reasoner = {
+      stream: async function* () {
+        yield { type: "text-delta", text: "Here is your " };
+        yield { type: "client-message", payload: { card: "invoice", id: "inv_1" } };
+        yield { type: "text-delta", text: "invoice." };
+        yield { type: "finish", reason: "stop", text: "Here is your invoice." };
+      },
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-cm", "Show me the invoice."));
+    await waitFor(() => packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.done"));
+
+    const clientMessages = packets.filter(({ packet }) => (packet as { kind?: string }).kind === "llm.client_message");
+    expect(clientMessages).toHaveLength(1);
+    expect(clientMessages[0]).toEqual({
+      route: Route.Main,
+      packet: expect.objectContaining({
+        kind: "llm.client_message",
+        contextId: "turn-cm",
+        payload: { card: "invoice", id: "inv_1" },
+      }),
+    });
+
+    // Ordering: the client-message must land strictly between the two llm.delta
+    // pushes it was yielded between — that ordering IS the reason this seam is a
+    // ReasoningPart on the shared stream rather than a side callback.
+    const kinds = packets.map(({ packet }) => (packet as { kind?: string }).kind);
+    const deltaIndices = kinds.reduce<number[]>((acc, k, i) => (k === "llm.delta" ? [...acc, i] : acc), []);
+    const cmIndex = kinds.indexOf("llm.client_message");
+    expect(cmIndex).toBeGreaterThan(deltaIndices[0]!);
+    expect(cmIndex).toBeLessThan(deltaIndices[1]!);
+
+    // Hard requirement: the payload must never reach TTS. ReasoningBridge never
+    // constructs a tts.text packet at all (that is voice-agent-session's job, fed
+    // only from llm.delta) — assert none appeared here.
+    expect(kinds.includes("tts.text")).toBe(false);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
+  it("delivers no client-message after the turn is aborted by barge-in", async () => {
+    const packets: Array<{ route: Route; packet: unknown }> = [];
+    const reasoner: Reasoner = {
+      stream: async function* (turn) {
+        yield { type: "text-delta", text: "Here" };
+        await new Promise<void>((resolve) => {
+          if (turn.signal.aborted) {
+            resolve();
+            return;
+          }
+          turn.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        // Racing the abort: the reasoner still tries to emit a client-message after
+        // the turn was cancelled. ReasoningBridge's `if (signal.aborted) return;`
+        // guard must stop this from ever reaching the bus.
+        yield { type: "client-message", payload: { card: "late" } };
+      },
+    };
+    const plugin = new ReasoningBridge(reasoner);
+    const bus = new PipelineBusImpl({ onPacket: (route, packet) => packets.push({ route, packet }) });
+    const drain = bus.start();
+
+    await plugin.initialize(bus, baseConfig());
+    bus.push(Route.Main, turnComplete("turn-abort-cm", "hello"));
+    await waitFor(() =>
+      packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.delta"),
+    );
+
+    bus.push(Route.Critical, interruptLlm("turn-abort-cm"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(packets.some(({ packet }) => (packet as { kind?: string }).kind === "llm.client_message")).toBe(false);
+
+    bus.stop();
+    await drain;
+    await plugin.close();
+  });
+
   it("accepts the truncated reply on token-limit finish (fails the turn, never the call)", async () => {
     // A `length` finish means the model hit the token cap: the streamed reply is
     // truncated but usable. It must be spoken and the call kept up (L2) — never

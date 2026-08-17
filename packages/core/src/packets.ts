@@ -373,6 +373,16 @@ export interface LlmToolResultPacket extends VoicePacket {
   readonly result: string;
 }
 
+/**
+ * The wire form of a `client-message` ReasoningPart — a tool-authored payload for
+ * the client UI, ordered against `llm.delta` on the same route. NEVER consumed by
+ * the TTS path; only `voice-agent-session`'s LLM handlers read this kind.
+ */
+export interface LlmClientMessagePacket extends VoicePacket {
+  readonly kind: "llm.client_message";
+  readonly payload: unknown;
+}
+
 export interface ReasoningSuspendedPacket extends VoicePacket {
   readonly kind: "reasoning.suspended";
   readonly runId: string;
@@ -754,6 +764,7 @@ export type LlmPacket =
   | LlmErrorPacket
   | LlmToolCallPacket
   | LlmToolResultPacket
+  | LlmClientMessagePacket
   | ReasoningSuspendedPacket
   | ReasoningResumePacket;
 

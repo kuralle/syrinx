@@ -572,6 +572,18 @@ export class ReasoningBridge implements VoicePlugin {
                   },
                 });
                 break;
+              case "client-message":
+                // Route.Main, same as llm.delta above — the push order within this
+                // single for-await loop IS the ordering guarantee (one queue, one
+                // writer). Never folded into `reply`/bufferTtsText, so it structurally
+                // cannot reach TTS (hard requirement — see the ReasoningPart doc comment).
+                push(Route.Main, {
+                  kind: "llm.client_message",
+                  contextId,
+                  timestampMs: Date.now(),
+                  payload: part.payload,
+                });
+                break;
               case "blocked": {
                 if (signal.aborted) return;
                 const safeMessage = part.userFacingMessage;

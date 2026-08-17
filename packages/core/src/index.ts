@@ -70,6 +70,8 @@ export {
   type LlmErrorPacket,
   type LlmToolCallPacket,
   type LlmToolResultPacket,
+  type LlmClientMessagePacket,
+  type LlmPacket,
 } from "./packets.js";
 
 // Pipeline packets — reasoning (suspend/resume)

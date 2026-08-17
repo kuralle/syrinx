@@ -65,6 +65,13 @@ export type ReasoningPart =
   | { readonly type: "tool-call"; readonly toolId: string; readonly toolName: string; readonly args: Record<string, unknown> }
   | { readonly type: "tool-result"; readonly toolId: string; readonly toolName: string; readonly result: string }
   | { readonly type: "control"; readonly name: string; readonly payload: unknown }
+  // A tool-authored payload for the client UI (a card, a link, a form) — data, not
+  // speech. Rides the turn stream so its position against surrounding `text-delta`
+  // parts is preserved for free (the deciding property — see the "reasoner reaches
+  // the client" decision). `payload` MUST be JSON-serializable and size-bounded, and
+  // MUST NEVER be spoken: the bridge routes it straight to the wire, never through TTS.
+  // Barge-in drops it with the rest of the stream, same as every other part.
+  | { readonly type: "client-message"; readonly payload: unknown }
   | { readonly type: "blocked"; readonly userFacingMessage: string; readonly payload?: unknown }
   // Human-in-the-loop pause (step 3). ALWAYS the terminal part for the turn.
   | { readonly type: "suspended"; readonly runId: string; readonly toolId?: string; readonly prompt?: string; readonly payload: unknown }

@@ -620,6 +620,38 @@ describe("createVoiceWebSocketServer", () => {
     await server.close();
   });
 
+  it("forwards a reasoner client-message to the browser socket as a typed client_message wire packet", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+
+    const server = registerServer(await createVoiceWebSocketServer({
+      port: 0,
+      createSession: () => session,
+      contextId: () => "turn-cm",
+    }));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+
+    const clientMessage = readJsonMatching(client, (message) => message.type === "client_message");
+
+    session.bus.push(Route.Main, {
+      kind: "llm.client_message",
+      contextId: "turn-cm",
+      timestampMs: Date.now(),
+      payload: { card: "invoice", amount: 42 },
+    });
+
+    await expect(clientMessage).resolves.toMatchObject({
+      type: "client_message",
+      turnId: "turn-cm",
+      payload: { card: "invoice", amount: 42 },
+    });
+
+    client.close();
+    await server.close();
+  });
+
   it("forwards VAD-driven assistant interruption as audio clear events", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
     const server = registerServer(await createVoiceWebSocketServer({

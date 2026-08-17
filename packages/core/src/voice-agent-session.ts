@@ -39,6 +39,7 @@ import type {
   LlmResponseDonePacket,
   LlmToolCallPacket,
   LlmToolResultPacket,
+  LlmClientMessagePacket,
   TextToSpeechAudioPacket,
   TextToSpeechEndPacket,
   TextToSpeechPlayoutProgressPacket,
@@ -251,6 +252,14 @@ export interface VoiceAgentSessionEvents {
   user_input_partial: (event: { tsMs: number; turnId: string; text: string; iuId: IncrementalUnitId }) => void;
   user_input_final: (event: { tsMs: number; turnId: string; text: string; confidence: number; iuId: IncrementalUnitId }) => void;
   agent_text_delta: (event: { tsMs: number; turnId: string; delta: string; iuId: IncrementalUnitId }) => void;
+  /**
+   * A tool-authored payload for the client UI (a card, a link, a form) — data, not
+   * speech. Ordered against `agent_text_delta` for the same turn, since both are
+   * folded from the same `llm.client_message`/`llm.delta` Route.Main stream. Dropped
+   * (never emitted) for a turn already flagged in `interruptedGenerationContextIds`,
+   * mirroring `agent_text_delta`'s barge-in behavior.
+   */
+  agent_client_message: (event: { tsMs: number; turnId: string; payload: unknown }) => void;
   agent_tool_call: (event: { tsMs: number; turnId: string; id: string; name: string; args: Record<string, unknown> }) => void;
   agent_tool_result: (event: { tsMs: number; turnId: string; id: string; result: string; durationMs: number }) => void;
   delegate_query: (event: { tsMs: number; turnId: string; query: string; toolId?: string; toolName?: string }) => void;
@@ -922,6 +931,7 @@ export class VoiceAgentSession {
 
     // LLM
     this.bus.on("llm.delta", this.handleLlmDelta.bind(this));
+    this.bus.on("llm.client_message", this.handleLlmClientMessage.bind(this));
     this.bus.on("llm.done", this.handleLlmDone.bind(this));
     this.bus.on("llm.tool_call", this.handleLlmToolCall.bind(this));
     this.bus.on("llm.tool_result", this.handleLlmToolResult.bind(this));
@@ -1499,6 +1509,24 @@ export class VoiceAgentSession {
     });
 
     this.bufferTtsText(pkt.contextId, deltaText, pkt.timestampMs);
+  }
+
+  /**
+   * Folds `llm.client_message` (the wire form of a `client-message` ReasoningPart)
+   * into `agent_client_message`. Deliberately never touches `bufferTtsText` or
+   * `segmentation` — the hard requirement is that this payload can never become
+   * spoken audio, and the only way to guarantee that is to never hand it to the
+   * TTS-buffering path in the first place.
+   */
+  private handleLlmClientMessage(pkt: LlmClientMessagePacket): void {
+    if (this.interruptedGenerationContextIds.has(pkt.contextId)) {
+      this.bus.push(
+        Route.Background,
+        make.metric(pkt.contextId, "llm.client_message_ignored_after_interrupt", "1"),
+      );
+      return;
+    }
+    this.emit("agent_client_message", { tsMs: pkt.timestampMs, turnId: pkt.contextId, payload: pkt.payload });
   }
 
   private handleLlmDone(pkt: LlmResponseDonePacket): void {

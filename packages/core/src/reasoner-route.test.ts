@@ -245,4 +245,89 @@ describe("RoutingReasoner", () => {
 
     await expect(collect(router, baseTurn())).rejects.toThrow('RoutingReasoner: unknown route id "missing"');
   });
+
+  it("forwards client-message from a kept speculative route, ordered against text-delta", async () => {
+    const fast = new ControllableReasoner();
+    const deep = new ControllableReasoner();
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+
+    const router = new RoutingReasoner({
+      routes: [
+        { id: "fast", reasoner: fast },
+        { id: "deep", reasoner: deep },
+      ],
+      classify: () => "fast",
+      speculateRouteId: "fast",
+      bus,
+      contextId: "ctx-cm-1",
+    });
+
+    const streamPromise = collect(router, baseTurn());
+    fast.emit({ type: "text-delta", text: "here is " });
+    fast.emit({ type: "client-message", payload: { card: "invoice" } });
+    fast.emit({ type: "text-delta", text: "your invoice" });
+    fast.emit({ type: "finish", reason: "stop", text: "here is your invoice" });
+    const parts = await streamPromise;
+
+    expect(deep.streamInvoked).toBe(false);
+    expect(parts).toEqual([
+      { type: "text-delta", text: "here is " },
+      { type: "client-message", payload: { card: "invoice" } },
+      { type: "text-delta", text: "your invoice" },
+      { type: "finish", reason: "stop", text: "here is your invoice" },
+    ]);
+
+    bus.stop();
+    await started;
+  });
+
+  it("drops a client-message from a mispredicted speculative route", async () => {
+    const fast = new ControllableReasoner();
+    let deepInvoked = false;
+    let resolveClassify: ((id: string) => void) | undefined;
+    const classifyGate = new Promise<string>((resolve) => {
+      resolveClassify = resolve;
+    });
+
+    const bus = new PipelineBusImpl();
+    const started = bus.start();
+
+    const deepPartsWithClientMessage: ReasoningPart[] = [
+      { type: "client-message", payload: { card: "deep-route" } },
+      { type: "text-delta", text: "deep" },
+      { type: "finish", reason: "stop", text: "deep" },
+    ];
+
+    const router = new RoutingReasoner({
+      routes: [
+        { id: "fast", reasoner: fast },
+        {
+          id: "deep",
+          reasoner: scriptedReasoner(deepPartsWithClientMessage, () => {
+            deepInvoked = true;
+          }),
+        },
+      ],
+      classify: () => classifyGate,
+      speculateRouteId: "fast",
+      bus,
+      contextId: "ctx-cm-2",
+    });
+
+    const streamPromise = collect(router, baseTurn());
+    await Promise.resolve();
+    // The speculative route emits its own client-message before the mispredict —
+    // it must never reach the output once "deep" is chosen instead.
+    fast.emit({ type: "client-message", payload: { card: "must-not-forward" } });
+    resolveClassify!("deep");
+    const parts = await streamPromise;
+
+    expect(fast.capturedSignal?.aborted).toBe(true);
+    expect(deepInvoked).toBe(true);
+    expect(parts).toEqual(deepPartsWithClientMessage);
+
+    bus.stop();
+    await started;
+  });
 });

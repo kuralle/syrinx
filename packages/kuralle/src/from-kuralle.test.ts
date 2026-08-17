@@ -256,6 +256,25 @@ describe("fromKuralleRuntime", () => {
     ]);
   });
 
+  it("maps a client-message kuralle event to a client-message ReasoningPart, mid-stream", async () => {
+    const clientMessage = {
+      type: "client-message",
+      payload: { card: "invoice", amount: 42 },
+    } satisfies KuralleStreamPart;
+    const reasoner = fromKuralleRuntime(
+      fakeRuntime([textDelta("Here is your invoice."), clientMessage, done()]),
+      { sessionId: "sess-client-message" },
+    );
+
+    const parts = await collectParts(reasoner, baseTurn());
+
+    expect(parts).toEqual([
+      { type: "text-delta", text: "Here is your invoice." },
+      { type: "client-message", payload: { card: "invoice", amount: 42 } },
+      { type: "finish", reason: "stop", text: "Here is your invoice." },
+    ]);
+  });
+
   it("yields terminal error when stream ends without done", async () => {
     const reasoner = fromKuralleRuntime(fakeRuntime([textDelta("partial")]), { sessionId: "sess-1" });
 

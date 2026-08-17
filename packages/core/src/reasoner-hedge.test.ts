@@ -358,4 +358,44 @@ describe("HedgedReasoner", () => {
     bus.stop();
     await started;
   });
+
+  it("(h) forwards client-message from the winning branch, drops it from the discarded branch", async () => {
+    const scheduler = new FakeScheduler();
+    const primary = new ControllableReasoner();
+    const hedge = new HedgedReasoner({
+      primary,
+      backup: scriptedReasoner([
+        { type: "client-message", payload: { from: "backup" } },
+        { type: "text-delta", text: "backup" },
+        { type: "finish", reason: "stop", text: "backup" },
+      ]),
+      hedgeAfterMs: 5,
+      scheduler,
+    });
+
+    const streamPromise = collect(hedge, baseTurn());
+    await Promise.resolve();
+    scheduler.fire("hedge");
+    const parts = await streamPromise;
+
+    // The turn is fully resolved from the backup alone — the winning branch's
+    // client-message is forwarded, ordered before the text it announces.
+    expect(parts).toEqual([
+      { type: "client-message", payload: { from: "backup" } },
+      { type: "text-delta", text: "backup" },
+      { type: "finish", reason: "stop", text: "backup" },
+    ]);
+
+    // The loser was aborted at commit — HedgedReasoner only ever reads from
+    // `commit.iter` (the winner) afterward, so anything the loser still tries to
+    // emit is structurally unreachable, not merely absent by timing luck.
+    expect(primary.capturedSignal?.aborted).toBe(true);
+    primary.emit({ type: "client-message", payload: { from: "primary" } });
+    await Promise.resolve();
+    expect(parts).toEqual([
+      { type: "client-message", payload: { from: "backup" } },
+      { type: "text-delta", text: "backup" },
+      { type: "finish", reason: "stop", text: "backup" },
+    ]);
+  });
 });

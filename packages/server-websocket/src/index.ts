@@ -519,6 +519,9 @@ function wireBrowserSessionEvents(
   onSession("agent_text_delta", (event) => {
     sendJson(socket, { type: "agent_chunk", turnId: event.turnId, text: event.delta }, maxBufferedAmountBytes);
   });
+  onSession("agent_client_message", (event) => {
+    sendJson(socket, { type: "client_message", turnId: event.turnId, payload: event.payload }, maxBufferedAmountBytes);
+  });
   onSession("agent_tool_call", (event) => {
     sendJson(socket, { type: "agent_tool_call", turnId: event.turnId, id: event.id, name: event.name, args: event.args }, maxBufferedAmountBytes);
   });

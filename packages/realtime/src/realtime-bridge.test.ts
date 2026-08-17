@@ -676,6 +676,48 @@ describe("RealtimeBridge", () => {
     await started;
   });
 
+  it("forwards a client-message part straight to the wire, bypassing the delegate tool-result relay", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "client-message", payload: { card: "invoice" } };
+        yield { type: "text-delta", text: "Here is your invoice." };
+        yield { type: "finish", reason: "stop", text: "Here is your invoice." };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const clientMessages: Array<Record<string, unknown>> = [];
+    const results: DelegateResultPacket[] = [];
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    bus.on("llm.client_message", (pkt) => { clientMessages.push(pkt as unknown as Record<string, unknown>); });
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_cm",
+      toolName: "consult_knowledge",
+      args: { query: "invoice" },
+    });
+
+    await waitForCondition(() => results.length === 1);
+
+    expect(clientMessages).toEqual([
+      expect.objectContaining({ kind: "llm.client_message", payload: { card: "invoice" } }),
+    ]);
+    // The delegate's front-model tool-result relay never sees this payload — it
+    // must not leak into what gets spoken/injected back to the realtime front.
+    expect(adapter.injectedToolResults[0]!.text).not.toContain("card");
+    expect(results[0]).toMatchObject({ answer: "Here is your invoice." });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
   it("surfaces a blocked part as a safe terminal delegate result", async () => {
     const adapter = new FakeRealtimeAdapter();
     const reasoner: Reasoner = {

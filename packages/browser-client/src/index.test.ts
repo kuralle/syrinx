@@ -250,6 +250,30 @@ describe("SyrinxBrowserClient — audio sequence", () => {
     expect(messages).toEqual([]);
     expect(errors).toEqual(["agent_chunk.text must be a non-empty string"]);
   });
+
+  it("parses a reasoner client_message with its payload intact", () => {
+    const client = makeClient();
+    const messages: unknown[] = [];
+    const errors: unknown[] = [];
+    client.on((event) => {
+      if (event.type === "message") messages.push(event.message);
+      if (event.type === "error") errors.push(event.error);
+    });
+    client.connect();
+
+    sockets[0]!.dispatch("message", {
+      data: JSON.stringify({
+        type: "client_message",
+        turnId: "turn-1",
+        payload: { card: "invoice", amount: 42 },
+      }),
+    });
+
+    expect(errors).toEqual([]);
+    expect(messages).toEqual([
+      { type: "client_message", turnId: "turn-1", payload: { card: "invoice", amount: 42 } },
+    ]);
+  });
 });
 
 describe("SyrinxBrowserClient — sessionId", () => {

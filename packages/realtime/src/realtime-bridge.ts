@@ -462,6 +462,18 @@ export class RealtimeBridge implements VoicePlugin {
             });
             break;
           }
+          case "client-message":
+            // Bypasses the delegate's tool-result relay entirely (the front
+            // realtime model never sees this) — straight to the wire on
+            // Route.Main, same surface the cascade bridge uses. Never folded
+            // into `answer`, so it cannot reach TTS or the front model's speech.
+            bus.push(Route.Main, {
+              kind: "llm.client_message",
+              contextId,
+              timestampMs: Date.now(),
+              payload: part.payload,
+            });
+            break;
           case "blocked":
             blockedMessage = part.userFacingMessage;
             blockedPayload = part.payload;

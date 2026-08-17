@@ -26,6 +26,7 @@ import type {
   EndOfSpeechPacket,
   LlmDeltaPacket,
   LlmResponseDonePacket,
+  LlmClientMessagePacket,
   TextToSpeechDonePacket,
   TextToSpeechAudioPacket,
   TextToSpeechEndPacket,
@@ -637,6 +638,67 @@ describe("VoiceAgentSession", () => {
         blocked: { userFacingMessage: "I cannot help with that." },
       }),
     ]);
+
+    await closeSession(session);
+  });
+
+  it("routes llm.client_message to agent_client_message and never feeds it to TTS", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const messages: Array<{ turnId: string; payload: unknown }> = [];
+    const ttsText: unknown[] = [];
+    session.on("agent_client_message", (event) => messages.push(event));
+    session.bus.on("tts.text", (pkt) => { ttsText.push(pkt); });
+    await session.start();
+
+    session.bus.push(Route.Main, {
+      kind: "llm.client_message",
+      contextId: "turn-cm",
+      timestampMs: Date.now(),
+      payload: { card: "invoice", amount: "42.00" },
+    } satisfies LlmClientMessagePacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(messages).toEqual([
+      expect.objectContaining({ turnId: "turn-cm", payload: { card: "invoice", amount: "42.00" } }),
+    ]);
+    // Hard requirement: the payload must never reach TTS. `llm.client_message` is a
+    // distinct bus kind from `llm.delta`, so bufferTtsText is never invoked for it —
+    // this asserts that structural guarantee holds, not just that it looks right.
+    expect(ttsText).toEqual([]);
+
+    await closeSession(session);
+  });
+
+  it("drops a client-message delivered for a turn already interrupted by barge-in", async () => {
+    const session = new VoiceAgentSession({ plugins: {} });
+    const messages: Array<{ turnId: string; payload: unknown }> = [];
+    const metrics: string[] = [];
+    session.on("agent_client_message", (event) => messages.push(event));
+    session.bus.on("metric.conversation", (pkt) => {
+      metrics.push((pkt as unknown as { name: string }).name);
+    });
+    await session.start();
+
+    session.bus.push(Route.Critical, {
+      kind: "interrupt.detected",
+      contextId: "turn-cm",
+      timestampMs: Date.now(),
+      source: "vad",
+    } satisfies InterruptionDetectedPacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A client-message that lands for this contextId AFTER the barge-in — the same
+    // race `llm.delta_ignored_after_interrupt` guards against — must deliver nothing.
+    session.bus.push(Route.Main, {
+      kind: "llm.client_message",
+      contextId: "turn-cm",
+      timestampMs: Date.now(),
+      payload: { card: "stale" },
+    } satisfies LlmClientMessagePacket);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(messages).toEqual([]);
+    expect(metrics).toContain("llm.client_message_ignored_after_interrupt");
 
     await closeSession(session);
   });

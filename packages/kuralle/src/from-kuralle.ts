@@ -290,6 +290,11 @@ export async function* streamFromKuralle(
             payload: part,
           };
           return;
+        case "client-message":
+          // A kuralle tool's UI payload (card/link/form) — most likely origin of
+          // this variant per the seam decision. Not terminal: the run keeps going.
+          yield { type: "client-message", payload: part.payload };
+          break;
         case "done":
           yield { type: "finish", reason: "stop", text: acc };
           return;
