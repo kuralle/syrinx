@@ -118,6 +118,9 @@ export class RealtimeBridge implements VoicePlugin {
   private pendingSpeechEndedAtMs: number | null = null;
   private sessionAbort: AbortController | null = null;
   private inflight: AbortController | undefined;
+  /** In-flight delegate turns keyed by the front-model tool id that started them, so a
+   *  provider-side `tool_call_cancelled` can abort the one turn it named. */
+  private readonly delegateControllers = new Map<string, AbortController>();
   private delegateTask: Promise<void> | null = null;
   private playedMs = 0;
   private audioRemainder: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
@@ -257,6 +260,9 @@ export class RealtimeBridge implements VoicePlugin {
       case "speech_stopped":
         this.onSpeechStopped(bus);
         break;
+      case "tool_call_cancelled":
+        this.onToolCallCancelled(ev.toolIds);
+        break;
       case "resumption_handle": {
         // G4: persist-worthy native-resume handle (Gemini). Background route —
         // a durable host stores the latest and passes it back on reconnect.
@@ -295,6 +301,23 @@ export class RealtimeBridge implements VoicePlugin {
       const cause = new Error(`Unexpected tool call "${ev.toolName}" (expected "${this.delegateToolName}")`);
       if (this.opts.debug) console.error("[realtime-bridge]", cause.message);
       this.onError(bus, cause, true);
+    }
+  }
+
+  /**
+   * The front model discarded a pending tool call (e.g. Gemini `toolCallCancellation` on
+   * barge-in) and named its id here. Abort the matching in-flight delegate turn so the
+   * reasoner actually stops rather than merely having its result discarded on return. An id
+   * with no matching controller — unknown, already completed, or a synthesised id the
+   * provider never issued — is ignored: the cancellation and the completion race, and either
+   * order is normal.
+   */
+  private onToolCallCancelled(toolIds: readonly string[]): void {
+    for (const toolId of toolIds) {
+      const controller = this.delegateControllers.get(toolId);
+      if (!controller) continue;
+      this.delegateControllers.delete(toolId);
+      controller.abort();
     }
   }
 
@@ -366,6 +389,7 @@ export class RealtimeBridge implements VoicePlugin {
 
     const controller = new AbortController();
     this.inflight = controller;
+    this.delegateControllers.set(ev.toolId, controller);
     let answer = "";
     let grounded = false;
     let blockedMessage: string | undefined;
@@ -467,6 +491,7 @@ export class RealtimeBridge implements VoicePlugin {
     } finally {
       // Only clear if still ours — a newer delegate may have replaced this.inflight.
       if (this.inflight === controller) this.inflight = undefined;
+      if (this.delegateControllers.get(ev.toolId) === controller) this.delegateControllers.delete(ev.toolId);
     }
 
     if (blockedMessage !== undefined) {

@@ -83,6 +83,10 @@ export type RealtimeEvent =
   | { type: "speech_stopped" }
   | { type: "transcript"; role: "user" | "assistant"; text: string; final: boolean }
   | { type: "tool_call"; toolId: string; toolName: string; args: Record<string, unknown> }
+  /** The provider discarded a pending tool call — e.g. Gemini `toolCallCancellation` on
+   *  barge-in. The host must abort whatever is answering `toolIds` rather than let it run
+   *  to completion for an answer the provider will never accept. */
+  | { type: "tool_call_cancelled"; toolIds: readonly string[] }
   | { type: "response_started" }
   | { type: "response_done"; usage?: RealtimeUsage }
   // G4: a native-resume provider issued a fresh resumption handle — persist the

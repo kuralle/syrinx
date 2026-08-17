@@ -1446,6 +1446,100 @@ describe("RealtimeBridge", () => {
     await session.close();
   });
 
+  it("aborts the reasoner's AbortSignal when the front model reports tool_call_cancelled, and never answers it", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    let delegateSignal: AbortSignal | undefined;
+    let reasonerCompleted = false;
+    const reasoner: Reasoner = {
+      stream: ({ signal }) => {
+        delegateSignal = signal;
+        return (async function* () {
+          // A slow reasoner turn — the cancellation must abort it, not wait it out.
+          await new Promise((resolve) => setTimeout(resolve, 60_000));
+          reasonerCompleted = true;
+          yield { type: "finish", reason: "stop", text: "never sent — call was cancelled" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const session = new VoiceAgentSession({
+      plugins: { realtime: {} },
+      endpointingOwner: "timer",
+      minInterruptionMs: 0,
+    });
+    session.registerPlugin("realtime", bridge);
+
+    const turnChanges: TurnChangePacket[] = [];
+    session.bus.on("turn.change", (pkt) => { turnChanges.push(pkt as TurnChangePacket); });
+
+    await session.start();
+
+    adapter.emit({ type: "response_started" });
+    await waitForCondition(() => turnChanges.length >= 1);
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_cancelled_by_gemini",
+      toolName: "consult_knowledge",
+      args: { query: "late add policy" },
+    });
+
+    await waitForCondition(() => delegateSignal !== undefined);
+    expect(delegateSignal!.aborted).toBe(false);
+
+    adapter.emit({ type: "tool_call_cancelled", toolIds: ["call_cancelled_by_gemini"] });
+
+    await waitForCondition(() => delegateSignal!.aborted);
+    expect(reasonerCompleted).toBe(false);
+    expect(adapter.injectedToolResults).toEqual([]);
+
+    await session.close();
+  });
+
+  it("ignores a tool_call_cancelled naming an id that is not the in-flight delegate's", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    let delegateSignal: AbortSignal | undefined;
+    const reasoner: Reasoner = {
+      stream: ({ signal }) => {
+        delegateSignal = signal;
+        return (async function* () {
+          await new Promise((resolve) => setTimeout(resolve, 60_000));
+          yield { type: "finish", reason: "stop", text: "unrelated cancellation must not stop this" };
+        })();
+      },
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner);
+    const session = new VoiceAgentSession({
+      plugins: { realtime: {} },
+      endpointingOwner: "timer",
+      minInterruptionMs: 0,
+    });
+    session.registerPlugin("realtime", bridge);
+
+    const turnChanges: TurnChangePacket[] = [];
+    session.bus.on("turn.change", (pkt) => { turnChanges.push(pkt as TurnChangePacket); });
+
+    await session.start();
+
+    adapter.emit({ type: "response_started" });
+    await waitForCondition(() => turnChanges.length >= 1);
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_still_running",
+      toolName: "consult_knowledge",
+      args: { query: "late add policy" },
+    });
+    await waitForCondition(() => delegateSignal !== undefined);
+
+    adapter.emit({ type: "tool_call_cancelled", toolIds: ["some_other_unrelated_call"] });
+
+    // No signal to wait on for an absence — give the (already-queued) event a real tick to
+    // land, matching the pump's actual scheduling, then assert the in-flight turn is untouched.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(delegateSignal!.aborted).toBe(false);
+
+    await session.close();
+  });
+
   // ── Half-cascade C1: textOnly routing ────────────────────────────────────
   // In text-only mode the bridge streams assistant transcript into the cascade
   // llm.delta → segmenter → tts.text path. The TTS plugin owns tts.end.

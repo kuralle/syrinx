@@ -116,6 +116,13 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   private openRejecter: ((err: Error) => void) | null = null;
   private activeResponse = false;
   private readonly toolNames = new Map<string, { name: string; providerId: string | undefined }>();
+  /**
+   * Ids Gemini has told us it discarded (`toolCallCancellation`) — tracked so a later
+   * `injectToolResult` for one is a silent no-op rather than the `unknown tool id` error
+   * path (that error reports a fault; a cancellation is not one). Bounded like `toolNames`
+   * (iu-ledger pattern) so an id whose delegate turn never answers back can't leak.
+   */
+  private readonly cancelledToolIds = new Set<string>();
   /** Bumped on every (re)connect; callbacks captured from a retired session no-op once stale. */
   private generation = 0;
   private closed = false;
@@ -337,6 +344,11 @@ class GeminiLiveAdapter implements RealtimeAdapter {
   injectToolResult(toolId: string, text: string): void {
     const entry = this.toolNames.get(toolId);
     if (!entry) {
+      // The id may be missing because Gemini already cancelled it (toolCallCancellation) and
+      // the reasoner turn raced the cancellation, answering anyway. That is not a fault — the
+      // cancellation already told us the server discarded the call — so drop the late answer
+      // silently instead of reporting an error for a call nothing will ever accept.
+      if (this.cancelledToolIds.delete(toolId)) return;
       this.stream.push({
         type: "error",
         cause: new Error(`unknown tool id "${toolId}" for Gemini tool response`),
@@ -367,6 +379,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     this.session?.close();
     this.session = null;
     this.toolNames.clear();
+    this.cancelledToolIds.clear();
     this.stream.close();
   }
 
@@ -379,6 +392,14 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       if (oldest !== undefined) this.toolNames.delete(oldest);
     }
     this.toolNames.set(toolId, entry);
+  }
+
+  private markCancelled(toolId: string): void {
+    if (!this.cancelledToolIds.has(toolId) && this.cancelledToolIds.size >= MAX_TOOL_NAMES) {
+      const oldest = this.cancelledToolIds.values().next().value;
+      if (oldest !== undefined) this.cancelledToolIds.delete(oldest);
+    }
+    this.cancelledToolIds.add(toolId);
   }
 
   private requireSession(): Session {
@@ -462,6 +483,7 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     // The new session has no memory of a tool call the retired one issued — an id carried
     // across would fail its lookup on a response the new session never asked for.
     this.toolNames.clear();
+    this.cancelledToolIds.clear();
     this.goAwayDeadlineAtMs = undefined;
     this.reestablishing = false;
     // Reuse the OpenAI-compatible adapter's reconnect-notification shape (recoverable error)
@@ -498,6 +520,22 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     if (msg.goAway) {
       this.armGoAwayDeadline(msg.goAway.timeLeft);
       return;
+    }
+
+    // Gemini discards a pending tool call on barge-in and names it here — release trigger 2
+    // of toolNames' three release triggers (terminal tool response, cancellation, session
+    // close; Decision: toolNames entries release on the terminal tool response, never on
+    // turnComplete, 2026-08-16). NOT turnComplete: turnComplete fires while a NON_BLOCKING
+    // call is still outstanding on both tested models, and a late answer sent after it is
+    // still honoured by the server — evicting at turnComplete would break an answer the
+    // server would have accepted.
+    const cancelledIds = msg.toolCallCancellation?.ids;
+    if (cancelledIds?.length) {
+      for (const id of cancelledIds) {
+        this.toolNames.delete(id);
+        this.markCancelled(id);
+      }
+      this.stream.push({ type: "tool_call_cancelled", toolIds: cancelledIds });
     }
 
     if (msg.setupComplete) {

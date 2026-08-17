@@ -657,6 +657,210 @@ describe("fromGeminiLive", () => {
     });
   });
 
+  describe("toolCallCancellation", () => {
+    it("pushes tool_call_cancelled and drops the id from toolNames so a later injectToolResult is a silent no-op", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_cancel_me");
+
+      inject({ toolCallCancellation: { ids: ["call_cancel_me"] } });
+
+      await vi.waitFor(() =>
+        expect(events.some((e) => e.type === "tool_call_cancelled")).toBe(true),
+      );
+      expect(events).toContainEqual({ type: "tool_call_cancelled", toolIds: ["call_cancel_me"] });
+
+      sendToolResponse.mockClear();
+      // Race: the reasoner turn was already running and answers after the cancellation arrived.
+      adapter.injectToolResult("call_cancel_me", "too late — the server already discarded this call");
+
+      // Prove absence, not just non-throw: a canary round-trip that only succeeds once the
+      // event queue has drained everything injectToolResult above could have pushed.
+      injectToolCall("call_after_cancel");
+      adapter.injectToolResult("call_after_cancel", "still works");
+      await vi.waitFor(() => expect(sendToolResponse).toHaveBeenCalledTimes(1));
+
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "call_after_cancel",
+          name: "consult_knowledge",
+          response: { result: "still works" },
+        }],
+      });
+      expect(events.some((e) => e.type === "error")).toBe(false);
+
+      await adapter.close();
+    });
+
+    it("ignores a cancellation naming an unknown or already-answered id, silently", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      // Case 1: an id nothing ever issued.
+      inject({ toolCallCancellation: { ids: ["ghost_id_never_issued"] } });
+
+      // Case 2: an id that already completed via the terminal-response release trigger.
+      injectToolCall("call_already_done");
+      adapter.injectToolResult("call_already_done", "resolved");
+      sendToolResponse.mockClear();
+      inject({ toolCallCancellation: { ids: ["call_already_done"] } });
+
+      // Canary: prove the queue is clean by round-tripping a fresh call.
+      injectToolCall("call_canary");
+      adapter.injectToolResult("call_canary", "fine");
+      await vi.waitFor(() => expect(sendToolResponse).toHaveBeenCalledTimes(1));
+
+      // Both cancellations are observability events on the stream, so wait for the consumer's
+      // async queue to actually drain them (each hop through the shared FIFO queue is its own
+      // microtask) before asserting on the fully-drained array.
+      await vi.waitFor(() =>
+        expect(events.filter((e) => e.type === "tool_call_cancelled").length).toBe(2),
+      );
+      expect(events.filter((e) => e.type === "error")).toEqual([]);
+      expect(events.filter((e) => e.type === "tool_call_cancelled")).toEqual([
+        { type: "tool_call_cancelled", toolIds: ["ghost_id_never_issued"] },
+        { type: "tool_call_cancelled", toolIds: ["call_already_done"] },
+      ]);
+
+      await adapter.close();
+    });
+
+    it("never matches a synthesised (non-provider) tool id — cancellation only ever names ids Gemini itself issued", async () => {
+      const uuidSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000099");
+
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+
+      // Gemini supplies an id for one call (providerId == our key) and omits it for the other,
+      // which the adapter synthesises locally. Gemini can only ever cancel ids it issued, so a
+      // cancellation naming only the provider id must not disturb the co-existing synthesised
+      // entry — there is no code path by which the synthesised id could appear in `ids`.
+      inject({
+        toolCall: {
+          functionCalls: [
+            { id: "call_provider_issued", name: "consult_knowledge", args: { query: "a" } },
+            { name: "consult_knowledge", args: { query: "b" } },
+          ],
+        },
+      });
+
+      inject({ toolCallCancellation: { ids: ["call_provider_issued"] } });
+
+      sendToolResponse.mockClear();
+      adapter.injectToolResult("call_provider_issued", "too late");
+      expect(sendToolResponse).not.toHaveBeenCalled();
+
+      const synthesizedId = "00000000-0000-4000-8000-000000000099";
+      adapter.injectToolResult(synthesizedId, "still valid");
+      expect(sendToolResponse).toHaveBeenCalledTimes(1);
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          name: "consult_knowledge",
+          response: { result: "still valid" },
+        }],
+      });
+
+      uuidSpy.mockRestore();
+      await adapter.close();
+    });
+
+    it("bounds cancelledToolIds at the same cap as toolNames, so an id whose delegate never answers can't leak forever", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      // Collect from the start rather than opening a fresh iterator later. The loop below
+      // pushes 257 tool_call_cancelled events, and a consumer attached afterwards has to
+      // drain all of them before it sees the assertion's error — which is timing-dependent
+      // and times out under a loaded full-suite run even though it passes in isolation.
+      const events: RealtimeEvent[] = [];
+      void (async () => {
+        for await (const event of adapter.events) events.push(event);
+      })();
+
+      await adapter.open(new AbortController().signal);
+
+      // 257 cancellations for ids nobody ever answers — one past the cap. The oldest
+      // (orphan_0) must be evicted from cancelledToolIds so it stops being tracked, while the
+      // newest stays. This proves the cap evicts the correct (oldest) entry rather than
+      // growing unbounded.
+      for (let i = 0; i < 257; i++) {
+        inject({ toolCallCancellation: { ids: [`orphan_${i}`] } });
+      }
+
+      // orphan_0 was evicted, so it is no longer known to be cancelled and its late answer
+      // takes the ordinary unknown-tool-id error path.
+      adapter.injectToolResult("orphan_0", "too late — evicted from cancelledToolIds");
+      await vi.waitFor(() =>
+        expect(
+          events.some(
+            (e) =>
+              e.type === "error" &&
+              e.cause.message === 'unknown tool id "orphan_0" for Gemini tool response',
+          ),
+        ).toBe(true),
+      );
+
+      // orphan_256 is still tracked as cancelled, so its late answer stays a silent no-op —
+      // and a genuine call after the cap still answers normally.
+      sendToolResponse.mockClear();
+      const errorsBefore = events.filter((e) => e.type === "error").length;
+      adapter.injectToolResult("orphan_256", "too late — still tracked");
+      injectToolCall("call_after_cap_canary");
+      adapter.injectToolResult("call_after_cap_canary", "fine");
+      await vi.waitFor(() => expect(sendToolResponse).toHaveBeenCalledTimes(1));
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "call_after_cap_canary",
+          name: "consult_knowledge",
+          response: { result: "fine" },
+        }],
+      });
+      expect(events.filter((e) => e.type === "error")).toHaveLength(errorsBefore);
+
+      await adapter.close();
+    });
+  });
+
   describe("goAway reconnect", () => {
     it("reconnects with the latest resumption handle when idle, and it is observable", async () => {
       const adapter = fromGeminiLive({ apiKey: "test-key" });
