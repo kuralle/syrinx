@@ -530,7 +530,7 @@ describe("fromGeminiLive", () => {
   });
 
   describe("toolNames map lifetime", () => {
-    it("drops each entry after its tool result is sent", async () => {
+    it("a terminal response (willContinue omitted or false) drops the entry — a second response for the same id then errors", async () => {
       const adapter = fromGeminiLive({
         apiKey: "test-key",
         tools: [{
@@ -563,6 +563,161 @@ describe("fromGeminiLive", () => {
           recoverable: false,
         });
       }
+
+      await adapter.close();
+    });
+
+    it("willContinue: true keeps the entry resolvable — a generator sequence sends several responses for one id", async () => {
+      // Red gate for this task: at HEAD before this change, the unconditional delete after the
+      // first send makes the second `injectToolResult` call below take the unknown-tool-id
+      // error path instead of reaching `sendToolResponse` a second time.
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_generator");
+
+      adapter.injectToolResult("call_generator", "still looking", { willContinue: true });
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "call_generator",
+          name: "consult_knowledge",
+          willContinue: true,
+          response: { result: "still looking" },
+        }],
+      });
+      sendToolResponse.mockClear();
+
+      // The id must still resolve — the intermediate willContinue:true response did not evict it.
+      adapter.injectToolResult("call_generator", "final answer");
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "call_generator",
+          name: "consult_knowledge",
+          response: { result: "final answer" },
+        }],
+      });
+      sendToolResponse.mockClear();
+
+      // The terminal response above released the entry — a third response now errors.
+      const errorTask = nextErrorEvent(adapter.events);
+      adapter.injectToolResult("call_generator", "too late");
+      expect(await errorTask).toMatchObject({
+        type: "error",
+        cause: new Error('unknown tool id "call_generator" for Gemini tool response'),
+      });
+
+      await adapter.close();
+    });
+
+    it("a generator sequence spanning a turnComplete still resolves its later responses — the cross-turn case an intra-sequence test cannot discriminate", async () => {
+      // This is the deliberate discriminator: turnComplete looks like a safe release point
+      // because it never fires *between* two responses in a single injectToolResult sequence
+      // (see the previous test) — but a NON_BLOCKING call can span a turn boundary, and the
+      // server still honours an answer sent after turnComplete. A release-on-turnComplete
+      // implementation would pass the previous test and fail only this one.
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_cross_turn");
+
+      adapter.injectToolResult("call_cross_turn", "still looking", { willContinue: true });
+      sendToolResponse.mockClear();
+
+      // The turn that issued the call completes while the NON_BLOCKING call is still open.
+      inject({ serverContent: { turnComplete: true } });
+
+      // The id must still resolve after the turn boundary.
+      adapter.injectToolResult("call_cross_turn", "final answer, after turnComplete");
+      expect(sendToolResponse).toHaveBeenLastCalledWith({
+        functionResponses: [{
+          id: "call_cross_turn",
+          name: "consult_knowledge",
+          response: { result: "final answer, after turnComplete" },
+        }],
+      });
+
+      await adapter.close();
+    });
+
+    it("willContinue omitted produces a frame with no willContinue key anywhere", async () => {
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_no_willcontinue");
+      adapter.injectToolResult("call_no_willcontinue", "answer");
+
+      const frame = sendToolResponse.mock.calls[0]![0] as {
+        functionResponses: Array<Record<string, unknown>>;
+      };
+      expect("willContinue" in frame.functionResponses[0]!).toBe(false);
+      expect(JSON.stringify(frame)).not.toMatch(/willContinue/);
+
+      await adapter.close();
+    });
+
+    it("willContinue: false plus scheduling: SILENT finishes the call without triggering generation — both fields at the top level", async () => {
+      // Per @google/genai@2.8.0: an empty response with willContinue:false finishes the call but
+      // may still trigger generation; scheduling:SILENT additionally suppresses that.
+      const adapter = fromGeminiLive({
+        apiKey: "test-key",
+        tools: [{
+          name: "consult_knowledge",
+          description: "Answer knowledge questions.",
+          parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+        }],
+      });
+
+      await adapter.open(new AbortController().signal);
+      injectToolCall("call_silent_finish");
+      adapter.injectToolResult("call_silent_finish", "", { willContinue: false, scheduling: "SILENT" });
+
+      expect(sendToolResponse).toHaveBeenCalledWith({
+        functionResponses: [{
+          id: "call_silent_finish",
+          name: "consult_knowledge",
+          scheduling: "SILENT",
+          willContinue: false,
+          response: { result: "" },
+        }],
+      });
+      const frame = sendToolResponse.mock.calls[0]![0] as {
+        functionResponses: Array<Record<string, unknown>>;
+      };
+      const fr = frame.functionResponses[0]!;
+      expect(fr["scheduling"]).toBe("SILENT");
+      expect(fr["willContinue"]).toBe(false);
+      const response = fr["response"] as Record<string, unknown>;
+      expect("scheduling" in response).toBe(false);
+      expect("willContinue" in response).toBe(false);
+
+      // willContinue:false is terminal — the entry releases, and a further response errors.
+      const errorTask = nextErrorEvent(adapter.events);
+      adapter.injectToolResult("call_silent_finish", "too late");
+      expect(await errorTask).toMatchObject({
+        type: "error",
+        cause: new Error('unknown tool id "call_silent_finish" for Gemini tool response'),
+      });
 
       await adapter.close();
     });

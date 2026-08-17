@@ -47,7 +47,16 @@ export interface RealtimeAdapter {
    */
   requestResponse?(): void;
   cancelResponse(audioEndMs: number): void;
-  injectToolResult(toolId: string, text: string): void;
+  /**
+   * `opts` is Gemini Live-specific (`scheduling`, `willContinue` on a NON_BLOCKING
+   * `FunctionResponse`) and optional so every other adapter's two-parameter implementation
+   * still satisfies this signature.
+   */
+  injectToolResult(
+    toolId: string,
+    text: string,
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT"; willContinue?: boolean },
+  ): void;
   /** Close the provider socket and end the event stream. */
   close(): Promise<void>;
   readonly events: AsyncIterable<RealtimeEvent>;

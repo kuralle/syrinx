@@ -133,6 +133,46 @@ that support explicit language selection. See Google's [API version guide](https
 for version semantics; `apiVersion` is applied at SDK client level because Live does not support
 request-level HTTP options.
 
+### Gemini Live NON_BLOCKING tool calls and generator responses
+
+A tool declared with `behavior: "NON_BLOCKING"` on `RealtimeToolDef` runs without holding the
+turn — the front model keeps listening and speaking while it runs, instead of going silent for
+the duration of the call:
+
+```ts
+const adapter = fromGeminiLive({
+  apiKey,
+  tools: [{
+    name: "consult_knowledge",
+    description: "Answer knowledge questions.",
+    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    behavior: "NON_BLOCKING",
+  }],
+});
+```
+
+`injectToolResult(toolId, text, opts)` accepts `opts.scheduling` (`"SILENT" | "WHEN_IDLE" |
+"INTERRUPT"`, when the late result re-enters the turn) and `opts.willContinue` (send several
+responses for the same `toolId` as a generator: `willContinue: true` for each intermediate
+"still looking" response, then a terminal one — `willContinue` absent or `false` — to finish
+the call). Both options are per-adapter — declared on `RealtimeAdapter.injectToolResult` itself
+so every implementation's signature stays compatible, but only meaningful when
+`caps.supportsToolBehavior` is true (Gemini Live today; Vertex does not support `willContinue`).
+
+Per `@google/genai@2.8.0`, an empty `response` with `willContinue: false` finishes the call but
+may still trigger model generation. To finish the call without triggering generation, also pass
+`scheduling: "SILENT"`:
+
+```ts
+adapter.injectToolResult(toolId, "", { willContinue: false, scheduling: "SILENT" });
+```
+
+A generator sequence is not required to complete before the front model's own turn does —
+`turnComplete` can fire while a call is still open, and the server still honours a later
+response for that `toolId` sent after it. The map entry that resolves a tool id therefore
+releases only on that call's terminal response (or on `toolCallCancellation` / adapter
+`close()`), never on `turnComplete`.
+
 ## The Responder-Thinker primitive (the delegate seam)
 
 The bi-model shape has a name: **Responder-Thinker** — a fast realtime **responder** on the audio

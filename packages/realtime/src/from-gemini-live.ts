@@ -424,10 +424,18 @@ class GeminiLiveAdapter implements RealtimeAdapter {
     this.requireSession().sendRealtimeInput({ activityEnd: {} });
   }
 
+  /**
+   * A NON_BLOCKING tool call can answer progressively: send `willContinue: true` for each
+   * intermediate ("still looking") response, then a terminal one (`willContinue` absent or
+   * `false`) to finish the call — the same `toolId` answered more than once. Per
+   * `@google/genai@2.8.0`, an empty `response` with `willContinue: false` finishes the call
+   * but may still trigger model generation; to finish without generating, also pass
+   * `scheduling: "SILENT"`.
+   */
   injectToolResult(
     toolId: string,
     text: string,
-    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT" },
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT"; willContinue?: boolean },
   ): void {
     const entry = this.toolNames.get(toolId);
     if (!entry) {
@@ -447,17 +455,25 @@ class GeminiLiveAdapter implements RealtimeAdapter {
       functionResponses: [{
         ...(entry.providerId !== undefined ? { id: entry.providerId } : {}),
         name: entry.name,
-        // Top level, a sibling of `response` — NOT nested inside it. `FunctionResponse` in
-        // @google/genai@2.8.0 declares `scheduling` beside `response`, and a live differential
-        // (2026-08-16) confirmed the nested position is inert: the model ignored a nested
-        // `SILENT` and spoke anyway, while a top-level one correctly silenced it.
+        // Top level, siblings of `response` — NOT nested inside it. `FunctionResponse` in
+        // @google/genai@2.8.0 declares `scheduling` and `willContinue` beside `response`, and a
+        // live differential (2026-08-16) confirmed the nested position is inert: the model
+        // ignored a nested `SILENT` and spoke anyway, while a top-level one correctly silenced it.
         ...(opts?.scheduling !== undefined
           ? { scheduling: this.mapToolScheduling(opts.scheduling) }
           : {}),
+        ...(opts?.willContinue !== undefined ? { willContinue: opts.willContinue } : {}),
         response: { result: text },
       }],
     });
-    this.toolNames.delete(toolId);
+    // Release ONLY on a terminal response (willContinue absent or false). NOT on turnComplete:
+    // turnComplete fires while a NON_BLOCKING call is still outstanding on both tested models
+    // (gemini-3.1-flash-live-preview, gemini-2.5-flash-native-audio-latest), the outstanding
+    // call is not cancelled by the new turn, and answering it after turnComplete is still
+    // honoured by the server — evicting there would fail a late answer the server would have
+    // accepted. Decision: toolNames entries release on the terminal tool response, never on
+    // turnComplete, 2026-08-16 (live measurement).
+    if (opts?.willContinue !== true) this.toolNames.delete(toolId);
   }
 
   async close(): Promise<void> {
@@ -787,17 +803,14 @@ function toRealtimeUsage(usage: UsageMetadata): RealtimeUsage | undefined {
  * `startUserActivity` is Gemini-specific (manual-activity-detection mode) and not part of the
  * shared `RealtimeAdapter` interface — wiring a host-side speech-start signal to it is future
  * work (see task non-goals); this widened return type only makes the method reachable and
- * testable now.
+ * testable now. `injectToolResult`'s `scheduling`/`willContinue` options live on the shared
+ * interface itself (every other adapter's fewer-parameter implementation still satisfies it),
+ * so they need no widening here.
  */
 export function fromGeminiLive(
   opts: GeminiLiveOptions,
 ): RealtimeAdapter & {
   startUserActivity(): void;
-  injectToolResult(
-    toolId: string,
-    text: string,
-    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT" },
-  ): void;
 } {
   return new GeminiLiveAdapter(opts);
 }
