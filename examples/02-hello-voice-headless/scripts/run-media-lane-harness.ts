@@ -50,6 +50,8 @@ const FRAME_SAMPLES = 320;
 const TRAILING_SILENCE_MS = 1400;
 const POST_TTS_DRAIN_MS = 500;
 const TURN_TIMEOUT_MS = 120_000;
+/** How often the client reports playout position when --emit-playout-progress is set. */
+const PLAYOUT_REPORT_EVERY_FRAMES = 5;
 
 const SHORT_FIXTURE = {
   id: "review-late-add",
@@ -125,7 +127,7 @@ async function main(): Promise<void> {
   const runs: HarnessRunCapture[] = [];
   for (let index = 0; index < args.repeats; index += 1) {
     console.log(`starting repeat ${String(index + 1)}/${String(args.repeats)}`);
-    const capture = await runSingleHarnessTurn(wsUrl, index, args.expectedAudioDurationMs);
+    const capture = await runSingleHarnessTurn(wsUrl, index, args.expectedAudioDurationMs, args.emitPlayoutProgress);
     runs.push(capture);
     const validityLabel = capture.runValidity.state === "valid"
       ? "valid"
@@ -217,6 +219,7 @@ interface ParsedArgs {
   readonly delayMs: number;
   readonly delayServerUrl: string | undefined;
   readonly expectedAudioDurationMs: number;
+  readonly emitPlayoutProgress: boolean;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -225,6 +228,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let delayMs = Number.parseInt(process.env["SYRINX_MEDIA_LANE_DELAY_MS"] ?? "2000", 10);
   let delayServerUrl = process.env["SYRINX_MEDIA_LANE_DELAY_URL"]?.trim();
   let expectedAudioDurationMs = Number.parseInt(process.env["SYRINX_MEDIA_LANE_EXPECTED_AUDIO_MS"] ?? "0", 10);
+  let emitPlayoutProgress = process.env["SYRINX_MEDIA_LANE_EMIT_PLAYOUT"] === "1";
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -232,6 +236,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     if (arg === "--repeats") repeats = Number.parseInt(argv[index + 1] ?? "1", 10);
     if (arg === "--delay-ms") delayMs = Number.parseInt(argv[index + 1] ?? "2000", 10);
     if (arg === "--delay-url") delayServerUrl = argv[index + 1]?.trim();
+    if (arg === "--emit-playout-progress") emitPlayoutProgress = true;
     if (arg === "--expected-audio-ms") {
       expectedAudioDurationMs = Number.parseInt(argv[index + 1] ?? "0", 10);
     }
@@ -240,13 +245,14 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   if (!Number.isFinite(repeats) || repeats < 1) repeats = 1;
   if (!Number.isFinite(delayMs) || delayMs < 0) delayMs = 2000;
 
-  return { wsUrl, repeats, delayMs, delayServerUrl, expectedAudioDurationMs };
+  return { wsUrl, repeats, delayMs, delayServerUrl, expectedAudioDurationMs, emitPlayoutProgress };
 }
 
 async function runSingleHarnessTurn(
   wsUrl: string,
   runIndex: number,
   expectedAudioDurationMs: number,
+  emitPlayoutProgress = false,
 ): Promise<HarnessRunCapture> {
   const socket = await openSocket(wsUrl);
   const turnId = `media-lane-${String(runIndex + 1).padStart(2, "0")}`;
@@ -265,6 +271,7 @@ async function runSingleHarnessTurn(
   let agentEndedAtMs = 0;
   let sttFinalAtMs = 0;
   let firstAudioAtMs = 0;
+  let playedOutMs = 0;
 
   const onMessage = (data: RawData, isBinary: boolean): void => {
     if (process.env["SYRINX_MEDIA_LANE_TRACE"] === "1") {
@@ -287,6 +294,23 @@ async function runSingleHarnessTurn(
       const durationMs = accumulateFrameDuration(wire, assistantEncoding, opusDecoder);
       frames.push({ arrivedAtMs, durationMs });
       if (firstAudioAtMs === 0) firstAudioAtMs = arrivedAtMs;
+      // On the EDGE transport the client is the playout clock: the server streams
+      // envelopes and the browser schedules them, so `tts.playout_progress` exists on
+      // the bus only because a client reports its position (edge.ts maps the
+      // `playout_progress` message onto a Route.Main packet). The Node WS host paces
+      // server-side and emits it itself, so this is opt-in — sending it there would
+      // add packets the real Node client never sends and change the baseline.
+      if (emitPlayoutProgress) {
+        playedOutMs += durationMs;
+        if (frames.length % PLAYOUT_REPORT_EVERY_FRAMES === 0) {
+          socket.send(JSON.stringify({
+            type: "playout_progress",
+            contextId: turnId,
+            playedOutMs,
+            complete: false,
+          }));
+        }
+      }
       return;
     }
 
