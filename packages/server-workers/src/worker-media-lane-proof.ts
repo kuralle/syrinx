@@ -153,6 +153,19 @@ export function armFromSessionId(sessionId: string): Arm {
 }
 
 /**
+ * Park mode ALSO comes from the sessionId, so `main` and `concurrent` can be interleaved
+ * inside one batch instead of run as consecutive blocks. Running them as separate batches
+ * is what voided three earlier diagnosis attempts: against a fault whose incidence varies
+ * with utterance length, a clean batch cannot be told from a working fix.
+ * Env stays the default for any session that does not name a mode.
+ */
+export function parkModeFromSessionId(sessionId: string, fallback: "main" | "concurrent"): "main" | "concurrent" {
+  if (sessionId.includes("-concurrent-")) return "concurrent";
+  if (sessionId.includes("-main-")) return "main";
+  return fallback;
+}
+
+/**
  * Model the pre-media-lane world by demoting Route.Media pushes to Route.Main, so
  * `tts.audio` shares the one queue with application traffic as it did before the lane
  * existed. Harness-only: no production code path is modified, and the "after" arm never
@@ -283,7 +296,10 @@ function proofPipeline(env: Env): typeof liveCascadedPipeline {
           // The control arm is the before arm with the treatment removed.
           arm === "control" ? 0 : Number.isFinite(delayMs) && delayMs > 0 ? delayMs : DEFAULT_DELAY_MS,
           Number.isFinite(blockOn) && blockOn > 0 ? blockOn : DEFAULT_BLOCK_ON,
-          env.MEDIA_LANE_PARK_MODE?.trim() === "concurrent" ? "concurrent" : "main",
+          parkModeFromSessionId(
+            ctx.sessionId,
+            env.MEDIA_LANE_PARK_MODE?.trim() === "concurrent" ? "concurrent" : "main",
+          ),
           resolveStorageProbe(env.MEDIA_LANE_STORAGE_PROBE),
         ),
       };
