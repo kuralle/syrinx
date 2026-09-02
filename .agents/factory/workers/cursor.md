@@ -28,6 +28,13 @@ another model, dispatch the worker built for it rather than re-pointing Cursor:
 
 Routing lives in [../routing.md](../routing.md).
 
+**Usage-limit exits look like success.** Observed 2026-09-03: the CLI exited 0 within
+seconds having written one line to the log — `ActionRequiredError: Increase limits for
+faster responses You're out of usage. Switch to Auto…` — and no result file. Treat a
+`worker-<task>.log` under ~200 bytes as this case, fall through to the next worker in
+[../routing.md](../routing.md), and do not re-dispatch to Cursor until the limit resets.
+
+
 Dispatch rule: run `probe` first — if it fails, this worker does not exist on
 this machine; pick another file in this directory. Then substitute the
 placeholders — `{prompt_file}` with the brief path, `{repo_path}` with the

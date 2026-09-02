@@ -1120,6 +1120,50 @@ describe("withVoice(Agent)", () => {
     expect(order).toEqual(["delegate_result", "onTurn:true"]);
   });
 
+  it("keeps consulted: true when the turn commits before delegate_result arrives (NON_BLOCKING)", async () => {
+    // A NON_BLOCKING tool call (42da625, Gemini Live) lets the front keep talking and commit
+    // the turn WITHOUT waiting for the reasoner's answer — the inverse of the ordering the test
+    // above relies on. delegate_result arrives strictly after this turn's eos.turn_complete.
+    const front = new FakeFront();
+    const turns: TurnContext[] = [];
+    const results: DelegateResultContext[] = [];
+    let releaseReasoner: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { releaseReasoner = resolve; });
+    const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
+      asBase(FakeAgentBase),
+      {
+        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        reasoner: () => ({
+          stream: async function* () {
+            await gate;
+            yield { type: "finish", reason: "stop", text: "5000 rupees." } as const;
+          },
+        }),
+        onDelegateResult: (c) => { results.push(c); },
+        onTurn: (c) => { turns.push(c); },
+      },
+    );
+    const agent = new VoiceAgent({});
+    const conn = fakeConnection();
+
+    agent.onConnect(conn, ctx());
+    await vi.waitFor(() => expect(jsonFrames(conn).some((f) => f["type"] === "ready")).toBe(true));
+
+    front.emit({ type: "response_started" });
+    front.emit({ type: "tool_call", toolId: "t1", toolName: "consult_knowledge", args: { query: "fees" } });
+    front.emit({ type: "transcript", role: "user", text: "What are the fees?", final: true });
+    front.emit({ type: "transcript", role: "assistant", text: "One moment.", final: true });
+    front.emit({ type: "response_done" });
+
+    await vi.waitFor(() => expect(turns).toHaveLength(1));
+    // The turn committed before the reasoner resolved — the precondition for the hazard.
+    expect(results).toHaveLength(0);
+    expect(turns[0]).toMatchObject({ consulted: true });
+
+    releaseReasoner();
+    await vi.waitFor(() => expect(results).toHaveLength(1));
+  });
+
   it("onTurn fires when durableHistory: false", async () => {
     const front = new FakeFront();
     const turns: TurnContext[] = [];

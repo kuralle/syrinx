@@ -1,7 +1,7 @@
 ---
 type: worker
 probe: command -v grok
-command: grok --prompt-file {prompt_file} --model grok-4.5 --always-approve --cwd {repo_path} --output-format plain < /dev/null
+command: grok --prompt-file {prompt_file} --model grok-4.6 --always-approve --cwd {repo_path} --output-format plain < /dev/null
 ---
 
 # grok
@@ -9,14 +9,14 @@ command: grok --prompt-file {prompt_file} --model grok-4.5 --always-approve --cw
 Fast implementation worker. Which worker is the default IC is routing data,
 not a worker-file fact — see [../routing.md](../routing.md). **`< /dev/null` is mandatory** on
 background fires — otherwise grok blocks on stdin with no output. Model ids
-change between releases — run `grok models` and pin what is actually installed; a stale id fails the
+change between releases (2026-09-03: `grok-4.5` returned "unknown model id"; `grok models` listed only `grok-4.6`, now pinned) — run `grok models` and pin what is actually installed; a stale id fails the
 dispatch immediately with "unknown model id". Never pass `--sandbox` — omitting it grants full IC
 access; `--sandbox` is opt-in to restrict, only for untrusted third-party
 code.
 
 **Free-tier accounts hit a usage limit.** When they do, grok exits 0 having
 written nothing — the run reads as a clean success unless you check for the
-result file. Observed twice. This is the case the result-contract rule exists
+result file. Observed twice; a third time on 2026-09-03 it printed "You’ve reached your free Grok Build usage limit" and exited 0 mid-task with no edits. This is the case the result-contract rule exists
 for: the file is the completion signal, not the exit code.
 
 Dispatch rule: run `probe` first — if it fails, this worker does not exist on

@@ -228,7 +228,7 @@ function isKuralleRuntime(value: unknown): value is KuralleRuntimeLike {
  *  (the MAX_TOOL_NAMES pattern), so interrupted turns cannot grow the map without bound. */
 const MAX_PENDING_ASSISTANT = 64;
 
-/** Turn ids recorded from `delegate_result`, awaiting the turn's commit. Same cap-plus-
+/** Turn ids recorded from `agent_tool_call`, awaiting the turn's commit. Same cap-plus-
  *  oldest-first shape as MAX_PENDING_ASSISTANT, applied to the onTurn correlation set. */
 const MAX_CONSULTED_TURNS = 64;
 
@@ -249,7 +249,9 @@ export interface TurnContext {
   readonly turnId: string;
   readonly userText?: string;
   readonly assistantText?: string;
-  /** True when a delegate call occurred in this turn. */
+  /** True when the front issued a delegate call in this turn — recorded when the call is
+   *  made, not when it resolves, so a NON_BLOCKING tool call whose result outlives the turn's
+   *  commit still reports true. */
   readonly consulted: boolean;
   readonly ts: number;
 }
@@ -292,12 +294,15 @@ export function observeRealtimeTurns(
 
 /**
  * Correlates `onTurn`'s `consulted` flag: `record(turnId)` on the session's
- * `delegate_result`, `consume(turnId)` when that turn commits — reporting (and
- * clearing) whether it was consulted. Bounded like `pendingAssistant` above (oldest
- * evicted at cap), because a turn that never commits (interrupted/abandoned) would
- * otherwise leave its id in the set for the life of the Durable Object. Extracted
- * (rather than inlined in the mixin) so the bound is testable without an auto-minted
- * `contextId` in the way — `withVoice` cannot retroactively commit a superseded turn.
+ * `agent_tool_call` (fired the instant the front issues the delegate tool call —
+ * before the reasoner runs, so it always precedes the turn's commit, unlike
+ * `delegate_result`, which a NON_BLOCKING tool call can delay past `eos.turn_complete`),
+ * `consume(turnId)` when that turn commits — reporting (and clearing) whether it was
+ * consulted. Bounded like `pendingAssistant` above (oldest evicted at cap), because a
+ * turn that never commits (interrupted/abandoned) would otherwise leave its id in the
+ * set for the life of the Durable Object. Extracted (rather than inlined in the mixin)
+ * so the bound is testable without an auto-minted `contextId` in the way — `withVoice`
+ * cannot retroactively commit a superseded turn.
  */
 export function createConsultedTurnTracker(cap: number = MAX_CONSULTED_TURNS): {
   record(turnId: string): void;
@@ -474,13 +479,15 @@ export function withVoice<Env, TBase extends AgentLike>(
           }
           // Per-turn observability (onTurn): a second, independent subscription to the
           // turn observer — fires for every realtime turn regardless of durableHistory.
-          // `consulted` is recorded from `delegate_result` (fired when the reasoner
-          // returns, well before the front's llm.done/eos.turn_complete pair for the
-          // same turn — see with-voice.test.ts for the ordering proof) and consumed
-          // when that turn commits, so a turn's flag reflects only its own consult.
+          // `consulted` is recorded from `agent_tool_call` (fired the instant the front
+          // issues the delegate tool call, before the reasoner runs — and therefore always
+          // before the turn can commit, unlike `delegate_result`, which a NON_BLOCKING tool
+          // call can delay past the turn's `eos.turn_complete` — see with-voice.test.ts for
+          // the ordering proof) and consumed when that turn commits, so a turn's flag
+          // reflects only its own consult.
           if (options.onTurn) {
             const consultedTurns = createConsultedTurnTracker();
-            session.on("delegate_result", (e) => consultedTurns.record(e.turnId));
+            session.on("agent_tool_call", (e) => consultedTurns.record(e.turnId));
             observeRealtimeTurns(session.bus, (turn) => {
               const consulted = consultedTurns.consume(turn.turnId);
               try {
