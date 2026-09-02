@@ -5,6 +5,25 @@ description: Selected bus packets — audio, transcripts, usage, telephony, reco
 
 Syrinx is packet-driven: components communicate over a `PipelineBus`. Factories live in `@kuralle-syrinx/core` (`packet-factories.ts`); the kinds below are the ones most relevant to building on the engine.
 
+## Unknown kinds are forwarded
+
+**Unknown packet kinds are forwarded, never rejected.** `VoicePacket.kind` is an open `string`. Core never switches exhaustively over the packet type: a kind core has never seen flows through `PipelineBus` to any handler registered for it, is routed to `Route.Main` unless the provider declares otherwise, and is neither dropped nor logged as an error.
+
+The exported unions (`InputPacket`, `InterruptPacket`, `LlmPacket`, `TtsPacket`, `AnyErrorPacket`, `ObservabilityPacket`, `DelegatePacket`, and `RecordAssistantAudioPacket`) are conveniences for narrowing well-known kinds; they are not the set of kinds the bus accepts. `RecordAssistantAudioPacket` is narrowing-only for the two known `record.assistant_audio` shapes.
+
+Third-party kinds use a vendor prefix (`acme.frame`, never `tts.frame`) so they cannot collide with a future core kind.
+
+Convenience unions are narrowing-only:
+
+- `InputPacket` — well-known input kinds.
+- `InterruptPacket` — well-known interruption kinds.
+- `LlmPacket` — well-known LLM kinds.
+- `TtsPacket` — well-known TTS kinds.
+- `AnyErrorPacket` — well-known error kinds.
+- `ObservabilityPacket` — well-known observability kinds.
+- `DelegatePacket` — well-known delegate lifecycle kinds.
+- `RecordAssistantAudioPacket` — the two well-known assistant-recording shapes.
+
 ## Audio & transcripts
 
 | Kind | Direction | Notes |

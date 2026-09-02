@@ -16,7 +16,10 @@ import type { EndpointingOwner, SttReconfigurePartial } from "./plugin-contract.
 // Base Types
 // =============================================================================
 
-/** Every packet flowing through the bus has these fields. */
+/**
+ * Open packet envelope: unknown string kinds are forwarded, never rejected, and default to Route.Main.
+ * See /reference/packets/#unknown-kinds-are-forwarded.
+ */
 export interface VoicePacket {
   /** Discriminator. Examples: "stt.result", "vad.speech_started", "init.failed" */
   readonly kind: string;
@@ -546,6 +549,7 @@ export interface RecordAssistantAudioTruncatePacket extends VoicePacket {
   readonly truncate: true;
 }
 
+/** Convenience-only narrowing for the two well-known assistant-recording shapes; not the set accepted by the bus. */
 export type RecordAssistantAudioPacket = RecordAssistantAudioDataPacket | RecordAssistantAudioTruncatePacket;
 
 // =============================================================================
@@ -726,7 +730,7 @@ export interface PipelineErrorPacket extends VoicePacket, VoiceErrorPacket {
 // Convenience union types
 // =============================================================================
 
-/** All input pipeline packets. */
+/** Convenience-only narrowing for well-known input packet kinds; not the set accepted by the bus. */
 export type InputPacket =
   | UserAudioReceivedPacket
   | UserTextReceivedPacket
@@ -749,7 +753,7 @@ export type InputPacket =
   | EndOfSpeechRetractedPacket
   | UserInputPacket;
 
-/** All interruption packets (Critical route). */
+/** Convenience-only narrowing for well-known interruption packet kinds; not the set accepted by the bus. */
 export type InterruptPacket =
   | InterruptionDetectedPacket
   | InterruptTtsPacket
@@ -757,7 +761,7 @@ export type InterruptPacket =
   | InterruptSttPacket
   | TurnChangePacket;
 
-/** All LLM output packets. */
+/** Convenience-only narrowing for well-known LLM packet kinds; not the set accepted by the bus. */
 export type LlmPacket =
   | LlmDeltaPacket
   | LlmResponseDonePacket
@@ -768,7 +772,7 @@ export type LlmPacket =
   | ReasoningSuspendedPacket
   | ReasoningResumePacket;
 
-/** All TTS output packets. */
+/** Convenience-only narrowing for well-known TTS packet kinds; not the set accepted by the bus. */
 export type TtsPacket =
   | TextToSpeechTextPacket
   | TextToSpeechDonePacket
@@ -779,7 +783,7 @@ export type TtsPacket =
   | TextToSpeechWordTimestampsPacket
   | TtsErrorPacket;
 
-/** All error packets (any component). */
+/** Convenience-only narrowing for well-known error packet kinds; not the set accepted by the bus. */
 export type AnyErrorPacket =
   | SttErrorPacket
   | TtsErrorPacket
@@ -787,7 +791,7 @@ export type AnyErrorPacket =
   | PipelineErrorPacket
   | InitializationFailedPacket;
 
-/** Observability packets (Background route). */
+/** Convenience-only narrowing for well-known observability packet kinds; not the set accepted by the bus. */
 export type ObservabilityPacket =
   | ConversationMetricPacket
   | TurnBoundaryEventPacket
@@ -796,5 +800,5 @@ export type ObservabilityPacket =
   | TurnLocalizationPacket
   | HistoryCompactionPacket;
 
-/** Delegate (Responder-Thinker) lifecycle packets (Background route). */
+/** Convenience-only narrowing for well-known delegate packet kinds; not the set accepted by the bus. */
 export type DelegatePacket = DelegateQueryPacket | DelegateResultPacket;
