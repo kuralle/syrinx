@@ -105,6 +105,21 @@ export interface RealtimeBridgeOptions {
    * Native mode (`syrinxTurns` absent/false) is unchanged.
    */
   readonly syrinxTurns?: boolean;
+  /** How the delegate tool runs on a front whose `caps.supportsToolBehavior` is true.
+   *  `"BLOCKING"` (default) holds the turn until the reasoner answers — today's behavior.
+   *  `"NON_BLOCKING"` acks immediately and lets the front keep speaking; the answer is
+   *  injected as a terminal tool result when it arrives. Ignored (blocking) on fronts
+   *  without the capability. */
+  readonly delegateBehavior?: "BLOCKING" | "NON_BLOCKING";
+  /** Scheduling of the terminal delegate answer under NON_BLOCKING. `"INTERRUPT"` (default)
+   *  makes the front voice it as soon as it lands; `"WHEN_IDLE"` waits for the front to
+   *  finish its current utterance. */
+  readonly delegateAnswerScheduling?: "INTERRUPT" | "WHEN_IDLE";
+  /** Scheduling of the immediate NON_BLOCKING ack. `"WHEN_IDLE"` (default) lets the front
+   *  acknowledge the wait out loud once it is idle — measured live: a `"SILENT"` ack leaves
+   *  the front mute for the whole consult because the model's turn ends at the tool call;
+   *  `"SILENT"` keeps it mute on purpose; `"INTERRUPT"` speaks at once. */
+  readonly delegateAckScheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT";
 }
 
 export class RealtimeBridge implements VoicePlugin {
@@ -292,7 +307,7 @@ export class RealtimeBridge implements VoicePlugin {
       return;
     }
     if (this.opts.onFrontToolCall) {
-      await this.handleFrontTool(bus, ev);
+      this.dispatchFrontTool(bus, ev);
       return;
     }
     // No front-tool handler: with a reasoner, an unexpected tool is a recoverable error
@@ -319,6 +334,22 @@ export class RealtimeBridge implements VoicePlugin {
       this.delegateControllers.delete(toolId);
       controller.abort();
     }
+  }
+
+  /**
+   * Dispatch a front tool OFF the serial event pump, mirroring `dispatchDelegate` — a slow
+   * `onFrontToolCall` (host-provided) must not stall event draining any more than a slow
+   * reasoner turn does. `handleFrontTool` already routes its own errors to `onError` and never
+   * rejects; the `.catch` here is a backstop for anything unexpected escaping it.
+   */
+  private dispatchFrontTool(
+    bus: PipelineBus,
+    ev: { toolId: string; toolName: string; args: Record<string, unknown> },
+  ): void {
+    this.handleFrontTool(bus, ev).catch((err) => {
+      if (!this.bus || isAbortError(err)) return;
+      this.onError(bus, err instanceof Error ? err : new Error(String(err)), true);
+    });
   }
 
   private async handleFrontTool(
@@ -390,6 +421,20 @@ export class RealtimeBridge implements VoicePlugin {
     const controller = new AbortController();
     this.inflight = controller;
     this.delegateControllers.set(ev.toolId, controller);
+
+    // NON_BLOCKING: ack immediately (SILENT + willContinue) so the front keeps speaking
+    // while the reasoner "thinks" — only when the adapter actually supports it (Gemini Live);
+    // on a front without the cap this stays byte-for-byte the old blocking behavior.
+    const nonBlockingDelegate =
+      this.adapter.caps.supportsToolBehavior === true && this.opts.delegateBehavior === "NON_BLOCKING";
+    if (nonBlockingDelegate) {
+      this.adapter.injectToolResult(
+        ev.toolId,
+        this.formatToolResult("Still working on it. Briefly tell the caller you are checking, then wait for the answer."),
+        { scheduling: this.opts.delegateAckScheduling ?? "WHEN_IDLE", willContinue: true },
+      );
+    }
+
     let answer = "";
     let grounded = false;
     let blockedMessage: string | undefined;
@@ -520,7 +565,13 @@ export class RealtimeBridge implements VoicePlugin {
         toolName: ev.toolName,
         blocked: { userFacingMessage: blockedMessage, payload: blockedPayload },
       });
-      this.adapter.injectToolResult(ev.toolId, this.formatToolResult(blockedMessage));
+      // A tool_call_cancelled naming this call aborted `controller` (onToolCallCancelled). The
+      // reasoner may not check the signal itself and still yield a late answer — the bus keeps
+      // the observability record, but the front already discarded the call and must not receive
+      // a terminal inject for it.
+      if (!controller.signal.aborted) {
+        this.injectDelegateAnswer(ev.toolId, this.formatToolResult(blockedMessage), nonBlockingDelegate);
+      }
       return;
     }
 
@@ -552,7 +603,23 @@ export class RealtimeBridge implements VoicePlugin {
       toolName: ev.toolName,
     };
     bus.push(Route.Background, delegateResult);
-    this.adapter.injectToolResult(ev.toolId, this.formatToolResult(answer));
+    // See the blocked-path comment above: cancellation suppresses only the terminal inject.
+    if (!controller.signal.aborted) {
+      this.injectDelegateAnswer(ev.toolId, this.formatToolResult(answer), nonBlockingDelegate);
+    }
+  }
+
+  /** Terminal delegate answer: NON_BLOCKING passes `scheduling` (INTERRUPT by default) so the
+   *  provider knows to re-enter the turn; BLOCKING (or a front lacking the cap) stays the
+   *  original two-argument call, byte-for-byte. */
+  private injectDelegateAnswer(toolId: string, text: string, nonBlockingDelegate: boolean): void {
+    if (nonBlockingDelegate) {
+      this.adapter.injectToolResult(toolId, text, {
+        scheduling: this.opts.delegateAnswerScheduling ?? "INTERRUPT",
+      });
+      return;
+    }
+    this.adapter.injectToolResult(toolId, text);
   }
 
   /** G1: wrap the buffered delegate answer for the front model (synchronous — R2). */

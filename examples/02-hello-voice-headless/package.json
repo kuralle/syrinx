@@ -65,7 +65,8 @@
     "smoke:half-cascade-multiturn": "tsx scripts/run-half-cascade-multiturn.ts",
     "smoke:half-cascade-conversation": "tsx scripts/run-half-cascade-conversation.ts",
     "smoke:turn-latency": "tsx scripts/run-turn-latency-smoke.ts",
-    "smoke:media-lane-harness": "tsx scripts/run-media-lane-harness.ts"
+    "smoke:media-lane-harness": "tsx scripts/run-media-lane-harness.ts",
+    "smoke:gemini-nonblocking-delegate-live-proof": "tsx scripts/run-gemini-nonblocking-delegate-live-proof.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.0",

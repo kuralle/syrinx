@@ -177,7 +177,7 @@ releases only on that call's terminal response (or on `toolCallCancellation` / a
 
 The bi-model shape has a name: **Responder-Thinker** — a fast realtime **responder** on the audio
 loop, an async reasoning/RAG **thinker** behind it, delegated to via one tool. `RealtimeBridge` +
-`Reasoner` *is* this architecture, and the delegate seam ships with four built-in behaviors
+`Reasoner` *is* this architecture, and the delegate seam ships with five built-in behaviors
 (RFC `docs/rfc-bimodel-delegate-seam.md`) so a consumer never hand-rolls them:
 
 - **G1 — structured result envelope (default).** The thinker's answer reaches the responder as
@@ -203,10 +203,23 @@ loop, an async reasoning/RAG **thinker** behind it, delegated to via one tool. `
   (sent as `conversation.item.create` after every (re)connect's `session.update`, never a
   `response.create` — a resumed session cannot double-answer). The thinker side re-seeds from a
   `ReasonerSessionStore` (`@kuralle-syrinx/core`), DO-SQLite-backed in `@kuralle-syrinx/cf-agents`.
+- **G5 — NON_BLOCKING delegate dispatch.** `delegateBehavior: "NON_BLOCKING"` (default
+  `"BLOCKING"`) — on a front whose `caps.supportsToolBehavior` is true (Gemini Live today), the
+  bridge acks the delegate call immediately (`injectToolResult` with `willContinue: true` and
+  `scheduling: delegateAckScheduling ?? "WHEN_IDLE"`) instead of holding the turn, then injects
+  the reasoner's answer as a terminal tool result when it arrives
+  (`scheduling: delegateAnswerScheduling ?? "INTERRUPT"`, `"WHEN_IDLE"` to wait for the front to
+  finish talking first). The ack defaults to `"WHEN_IDLE"` on purpose — measured live on Gemini
+  (2026-09-03): a `"SILENT"` ack leaves the front mute for the whole consult because the model's
+  turn ends at the tool call, while a `"WHEN_IDLE"` ack has it tell the caller it is checking
+  (audio during a 6 s wait, answer voiced 122 ms after it landed). Net effect: the front keeps
+  speaking during the consult; the answer is voiced when it lands. A `tool_call_cancelled`
+  naming the call suppresses that terminal inject. Ignored (falls back to `"BLOCKING"`) on a
+  front without the capability, or when unset.
 
-On Cloudflare, `withVoice(Agent)` (`@kuralle-syrinx/cf-agents`) wires all four up turnkey — a new
-consumer supplies a front + a `Reasoner` and gets envelope + observability + cues + durable resume
-for free.
+On Cloudflare, `withVoice(Agent)` (`@kuralle-syrinx/cf-agents`) wires the first four up
+turnkey — a new consumer supplies a front + a `Reasoner` and gets envelope + observability +
+cues + durable resume for free.
 
 ## Capability model
 

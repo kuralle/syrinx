@@ -93,10 +93,18 @@ class FakeRealtimeAdapter implements RealtimeAdapter {
     this.cancelCalls.push(audioEndMs);
   }
 
-  readonly injectedToolResults: Array<{ toolId: string; text: string }> = [];
+  readonly injectedToolResults: Array<{
+    toolId: string;
+    text: string;
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT"; willContinue?: boolean };
+  }> = [];
 
-  injectToolResult(toolId: string, text: string): void {
-    this.injectedToolResults.push({ toolId, text });
+  injectToolResult(
+    toolId: string,
+    text: string,
+    opts?: { scheduling?: "SILENT" | "WHEN_IDLE" | "INTERRUPT"; willContinue?: boolean },
+  ): void {
+    this.injectedToolResults.push({ toolId, text, opts });
   }
 
   async close(): Promise<void> {
@@ -1741,6 +1749,195 @@ describe("RealtimeBridge", () => {
     // TTS plugin owns tts.end in text-only mode — bridge must not force it.
     expect(ends).toHaveLength(0);
     expect(turnCompletes).toHaveLength(1);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  // ── NON_BLOCKING delegate dispatch ───────────────────────────────────────
+
+  it("NON_BLOCKING delegate: acks with WHEN_IDLE+willContinue immediately, then injects the terminal answer with default INTERRUPT scheduling", async () => {
+    const adapter = new FakeRealtimeAdapter({ supportsToolBehavior: true });
+    let releaseAnswer: (() => void) | undefined;
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        await new Promise<void>((resolve) => { releaseAnswer = resolve; });
+        yield { type: "finish", reason: "stop", text: "the answer" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      delegateBehavior: "NON_BLOCKING",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_nb_ack",
+      toolName: "consult_knowledge",
+      args: { query: "when does the office open" },
+    });
+
+    // The ack must land before the reasoner ever resolves — nothing has released it yet.
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(adapter.injectedToolResults[0]!.toolId).toBe("call_nb_ack");
+    expect(adapter.injectedToolResults[0]!.opts).toEqual({ scheduling: "WHEN_IDLE", willContinue: true });
+    expect(JSON.parse(adapter.injectedToolResults[0]!.text)).toMatchObject({ response_text: "Still working on it. Briefly tell the caller you are checking, then wait for the answer." });
+
+    releaseAnswer?.();
+    await waitForCondition(() => adapter.injectedToolResults.length === 2);
+    expect(adapter.injectedToolResults[1]!.opts).toEqual({ scheduling: "INTERRUPT" });
+    expect(JSON.parse(adapter.injectedToolResults[1]!.text)).toMatchObject({ response_text: "the answer" });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("NON_BLOCKING delegate: delegateAnswerScheduling overrides the terminal inject's scheduling", async () => {
+    const adapter = new FakeRealtimeAdapter({ supportsToolBehavior: true });
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "when idle answer" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      delegateBehavior: "NON_BLOCKING",
+      delegateAnswerScheduling: "WHEN_IDLE",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_nb_idle",
+      toolName: "consult_knowledge",
+      args: { query: "q" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 2);
+    expect(adapter.injectedToolResults[1]!.opts).toEqual({ scheduling: "WHEN_IDLE" });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("NON_BLOCKING is ignored (blocking, byte-for-byte) when the adapter lacks supportsToolBehavior", async () => {
+    const adapter = new FakeRealtimeAdapter(); // supportsToolBehavior absent
+    const reasoner: Reasoner = {
+      stream: () => (async function* () {
+        yield { type: "finish", reason: "stop", text: "blocking answer" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      delegateBehavior: "NON_BLOCKING",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_no_cap",
+      toolName: "consult_knowledge",
+      args: { query: "q" },
+    });
+
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    // No ack, and the single terminal inject carries no opts — the original two-arg call.
+    expect(adapter.injectedToolResults[0]!.opts).toBeUndefined();
+    expect(JSON.parse(adapter.injectedToolResults[0]!.text)).toMatchObject({ response_text: "blocking answer" });
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  it("NON_BLOCKING delegate: suppresses the terminal inject after tool_call_cancelled even when the reasoner ignores the abort signal", async () => {
+    const adapter = new FakeRealtimeAdapter({ supportsToolBehavior: true });
+    const reasoner: Reasoner = {
+      stream: ({ signal }) => (async function* () {
+        // Deliberately does not check `signal` before yielding — the bridge, not the reasoner,
+        // must be the one that stops a late answer from reaching the front.
+        await waitForCondition(() => signal.aborted);
+        yield { type: "finish", reason: "stop", text: "late answer after cancel" };
+      })(),
+    };
+    const bridge = new RealtimeBridge(adapter, reasoner, "consult_knowledge", {
+      delegateBehavior: "NON_BLOCKING",
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const results: DelegateResultPacket[] = [];
+    bus.on("delegate.result", (pkt) => { results.push(pkt as DelegateResultPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({
+      type: "tool_call",
+      toolId: "call_nb_cancel",
+      toolName: "consult_knowledge",
+      args: { query: "q" },
+    });
+
+    // Only the ack so far.
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    adapter.emit({ type: "tool_call_cancelled", toolIds: ["call_nb_cancel"] });
+
+    // The reasoner now unblocks (it was waiting on signal.aborted) and yields its answer —
+    // the bus keeps the observability record, but the adapter must never see it.
+    await waitForCondition(() => results.length === 1);
+    expect(results[0]).toMatchObject({ answer: "late answer after cancel" });
+    expect(adapter.injectedToolResults).toHaveLength(1);
+
+    await bridge.close();
+    bus.stop();
+    await started;
+  });
+
+  // ── Front tools off the pump ─────────────────────────────────────────────
+
+  it("a slow onFrontToolCall does not delay draining the next adapter event (front tools run off the pump)", async () => {
+    const adapter = new FakeRealtimeAdapter();
+    let releaseFrontTool: (() => void) | undefined;
+    const bridge = new RealtimeBridge(adapter, undefined, "consult_knowledge", {
+      onFrontToolCall: () => new Promise<string>((resolve) => { releaseFrontTool = () => resolve("done"); }),
+    });
+    const bus = new PipelineBusImpl();
+    buses.push(bus);
+    const interrupts: InterruptionDetectedPacket[] = [];
+    bus.on("interrupt.detected", (pkt) => { interrupts.push(pkt as InterruptionDetectedPacket); });
+
+    const started = bus.start();
+    await bridge.initialize(bus, {});
+
+    adapter.emit({ type: "response_started" });
+    adapter.emit({ type: "tool_call", toolId: "call_slow_front", toolName: "wait_for_user", args: {} });
+    // The front tool handler is now pending indefinitely — the pump must still drain the next
+    // event instead of freezing on the await (mirrors BUG1 for the delegate path).
+    adapter.emit({ type: "speech_started" });
+
+    await waitForCondition(() => interrupts.length >= 1);
+    expect(adapter.injectedToolResults).toHaveLength(0);
+
+    releaseFrontTool?.();
+    await waitForCondition(() => adapter.injectedToolResults.length === 1);
+    expect(adapter.injectedToolResults[0]).toEqual({ toolId: "call_slow_front", text: "done", opts: undefined });
 
     await bridge.close();
     bus.stop();

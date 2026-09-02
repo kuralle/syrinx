@@ -44,6 +44,15 @@ apply to (a cascade-only `vad`/`eos`/`endpointingOwner`/`sttForceFinalizeTimeout
 `speculative` on a realtime front, or `delegateToolName`/`toolResultFormat`/
 `renderDirective` on a cascade) throws naming the field. No alias is kept.
 
+### Added — `realtime`: NON_BLOCKING delegate dispatch on `RealtimeBridge`
+
+`RealtimeBridgeOptions.delegateBehavior: "NON_BLOCKING"` (default `"BLOCKING"`), paired with
+`delegateAnswerScheduling: "INTERRUPT" | "WHEN_IDLE"` and `delegateAckScheduling: "SILENT" |
+"WHEN_IDLE" | "INTERRUPT"` (default `"WHEN_IDLE"`) — on a front whose `caps.supportsToolBehavior`
+is true (Gemini Live), the delegate tool call acks immediately instead of holding the turn, the
+front tells the caller it is checking, and the reasoner's answer is injected as a terminal tool
+result when it arrives. Front tools (`onFrontToolCall`) now run off the serial event pump.
+
 ## 4.6.3 — 2026-07-27
 
 ### Fixed — the Testing page told readers to install the internal fakes
