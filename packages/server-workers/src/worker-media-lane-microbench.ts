@@ -74,11 +74,15 @@ function startBench(
       );
     };
     let fired = false;
-    bus.on("bench.tick", async () => {
-      if (fired) return;
-      fired = true;
-      await park();
-    }, ...(mode === "concurrent" ? [{ concurrent: true }] : []));
+    bus.on(
+      "bench.tick",
+      async () => {
+        if (fired) return;
+        fired = true;
+        await park();
+      },
+      mode === "concurrent" ? { concurrent: true } : { serial: true },
+    );
   }
 
   void bus.start();
@@ -201,7 +205,7 @@ export class MediaLaneMicrobench extends DurableObject<Env> {
           fired = true;
           await park();
         },
-        ...(mode === "concurrent" ? [{ concurrent: true }] : []),
+        mode === "concurrent" ? { concurrent: true } : { serial: true },
       );
     }
 

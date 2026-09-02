@@ -471,12 +471,16 @@ describe("VoiceSessionRecorder", () => {
       const mainBlocked = new Promise<void>((resolve) => {
         notifyMainBlocked = resolve;
       });
-      bus.on("record.assistant_audio", async (pkt) => {
-        if (!(pkt as RecordAssistantAudioPacket).truncate) {
-          notifyMainBlocked();
-          await mainReleased;
-        }
-      });
+      bus.on(
+        "record.assistant_audio",
+        async (pkt) => {
+          if (!(pkt as RecordAssistantAudioPacket).truncate) {
+            notifyMainBlocked();
+            await mainReleased;
+          }
+        },
+        { serial: true },
+      );
 
       const recorder = new VoiceSessionRecorder();
       await recorder.initialize(bus, {

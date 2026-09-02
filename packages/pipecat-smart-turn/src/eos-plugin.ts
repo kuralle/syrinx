@@ -118,9 +118,13 @@ export class PipecatEOSPlugin implements VoicePlugin {
       bus.on("vad.speech_started", (pkt) => {
         this.handleSpeechStarted(pkt as VadSpeechStartedPacket);
       }),
-      bus.on("vad.speech_ended", async (pkt) => {
-        await this.handleSpeechEnded(pkt as VadSpeechEndedPacket);
-      }),
+      bus.on(
+        "vad.speech_ended",
+        async (pkt) => {
+          await this.handleSpeechEnded(pkt as VadSpeechEndedPacket);
+        },
+        { concurrent: true },
+      ),
       bus.on("tts.audio", (pkt) => {
         this.handleTtsAudio(pkt as TextToSpeechAudioPacket);
       }),

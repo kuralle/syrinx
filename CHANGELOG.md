@@ -2,6 +2,26 @@
 
 All `@kuralle-syrinx/*` packages are versioned and released in lockstep.
 
+## Unreleased
+
+### Breaking — `core`: a handler's dispatch mode is now declared at registration
+
+`PipelineBus.on(kind, handler)` no longer silently awaits an `async` handler in
+registration order. An `async` handler (or one that returns a `Promise`) must now
+declare `{ concurrent: true }` or `{ serial: true }` as a third argument — omitting
+it is a **compile error**, not a runtime warning. This is the fix for the class of
+bug the dev-only `SLOW_HANDLER_WARN_MS` guard (4.6.x) could only report after the
+fact: on Cloudflare Workers/Durable Objects, an awaited non-concurrent handler defers
+delivery of the provider's inbound socket events for the whole await, so TTS audio
+stops being produced for that duration (measured live: `main` stalled 3/6 runs with
+gaps up to 10s, `concurrent` 0/6). Third-party plugins with an `async` handler
+registered with no third argument will fail to build; add `{ concurrent: true }`
+(the default remedy — fire-and-forget, never parks the drain loop) or `{ serial:
+true }` if the handler genuinely needs registration-order awaiting. A sync handler
+is unaffected. The old loose `{ concurrent: false }` also stops compiling, and a
+third-party implementation of the `PipelineBus` interface must adopt the new `on`
+signature. New exported type `DispatchMode`.
+
 ## 4.6.3 — 2026-07-27
 
 ### Fixed — the Testing page told readers to install the internal fakes

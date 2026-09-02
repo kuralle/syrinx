@@ -21,9 +21,13 @@ describe("media lane isolation", () => {
     });
 
     let audioDispatchedAt = -1;
-    bus.on("tts.text", async () => {
-      await slowGate;
-    });
+    bus.on(
+      "tts.text",
+      async () => {
+        await slowGate;
+      },
+      { serial: true },
+    );
     bus.on("tts.audio", () => {
       audioDispatchedAt = Date.now();
     });
@@ -53,9 +57,13 @@ describe("media lane isolation", () => {
     });
 
     let audioDispatchedAt = -1;
-    bus.on("eos.turn_complete", async () => {
-      await slowGate;
-    });
+    bus.on(
+      "eos.turn_complete",
+      async () => {
+        await slowGate;
+      },
+      { serial: true },
+    );
     bus.on("user.audio_received", () => {
       audioDispatchedAt = Date.now();
     });
@@ -103,10 +111,14 @@ describe("media lane isolation", () => {
       releaseMedia = resolve;
     });
 
-    bus.on("tts.audio", async (p) => {
-      dispatched.push(p.contextId);
-      await mediaGate;
-    });
+    bus.on(
+      "tts.audio",
+      async (p) => {
+        dispatched.push(p.contextId);
+        await mediaGate;
+      },
+      { serial: true },
+    );
     bus.on("metric.conversation", (p) => {
       metrics.push((p as ConversationMetricPacket).name);
     });

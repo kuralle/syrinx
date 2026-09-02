@@ -125,17 +125,27 @@ export class DeepgramTTSPlugin implements VoicePlugin {
     await this.conn.connect();
 
     this.disposers.push(
-      bus.on("tts.text", async (pkt: unknown) => {
-        const textPkt = pkt as { text: string; contextId: string };
-        await this.speak(textPkt.text, textPkt.contextId);
-      }),
-      bus.on("tts.done", async (pkt: unknown) => {
-        const donePkt = pkt as { contextId: string };
-        if (finishTimeoutMs > 0 && this.activeContexts.has(donePkt.contextId)) {
-          this.scheduleFinishTimeout(donePkt.contextId, finishTimeoutMs);
-        }
-        await this.finishContext(donePkt.contextId);
-      }),
+      // serial: text chunks and the trailing Flush must reach the Deepgram socket in
+      // registration order (see tts.test.ts's asserted "Speak"/"Speak"/"Flush" sequence).
+      bus.on(
+        "tts.text",
+        async (pkt: unknown) => {
+          const textPkt = pkt as { text: string; contextId: string };
+          await this.speak(textPkt.text, textPkt.contextId);
+        },
+        { serial: true },
+      ),
+      bus.on(
+        "tts.done",
+        async (pkt: unknown) => {
+          const donePkt = pkt as { contextId: string };
+          if (finishTimeoutMs > 0 && this.activeContexts.has(donePkt.contextId)) {
+            this.scheduleFinishTimeout(donePkt.contextId, finishTimeoutMs);
+          }
+          await this.finishContext(donePkt.contextId);
+        },
+        { serial: true },
+      ),
       bus.on("interrupt.tts", () => {
         this.cancelActiveContexts().catch(() => {
           // Best-effort interruption.

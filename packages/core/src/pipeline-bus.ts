@@ -51,9 +51,22 @@ export const MEDIA_KINDS: ReadonlySet<string> = new Set([
   "record.assistant_audio",
 ]);
 
-export type PacketHandler<T extends VoicePacket = VoicePacket> = (
-  pkt: T,
-) => void | Promise<void>;
+export type PacketHandler<
+  T extends VoicePacket = VoicePacket,
+  R extends void | Promise<void> = void | Promise<void>,
+> = (pkt: T) => R;
+
+/**
+ * A handler's dispatch mode, declared at registration.
+ *
+ * - `concurrent: true` — fire-and-forget; never parks the drain loop.
+ * - `serial: true` — awaited in registration order, on purpose. Only for a handler
+ *   that needs ordering and awaits microtasks or sub-100ms work; `SLOW_HANDLER_WARN_MS`
+ *   still polices it.
+ */
+export type DispatchMode =
+  | { concurrent: true; serial?: never }
+  | { serial: true; concurrent?: never };
 
 export interface PipelineBus {
   /**
@@ -70,17 +83,29 @@ export interface PipelineBus {
    * Handlers for media kinds (`MEDIA_KINDS`) must not await network or model I/O —
    * only same-tick work. Media packets drain on a separate loop from Main.
    *
-   * By default handlers are awaited in registration order (consumer semantics — the
-   * handler's state mutations are visible to the next packet's handlers). Pass
-   * `{ concurrent: true }` for a long-running PRODUCER handler (e.g. an LLM-generation
-   * loop that emits its own packets over time): it is dispatched fire-and-forget so it
-   * does not park the drain loop and defer subsequent Main packets / Critical interrupts
-   * behind it. Concurrent handler errors are surfaced as `pipeline.error`, like async packets.
+   * A sync handler (returns `void`) needs no mode. An `async` handler (or one that
+   * returns a `Promise`) MUST declare its dispatch mode — this is a compile error
+   * otherwise, not a runtime warning:
+   *   - `{ concurrent: true }` — the default remedy. Dispatched fire-and-forget, so a
+   *     long-running handler (e.g. an LLM-generation loop that emits its own packets
+   *     over time) never parks the drain loop and defers subsequent Main packets /
+   *     Critical interrupts behind it. On Workers/DO an awaited handler defers delivery
+   *     of the provider's inbound socket events for the whole await — audio stops being
+   *     produced for that duration. Concurrent handler errors are surfaced as
+   *     `pipeline.error`, like async packets.
+   *   - `{ serial: true }` — awaited in registration order on purpose (consumer
+   *     semantics: the handler's state mutations are visible to the next packet's
+   *     handlers). Only for a handler that needs that ordering and awaits microtasks or
+   *     sub-100ms work; `SLOW_HANDLER_WARN_MS` still polices it.
+   *
+   * The one shape the compiler cannot see is a handler annotated to return `any`:
+   * `any` is assignable to `void`, so it registers modeless. Treat an `any`-typed
+   * handler as a contract violation in review.
    */
-  on<T extends VoicePacket>(
+  on<T extends VoicePacket, R extends void | Promise<void> = void>(
     kind: T["kind"],
-    handler: PacketHandler<T>,
-    opts?: { concurrent?: boolean },
+    handler: PacketHandler<T, R>,
+    ...mode: [R] extends [void] ? [mode?: DispatchMode] : [mode: DispatchMode]
   ): () => void;
 
   /** Start draining the bus. Resolves when stop() is called and final drain completes. */
@@ -286,17 +311,18 @@ export class PipelineBusImpl implements PipelineBus {
     this.wakeDrainLoop(route);
   }
 
-  on<T extends VoicePacket>(
+  on<T extends VoicePacket, R extends void | Promise<void> = void>(
     kind: T["kind"],
-    handler: PacketHandler<T>,
-    opts?: { concurrent?: boolean },
+    handler: PacketHandler<T, R>,
+    ...mode: [R] extends [void] ? [mode?: DispatchMode] : [mode: DispatchMode]
   ): () => void {
+    const opts = mode[0];
     let set = this.handlers.get(kind);
     if (!set) {
       set = new Set();
       this.handlers.set(kind, set);
     }
-    const h = handler as PacketHandler;
+    const h = handler as unknown as PacketHandler;
     set.add(h);
     if (opts?.concurrent) this.concurrentHandlers.add(h);
     return () => {

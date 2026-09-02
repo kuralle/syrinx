@@ -53,10 +53,17 @@ export class SileroVADPlugin implements VoicePlugin {
     this.machine.noteModelReset();
 
     this.disposers.push(
-      bus.on("vad.audio", async (pkt: unknown) => {
-        const audioPkt = pkt as { audio: Uint8Array; contextId: string };
-        await this.processAudio(audioPkt.audio, audioPkt.contextId);
-      }),
+      // serial: runModel() carries RNN-style hidden state (this.state/this.context)
+      // across calls — concurrent dispatch would race two windows against the same
+      // state and corrupt VAD accuracy.
+      bus.on(
+        "vad.audio",
+        async (pkt: unknown) => {
+          const audioPkt = pkt as { audio: Uint8Array; contextId: string };
+          await this.processAudio(audioPkt.audio, audioPkt.contextId);
+        },
+        { serial: true },
+      ),
     );
   }
 

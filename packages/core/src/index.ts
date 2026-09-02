@@ -211,6 +211,7 @@ export {
   type PipelineBus,
   type PipelineBusConfig,
   type PacketHandler,
+  type DispatchMode,
 } from "./pipeline-bus.js";
 
 // Init chain

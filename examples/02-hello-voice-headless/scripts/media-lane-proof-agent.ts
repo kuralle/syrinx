@@ -102,25 +102,29 @@ export function createSession(): VoiceAgentSession {
   // guaranteed to fire mid-speech, which is exactly what this fixture needs.
   let seen = 0;
   let fired = false;
-  session.bus.on("tts.playout_progress", async () => {
-    seen += 1;
-    if (fired || seen < blockOnChunk || delayMs <= 0) return;
-    fired = true;
-    const startedAt = Date.now();
-    console.log(`PROOF_BLOCK_START arm=${arm} chunk=${seen} delayMs=${delayMs}`);
-    try {
-      if (delayUrl) {
-        const url = new URL(delayUrl);
-        url.searchParams.set("ms", String(delayMs));
-        await fetch(url, { signal: AbortSignal.timeout(delayMs + 15_000) });
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+  session.bus.on(
+    "tts.playout_progress",
+    async () => {
+      seen += 1;
+      if (fired || seen < blockOnChunk || delayMs <= 0) return;
+      fired = true;
+      const startedAt = Date.now();
+      console.log(`PROOF_BLOCK_START arm=${arm} chunk=${seen} delayMs=${delayMs}`);
+      try {
+        if (delayUrl) {
+          const url = new URL(delayUrl);
+          url.searchParams.set("ms", String(delayMs));
+          await fetch(url, { signal: AbortSignal.timeout(delayMs + 15_000) });
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      } catch (err) {
+        console.log(`PROOF_BLOCK_ERROR arm=${arm} err=${String(err)}`);
       }
-    } catch (err) {
-      console.log(`PROOF_BLOCK_ERROR arm=${arm} err=${String(err)}`);
-    }
-    console.log(`PROOF_BLOCK_END arm=${arm} heldMs=${Date.now() - startedAt}`);
-  });
+      console.log(`PROOF_BLOCK_END arm=${arm} heldMs=${Date.now() - startedAt}`);
+    },
+    { serial: true },
+  );
 
   console.log(
     `PROOF_AGENT arm=${arm} delayMs=${delayMs} blockOnChunk=${blockOnChunk} ` +

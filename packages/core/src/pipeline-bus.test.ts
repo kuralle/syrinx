@@ -118,10 +118,14 @@ describe("PipelineBusImpl", () => {
         releaseMain = resolve;
       });
 
-      bus.on("llm.delta", async (p) => {
-        dispatched.push(p.contextId);
-        await mainGate;
-      });
+      bus.on(
+        "llm.delta",
+        async (p) => {
+          dispatched.push(p.contextId);
+          await mainGate;
+        },
+        { serial: true },
+      );
       bus.on("metric.conversation", (p) => {
         metrics.push((p as ConversationMetricPacket).name);
       });

@@ -33,6 +33,8 @@ apps/
 
 Everything is a packet on a `PipelineBus`. Audio flows `user.audio_received` → (session fans to) `stt.audio` → STT → `stt.result` / `eos.turn_complete` → reasoner → `llm.delta` / `llm.done` → `tts.text` → TTS → `tts.audio`. Cross-cutting packets: `usage.recorded`, `metric.conversation`, `acoustic.signal`, `dtmf.received` / `dtmf.send`, `call.transfer`, `stt.reconfigure`. See [Packets](/reference/packets/).
 
+An `async` handler registered with `bus.on(kind, handler)` must declare its dispatch mode as a third argument — `{ concurrent: true }` or `{ serial: true }` — enforced at compile time. `concurrent` dispatches fire-and-forget; `serial` awaits in registration order, on purpose. On Workers/Durable Objects a `serial` await defers delivery of the provider's inbound socket events for its whole duration, so TTS audio stops being produced until it resolves — `concurrent` is the default remedy. A sync handler needs no mode.
+
 ## Runs on Node and Cloudflare Workers
 
 The core is socket-free. Inject `createNodeWsSocket` (Node) or `createWorkersSocket` (Workers). On the edge, each conversation is one hibernatable Durable Object; timers become DO alarms and the session store is DO-SQLite.

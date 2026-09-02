@@ -508,7 +508,7 @@ describe("createSmartPbxMediaStreamServer", () => {
     session.bus.on("user.audio_received", async () => {
       notifyMainBlocked();
       await mainReleased;
-    });
+    }, { serial: true });
     const server = registerServer(await createSmartPbxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,

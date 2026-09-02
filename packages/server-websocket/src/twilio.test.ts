@@ -611,7 +611,7 @@ describe("createTwilioMediaStreamServer", () => {
     session.bus.on("user.audio_received", async () => {
       notifyMainBlocked();
       await mainReleased;
-    });
+    }, { serial: true });
     const server = registerServer(await createTwilioMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,

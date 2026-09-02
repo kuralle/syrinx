@@ -730,3 +730,71 @@ describe("edge turn metrics (LDT-18 parity)", () => {
     expect(metrics).not.toHaveProperty("e2eMs");
   });
 });
+
+// Dispatch-mode audit (see @kuralle-syrinx/core's DispatchMode contract). A serial
+// (awaited, unmoded-by-default) handler on ANY kind edge.ts registers — Main lane or
+// Media lane — defers delivery of the provider's inbound socket events on Workers/DO
+// for the whole await, the exact failure this contract exists to make unrepresentable
+// at compile time. This test is the runtime backstop for handlers whose registration
+// slips past typecheck via a widened parameter type (e.g. `(pkt) => unknown`).
+describe("edge dispatch-mode audit", () => {
+  interface RecordedOn {
+    kind: string;
+    isAsync: boolean;
+    mode: { concurrent?: true; serial?: true } | undefined;
+  }
+
+  /** Wraps a real PipelineBusImpl, recording every `.on()` registration's kind/async-ness/mode. */
+  function auditBus(): { bus: VoiceAgentSession["bus"]; registrations: RecordedOn[] } {
+    const inner = new PipelineBusImpl();
+    const registrations: RecordedOn[] = [];
+    const bus: VoiceAgentSession["bus"] = {
+      push: (...args: unknown[]) => (inner.push as (...a: unknown[]) => void)(...args),
+      on: (kind: string, handler: (...a: unknown[]) => unknown, mode?: RecordedOn["mode"]) => {
+        registrations.push({
+          kind,
+          isAsync: (handler as { constructor: { name: string } }).constructor.name === "AsyncFunction",
+          mode,
+        });
+        return (inner.on as (...a: unknown[]) => () => void)(kind, handler, mode);
+      },
+      start: () => inner.start(),
+      stop: () => inner.stop(),
+      get allPackets() {
+        return inner.allPackets;
+      },
+    } as unknown as VoiceAgentSession["bus"];
+    return { bus, registrations };
+  }
+
+  it("registers every handler as sync or concurrent — never an unmoded/serial await", async () => {
+    const { bus, registrations: recorded } = auditBus();
+    const session = {
+      bus,
+      committedTranscript: () => [],
+      async start() {
+        void bus.start();
+      },
+      async close() {
+        bus.stop();
+      },
+      on() {},
+      off() {},
+      requestClientInterrupt() {},
+      noteSessionStart() {},
+    } as unknown as VoiceAgentSession;
+
+    const socket = new FakeSocket();
+    const scheduler = new ManualScheduler();
+    await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
+      sessionStore: new InMemorySessionStore(),
+      scheduler,
+      createSession: () => session,
+    });
+    waitForReady(socket);
+
+    expect(recorded.length).toBeGreaterThan(0);
+    const offenders = recorded.filter((r) => r.isAsync && r.mode?.concurrent !== true);
+    expect(offenders.map((o) => o.kind)).toEqual([]);
+  });
+});

@@ -651,7 +651,7 @@ describe("createTelnyxMediaStreamServer", () => {
     session.bus.on("user.audio_received", async () => {
       notifyMainBlocked();
       await mainReleased;
-    });
+    }, { serial: true });
     const server = registerServer(await createTelnyxMediaStreamServer({
       port: 0,
       outputSampleRateHz: 16000,

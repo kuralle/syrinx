@@ -259,7 +259,7 @@ class MediaLaneProofPlugin implements VoicePlugin {
           `inLast500ms=${inLast500}`,
       );
     };
-    bus.on("tts.playout_progress", park, ...(this.parkMode === "concurrent" ? [{ concurrent: true }] : []));
+    bus.on("tts.playout_progress", park, this.parkMode === "concurrent" ? { concurrent: true } : { serial: true });
 
     console.log(
       `PROOF_AGENT arm=${this.arm} delayMs=${this.delayMs} blockOn=${this.blockOn} ` +

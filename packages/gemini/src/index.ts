@@ -103,19 +103,23 @@ export class GeminiTTSPlugin implements VoicePlugin {
         this.textByContextId.set(textPkt.contextId, current + textPkt.text);
       }),
 
-      bus.on("tts.done", async (pkt: unknown) => {
-        const donePkt = pkt as { text: string; contextId: string };
-        const buffered = this.textByContextId.get(donePkt.contextId) ?? "";
-        this.textByContextId.delete(donePkt.contextId);
-        const text = donePkt.text || buffered;
-        if (!text.trim()) {
-          this.charactersByContextId.delete(donePkt.contextId);
-          this.emitEnd(donePkt.contextId);
-          return;
-        }
-        this.charactersByContextId.set(donePkt.contextId, text.length);
-        await this.synthesize(text, donePkt.contextId);
-      }),
+      bus.on(
+        "tts.done",
+        async (pkt: unknown) => {
+          const donePkt = pkt as { text: string; contextId: string };
+          const buffered = this.textByContextId.get(donePkt.contextId) ?? "";
+          this.textByContextId.delete(donePkt.contextId);
+          const text = donePkt.text || buffered;
+          if (!text.trim()) {
+            this.charactersByContextId.delete(donePkt.contextId);
+            this.emitEnd(donePkt.contextId);
+            return;
+          }
+          this.charactersByContextId.set(donePkt.contextId, text.length);
+          await this.synthesize(text, donePkt.contextId);
+        },
+        { concurrent: true },
+      ),
 
       // Listen for TTS interrupts — abort only the interrupted turn's synthesis.
       bus.on("interrupt.tts", (pkt) => {

@@ -34,12 +34,16 @@ afterEach(() => {
 });
 
 describe("slow non-concurrent handler guard", () => {
-  it("warns when a non-concurrent handler holds the drain loop past the threshold", async () => {
+  it("warns when a serial handler holds the drain loop past the threshold", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await withBus(async (bus) => {
-      bus.on("stt.result", async () => {
-        await new Promise((resolve) => setTimeout(resolve, SLOW_HANDLER_WARN_MS + 40));
-      });
+      bus.on(
+        "stt.result",
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, SLOW_HANDLER_WARN_MS + 40));
+        },
+        { serial: true },
+      );
       bus.push(Route.Main, packet("stt.result"));
       await settle();
     });
@@ -56,9 +60,13 @@ describe("slow non-concurrent handler guard", () => {
     await withBus(async (bus) => {
       // Awaiting is legal consumer semantics. Duration is the hazard, not the promise —
       // so a brief await must NOT warn, or the guard becomes noise and gets ignored.
-      bus.on("stt.result", async () => {
-        await Promise.resolve();
-      });
+      bus.on(
+        "stt.result",
+        async () => {
+          await Promise.resolve();
+        },
+        { serial: true },
+      );
       bus.push(Route.Main, packet("stt.result"));
       await settle();
     });
@@ -87,9 +95,13 @@ describe("slow non-concurrent handler guard", () => {
   it("warns once per kind, not once per packet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await withBus(async (bus) => {
-      bus.on("stt.result", async () => {
-        await new Promise((resolve) => setTimeout(resolve, SLOW_HANDLER_WARN_MS + 20));
-      });
+      bus.on(
+        "stt.result",
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, SLOW_HANDLER_WARN_MS + 20));
+        },
+        { serial: true },
+      );
       bus.push(Route.Main, packet("stt.result"));
       bus.push(Route.Main, packet("stt.result"));
       bus.push(Route.Main, packet("stt.result"));

@@ -242,9 +242,13 @@ function installMainDrainBlocker(bus: PipelineBus): { release: () => void } {
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  bus.on("llm.delta", async () => {
-    await gate;
-  });
+  bus.on(
+    "llm.delta",
+    async () => {
+      await gate;
+    },
+    { serial: true },
+  );
   return { release };
 }
 
