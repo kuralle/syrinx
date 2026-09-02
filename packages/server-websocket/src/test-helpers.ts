@@ -43,6 +43,42 @@ export function registerServer<T extends ClosableServer>(server: T): T {
   return server;
 }
 
+export interface LoopbackTransportHandle extends ClosableServer {
+  address(): ReturnType<HttpServer["address"]>;
+}
+
+export interface StartedLoopbackTransport<T extends LoopbackTransportHandle> {
+  readonly server: T;
+  readonly port: number;
+}
+
+/**
+ * Start a transport server on an ephemeral port bound to 127.0.0.1 explicitly —
+ * never the dual-stack wildcard that `listen(0)` without a host produces. A
+ * wildcard listener can be shadowed for 127.0.0.1 traffic by any other process
+ * that binds the same port number on 127.0.0.1 specifically: the kernel allows
+ * both to listen ([::]:P and 127.0.0.1:P) and routes loopback traffic to the more
+ * specific address, so the client reaches the wrong server and the test sees
+ * `Unexpected server response: 404` or `Socket closed before matching JSON
+ * message` — flaky only under `pnpm -r test`, where sibling suites bind their own
+ * loopback servers concurrently. A specific-address bind cannot be shadowed: a
+ * second bind of 127.0.0.1:P fails with EADDRINUSE, so the client always reaches
+ * the server it asked for. Production code must keep the wildcard default; only
+ * tests, which dial 127.0.0.1, take the specific bind.
+ */
+export async function startLoopbackTransportServer<
+  Options extends { port?: number; host?: string },
+  T extends LoopbackTransportHandle,
+>(create: (options: Options) => Promise<T>, options: Options): Promise<StartedLoopbackTransport<T>> {
+  const server = registerServer(await create({ ...options, port: 0, host: "127.0.0.1" }));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Expected TCP address");
+  if (address.address !== "127.0.0.1") {
+    throw new Error(`Expected transport server bound to 127.0.0.1, got ${address.address}`);
+  }
+  return { server, port: address.port };
+}
+
 export function registerHttpServer(server: HttpServer): HttpServer {
   activeHttpServers.push(server);
   return server;
@@ -88,6 +124,25 @@ export async function openSocket(url: string, options?: WebSocket.ClientOptions)
     socket.once("error", reject);
   });
   return socket;
+}
+
+/**
+ * Open a client socket with room to attach message/close listeners BEFORE the
+ * connection opens. ws delivers every frame in a received chunk synchronously —
+ * open, message, close — before any promise continuation runs, so a listener
+ * attached after `await openSocket(...)` misses server-unsolicited frames that
+ * coalesce with the handshake when the event loop stalls under `pnpm -r test`
+ * load (observed: startup-timeout tests reading `Socket closed before matching
+ * JSON message`). Tests that expect a message the server sends unprompted right
+ * after accept must attach via this helper, then await `opened`.
+ */
+export function connectSocket(url: string, options?: WebSocket.ClientOptions): { readonly socket: WebSocket; readonly opened: Promise<void> } {
+  const socket = registerSocket(new WebSocket(url, options));
+  const opened = new Promise<void>((resolveOpen, reject) => {
+    socket.once("open", resolveOpen);
+    socket.once("error", reject);
+  });
+  return { socket, opened };
 }
 
 export async function openSmartPbxSocket(url: string): Promise<WebSocket> {

@@ -14,9 +14,10 @@ import {
   resamplePcm16,
 } from "@kuralle-syrinx/core/audio";
 import {
+  connectSocket,
+  startLoopbackTransportServer,
   openSocket,
   readJsonMatching,
-  registerServer,
   setupTransportTestCleanup,
   waitForCondition,
 } from "./test-helpers.js";
@@ -60,15 +61,12 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const samples8k = new Int16Array([0, 1000, -1000, 3000]);
     const ulaw = encodePcm16ToMuLaw(samples8k);
 
@@ -107,16 +105,13 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       maxInboundReorderFrames: 1,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify(telnyxStart()));
@@ -156,15 +151,12 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const chunk1 = bigEndianPcm16(new Int16Array([1, 2, 3, 4]));
     const chunk2 = bigEndianPcm16(new Int16Array([101, 102, 103, 104]));
     const chunk3 = bigEndianPcm16(new Int16Array([201, 202, 203, 204]));
@@ -213,15 +205,12 @@ describe("createTelnyxMediaStreamServer", () => {
       await originalClose();
     };
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const chunk1 = bigEndianPcm16(new Int16Array([1, 2, 3, 4]));
     const chunk3 = bigEndianPcm16(new Int16Array([201, 202, 203, 204]));
 
@@ -266,15 +255,12 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array(160))).toString("base64");
 
     client.send(JSON.stringify(telnyxStart()));
@@ -324,15 +310,12 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify(telnyxStart()));
@@ -366,15 +349,12 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify({ ...telnyxStart(), sequence_number: "1" }));
@@ -408,15 +388,12 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify({ ...telnyxStart(), sequence_number: "1" }));
@@ -459,18 +436,15 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
         return session;
       },
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const ulaw = encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]));
     client.send(JSON.stringify(telnyxStart()));
     client.send(JSON.stringify({
@@ -494,21 +468,19 @@ describe("createTelnyxMediaStreamServer", () => {
   });
 
   it("closes Telnyx websocket connections when session startup exceeds startupTimeoutMs", async () => {
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       startupTimeoutMs: 10,
       createSession: () => new Promise<VoiceAgentSession>(() => undefined),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const { socket: client, opened } = connectSocket(telnyxUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "error");
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
       });
     });
+    await opened;
 
     await expect(errorMessage).resolves.toEqual(expect.objectContaining({ event: expect.any(String) }));
     await expect(closed).resolves.toEqual({
@@ -526,14 +498,11 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "error");
     client.send(JSON.stringify(telnyxStart("PCMU", 16000)));
 
@@ -557,15 +526,12 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const samples = new Int16Array([0, 1000, -1000, 3000]);
     client.send(JSON.stringify(telnyxStart("L16", 16000)));
     client.send(JSON.stringify({
@@ -590,14 +556,11 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -652,17 +615,14 @@ describe("createTelnyxMediaStreamServer", () => {
       notifyMainBlocked();
       await mainReleased;
     }, { serial: true });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -721,16 +681,13 @@ describe("createTelnyxMediaStreamServer", () => {
     session.bus.on("record.assistant_audio", (pkt) => {
       recording.push(pkt as RecordAssistantAudioPacket);
     });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(telnyxUrl(address.port));
+    });
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -756,15 +713,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("encodes assistant PCM16 into default PCMU Telnyx media, marks playback, and clears on interruption", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -811,13 +765,10 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("emits tts.playout_progress with completion after the paced audio drains", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
     const progress: Array<{ playedOutMs: number; complete: boolean }> = [];
     session.bus.on("tts.playout_progress", (pkt) => {
@@ -825,7 +776,7 @@ describe("createTelnyxMediaStreamServer", () => {
       if (p.contextId === "telnyx-playout") progress.push({ playedOutMs: p.playedOutMs, complete: p.complete });
     });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -858,13 +809,10 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("attributes the final paced frame to its contextId (playout clock not short by one frame)", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
     const progress: Array<{ playedOutMs: number; complete: boolean }> = [];
     session.bus.on("tts.playout_progress", (pkt) => {
@@ -872,7 +820,7 @@ describe("createTelnyxMediaStreamServer", () => {
       if (p.contextId === "telnyx-final-frame") progress.push({ playedOutMs: p.playedOutMs, complete: p.complete });
     });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -902,16 +850,13 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("uses configured L16 bidirectional output rather than assuming the inbound codec", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       bidirectionalCodec: "L16",
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart("PCMU", 8000)));
     await new Promise((resolve) => setTimeout(resolve, 20));
     const mediaMessage = readJsonMatching(client, (message) => message.event === "media");
@@ -937,15 +882,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("paces outbound media and clears locally queued frames on interruption", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(telnyxUrl(address.port));
+    });
+    const client = await openSocket(telnyxUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -1002,14 +944,11 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1037,15 +976,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("sends the terminal Telnyx playback mark after pending playback marks are acknowledged", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1090,14 +1026,11 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "error");
     client.send(JSON.stringify(telnyxStart()));
     client.send(JSON.stringify({
@@ -1128,14 +1061,11 @@ describe("createTelnyxMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "error");
     client.send(JSON.stringify(telnyxStart()));
     client.send(JSON.stringify({
@@ -1159,15 +1089,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("sends heartbeat pings to Telnyx websocket peers", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       heartbeatIntervalMs: 10,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const ping = new Promise<void>((resolve) => {
       client.once("ping", () => resolve());
     });
@@ -1180,15 +1107,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("closes Telnyx websocket sessions that exceed maxSessionDurationMs", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       maxSessionDurationMs: 10,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -1205,15 +1129,12 @@ describe("createTelnyxMediaStreamServer", () => {
 
   it("closes oversized inbound Telnyx websocket messages before parsing", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       maxInboundMessageBytes: 8,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -1236,15 +1157,12 @@ describe("createTelnyxMediaStreamServer", () => {
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       maxBufferedAmountBytes: 1,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await waitForCondition(() => server.wsServer.clients.size > 0);
 
@@ -1303,14 +1221,11 @@ describe("createTelnyxMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify({
       event: "dtmf",
       stream_id: "telnyx-stream",
@@ -1335,14 +1250,11 @@ describe("createTelnyxMediaStreamServer", () => {
       dtmfReceived.push(pkt as unknown as { kind: string; digit: string; provider: string; rawDigit: string; contextId: string });
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     client.send(JSON.stringify({
       event: "dtmf",
@@ -1386,15 +1298,12 @@ describe("createTelnyxMediaStreamServer", () => {
       session.bus.on(kind, (pkt) => { speechPath.push(pkt); });
     }
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1435,14 +1344,11 @@ describe("createTelnyxMediaStreamServer", () => {
     });
     session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart()));
     client.send(JSON.stringify({
       event: "dtmf",
@@ -1493,15 +1399,12 @@ describe("Telnyx PCMA / G722 media transcode", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart("PCMA", 8000)));
 
     const samples8k = new Int16Array(160);
@@ -1531,15 +1434,12 @@ describe("Telnyx PCMA / G722 media transcode", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart("G722", 16000)));
 
     const samples16k = new Int16Array(320); // 20 ms @ 16 kHz
@@ -1574,14 +1474,11 @@ describe("Telnyx dtmf.send / call.transfer bus wiring", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart("PCMU", 8000)));
     // allow start to process
     await new Promise((r) => setTimeout(r, 50));
@@ -1605,15 +1502,12 @@ describe("Telnyx dtmf.send / call.transfer bus wiring", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTelnyxMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTelnyxMediaStreamServer, {
       createSession: () => session,
       warmTransferSummarizer: async () => "from summarizer seam",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(telnyxUrl(address.port));
+    const client = await openSocket(telnyxUrl(port));
     client.send(JSON.stringify(telnyxStart("PCMU", 8000)));
     await new Promise((r) => setTimeout(r, 50));
 

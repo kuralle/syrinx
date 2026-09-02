@@ -8,6 +8,7 @@ import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 import { createTwilioMediaStreamServer, type TwilioMediaStreamServer } from "./twilio.js";
 import { createVoiceWebSocketServer, type VoiceWebSocketServer } from "./index.js";
+import { startLoopbackTransportServer } from "./test-helpers.js";
 
 function twilioUrl(port: number): string {
   return `ws://127.0.0.1:${port}/twilio`;
@@ -112,15 +113,12 @@ afterEach(async () => {
 describe("graceful connection draining (WT-04)", () => {
   it("non-graceful close terminates all clients immediately", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await waitMs(30);
 
@@ -137,15 +135,12 @@ describe("graceful connection draining (WT-04)", () => {
 
   it("graceful close with no pending audio sends 1001 going-away to clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await waitMs(30); // let wireSession + processMessage complete
 
@@ -158,18 +153,15 @@ describe("graceful connection draining (WT-04)", () => {
 
   it("graceful close drains pending paced audio before sending 1001", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outboundFrameDurationMs: 20,
       outputSampleRateHz: 8000,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await waitMs(30);
 
@@ -205,18 +197,15 @@ describe("graceful connection draining (WT-04)", () => {
 
   it("graceful close force-terminates at drainDeadlineMs for wedged consumers", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outboundFrameDurationMs: 20,
       outputSampleRateHz: 8000,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await waitMs(30);
 
@@ -248,15 +237,12 @@ describe("graceful connection draining (WT-04)", () => {
 
   it("createVoiceWebSocketServer graceful close sends 1001 to browser clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openBrowserSocketReady(browserUrl(address.port));
+    const client = await openBrowserSocketReady(browserUrl(port));
     const closePromise = waitForClose(client);
     await server.close({ graceful: true, drainDeadlineMs: 3_000 });
     expect(await closePromise).toBe(1001);
@@ -264,32 +250,26 @@ describe("graceful connection draining (WT-04)", () => {
 
   it("createVoiceWebSocketServer close() with no opts sends immediate RST (1006) to browser clients", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       createSession: () => session,
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
-    const client = await openBrowserSocketReady(browserUrl(address.port));
+    const client = await openBrowserSocketReady(browserUrl(port));
     const closePromise = waitForClose(client);
     await server.close();
     expect(await closePromise).toBe(1006);
   }, 10_000);
 
   it("multiple simultaneous clients all receive 1001 on graceful close", async () => {
-    const server = await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => new VoiceAgentSession({ plugins: {} }),
     });
     activeServers.push(server);
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
     const [c1, c2] = await Promise.all([
-      openSocket(twilioUrl(address.port)),
-      openSocket(twilioUrl(address.port)),
+      openSocket(twilioUrl(port)),
+      openSocket(twilioUrl(port)),
     ]);
     c1.send(JSON.stringify(twilioStart("MZ-1", "CA-1")));
     c2.send(JSON.stringify(twilioStart("MZ-2", "CA-2")));

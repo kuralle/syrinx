@@ -12,6 +12,7 @@ import {
 } from "./index.js";
 import { TRANSPORT_ADMISSION_REJECTED_METRIC } from "./transport-host.js";
 import {
+  startLoopbackTransportServer,
   openBrowserSocketReady,
   openSocket,
   registerHttpServer,
@@ -31,20 +32,17 @@ function websocketUrl(port: number): string {
 describe("WT-08 admission control and upgrade routing", () => {
   it("rejects connections beyond maxConcurrentSessions with 1013 and transport.admission_rejected", async () => {
     const metrics: string[] = [];
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       maxConcurrentSessions: 2,
       onTransportMetric: (name) => metrics.push(name),
       createSession: () => new VoiceAgentSession({ plugins: {} }),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const first = await openBrowserSocketReady(websocketUrl(address.port));
-    const second = await openBrowserSocketReady(websocketUrl(address.port));
+    const first = await openBrowserSocketReady(websocketUrl(port));
+    const second = await openBrowserSocketReady(websocketUrl(port));
     expect(server.wsServer.clients.size).toBe(2);
 
-    const rejected = registerSocket(new WebSocket(websocketUrl(address.port)));
+    const rejected = registerSocket(new WebSocket(websocketUrl(port)));
     await new Promise<void>((resolveOpen, reject) => {
       rejected.once("open", resolveOpen);
       rejected.once("error", reject);
@@ -60,19 +58,16 @@ describe("WT-08 admission control and upgrade routing", () => {
   });
 
   it("allows a new connection after an admitted session disconnects", async () => {
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       maxConcurrentSessions: 1,
       createSession: () => new VoiceAgentSession({ plugins: {} }),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const first = await openBrowserSocketReady(websocketUrl(address.port));
+    const first = await openBrowserSocketReady(websocketUrl(port));
     first.close();
     await waitForCondition(() => server.wsServer.clients.size === 0);
 
-    const second = await openBrowserSocketReady(websocketUrl(address.port));
+    const second = await openBrowserSocketReady(websocketUrl(port));
     expect(second.readyState).toBe(WebSocket.OPEN);
 
     second.close();
@@ -80,22 +75,19 @@ describe("WT-08 admission control and upgrade routing", () => {
   });
 
   it("rejects an unauthorized upgrade with 4401 and admits an authorized one", async () => {
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       authorize: (request) => new URL(request.url ?? "/", "http://x").searchParams.get("token") === "secret",
       createSession: () => new VoiceAgentSession({ plugins: {} }),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const rejected = registerSocket(new WebSocket(`${websocketUrl(address.port)}?token=wrong`));
+    const rejected = registerSocket(new WebSocket(`${websocketUrl(port)}?token=wrong`));
     await new Promise<void>((resolve, reject) => {
       rejected.once("open", resolve);
       rejected.once("error", reject);
     });
     expect(await waitForClose(rejected)).toBe(4401);
 
-    const authorized = await openBrowserSocketReady(`${websocketUrl(address.port)}?token=secret`);
+    const authorized = await openBrowserSocketReady(`${websocketUrl(port)}?token=secret`);
     expect(authorized.readyState).toBe(WebSocket.OPEN);
 
     authorized.close();

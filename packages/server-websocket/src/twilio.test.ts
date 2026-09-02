@@ -6,9 +6,10 @@ import { Route, VoiceAgentSession, type ConversationMetricPacket, type RecordAss
 import { createTwilioMediaStreamServer } from "./twilio.js";
 import { decodeMuLawToPcm16, encodePcm16ToMuLaw, pcm16SamplesToBytes, resamplePcm16 } from "@kuralle-syrinx/core/audio";
 import {
+  connectSocket,
+  startLoopbackTransportServer,
   openSocket,
   readJsonMatching,
-  registerServer,
   setupTransportTestCleanup,
   waitForCondition,
 } from "./test-helpers.js";
@@ -37,14 +38,11 @@ function twilioStart(streamSid = "MZ-test-stream", callSid = "CA-test-call"): Re
 
 describe("createTwilioMediaStreamServer", () => {
   it("does not negotiate websocket compression for carrier media streams", async () => {
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => new VoiceAgentSession({ plugins: {} }),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port), { perMessageDeflate: true });
+    const client = await openSocket(twilioUrl(port), { perMessageDeflate: true });
     expect(client.extensions).toBe("");
 
     client.close();
@@ -58,16 +56,13 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-call-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const samples8k = new Int16Array([0, 1000, -1000, 3000]);
     const ulaw = encodePcm16ToMuLaw(samples8k);
 
@@ -110,16 +105,13 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-gap-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify(twilioStart()));
@@ -158,16 +150,13 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-timestamp-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array(160))).toString("base64");
 
     client.send(JSON.stringify(twilioStart()));
@@ -213,16 +202,13 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-duplicate-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
@@ -260,16 +246,13 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-sequence-gap-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
     client.send(JSON.stringify({ ...twilioStart(), sequenceNumber: "1" }));
@@ -302,16 +285,13 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: () => session,
       contextId: () => "twilio-sequence-duplicate-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     const payload = Buffer.from(encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]))).toString("base64");
 
@@ -351,19 +331,16 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       inputSampleRateHz: 16000,
       createSession: async () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
         return session;
       },
       contextId: () => "twilio-delayed-session",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const ulaw = encodePcm16ToMuLaw(new Int16Array([0, 1000, -1000, 3000]));
     client.send(JSON.stringify(twilioStart()));
     client.send(JSON.stringify({
@@ -390,21 +367,19 @@ describe("createTwilioMediaStreamServer", () => {
   });
 
   it("closes Twilio websocket connections when session startup exceeds startupTimeoutMs", async () => {
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       startupTimeoutMs: 10,
       createSession: () => new Promise<VoiceAgentSession>(() => undefined),
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const { socket: client, opened } = connectSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
       });
     });
+    await opened;
 
     await expect(errorMessage).resolves.toMatchObject({
       event: "syrinx_error",
@@ -427,14 +402,11 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     client.send(JSON.stringify({
       event: "start",
@@ -471,14 +443,11 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     client.send(JSON.stringify(twilioStart()));
     client.send(JSON.stringify({
@@ -510,14 +479,11 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const errorMessage = readJsonMatching(client, (message) => message.event === "syrinx_error");
     client.send(JSON.stringify(twilioStart()));
     client.send(JSON.stringify({
@@ -547,14 +513,11 @@ describe("createTwilioMediaStreamServer", () => {
       received.push(pkt as UserAudioReceivedPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -612,17 +575,14 @@ describe("createTwilioMediaStreamServer", () => {
       notifyMainBlocked();
       await mainReleased;
     }, { serial: true });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -681,16 +641,13 @@ describe("createTwilioMediaStreamServer", () => {
     session.bus.on("record.assistant_audio", (pkt) => {
       recording.push(pkt as RecordAssistantAudioPacket);
     });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 250,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(twilioUrl(address.port));
+    });
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -716,15 +673,12 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("closes oversized inbound Twilio websocket messages before parsing", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       maxInboundMessageBytes: 8,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -743,15 +697,12 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("encodes assistant PCM16 audio into 20 ms Twilio media frames, marks playback, and clears on interruption", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -800,17 +751,14 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("paces outbound media frames and cancels unsent assistant audio on interruption", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
       maxQueuedOutputAudioMs: 30_000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const messages: any[] = [];
     client.on("message", (data, isBinary) => {
       if (!isBinary) messages.push(JSON.parse(data.toString()));
@@ -870,14 +818,11 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -905,15 +850,12 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("sends the terminal Twilio playback mark after pending playback marks are acknowledged", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -963,16 +905,13 @@ describe("createTwilioMediaStreamServer", () => {
     session.bus.on("record.assistant_audio", (pkt) => {
       recording.push(pkt as RecordAssistantAudioPacket);
     });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       outboundFrameDurationMs: 20,
       maxQueuedOutputAudioMs: 100,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
-    const client = await openSocket(twilioUrl(address.port));
+    });
+    const client = await openSocket(twilioUrl(port));
     client.once("close", () => {
       closed = true;
     });
@@ -1008,15 +947,12 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("sends heartbeat pings to telephony websocket peers", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       heartbeatIntervalMs: 10,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const ping = new Promise<void>((resolve) => {
       client.once("ping", () => resolve());
     });
@@ -1029,15 +965,12 @@ describe("createTwilioMediaStreamServer", () => {
 
   it("closes Twilio websocket sessions that exceed maxSessionDurationMs", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       maxSessionDurationMs: 10,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       client.once("close", (code, reason) => {
         resolve({ code, reason: reason.toString() });
@@ -1058,15 +991,12 @@ describe("createTwilioMediaStreamServer", () => {
     session.bus.on("metric.conversation", (pkt) => {
       metrics.push(pkt as ConversationMetricPacket);
     });
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       maxBufferedAmountBytes: 1,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1112,14 +1042,11 @@ describe("createTwilioMediaStreamServer", () => {
       metrics.push(pkt as ConversationMetricPacket);
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify({
       event: "dtmf",
       streamSid: "MZ-test-stream",
@@ -1144,14 +1071,11 @@ describe("createTwilioMediaStreamServer", () => {
       dtmfReceived.push(pkt as unknown as { kind: string; digit: string; provider: string; rawDigit: string; contextId: string });
     });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     client.send(JSON.stringify({
       event: "dtmf",
@@ -1195,15 +1119,12 @@ describe("createTwilioMediaStreamServer", () => {
       session.bus.on(kind, (pkt) => { speechPath.push(pkt); });
     }
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       outputSampleRateHz: 16000,
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -1244,14 +1165,11 @@ describe("createTwilioMediaStreamServer", () => {
     });
     session.bus.on("dtmf.received", (pkt) => { dtmfReceived.push(pkt); });
 
-    const server = registerServer(await createTwilioMediaStreamServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createTwilioMediaStreamServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const client = await openSocket(twilioUrl(address.port));
+    const client = await openSocket(twilioUrl(port));
     client.send(JSON.stringify(twilioStart()));
     client.send(JSON.stringify({
       event: "dtmf",

@@ -10,8 +10,8 @@ import {
 } from "./session-store.js";
 import { TurnMetricsTracker } from "./turn-metrics.js";
 import {
+  startLoopbackTransportServer,
   openBrowserClientAndReadReady,
-  registerServer,
   setupTransportTestCleanup,
   waitForCondition,
 } from "./test-helpers.js";
@@ -259,8 +259,7 @@ describe("createVoiceWebSocketServer sessionStore seam", () => {
 
     let created = 0;
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       resumeWindowMs: 200,
       sessionStore,
       createSession: () => {
@@ -268,11 +267,9 @@ describe("createVoiceWebSocketServer sessionStore seam", () => {
         return session;
       },
       contextId: () => "turn-test",
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const sessionUrl = `ws://127.0.0.1:${String(address.port)}/ws?sessionId=fake-store-test`;
+    const sessionUrl = `ws://127.0.0.1:${String(port)}/ws?sessionId=fake-store-test`;
     const [first, firstReady] = await openBrowserClientAndReadReady(sessionUrl);
     expect(firstReady).toMatchObject({ sessionId: "fake-store-test", resumed: false });
     first.close();

@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 import { createVoiceWebSocketServer, type VoiceWebSocketServer } from "./index.js";
+import { startLoopbackTransportServer } from "./test-helpers.js";
 
 function browserUrl(port: number): string {
   return `ws://127.0.0.1:${port}/ws`;
@@ -112,9 +113,8 @@ describe("WT-03 Browser outbound pacing", () => {
     activeHttpServers.push(httpServer);
     
     let session: VoiceAgentSession | null = null;
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0, // Let the system assign a port
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -123,7 +123,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
 
     // Session is already started by the websocket server
@@ -187,9 +186,8 @@ describe("WT-03 Browser outbound pacing", () => {
     activeHttpServers.push(httpServer);
     
     let session: VoiceAgentSession | null = null;
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0,
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -198,7 +196,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
 
     // Session is already started by the websocket server
@@ -249,9 +246,8 @@ describe("WT-03 Browser outbound pacing", () => {
     activeHttpServers.push(httpServer);
     
     let session: VoiceAgentSession | null = null;
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0,
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -260,7 +256,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
 
     // Session is already started by the websocket server
@@ -304,9 +299,8 @@ describe("WT-03 Browser outbound pacing", () => {
     activeHttpServers.push(httpServer);
     
     let session: VoiceAgentSession | null = null;
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0,
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -316,7 +310,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
 
     // Session is already started by the websocket server
@@ -357,9 +350,8 @@ describe("WT-03 Browser outbound pacing", () => {
 
     let session: VoiceAgentSession | null = null;
     const metrics: Array<{ name: string; value: string }> = [];
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0,
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -367,7 +359,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
     session!.bus.on("metric.conversation", (pkt) => {
       const metric = pkt as unknown as { name: string; value: string };
@@ -400,9 +391,8 @@ describe("WT-03 Browser outbound pacing", () => {
     activeHttpServers.push(httpServer);
 
     let session: VoiceAgentSession | null = null;
-    const server = await createVoiceWebSocketServer({
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       server: httpServer,
-      port: 0,
       createSession: () => {
         session = new VoiceAgentSession({ plugins: {} });
         return session;
@@ -411,7 +401,6 @@ describe("WT-03 Browser outbound pacing", () => {
     });
     activeServers.push(server);
 
-    const port = (server.address() as any).port;
     const socket = await openBrowserSocketReady(browserUrl(port));
     let closed = false;
     socket.once("close", () => {

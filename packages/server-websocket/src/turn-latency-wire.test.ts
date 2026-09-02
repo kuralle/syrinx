@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { Route, VoiceAgentSession } from "@kuralle-syrinx/core";
 import { createVoiceWebSocketServer } from "./index.js";
 import {
+  startLoopbackTransportServer,
   openBrowserClientAndReadReady,
   readJsonMatching,
-  registerServer,
   setupTransportTestCleanup,
   waitForCondition,
 } from "./test-helpers.js";
@@ -57,14 +57,11 @@ async function driveTurnLatency(session: VoiceAgentSession, contextId: string): 
 describe("turn_latency wire forwarding", () => {
   it("forwards turn_latency to the browser socket with present fields intact", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(port));
     const turnLatencyPromise = readJsonMatching(client, (message) =>
       (message as { type?: string }).type === "turn_latency",
     );
@@ -106,14 +103,11 @@ describe("turn_latency wire forwarding", () => {
 
   it("omits absent optional turn_latency fields instead of filling zeros", async () => {
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(port));
     const turnLatencyPromise = readJsonMatching(client, (message) =>
       (message as { type?: string }).type === "turn_latency",
     );
@@ -143,14 +137,11 @@ describe("turn_latency wire forwarding — rule 6 sabotage", () => {
     expect(sabotagedDeliver()).toBeNull();
 
     const session = new VoiceAgentSession({ plugins: {} });
-    const server = registerServer(await createVoiceWebSocketServer({
-      port: 0,
+    const { server, port } = await startLoopbackTransportServer(createVoiceWebSocketServer, {
       createSession: () => session,
-    }));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected TCP address");
+    });
 
-    const [client] = await openBrowserClientAndReadReady(websocketUrl(address.port));
+    const [client] = await openBrowserClientAndReadReady(websocketUrl(port));
     const turnLatencyPromise = readJsonMatching(client, (message) =>
       (message as { type?: string }).type === "turn_latency",
     );
