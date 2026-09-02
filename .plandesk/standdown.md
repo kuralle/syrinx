@@ -1,69 +1,61 @@
-# Standdown — 2026-08-19
+# Standdown — 2026-09-03
 
-Session subject: the media lane — proving it on Node, measuring it on Workers/DO,
-diagnosing why it fails there, and guarding against reintroduction.
+Session subject: an autonomous board run under "take full ownership: release scope, groom, work the frontier, defer only what needs a live carrier". Stopped at the run budget's 12-dispatch cap, not at an empty frontier.
 
-## Shipped
+## Shipped (eight commits on `main`, one work item each)
 
-- Proved the media lane on the Node WebSocket host with a controlled three-arm live experiment — after median 30 ms, before median 7666 ms, control median 38 ms, n=5 per arm across 15 live turns (`0f599d3`).
-- Established that the original task premise was false: a slow tool cannot exercise the media lane, because the reasoner run is registered on `eos.turn_complete` with `{ concurrent: true }` and dispatched fire-and-forget, and the telephony idle bed writes straight to the socket without touching the bus.
-- Encoded two measurement traps in the fixture — the `tts.playout_progress` trigger (a turn emits only two `tts.text` chunks) and `MIN_PARK_MS = 8000` (the paced-playout buffer absorbs ~2.3–2.5 s of any park).
-- Renamed "Prove the media lane end-to-end on a live call with a slow tool" to "Prove the media lane keeps audio flowing while a Main-lane handler is parked", rewrote its build contract, and flipped it to done.
-- Corrected goal criterion `350f17c7`, which had specified a 2000 ms tool call that measurement falsified in both halves.
-- Rewrote the Workers/DO proof host to install a non-concurrent Main-lane handler and serve all three arms from one deployment by sessionId prefix (`89d39c8`, `33e9b1e`).
-- Measured that the media lane does not deliver its property on Workers/DO — before ≈ after ≈ the park duration, control flat, after arm gapping 8343–9747 ms across eight runs.
-- Found and removed a self-fetch confound: a park implemented as `fetch()` to the Worker's own `/delay` route read 10104 ms; a timer park on the same arm read 322 ms.
-- Refuted the Durable Object output-gating hypothesis with a failed deterministic prediction — an un-awaited `storage.put()` before the park stalled 2 of 5 runs, not every run.
-- Rejected the shared-wake-signal hypothesis: `mediaResolver` and `restResolver` are separate in `pipeline-bus.ts`.
-- Recorded that two diagnosis experiments were void after a positive control failed to reproduce (`6fc8acc`, `b00e795`).
-- Built a provider-free microbenchmark with arms interleaved inside one batch — raw DO sockets, an agents-SDK `Connection`, both storage probes, concurrent-versus-parked handlers — 220 trials, zero stalls.
-- Diagnosed the stall as blocked production rather than held egress, by timestamping dispatches: last-dispatch offsets of 342, 1775, 1994, 1848, 1821 and 3703 ms into a 10 000 ms park, with zero dispatches in the final 500 ms (`dcfe018`, `2c2b394`).
-- Checked prior art with `gh` across `cloudflare/workerd` and `cloudflare/agents` (no matching issue) and sourced the input/output gate semantics from Cloudflare's "Durable Objects: Easy, Fast, Correct".
-- Added a dev-only guard in `pipeline-bus.ts` reporting a non-concurrent handler that holds the drain loop ≥100 ms, once per kind, naming the remedy; `SLOW_HANDLER_WARN_MS` exported from core (`6445d8b`).
-- Verified that guard by sabotage — disabling the threshold check failed the two positive tests while both negative controls stayed green.
-- Audited the workspace with the guard: it trips exactly twice, both inside `media-lane-isolation.test.ts`, which builds a slow Main handler deliberately. No production voice-path handler parks the loop.
-- Verified the concurrent-handler remedy with interleaved arms on the deployed edge host — `main` stalled 3 of 6, `concurrent` 0 of 6 with a 531 ms maximum (`19f373c`, `ab5eb9d`).
-- Ran the full workspace suite green, adding 4 tests in `packages/core/src/pipeline-bus.slow-handler.test.ts`.
-- Deleted both throwaway Workers, `syrinx-media-lane-proof` and `syrinx-media-lane-microbench`; `/health` returns 404.
-- Pushed 47 commits to `kuralle/main`, `5900f01` → `ab5eb9d`.
+- `05b0025` onTurn's `consulted` flag is recorded on `agent_tool_call`, so a NON_BLOCKING tool cannot invert it. Closed goal **withvoice-turn-observability**.
+- `bfbaebc` VoicePacket open-forwarding guarantee: type test, bus/session forwarding test, and a source scan that fails on an exhaustive switch over a packet kind; documented with the vendor-prefix rule.
+- `fdb9be6` **Breaking, core:** a Promise-returning bus handler must declare `{ concurrent: true }` or `{ serial: true }` at registration or it does not compile; every awaiting handler in the workspace migrated; edge audit test. Closed goal **continuous-interaction** (Workers/DO criterion corrected on the board to "met by contract + interleaved proof").
+- `80d1799` **Breaking, server-websocket:** the browser `metrics` message is derived from the session's `turn_latency` event, same names and anchor, plus playout facts; `sttMs`/`llmTTFTMs`/`ttsTTFBMs`/`e2eMs` are gone from packages, apps and examples; CLI `metrics.json` keys renamed.
+- `b64edcd` **Breaking, cf-agents:** `withVoice` takes `realtime` / `stt` / `tts` / `vad` / `eos` as peer fields; the shape is derived by `resolveVoiceShape`; half-cascade is `realtime + tts`; a knob foreign to the shape throws naming the field.
+- `ff3c566` Socket tests stop flaking: transport test servers bind `127.0.0.1` (a specific bind cannot be shadowed by another `127.0.0.1:P` listener the way the `[::]:P` wildcard was) and startup-timeout tests attach listeners before the handshake. 50/50 isolated, 5/5 full-suite in the worker's tree; 10 + 1 after merge. Also closed the Twilio port-race card.
+- `10214a2` `RealtimeBridge` dispatches the delegate tool NON_BLOCKING on fronts that support it (`delegateBehavior`, `delegateAnswerScheduling`, `delegateAckScheduling`) and runs front tools off the event pump. Live-proven on Gemini.
+- Goal **gemini-adapter-parity** completed on evidence that already existed (goAway 780 s proof, manual-VAD proof).
 
-## Decisions
+Every `full`-lane item had a cross-family review (pi/glm-5.2) with the verdict and findings posted on its task; every commit was preceded by `pnpm -r typecheck` and `pnpm -r test` on `main`.
 
-- The media lane is proven on Node WS and is **not** the defect on Workers/DO. Do not redesign it.
-- A slow tool cannot exercise this property on any transport, so the slow-tool fixture is abandoned as a proof shape.
-- The guard reports **duration, not promises** — awaiting is legal consumer semantics; only a long await is the hazard. Threshold 100 ms, an eighth of the ~800 ms–1 s voice budget.
-- Guard timing is dev-only and resolved once at construction, so production pays a boolean check rather than a clock read per dispatch.
-- Experiment arms must be **interleaved within one batch**. Sequential batches voided three earlier diagnosis attempts.
-- Two earlier claims stand retracted: the "held egress" localization and the "intermittent, temporally clustered" characterisation. The apparent intermittency was utterance length.
+## Decisions that constrain follow-up
+
+- **Dispatch mode is a compile-time contract.** Async handlers declare `concurrent` or `serial`; `serial` is the exception and the 100 ms guard still polices it. An `any`-typed handler is the one shape that escapes and is documented as a review violation.
+- **A NON_BLOCKING delegate's ack must not be SILENT.** Measured live: with `scheduling: "SILENT"` the Gemini front is mute for the whole consult because its turn ends at the tool call; `WHEN_IDLE` (now the default) has it tell the caller it is checking, and the `INTERRUPT` answer is voiced within a second of landing. "Keep talking during a tool" is a property of the ack's scheduling.
+- **One lockstep changelog.** Entries go under `## Unreleased` at the root; per-package changelogs are folded in.
+- **Half-cascade assembles with the generic `tts` plugin key**, not a provider name, because `init-stage-order.ts` only orders known keys. The example half-cascade scripts carry a latent ordering bug on this point.
+- **Text-only and bi-model are not `withVoice` shapes.** A voice front or `stt + tts` is mandatory there; the task text that listed them was narrowed deliberately.
+- **Board tooling can now move tasks between goals and edit goal contracts** (`update_task(goal_id)`, `update_goal`, `delete_edge`). The 13 Converse-parity tasks were re-homed to the new goal **voice-agent-front-door**.
+
+## Board state
+
+Goals: gemini-adapter-parity, withvoice-turn-observability, continuous-interaction **complete**; voice-agent-front-door and general **active**.
+
+`todo`, unblocked and groomed to contract depth: Add outcome + verified to tool results (full); Text turns as first-class session input (full); Measure real tool durations and learn a per-tool estimate (approve); Run the VAP interaction policy against TurnBench (approve); Bias STT from dialog state (approve); Classify interruption semantics (approve); Ship a real MetricsExporter backend (approve); Add a speak-ahead governor (approve); Stop packages/gemini index.test.ts flaking (auto, filed by a reviewer this run).
+
+`todo`, blocked by edges: Implement the @kuralle-syrinx/agents front door (on outcome + verified); Generate and publish an AsyncAPI document (on text turns + front door); Bind Telnyx transport on the CF Workers edge (on carrier certification).
+
+`scope`: Certify telephony against a live carrier (needs a Twilio/Telnyx line — deferred per instruction); Deferred background tools (needs the aria-flow re-entry decision); Floor-managed narration and Spoken permission gate (behind deferred tools); Measure the two production serial handlers on workerd (filed this run from review findings).
 
 ## Blocked / needs human
 
-- "Stop an awaiting handler from stalling audio production on Workers/DO" sits in `scope` at high severity and needs release. The remedy is diagnosed and verified; the production contract change is not made.
-- Whether to make awaiting edge handlers `{ concurrent: true }` **by contract** is deferred — it changes handler semantics on the live voice path.
-- The continuous-interaction goal cannot complete: criterion `350f17c7` is UNMET for Workers/DO.
+- **Raise or end the run budget.** The 12-dispatch cap was reached with nine groomed `todo` items left; nothing else stopped the frontier.
+- **Worker capacity on this machine:** cursor is out of usage, grok's free tier exhausts mid-task (and `grok-4.5` is gone; pinned `grok-4.6`). claude/sonnet, pi/glm-5.2 and codex/gpt-5.6-luna all delivered. Recorded in the worker files.
+- **The aria-flow decision** "how a detached tool call re-enters the conversation" gates the deferred-tools trio.
+- **A carrier line** gates telephony certification and the Telnyx-on-Workers deploy.
+- **Nothing has been published to npm.** `CHANGELOG.md` has an `## Unreleased` section with three Breaking entries and one Added; the 4.7.0 release is a human call (the studio publish gate from 25 July is also still open).
 
 ## Still open
 
-- Only the Node WS half of criterion `350f17c7` is met.
-- No production code change fixes the stall; the shipped guard is preventive only.
-- The `openai-tts` `synthQueue` chain-don't-await pattern is the repo's working remedy but is not generalised into a documented contract for other plugins or edge handlers.
-- App-supplied and third-party handlers can still register an awaiting non-concurrent handler; the guard shows this in dev but does not prevent it in production.
-- Two guard warnings fire in `media-lane-isolation.test.ts` on every full-suite run. Intentional fixtures; no decision taken on silencing them.
-- `DURABLE_HISTORY` in the proof host is a hand-flipped compile-time constant, kept though explicitly not implicated.
-- The microbench does not reproduce the fault, so it cannot serve as a regression test for this defect — only as a cheap harness for adjacent questions.
-- 72 Dependabot advisories (21 critical, 22 high) reported on push, untriaged.
-- `.env.bak.*` and `.env.before-cartesia-fix.*` remain untracked because they contain API keys.
+- `packages/deepgram/.handoff/finalize-contract-probe.test.ts` is an untracked leftover that inflates the deepgram count on `main` (54 vs 52 in a clean tree).
+- `scripts/run-kernel-benchmark.ts` and `test/performance/baseline.json` still spell the old latency names; outside the grep gate, own measurement, not consumers.
+- 106 agent-written board comments from earlier sessions remain unresolved; no human comment among them.
+- `.env.bak.*` files with API keys are untracked and not ignored; `.gitignore` lists only `.env`.
+- Two coverage gaps named by reviewers: a reconnect mid-turn before `turn_latency` fires now finalizes as `metrics.unmeasured_turn`; half-cascade is tested at assembly level only, not through `withVoice`'s turn observer.
 
 ## Suggested next
 
-- Release "Stop an awaiting handler from stalling audio production on Workers/DO" and choose between by-contract concurrent registration and documentation-only.
-- Add a regression test that fails when a non-concurrent Main-lane handler awaits on the voice path; the guard is currently observable only as a console warning.
-- Audit plugin-authored and third-party handlers for long awaits, since the guard reports at runtime rather than at registration.
-- Re-run the interleaved main-versus-concurrent proof after any handler-contract change, using sessionId-selected arms within one batch.
-- Triage the 72 Dependabot advisories on `kuralle/syrinx`.
+- Continue the frontier in this order: outcome + verified → front door; per-tool duration (fixes `durationMs` hardcoded to 0); TurnBench (first public number); gemini test flake (cheap, hurts every gate).
+- Cut 4.7.0 once a human has read the three Breaking entries.
+- Resolve the aria-flow re-entry decision to release the deferred-tools trio.
 
 ## Suggested skills
 
-- `plandesk-foreman` — to work the released Workers/DO task once a human opens it.
-- `plandesk-groom-task` — if the contract decision splits into separate build items.
-- `plandesk-standup` — to reopen from this file.
+- `plandesk-standup` to reopen from this file; `plandesk-autonomy /plandesk-foreman all todo` to resume the frontier with a fresh dispatch budget.
