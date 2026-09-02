@@ -18,14 +18,14 @@ const ctx = { sessionId: "s1" };
 
 describe("realtimeVoicePipeline", () => {
   it("is a realtime pipeline routed through the ask_university delegate tool", () => {
-    expect(realtimeVoicePipeline.kind).toBe("realtime");
+    expect(realtimeVoicePipeline.realtime).toBeDefined();
     expect(realtimeVoicePipeline.delegateToolName).toBe("ask_university");
   });
 
   it("builds an OpenAI front by default and a Gemini front when REALTIME_FRONT=gemini", () => {
-    const openai = realtimeVoicePipeline.front({ OPENAI_API_KEY: "k", VECTORIZE: mockVectorize }, ctx);
+    const openai = realtimeVoicePipeline.realtime!({ OPENAI_API_KEY: "k", VECTORIZE: mockVectorize }, ctx);
     expect(openai).toBeTruthy();
-    const gemini = realtimeVoicePipeline.front(
+    const gemini = realtimeVoicePipeline.realtime!(
       { REALTIME_FRONT: "gemini", GEMINI_API_KEY: "g", VECTORIZE: mockVectorize },
       ctx,
     );
@@ -33,9 +33,9 @@ describe("realtimeVoicePipeline", () => {
   });
 
   it("requires the front model's key (OPENAI_API_KEY default; GEMINI_API_KEY for gemini)", () => {
-    expect(() => realtimeVoicePipeline.front({ VECTORIZE: mockVectorize }, ctx)).toThrow(/OPENAI_API_KEY/);
+    expect(() => realtimeVoicePipeline.realtime!({ VECTORIZE: mockVectorize }, ctx)).toThrow(/OPENAI_API_KEY/);
     expect(() =>
-      realtimeVoicePipeline.front({ REALTIME_FRONT: "gemini", VECTORIZE: mockVectorize }, ctx),
+      realtimeVoicePipeline.realtime!({ REALTIME_FRONT: "gemini", VECTORIZE: mockVectorize }, ctx),
     ).toThrow(/GEMINI_API_KEY/);
   });
 

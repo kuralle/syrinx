@@ -16,22 +16,16 @@ interface Env extends Record<string, unknown> {
 
 // Realtime front: the agent's own kuralle runtime is the brain (default reasoner).
 export class RealtimeVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "realtime",
-    front: (env) => fromGeminiLive({ apiKey: env.GEMINI_API_KEY }),
-    delegateToolName: "consult_knowledge",
-  },
+  realtime: (env) => fromGeminiLive({ apiKey: env.GEMINI_API_KEY }),
+  delegateToolName: "consult_knowledge",
 }) {}
 
 // Cascaded: explicit reasoner + discrete stt/tts stages.
 const noopPlugin: VoicePlugin = { initialize: async () => {}, close: async () => {} };
 
 export class CascadedVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "cascaded",
-    stt: () => ({ plugin: noopPlugin, config: { model: "nova-3" } }),
-    tts: () => ({ plugin: noopPlugin, config: { voice_id: "v" } }),
-  },
+  stt: () => ({ plugin: noopPlugin, config: { model: "nova-3" } }),
+  tts: () => ({ plugin: noopPlugin, config: { voice_id: "v" } }),
   reasoner: () => ({
     // eslint-disable-next-line require-yield
     stream: async function* () {

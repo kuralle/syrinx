@@ -20,7 +20,7 @@ const INPUT_SAMPLE_RATE_HZ = 16000;
 const OUTPUT_SAMPLE_RATE_HZ = 16000;
 
 export class RealtimeVoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: realtimeVoicePipeline,
+  ...realtimeVoicePipeline,
   reasoner: (env, ctx) => createRealtimeReasoner(env, ctx),
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   outputSampleRateHz: OUTPUT_SAMPLE_RATE_HZ,

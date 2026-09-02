@@ -6,7 +6,7 @@
 // layer — the host (worker-realtime.ts) composes it via `withVoice(Agent)`.
 
 import type { Reasoner } from "@kuralle-syrinx/core";
-import type { RealtimePipeline, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
+import type { VoicePipelineFields, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
 import { fromGeminiLive, fromOpenAIRealtime } from "@kuralle-syrinx/realtime";
 import type { RealtimeAdapter, RealtimeToolDef } from "@kuralle-syrinx/realtime";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
@@ -70,9 +70,8 @@ function buildRealtimeFront(env: RealtimeSessionEnv): RealtimeAdapter {
 }
 
 /** Realtime pipeline descriptor consumed by `withVoice(Agent)`. */
-export const realtimeVoicePipeline: RealtimePipeline<RealtimeSessionEnv> = {
-  kind: "realtime",
-  front: (env) => buildRealtimeFront(env),
+export const realtimeVoicePipeline: VoicePipelineFields<RealtimeSessionEnv> = {
+  realtime: (env) => buildRealtimeFront(env),
   delegateToolName: ASK_UNIVERSITY_TOOL.name,
 };
 

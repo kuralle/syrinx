@@ -37,7 +37,8 @@ const mockAi = (): Ai => ({
 
 describe("liveCascadedPipeline", () => {
   it("is a cascaded pipeline with a tightened force-finalize timeout", () => {
-    expect(liveCascadedPipeline.kind).toBe("cascaded");
+    expect(liveCascadedPipeline.stt).toBeDefined();
+    expect(liveCascadedPipeline.tts).toBeDefined();
     expect(liveCascadedPipeline.sttForceFinalizeTimeoutMs).toBe(3500);
   });
 
@@ -60,19 +61,19 @@ describe("liveCascadedPipeline", () => {
 
   it("builds Deepgram Nova-3 STT (VAD events) and Aura TTS stages from the env", () => {
     const env = baseEnv();
-    const stt = liveCascadedPipeline.stt(env, ctx);
+    const stt = liveCascadedPipeline.stt!(env, ctx);
     expect(stt.plugin).toBeInstanceOf(DeepgramSTTPlugin);
     expect(stt.config).toMatchObject({ model: "nova-3", endpointing: 500, vad_events: true, utterance_end_ms: 1000, api_key: "dg-key" });
 
-    const tts = liveCascadedPipeline.tts(env, ctx);
+    const tts = liveCascadedPipeline.tts!(env, ctx);
     expect(tts.plugin).toBeInstanceOf(DeepgramTTSPlugin);
     expect(tts.config).toMatchObject({ model: "aura-2-thalia-en", api_key: "dg-key" });
   });
 
   it("requires DEEPGRAM_API_KEY to build the stt/tts stages", () => {
     const env = { OPENAI_API_KEY: "k", VECTORIZE: mockVectorize };
-    expect(() => liveCascadedPipeline.stt(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
-    expect(() => liveCascadedPipeline.tts(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
+    expect(() => liveCascadedPipeline.stt!(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
+    expect(() => liveCascadedPipeline.tts!(env, ctx)).toThrow(/DEEPGRAM_API_KEY/);
   });
 });
 

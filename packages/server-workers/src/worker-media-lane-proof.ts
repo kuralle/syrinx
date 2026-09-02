@@ -283,7 +283,7 @@ function proofPipeline(env: Env): typeof liveCascadedPipeline {
   return {
     ...liveCascadedPipeline,
     tts: (pipelineEnv, ctx): CascadedStage => {
-      const stage = liveCascadedPipeline.tts(pipelineEnv, ctx);
+      const stage = liveCascadedPipeline.tts!(pipelineEnv, ctx);
       const delayMs = Number.parseInt(env.MEDIA_LANE_DELAY_MS ?? "", 10);
       const blockOn = Number.parseInt(env.MEDIA_LANE_BLOCK_ON ?? "", 10);
       const arm = armFromSessionId(ctx.sessionId);
@@ -309,15 +309,12 @@ function proofPipeline(env: Env): typeof liveCascadedPipeline {
 
 export class MediaLaneProofConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
   transport: "edge",
-  pipeline: {
-    kind: "cascaded",
-    stt: (env, ctx) => liveCascadedPipeline.stt(env, ctx),
-    tts: (env, ctx) => proofPipeline(env as Env).tts(env, ctx),
-    ...(liveCascadedPipeline.eos ? { eos: liveCascadedPipeline.eos } : {}),
-    ...(liveCascadedPipeline.endpointingOwner !== undefined
-      ? { endpointingOwner: liveCascadedPipeline.endpointingOwner }
-      : {}),
-  },
+  stt: (env, ctx) => liveCascadedPipeline.stt!(env, ctx),
+  tts: (env, ctx) => proofPipeline(env as Env).tts!(env, ctx),
+  ...(liveCascadedPipeline.eos ? { eos: liveCascadedPipeline.eos } : {}),
+  ...(liveCascadedPipeline.endpointingOwner !== undefined
+    ? { endpointingOwner: liveCascadedPipeline.endpointingOwner }
+    : {}),
   reasoner: async (env, ctx) => await createLiveReasoner(env, ctx),
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   // A playground/harness client is never nagged mid-measurement.

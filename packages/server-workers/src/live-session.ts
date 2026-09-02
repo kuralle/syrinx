@@ -12,7 +12,7 @@
 // connection lifecycle.
 
 import type { Reasoner } from "@kuralle-syrinx/core";
-import type { CascadedPipeline, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
+import type { VoicePipelineFields, VoicePipelineContext } from "@kuralle-syrinx/cf-agents";
 import { DeepgramSTTPlugin, DeepgramTTSPlugin } from "@kuralle-syrinx/deepgram";
 import { PipecatEOSPlugin } from "@kuralle-syrinx/pipecat-smart-turn/eos";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
@@ -45,8 +45,7 @@ export function hasLiveSessionCredentials(env: LiveSessionEnv): boolean {
  * TTS. `sttForceFinalizeTimeoutMs: 3500` keeps the engine's force-finalize tighter
  * than the 7000ms default for the provider-endpointed cascade.
  */
-export const liveCascadedPipeline: CascadedPipeline<LiveSessionEnv> = {
-  kind: "cascaded",
+export const liveCascadedPipeline: VoicePipelineFields<LiveSessionEnv> = {
   stt: (env) => ({
     plugin: new DeepgramSTTPlugin(createWorkersSocket),
     config: {

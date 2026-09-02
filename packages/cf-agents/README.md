@@ -22,11 +22,8 @@ import { withVoice } from "@kuralle-syrinx/cf-agents";
 import { fromGeminiLive } from "@kuralle-syrinx/realtime";
 
 export class SupportVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "realtime",
-    front: (env) => fromGeminiLive({ apiKey: env.GEMINI_API_KEY, tools: [CONSULT] }),
-    delegateToolName: "consult_knowledge",
-  },
+  realtime: (env) => fromGeminiLive({ apiKey: env.GEMINI_API_KEY, tools: [CONSULT] }),
+  delegateToolName: "consult_knowledge",
   // reasoner defaults to fromKuralleRuntime(this.runtime, { sessionId })
 }) {}
 
@@ -45,18 +42,15 @@ import { CartesiaTTSPlugin } from "@kuralle-syrinx/cartesia";
 import { createWorkersSocket } from "@kuralle-syrinx/ws/workers";
 
 export class SupportVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "cascaded",
-    stt: (env) => ({
-      plugin: new DeepgramSTTPlugin(createWorkersSocket),
-      config: { api_key: env.DEEPGRAM_API_KEY, model: "nova-3", sample_rate: 16000 },
-    }),
-    tts: (env) => ({
-      plugin: new CartesiaTTSPlugin(createWorkersSocket),
-      config: { api_key: env.CARTESIA_API_KEY, voice_id: env.CARTESIA_VOICE_ID, model_id: "sonic-3" },
-    }),
-    // optional: vad, eos (set endpointingOwner: "smart_turn" when supplying eos)
-  },
+  stt: (env) => ({
+    plugin: new DeepgramSTTPlugin(createWorkersSocket),
+    config: { api_key: env.DEEPGRAM_API_KEY, model: "nova-3", sample_rate: 16000 },
+  }),
+  tts: (env) => ({
+    plugin: new CartesiaTTSPlugin(createWorkersSocket),
+    config: { api_key: env.CARTESIA_API_KEY, voice_id: env.CARTESIA_VOICE_ID, model_id: "sonic-3" },
+  }),
+  // optional: vad, eos (set endpointingOwner: "smart_turn" when supplying eos)
   // reasoner defaults to fromKuralleRuntime(this.runtime); required for non-kuralle agents
 }) {}
 ```
@@ -69,7 +63,7 @@ comes with —
 
 - **Structured result envelope (G1, default).** The reasoner's answer reaches the front model as
   `{ response_text, require_repeat_verbatim: true, render? }` so it repeats facts faithfully
-  instead of paraphrasing. Configure per pipeline: `toolResultFormat: "envelope" | "string"`,
+  instead of paraphrasing. Configure per agent: `toolResultFormat: "envelope" | "string"`,
   `renderDirective: "translate_faithfully"`.
 - **Delegate observability and client messaging (G2).** `onDelegateQuery` / `onDelegateResult` hooks
   fire around every reasoner run with the query, answer, `durationMs`, and `grounded` — log or persist
@@ -92,7 +86,9 @@ comes with —
 | Option | Description |
 | --- | --- |
 | `transport` | `"edge"` (default — Syrinx browser/edge protocol over `/ws`) or `"twilio"` (Twilio Media Streams, μ-law 8 kHz, for a PSTN leg). One transport per Agent class. |
-| `pipeline` | `{ kind: "realtime", front, delegateToolName?, toolResultFormat?, renderDirective? }` or `{ kind: "cascaded", stt, tts, vad?, eos?, endpointingOwner?, sttForceFinalizeTimeoutMs? }`. |
+| `realtime` / `stt` + `tts` | Peer fields — populate `realtime` for a realtime front, `stt` + `tts` for a cascade, or `realtime` + `tts` for a half-cascade (text-only realtime front, local TTS). The shape is derived from which fields are populated. |
+| `delegateToolName` / `toolResultFormat` / `renderDirective` | Realtime and half-cascade only. |
+| `vad` / `eos` / `endpointingOwner` / `sttForceFinalizeTimeoutMs` / `speculative` | Cascade only. |
 | `reasoner` | `(env, ctx) => Reasoner` (ctx: `{ sessionId, resume? }`). Defaults to `fromKuralleRuntime(this.runtime)` when the Agent exposes a kuralle `runtime`. Required for cascaded agents without one. |
 | `recorder` | `(env, { sessionId }) => EdgeRecorder \| undefined` — optional per-call recorder (e.g. the R2 recorder at `@kuralle-syrinx/cf-agents/r2-recorder`). Edge transport. |
 | `onToolCallStart` | `(ctx: { toolName, args, sessionId, connection }) => void \| Promise<void>` — fired the instant the front model invokes the delegate tool, **before** the reasoner runs — for app-specific cues beyond the standard `tool_call_*` wire messages. A throwing callback never affects the call. |

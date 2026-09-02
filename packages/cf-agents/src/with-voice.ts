@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// withVoice(Agent) — adds a Syrinx voice pipeline (realtime OR cascaded) to a
+// withVoice(Agent) — adds a Syrinx voice pipeline (realtime, half-cascade, or cascade) to a
 // Cloudflare `agents` SDK Agent.
 //
 // Design (issue #7): a mixin OVER the Agent, not a raw Durable Object. It reuses
@@ -34,6 +34,7 @@ import type {
   ReasonerMessage,
 } from "@kuralle-syrinx/core";
 import { fromKuralleRuntime, type KuralleRuntimeLike } from "@kuralle-syrinx/kuralle";
+import type { RealtimeAdapter } from "@kuralle-syrinx/realtime";
 import {
   connectionManagedSocket,
   type ConnectionSocketController,
@@ -41,7 +42,9 @@ import {
 } from "./connection-socket.js";
 import {
   buildVoiceSession,
-  type VoicePipeline,
+  resolveVoiceShape,
+  type CascadedEndpointingOwner,
+  type CascadedStage,
   type VoicePipelineContext,
   type VoiceSessionWiring,
 } from "./build-session.js";
@@ -122,8 +125,41 @@ export interface WithVoiceOptions<Env> {
    * `"twilio"` agent, and `/telnyx` to a `"telnyx"` agent.
    */
   readonly transport?: "edge" | "twilio" | "telnyx";
-  /** The voice pipeline: `{ kind: "realtime", ... }` or `{ kind: "cascaded", ... }`. */
-  readonly pipeline: VoicePipeline<Env>;
+  /** Realtime (speech-to-speech) front. Present ⇒ the front owns input; with `tts` ⇒ half-cascade. */
+  readonly realtime?: (env: Env, ctx: VoicePipelineContext) => RealtimeAdapter;
+  readonly stt?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  readonly tts?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  readonly vad?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  /** Optional EOS stage. Returning `undefined` is equivalent to omitting the stage. */
+  readonly eos?: (env: Env, ctx: VoicePipelineContext) => CascadedStage | undefined;
+  /** Name of the front-model tool routed to the reasoner (realtime, half-cascade). @default "consult_knowledge" */
+  readonly delegateToolName?: string;
+  /**
+   * How the delegate answer reaches the front model (G1, realtime/half-cascade): `"envelope"`
+   * (default) wraps it as a `DelegateResultEnvelope` (`response_text` + `require_repeat_verbatim`);
+   * `"string"` injects the raw answer.
+   */
+  readonly toolResultFormat?: "envelope" | "string";
+  /** Optional `render` directive included in the envelope (realtime, half-cascade), e.g. `"translate_faithfully"`. */
+  readonly renderDirective?: string;
+  /**
+   * Which component owns end-of-speech (cascade). @default "provider_stt". Set to
+   * "smart_turn" when supplying an `eos` stage. May be a static literal or an
+   * `(env) => owner` factory for per-request selection (e.g. smart_turn only
+   * when Workers AI is bound).
+   */
+  readonly endpointingOwner?: CascadedEndpointingOwner | ((env: Env) => CascadedEndpointingOwner);
+  /**
+   * Fallback timeout (ms, cascade) before the engine force-finalizes a turn when the STT
+   * provider's own endpointing/finalize never fires. Engine default 7000; set it when a
+   * provider-endpointed cascade tunes this (e.g. Deepgram at 3500).
+   */
+  readonly sttForceFinalizeTimeoutMs?: number;
+  /**
+   * Speculative generation (cascade): start the reasoner on an eager end-of-turn signal
+   * and commit/discard when the endpoint confirms. @default false
+   */
+  readonly speculative?: boolean;
   /**
    * The brain. Defaults to `fromKuralleRuntime(this.runtime, { sessionId })` when
    * the Agent exposes a kuralle `runtime`. Required for cascaded pipelines on
@@ -162,9 +198,9 @@ export interface WithVoiceOptions<Env> {
    * Fired once per realtime conversational turn, independent of whether the turn
    * consulted the Reasoner. `consulted` distinguishes a grounded turn (a delegate
    * call occurred) from one the front model answered alone, without a consumer
-   * correlating `onDelegateResult` by `turnId` itself. Realtime pipelines only — a
-   * cascade pipeline has no `eos.turn_complete`/`llm.done` pairing to define a turn
-   * boundary. Throwing here never affects the call. See {@link TurnContext}.
+   * correlating `onDelegateResult` by `turnId` itself. Realtime and half-cascade (any
+   * shape with a `realtime` front) only — a cascade has no `eos.turn_complete`/`llm.done`
+   * pairing to define a turn boundary. Throwing here never affects the call. See {@link TurnContext}.
    */
   readonly onTurn?: (ctx: TurnContext) => void | Promise<void>;
   /**
@@ -172,7 +208,7 @@ export interface WithVoiceOptions<Env> {
    * Agent's DO-SQLite so a session resumes with the same context after eviction/
    * hibernation: cascaded pipelines re-seed the ReasoningBridge; realtime pipelines
    * record the transcript, feed it to delegate turns as prior context, and expose it
-   * (plus any provider-native resume handle) to the `front()` factory via
+   * (plus any provider-native resume handle) to the `realtime()` factory via
    * `ctx.resume`. Set false for the pre-G4 ephemeral behavior.
    */
   readonly durableHistory?: boolean;
@@ -431,24 +467,26 @@ export function withVoice<Env, TBase extends AgentLike>(
               }
             : {}),
         };
+        // Both realtime and half-cascade shapes run on a RealtimeBridge (no ReasoningBridge
+        // to own history) — only a cascade has a "bridge" plugin for reasonerSessionStore.
+        const usesRealtimeBridge = resolveVoiceShape(options) !== "cascade";
         const wiring: VoiceSessionWiring = {
           ...(options.delayCueAfterMs !== undefined ? { delayCueAfterMs: options.delayCueAfterMs } : {}),
           ...(options.idleTimeout !== undefined ? { idleTimeout: options.idleTimeout } : {}),
           ...(durable
-            ? options.pipeline.kind === "realtime"
+            ? usesRealtimeBridge
               ? { contextProvider: () => liveHistory }
               : { reasonerSessionStore: durable }
             : {}),
         };
         const reasoner = await this.#resolveReasoner(env, ctx);
-        const session = buildVoiceSession(options.pipeline, env, reasoner, ctx, wiring);
-        // Realtime pipelines have no ReasoningBridge to own history — the turn observer
-        // is wired for every realtime pipeline, independent of `durable`, so a second
-        // consumer of turn-end (e.g. a future onTurn hook) never inherits a hidden
-        // dependency on this persistence flag. Durable persistence is a subscriber of
-        // the observer, not its owner. The cascaded path persists inside ReasoningBridge
-        // instead (heard-prefix aware).
-        if (options.pipeline.kind === "realtime") {
+        const session = buildVoiceSession(options, env, reasoner, ctx, wiring);
+        // Realtime/half-cascade shapes have no ReasoningBridge to own history — the turn
+        // observer is wired for both, independent of `durable`, so a second consumer of
+        // turn-end (e.g. a future onTurn hook) never inherits a hidden dependency on this
+        // persistence flag. Durable persistence is a subscriber of the observer, not its
+        // owner. The cascade path persists inside ReasoningBridge instead (heard-prefix aware).
+        if (usesRealtimeBridge) {
           const persist = (): void => {
             if (!durable) return;
             if (liveHistory.length > MAX_DURABLE_HISTORY_MESSAGES) {

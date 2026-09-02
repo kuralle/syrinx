@@ -28,34 +28,28 @@ interface Env extends Record<string, unknown> {
  * this minimal example runs front-only.
  */
 export class RealtimeVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "realtime",
-    front: (env) =>
-      fromGeminiLive({
-        apiKey: env.GEMINI_API_KEY,
-        systemInstruction: "You are a concise, friendly voice assistant.",
-      }),
-  },
+  realtime: (env) =>
+    fromGeminiLive({
+      apiKey: env.GEMINI_API_KEY,
+      systemInstruction: "You are a concise, friendly voice assistant.",
+    }),
 }) {}
 
 /** Cascaded: Deepgram STT → LLM reasoner → Cartesia TTS. */
 export class CascadedVoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: "cascaded",
-    stt: (env) => ({
-      plugin: new DeepgramSTTPlugin(createWorkersSocket),
-      config: { api_key: env.DEEPGRAM_API_KEY, model: "nova-3", sample_rate: 16000, language: "en-US" },
-    }),
-    tts: (env) => ({
-      plugin: new CartesiaTTSPlugin(createWorkersSocket),
-      config: {
-        api_key: env.CARTESIA_API_KEY,
-        voice_id: env.CARTESIA_VOICE_ID,
-        model_id: "sonic-3",
-        sample_rate: 16000,
-      },
-    }),
-  },
+  stt: (env) => ({
+    plugin: new DeepgramSTTPlugin(createWorkersSocket),
+    config: { api_key: env.DEEPGRAM_API_KEY, model: "nova-3", sample_rate: 16000, language: "en-US" },
+  }),
+  tts: (env) => ({
+    plugin: new CartesiaTTSPlugin(createWorkersSocket),
+    config: {
+      api_key: env.CARTESIA_API_KEY,
+      voice_id: env.CARTESIA_VOICE_ID,
+      model_id: "sonic-3",
+      sample_rate: 16000,
+    },
+  }),
   reasoner: (env) =>
     fromStreamText({
       model: createOpenAI({ apiKey: env.OPENAI_API_KEY })("gpt-4.1-mini"),

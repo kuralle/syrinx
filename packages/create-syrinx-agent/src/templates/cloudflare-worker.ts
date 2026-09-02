@@ -2,7 +2,7 @@
 //
 // Emits src/index.ts + wrangler.jsonc for --runtime cloudflare, mirroring
 // examples/03-cf-agent-voice/src/index.ts and packages/cf-agents/README.md's
-// `withVoice(Agent, { pipeline, reasoner, transport })` shape. VAD/endpointing
+// `withVoice(Agent, { realtime | stt + tts, reasoner, transport })` peer-field shape. VAD/endpointing
 // sidecars are not wired here yet (see the generator's report) — passing
 // --vad/--endpointing with --runtime cloudflare is refused upstream.
 
@@ -92,21 +92,18 @@ const ${SYSTEM_PROMPT_CONST} = ${JSON.stringify(SYSTEM_PROMPT)};
 
 export class VoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
   transport: "${transport}",
-  pipeline: {
-    kind: "cascaded",
-    stt: (env) => ({
-      plugin: ${sttNew},
-      config: {
-${stt.configFields(envRef).map((f) => `        ${f},`).join("\n")}
-      },
-    }),
-    tts: (env) => ({
-      plugin: ${ttsNew},
-      config: {
-${tts.configFields(envRef).map((f) => `        ${f},`).join("\n")}
-      },
-    }),
-  },
+  stt: (env) => ({
+    plugin: ${sttNew},
+    config: {
+${stt.configFields(envRef).map((f) => `      ${f},`).join("\n")}
+    },
+  }),
+  tts: (env) => ({
+    plugin: ${ttsNew},
+    config: {
+${tts.configFields(envRef).map((f) => `      ${f},`).join("\n")}
+    },
+  }),
   reasoner: (env) => {
 ${reasoner.preludeLines(envRef).map((l) => `    ${l}`).join("\n")}
     return ${reasoner.reasonerExpr};
@@ -144,10 +141,7 @@ ${envInterface(envKeys)}
 
 export class VoiceAgent extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
   transport: "${transport}",
-  pipeline: {
-    kind: "realtime",
-    front: (env) => ${realtime.adapterExpr(envRef, "createWorkersSocket")},
-  },
+  realtime: (env) => ${realtime.adapterExpr(envRef, "createWorkersSocket")},
 }) {}
 
 export default {

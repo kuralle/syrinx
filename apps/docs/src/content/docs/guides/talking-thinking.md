@@ -130,16 +130,13 @@ import { fromOpenAIRealtime } from '@kuralle-syrinx/realtime';
 import { createWorkersSocket } from '@kuralle-syrinx/ws/workers';
 
 export class VoiceSession extends withVoice(Agent<Env>, {
-  pipeline: {
-    kind: 'realtime',
-    front: (env) => fromOpenAIRealtime({
-      apiKey: env.OPENAI_API_KEY,
-      socketFactory: createWorkersSocket,
-      instructions: FRONT_PROMPT,
-      tools: [CONSULT_TOOL],
-    }),
-    delegateToolName: CONSULT_TOOL.name,
-  },
+  realtime: (env) => fromOpenAIRealtime({
+    apiKey: env.OPENAI_API_KEY,
+    socketFactory: createWorkersSocket,
+    instructions: FRONT_PROMPT,
+    tools: [CONSULT_TOOL],
+  }),
+  delegateToolName: CONSULT_TOOL.name,
   // The thinker — any Reasoner. Here a kuralle RAG runtime.
   reasoner: (env, ctx) => buildReasoner(env, ctx),
 

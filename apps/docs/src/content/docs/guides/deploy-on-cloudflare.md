@@ -15,17 +15,14 @@ import { CartesiaTTSPlugin } from '@kuralle-syrinx/cartesia';
 import { createWorkersSocket } from '@kuralle-syrinx/ws/workers';
 
 export class VoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: {
-    kind: 'cascaded',
-    stt: (env) => ({
-      plugin: new DeepgramSTTPlugin(createWorkersSocket),
-      config: { api_key: env.DEEPGRAM_API_KEY, model: 'nova-3', sample_rate: 16000 },
-    }),
-    tts: (env) => ({
-      plugin: new CartesiaTTSPlugin(createWorkersSocket),
-      config: { api_key: env.CARTESIA_API_KEY, voice_id: env.CARTESIA_VOICE_ID },
-    }),
-  },
+  stt: (env) => ({
+    plugin: new DeepgramSTTPlugin(createWorkersSocket),
+    config: { api_key: env.DEEPGRAM_API_KEY, model: 'nova-3', sample_rate: 16000 },
+  }),
+  tts: (env) => ({
+    plugin: new CartesiaTTSPlugin(createWorkersSocket),
+    config: { api_key: env.CARTESIA_API_KEY, voice_id: env.CARTESIA_VOICE_ID },
+  }),
   reasoner: (env) => yourReasoner(env),
 }) {}
 
@@ -35,7 +32,7 @@ export default {
 };
 ```
 
-`agents` is a peer dependency — install it alongside `@kuralle-syrinx/cf-agents`. `withVoice` also accepts a realtime pipeline (`kind: "realtime"`); see [Realtime providers](/providers/realtime/).
+`agents` is a peer dependency — install it alongside `@kuralle-syrinx/cf-agents`. `withVoice` also accepts a `realtime` front instead of `stt`/`tts`; see [Realtime providers](/providers/realtime/).
 
 :::tip
 A complete, deployable Worker — one cascaded agent and one realtime agent, with `wrangler.jsonc` and bindings — is in [`examples/03-cf-agent-voice`](https://github.com/kuralle/syrinx/tree/main/examples/03-cf-agent-voice) on GitHub.

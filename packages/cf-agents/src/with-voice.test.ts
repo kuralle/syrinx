@@ -25,7 +25,7 @@ import {
   type TurnContext,
 } from "./with-voice.js";
 import * as withVoiceModule from "./with-voice.js";
-import type { VoicePipeline, VoicePipelineContext } from "./build-session.js";
+import type { VoicePipelineFields, VoicePipelineContext } from "./build-session.js";
 
 /**
  * In-memory emulation of the DO-SQLite statements SqliteReasonerSessionStore issues,
@@ -193,8 +193,7 @@ const stubReasoner = (): Reasoner => ({
   },
 });
 
-const cascadedPipeline = (): VoicePipeline<Record<string, unknown>> => ({
-  kind: "cascaded",
+const cascadedPipeline = (): VoicePipelineFields<Record<string, unknown>> => ({
   stt: () => ({ plugin: stubPlugin(), config: { model: "nova-3" } }),
   tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
 });
@@ -215,7 +214,7 @@ describe("withVoice(Agent)", () => {
   it("starts a Syrinx voice session on connect and sends a `ready` frame", async () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline(), reasoner: () => stubReasoner() },
+      { ...cascadedPipeline(), reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -232,7 +231,7 @@ describe("withVoice(Agent)", () => {
   it("chains the base onConnect and holds a keepAlive lease, released on close", async () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline(), reasoner: () => stubReasoner() },
+      { ...cascadedPipeline(), reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -250,7 +249,7 @@ describe("withVoice(Agent)", () => {
   it("pumps inbound frames into the running session without throwing", async () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline(), reasoner: () => stubReasoner() },
+      { ...cascadedPipeline(), reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -274,7 +273,7 @@ describe("withVoice(Agent)", () => {
     }
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(RuntimeAgent),
-      { pipeline: cascadedPipeline() }, // no explicit reasoner
+      { ...cascadedPipeline() }, // no explicit reasoner
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -288,7 +287,7 @@ describe("withVoice(Agent)", () => {
   it("reports an initialization error frame when a cascaded agent has no brain", async () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline() }, // no reasoner, no runtime
+      { ...cascadedPipeline() }, // no reasoner, no runtime
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -305,7 +304,7 @@ describe("withVoice(Agent)", () => {
   it("gives each connection a distinct session id when no ?sessionId= is supplied", async () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline(), reasoner: () => stubReasoner() },
+      { ...cascadedPipeline(), reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const noQuery = () => ({ request: new Request("https://agent.test/agents/voice/inst-1") });
@@ -337,14 +336,13 @@ describe("withVoice(Agent)", () => {
       },
       close: async () => {},
     });
-    const twilioPipeline: VoicePipeline<Record<string, unknown>> = {
-      kind: "cascaded",
+    const twilioPipeline: VoicePipelineFields<Record<string, unknown>> = {
       stt: () => ({ plugin: capturingStt(), config: { model: "nova-3" } }),
       tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
     };
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { transport: "twilio", pipeline: twilioPipeline, reasoner: () => stubReasoner() },
+      { transport: "twilio", ...twilioPipeline, reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -377,14 +375,13 @@ describe("withVoice(Agent)", () => {
       },
       close: async () => {},
     });
-    const telnyxPipeline: VoicePipeline<Record<string, unknown>> = {
-      kind: "cascaded",
+    const telnyxPipeline: VoicePipelineFields<Record<string, unknown>> = {
       stt: () => ({ plugin: capturingStt(), config: { model: "nova-3" } }),
       tts: () => ({ plugin: stubPlugin(), config: { voice_id: "v" } }),
     };
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { transport: "telnyx", pipeline: telnyxPipeline, reasoner: () => stubReasoner() },
+      { transport: "telnyx", ...telnyxPipeline, reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -414,15 +411,14 @@ describe("withVoice(Agent)", () => {
   it("fires onToolCallStart with the tool + the live connection when the delegate tool is invoked", async () => {
     const front = new FakeFront();
     const calls: ToolCallStartContext[] = [];
-    const realtimePipeline: VoicePipeline<Record<string, unknown>> = {
-      kind: "realtime",
-      front: () => front,
+    const realtimePipeline: VoicePipelineFields<Record<string, unknown>> = {
+      realtime: () => front,
       delegateToolName: "consult_knowledge",
     };
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: realtimePipeline,
+        ...realtimePipeline,
         reasoner: () => stubReasoner(),
         onToolCallStart: (c) => { calls.push(c); },
       },
@@ -458,7 +454,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => answeringReasoner(),
         onDelegateQuery: (c) => { queries.push(c); },
         onDelegateResult: (c) => { results.push(c); },
@@ -499,15 +496,12 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: {
-          kind: "realtime",
-          front: (_env, pipelineCtx) => {
-            const front = new FakeFront();
-            fronts.set(pipelineCtx.sessionId, front);
-            return front;
-          },
-          delegateToolName: "consult_knowledge",
+        realtime: (_env, pipelineCtx) => {
+          const front = new FakeFront();
+          fronts.set(pipelineCtx.sessionId, front);
+          return front;
         },
+        delegateToolName: "consult_knowledge",
         reasoner: () => ({
           stream: async function* () {
             yield { type: "finish", reason: "stop", text: "Answer" } as const;
@@ -557,7 +551,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => ({
           stream: async function* () {
             yield { type: "finish", reason: "stop", text: "ok" } as const;
@@ -586,12 +581,9 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: {
-          kind: "realtime",
-          front: () => front,
-          delegateToolName: "consult_knowledge",
-          renderDirective: "translate_faithfully",
-        },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
+        renderDirective: "translate_faithfully",
         reasoner: () => ({
           stream: async function* () {
             yield { type: "finish", reason: "stop", text: "The fee is 5000 rupees." } as const;
@@ -621,7 +613,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => stubReasoner(),
         onToolCallStart: () => { throw new Error("app hook blew up"); },
       },
@@ -653,14 +646,11 @@ describe("withVoice(Agent)", () => {
     const capturedMessages: Array<readonly unknown[]> = [];
     const makeAgentClass = () =>
       withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
-        pipeline: {
-          kind: "realtime",
-          front: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
-            seenResume.push(pipelineCtx.resume);
-            const front = new FakeFront();
-            fronts.push(front);
-            return front;
-          },
+        realtime: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
+          seenResume.push(pipelineCtx.resume);
+          const front = new FakeFront();
+          fronts.push(front);
+          return front;
         },
         reasoner: () => ({
           stream: (turn) => {
@@ -719,14 +709,11 @@ describe("withVoice(Agent)", () => {
     const seenResume: Array<VoicePipelineContext["resume"]> = [];
     const makeAgentClass = () =>
       withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
-        pipeline: {
-          kind: "realtime",
-          front: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
-            seenResume.push(pipelineCtx.resume);
-            const front = new FakeFront();
-            fronts.push(front);
-            return front;
-          },
+        realtime: (_env: unknown, pipelineCtx: VoicePipelineContext) => {
+          seenResume.push(pipelineCtx.resume);
+          const front = new FakeFront();
+          fronts.push(front);
+          return front;
         },
         reasoner: () => stubReasoner(),
       });
@@ -762,7 +749,7 @@ describe("withVoice(Agent)", () => {
       const onSpy = vi.spyOn(PipelineBusImpl.prototype, "on");
       const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
         asBase(FakeAgentBase),
-        { pipeline: { kind: "realtime", front: () => front }, reasoner: () => stubReasoner(), durableHistory },
+        { realtime: () => front, reasoner: () => stubReasoner(), durableHistory },
       );
       const agent = new VoiceAgent({});
       const conn = fakeConnection();
@@ -932,7 +919,7 @@ describe("withVoice(Agent)", () => {
     const front = new FakeFront();
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(DurableBase),
-      { pipeline: { kind: "realtime", front: () => front }, reasoner: () => stubReasoner() },
+      { realtime: () => front, reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();
@@ -960,7 +947,7 @@ describe("withVoice(Agent)", () => {
     const capturedMessages: Array<readonly unknown[]> = [];
     const makeAgentClass = (reply: string) =>
       withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(asBase(DurableBase), {
-        pipeline: cascadedPipeline(),
+        ...cascadedPipeline(),
         reasoner: () => ({
           stream: (turn) => {
             capturedMessages.push([...turn.messages]);
@@ -1000,7 +987,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => stubReasoner(),
         onTurn: (c) => { turns.push(c); },
       },
@@ -1034,7 +1022,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => ({
           stream: async function* () {
             yield { type: "finish", reason: "stop", text: "5000 rupees." } as const;
@@ -1093,7 +1082,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => ({
           stream: async function* () {
             yield { type: "finish", reason: "stop", text: "5000 rupees." } as const;
@@ -1132,7 +1122,8 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front, delegateToolName: "consult_knowledge" },
+        realtime: () => front,
+        delegateToolName: "consult_knowledge",
         reasoner: () => ({
           stream: async function* () {
             await gate;
@@ -1170,7 +1161,7 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front },
+        realtime: () => front,
         reasoner: () => stubReasoner(),
         durableHistory: false,
         onTurn: (c) => { turns.push(c); },
@@ -1198,7 +1189,7 @@ describe("withVoice(Agent)", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
       {
-        pipeline: { kind: "realtime", front: () => front },
+        realtime: () => front,
         reasoner: () => stubReasoner(),
         onTurn: (c) => {
           call += 1;
@@ -1253,7 +1244,7 @@ describe("withVoice(Agent)", () => {
   it("forceEndVoice closes the connection", () => {
     const VoiceAgent = withVoice<Record<string, unknown>, ReturnType<typeof asBase>>(
       asBase(FakeAgentBase),
-      { pipeline: cascadedPipeline(), reasoner: () => stubReasoner() },
+      { ...cascadedPipeline(), reasoner: () => stubReasoner() },
     );
     const agent = new VoiceAgent({});
     const conn = fakeConnection();

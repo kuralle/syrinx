@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// @kuralle-syrinx/cf-agents — add a Syrinx voice pipeline (realtime or cascaded) to
+// @kuralle-syrinx/cf-agents — add a Syrinx voice pipeline (realtime, half-cascade, or cascade) to
 // a Cloudflare `agents` SDK Agent via the `withVoice(Agent, options)` mixin.
 
 export {
@@ -13,13 +13,14 @@ export {
   type TurnContext,
 } from "./with-voice.js";
 export type {
-  VoicePipeline,
-  RealtimePipeline,
-  CascadedPipeline,
+  VoicePipelineFields,
+  VoiceShape,
   CascadedStage,
+  CascadedEndpointingOwner,
   VoicePipelineContext,
   VoiceSessionWiring,
 } from "./build-session.js";
+export { resolveVoiceShape } from "./build-session.js";
 export { SqliteReasonerSessionStore, type SqlTag } from "./durable-history.js";
 export { connectionManagedSocket } from "./connection-socket.js";
 export type { VoiceConnection, ConnectionSocketController } from "./connection-socket.js";

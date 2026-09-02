@@ -17,7 +17,7 @@ export interface VoicePipelineContext {
   readonly sessionId: string;
   /**
    * G4 resume state for the session, present when durable history is on. The
-   * `front()` factory wires it into the adapter: `resumeHistory: ctx.resume.history`
+   * `realtime()` factory wires it into the adapter: `resumeHistory: ctx.resume.history`
    * on replay providers (OpenAI), `sessionResumptionHandle: ctx.resume.providerHandle`
    * on native-resume providers (Gemini — do NOT also replay, R6).
    */
@@ -45,16 +45,28 @@ export interface VoiceSessionWiring {
   readonly idleTimeout?: Partial<IdleTimeoutConfig>;
 }
 
+/** A cascaded-stage plugin plus its `VoiceAgentSession` plugin config. */
+export interface CascadedStage {
+  readonly plugin: VoicePlugin;
+  readonly config?: PluginConfig;
+}
+
+export type CascadedEndpointingOwner = "provider_stt" | "smart_turn";
+
 /**
- * Realtime front pipeline: a single speech-to-speech model (Gemini Live,
- * OpenAI Realtime, …) owns STT+TTS+turn-taking; the reasoner is consulted via a
- * front-model delegate tool. Assembled exactly as the verified realtime path:
- * `plugins: { realtime: {} }`, `endpointingOwner: "timer"`.
+ * Peer fields describing the voice shape. Populate `realtime` for a realtime front,
+ * `stt` + `tts` for a cascade, or `realtime` + `tts` for a half-cascade (a text-only
+ * realtime front paired with a local TTS plugin). The shape is derived from which
+ * fields are populated (see `resolveVoiceShape`), never selected via a mode literal.
  */
-export interface RealtimePipeline<Env> {
-  readonly kind: "realtime";
-  /** The realtime front adapter, e.g. `fromGeminiLive(...)` / `fromOpenAIRealtime(...)`. */
-  readonly front: (env: Env, ctx: VoicePipelineContext) => RealtimeAdapter;
+export interface VoicePipelineFields<Env> {
+  /** Realtime (speech-to-speech) front. Present ⇒ the front owns input; with `tts` ⇒ half-cascade. */
+  readonly realtime?: (env: Env, ctx: VoicePipelineContext) => RealtimeAdapter;
+  readonly stt?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  readonly tts?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  readonly vad?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
+  /** Optional EOS stage. Returning `undefined` is equivalent to omitting the stage. */
+  readonly eos?: (env: Env, ctx: VoicePipelineContext) => CascadedStage | undefined;
   /** Name of the front-model tool routed to the reasoner. @default "consult_knowledge" */
   readonly delegateToolName?: string;
   /**
@@ -65,29 +77,6 @@ export interface RealtimePipeline<Env> {
   readonly toolResultFormat?: "envelope" | "string";
   /** Optional `render` directive included in the envelope, e.g. `"translate_faithfully"`. */
   readonly renderDirective?: string;
-}
-
-/** A cascaded-stage plugin plus its `VoiceAgentSession` plugin config. */
-export interface CascadedStage {
-  readonly plugin: VoicePlugin;
-  readonly config?: PluginConfig;
-}
-
-/**
- * Cascaded pipeline: discrete STT → reasoner → TTS stages (optionally VAD + a
- * Smart-Turn EOS). Assembled exactly as the verified cascaded path:
- * `plugins: { stt, vad?, eos?, bridge, tts }`, reasoner wrapped in a
- * `ReasoningBridge` registered as `"bridge"`.
- */
-export type CascadedEndpointingOwner = "provider_stt" | "smart_turn";
-
-export interface CascadedPipeline<Env> {
-  readonly kind: "cascaded";
-  readonly stt: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
-  readonly tts: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
-  readonly vad?: (env: Env, ctx: VoicePipelineContext) => CascadedStage;
-  /** Optional EOS stage. Returning `undefined` is equivalent to omitting the stage. */
-  readonly eos?: (env: Env, ctx: VoicePipelineContext) => CascadedStage | undefined;
   /**
    * Which component owns end-of-speech. @default "provider_stt". Set to
    * "smart_turn" when supplying an `eos` stage. May be a static literal or an
@@ -110,25 +99,70 @@ export interface CascadedPipeline<Env> {
   readonly speculative?: boolean;
 }
 
-export type VoicePipeline<Env> = RealtimePipeline<Env> | CascadedPipeline<Env>;
+export type VoiceShape = "realtime" | "half_cascade" | "cascade";
 
 /**
- * Assemble a `VoiceAgentSession` for the configured pipeline. This is the single
- * place that maps the high-level pipeline config onto Syrinx's plugin slots, so
- * the realtime and cascaded shapes stay first-class instead of mode-flagged.
+ * Derives the voice shape from which peer fields are populated (ADR 0007 — behaviour
+ * follows populated fields, never a mode selector). `realtime` alone is a realtime
+ * front; `realtime` + `tts` is a half-cascade (text-only front, local TTS); `stt` +
+ * `tts` is a cascade. Any other combination is a contradiction or an omission and
+ * throws, naming exactly the field at fault.
+ */
+const CASCADE_ONLY_FIELDS = ["vad", "eos", "endpointingOwner", "sttForceFinalizeTimeoutMs", "speculative"] as const;
+const REALTIME_ONLY_FIELDS = ["delegateToolName", "toolResultFormat", "renderDirective"] as const;
+
+function rejectFieldsForeignToShape<Env>(
+  fields: VoicePipelineFields<Env>,
+  shape: VoiceShape,
+): void {
+  const foreign = shape === "cascade" ? REALTIME_ONLY_FIELDS : CASCADE_ONLY_FIELDS;
+  const present = foreign.filter((name) => fields[name] !== undefined);
+  if (present.length === 0) return;
+  const owner = shape === "cascade" ? "a `realtime` front" : "a cascade (`stt` + `tts`)";
+  throw new Error(
+    `withVoice: \`${present.join("`, `")}\` only applies to ${owner}; remove it from this ${shape.replace("_", "-")} configuration`,
+  );
+}
+
+export function resolveVoiceShape<Env>(fields: VoicePipelineFields<Env>): VoiceShape {
+  const hasRealtime = fields.realtime !== undefined;
+  const hasStt = fields.stt !== undefined;
+  const hasTts = fields.tts !== undefined;
+
+  let shape: VoiceShape;
+  if (hasRealtime) {
+    if (hasStt) throw new Error("withVoice: `realtime` owns input; remove `stt`");
+    shape = hasTts ? "half_cascade" : "realtime";
+  } else if (hasStt && hasTts) {
+    shape = "cascade";
+  } else if (hasStt || hasTts) {
+    throw new Error(`withVoice: a cascade needs both \`stt\` and \`tts\`; got ${hasStt ? "stt" : "tts"} only`);
+  } else {
+    throw new Error("withVoice: provide `realtime`, or `stt` + `tts`");
+  }
+  rejectFieldsForeignToShape(fields, shape);
+  return shape;
+}
+
+/**
+ * Assemble a `VoiceAgentSession` for the configured voice shape. This is the single
+ * place that maps the peer-field config onto Syrinx's plugin slots, so the realtime,
+ * half-cascade, and cascade shapes stay first-class instead of mode-flagged.
  */
 export function buildVoiceSession<Env>(
-  pipeline: VoicePipeline<Env>,
+  fields: VoicePipelineFields<Env>,
   env: Env,
   reasoner: Reasoner | undefined,
   ctx: VoicePipelineContext,
   wiring: VoiceSessionWiring = {},
 ): VoiceAgentSession {
-  if (pipeline.kind === "realtime") {
-    const front = pipeline.front(env, ctx);
-    const bridge = new RealtimeBridge(front, reasoner, pipeline.delegateToolName, {
-      ...(pipeline.toolResultFormat !== undefined ? { toolResultFormat: pipeline.toolResultFormat } : {}),
-      ...(pipeline.renderDirective !== undefined ? { renderDirective: pipeline.renderDirective } : {}),
+  const shape = resolveVoiceShape(fields);
+
+  if (shape === "realtime") {
+    const front = fields.realtime!(env, ctx);
+    const bridge = new RealtimeBridge(front, reasoner, fields.delegateToolName, {
+      ...(fields.toolResultFormat !== undefined ? { toolResultFormat: fields.toolResultFormat } : {}),
+      ...(fields.renderDirective !== undefined ? { renderDirective: fields.renderDirective } : {}),
       ...(wiring.contextProvider ? { contextProvider: wiring.contextProvider } : {}),
     });
     const session = new VoiceAgentSession({
@@ -141,6 +175,26 @@ export function buildVoiceSession<Env>(
     return session;
   }
 
+  if (shape === "half_cascade") {
+    const front = fields.realtime!(env, ctx);
+    const tts = fields.tts!(env, ctx);
+    const bridge = new RealtimeBridge(front, reasoner, fields.delegateToolName, {
+      textOnly: true,
+      ...(fields.toolResultFormat !== undefined ? { toolResultFormat: fields.toolResultFormat } : {}),
+      ...(fields.renderDirective !== undefined ? { renderDirective: fields.renderDirective } : {}),
+      ...(wiring.contextProvider ? { contextProvider: wiring.contextProvider } : {}),
+    });
+    const session = new VoiceAgentSession({
+      plugins: { realtime: {}, tts: tts.config ?? {} },
+      endpointingOwner: "timer",
+      ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
+      ...(wiring.idleTimeout !== undefined ? { idleTimeout: wiring.idleTimeout } : {}),
+    });
+    session.registerPlugin("realtime", bridge);
+    session.registerPlugin("tts", tts.plugin);
+    return session;
+  }
+
   if (!reasoner) {
     throw new Error(
       "withVoice: a cascaded pipeline needs a reasoner. Set `reasoner` in the options, " +
@@ -148,14 +202,14 @@ export function buildVoiceSession<Env>(
     );
   }
 
-  const stt = pipeline.stt(env, ctx);
-  const tts = pipeline.tts(env, ctx);
-  const vad = pipeline.vad?.(env, ctx);
-  const eos = pipeline.eos?.(env, ctx);
+  const stt = fields.stt!(env, ctx);
+  const tts = fields.tts!(env, ctx);
+  const vad = fields.vad?.(env, ctx);
+  const eos = fields.eos?.(env, ctx);
   const endpointingOwner =
-    typeof pipeline.endpointingOwner === "function"
-      ? pipeline.endpointingOwner(env)
-      : pipeline.endpointingOwner;
+    typeof fields.endpointingOwner === "function"
+      ? fields.endpointingOwner(env)
+      : fields.endpointingOwner;
 
   if (endpointingOwner === "smart_turn" && !eos) {
     throw new Error(
@@ -175,8 +229,8 @@ export function buildVoiceSession<Env>(
   const session = new VoiceAgentSession({
     plugins,
     endpointingOwner: endpointingOwner ?? "provider_stt",
-    ...(pipeline.sttForceFinalizeTimeoutMs !== undefined
-      ? { sttForceFinalizeTimeoutMs: pipeline.sttForceFinalizeTimeoutMs }
+    ...(fields.sttForceFinalizeTimeoutMs !== undefined
+      ? { sttForceFinalizeTimeoutMs: fields.sttForceFinalizeTimeoutMs }
       : {}),
     ...(wiring.delayCueAfterMs !== undefined ? { delayCueAfterMs: wiring.delayCueAfterMs } : {}),
     ...(wiring.idleTimeout !== undefined ? { idleTimeout: wiring.idleTimeout } : {}),
@@ -188,7 +242,7 @@ export function buildVoiceSession<Env>(
       ...(wiring.reasonerSessionStore
         ? { sessionStore: wiring.reasonerSessionStore, sessionId: ctx.sessionId }
         : {}),
-      ...(pipeline.speculative ? { speculative: true } : {}),
+      ...(fields.speculative ? { speculative: true } : {}),
     }),
   );
   session.registerPlugin("tts", tts.plugin);

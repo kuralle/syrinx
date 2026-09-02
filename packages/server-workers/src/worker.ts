@@ -31,7 +31,7 @@ const OUTPUT_SAMPLE_RATE_HZ = 16000;
 
 /** Browser/edge cascaded host (Syrinx JSON+envelope protocol over /ws). */
 export class VoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
-  pipeline: liveCascadedPipeline,
+  ...liveCascadedPipeline,
   reasoner: (env, ctx) => createLiveReasoner(env, ctx),
   recorder: (env, { sessionId }) =>
     env.RECORDINGS
@@ -50,7 +50,7 @@ export class VoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<E
 /** Telephony cascaded host (Twilio Media Streams μ-law 8 kHz over /twilio). Same pipeline/brain. */
 export class TwilioVoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
   transport: "twilio",
-  pipeline: liveCascadedPipeline,
+  ...liveCascadedPipeline,
   reasoner: (env, ctx) => createLiveReasoner(env, ctx),
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   resumeWindowMs: 15_000,
@@ -63,7 +63,7 @@ export class TwilioVoiceConversation extends withVoice<Env, typeof Agent<Env>>(A
  */
 export class TelnyxVoiceConversation extends withVoice<Env, typeof Agent<Env>>(Agent<Env>, {
   transport: "telnyx",
-  pipeline: liveCascadedPipeline,
+  ...liveCascadedPipeline,
   reasoner: (env, ctx) => createLiveReasoner(env, ctx),
   inputSampleRateHz: INPUT_SAMPLE_RATE_HZ,
   resumeWindowMs: 15_000,

@@ -28,6 +28,22 @@ The `metrics` websocket message (`server-websocket`) dropped `sttMs`/`llmTTFTMs`
 
 `syrinx turn`'s `metrics.json` output renamed `llmTTFTMs`/`ttsTTFBMs` to `llmTtftMs`/`ttsTtfbMs` to match.
 
+### Breaking — `cf-agents`: `withVoice` takes `stt` / `tts` / `realtime` as peer fields
+
+`withVoice(Agent, { pipeline: { kind: "realtime" | "cascaded", … } })` is gone. The
+voice stages are peer fields on `WithVoiceOptions` — `realtime`, `stt`, `tts`, `vad`,
+`eos` — and the shape is derived from which are populated: `realtime` alone is a
+realtime front, `realtime` + `tts` is a half-cascade (text-only front, Syrinx TTS),
+`stt` + `tts` is a cascade. Any other combination throws naming the field at fault.
+The shape-specific knobs (`delegateToolName`, `toolResultFormat`, `renderDirective`,
+`endpointingOwner`, `sttForceFinalizeTimeoutMs`, `speculative`) moved up one level
+with their names unchanged. `RealtimePipeline`, `CascadedPipeline` and
+`VoicePipeline` are deleted; `VoicePipelineFields`, `VoiceShape`, `resolveVoiceShape` and
+`CascadedEndpointingOwner` are exported instead. A knob supplied to a shape it does not
+apply to (a cascade-only `vad`/`eos`/`endpointingOwner`/`sttForceFinalizeTimeoutMs`/
+`speculative` on a realtime front, or `delegateToolName`/`toolResultFormat`/
+`renderDirective` on a cascade) throws naming the field. No alias is kept.
+
 ## 4.6.3 — 2026-07-27
 
 ### Fixed — the Testing page told readers to install the internal fakes

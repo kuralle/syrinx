@@ -112,4 +112,4 @@ The bridge emits `llm.tool_call` / `llm.tool_result` on the bus as the reasoner 
 
 ## On Cloudflare Workers
 
-The same pipeline and reasoner run under `withVoice(Agent, { pipeline, reasoner })` on the Workers edge — see [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).
+The same pipeline and reasoner run under `withVoice(Agent, { stt, tts, reasoner })` on the Workers edge — see [Deploy on Cloudflare](/guides/deploy-on-cloudflare/).
