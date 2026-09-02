@@ -165,7 +165,7 @@ async function main(): Promise<void> {
         const r = await driveTurn({
           session: () => {
             const sess = makeSession(sttName, ttsName, reasonerName === "kuralle" ? "kuralle" : "aisdk");
-            // The engine's OWN decomposition. The runner's ttsTTFBMs is
+            // The engine's OWN decomposition. The runner's ttsTtfbMs is
             // firstAudio - firstLlmDelta, which silently folds the engine's text
             // aggregation into the provider's synthesis time; this separates them.
             sess.bus.on("eos.turn_complete", () => { lastEosAtMs = Date.now(); });
@@ -184,8 +184,8 @@ async function main(): Promise<void> {
         });
         const m = r.metrics;
         rows.push({
-          turn: i + 1, sttMs: m.speechEndToFinalTranscriptMs, llmTtftMs: m.llmTTFTMs,
-          ttsTtfbMs: m.ttsTTFBMs, ttfaMs: m.speechEndToFirstAudioMs,
+          turn: i + 1, sttFinalizeMs: m.speechEndToFinalTranscriptMs, llmTtftMs: m.llmTtftMs,
+          ttsTtfbMs: m.ttsTtfbMs, ttfaMs: m.speechEndToFirstAudioMs,
           ...(latency !== undefined ? { engine: latency } : {}),
         });
         process.stderr.write(`${combo} turn ${String(i + 1)}: ttfa=${String(m.speechEndToFirstAudioMs)}ms\n`);
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
       coldStartTtfaMs: rows[0]?.["ttfaMs"] ?? null,
       warmTtfaMedianMs: pct(warm.map((r) => Number(r["ttfaMs"])), 50),
       stageMedians: {
-        sttMs: pct(warm.map((r) => Number(r["sttMs"])), 50),
+        sttFinalizeMs: pct(warm.map((r) => Number(r["sttFinalizeMs"])), 50),
         llmTtftMs: pct(warm.map((r) => Number(r["llmTtftMs"])), 50),
         ttsTtfbMs: pct(warm.map((r) => Number(r["ttsTtfbMs"])), 50),
       },

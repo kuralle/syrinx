@@ -417,7 +417,7 @@ function wireEdgeSessionEvents(
   // `tts.playout_progress` completion), so also finalize on `tts.end` — see
   // TurnMetricsTrackerOptions.finalizeOnTtsEnd.
   const turnMetrics = new TurnMetricsTracker(
-    session.bus,
+    session,
     (message) => sendJson(socket, message),
     turnMetricsTurns,
     { finalizeOnTtsEnd: true },

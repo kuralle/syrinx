@@ -719,7 +719,7 @@ function wireBrowserSessionEvents(
     }),
   );
 
-  const turnMetrics = new TurnMetricsTracker(session.bus, (message) => {
+  const turnMetrics = new TurnMetricsTracker(session, (message) => {
     sendJson(socket, message, maxBufferedAmountBytes);
   }, turnMetricsTurns);
   turnMetrics.wire(disposers);

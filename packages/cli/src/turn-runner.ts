@@ -53,8 +53,8 @@ export interface PerTurnMetrics {
    */
   readonly ttfaAnchor?: "speech_end" | "eos";
   readonly endpointingMs: number;
-  readonly llmTTFTMs: number;
-  readonly ttsTTFBMs: number;
+  readonly llmTtftMs: number;
+  readonly ttsTtfbMs: number;
   readonly e2eLatencyMs: number;
   readonly agentTokens: number;
   readonly playedMs: number;
@@ -335,11 +335,11 @@ export async function driveTurn(opts: DriveTurnOptions): Promise<TurnResult> {
       timeline.feedStartMs > 0 && timeline.finalTranscriptMs > 0
         ? Math.max(0, timeline.finalTranscriptMs - timeline.feedStartMs)
         : 0,
-    llmTTFTMs:
+    llmTtftMs:
       timeline.finalTranscriptMs > 0 && timeline.firstLlmDeltaMs > 0
         ? Math.max(0, timeline.firstLlmDeltaMs - timeline.finalTranscriptMs)
         : 0,
-    ttsTTFBMs:
+    ttsTtfbMs:
       timeline.firstLlmDeltaMs > 0 && timeline.firstTtsAudioMs > 0
         ? Math.max(0, timeline.firstTtsAudioMs - timeline.firstLlmDeltaMs)
         : 0,

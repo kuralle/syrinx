@@ -693,15 +693,17 @@ describe("SyrinxBrowserClient — metrics", () => {
         type: "metrics",
         turnId: "turn-1",
         correlationId: "turn-1",
+        ttfaMs: 900,
+        anchor: "speech_end",
+        unattributedMs: 0,
+        llmTtftMs: 300,
+        ttsTtfbMs: 200,
         speechEndMs: 1000,
         textReadyMs: 1500,
         firstAudioByteMs: 1700,
         firstAudioPlayedMs: 1900,
         lastAudioPlayedMs: 2500,
-        sttMs: 200,
-        llmTTFTMs: 300,
-        ttsTTFBMs: 200,
-        e2eMs: 900,
+        ttfaPlayedMs: 900,
       }),
     });
 
@@ -714,7 +716,8 @@ describe("SyrinxBrowserClient — metrics", () => {
         type: "metrics",
         turnId: "turn-1",
         correlationId: "turn-1",
-        e2eMs: 900,
+        ttfaMs: 900,
+        ttfaPlayedMs: 900,
       },
     });
   });

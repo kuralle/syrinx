@@ -15,7 +15,7 @@ function passingBrowser(overrides: Partial<BrowserJitterSmokeResult> = {}): Brow
     metricsEvents: 1,
     lastMetrics: {
       turnId: "turn-1",
-      e2eMs: 950,
+      ttfaPlayedMs: 950,
       firstAudioPlayedMs: 5000,
     },
     minPlaybackLeadMs: 15,

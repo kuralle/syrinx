@@ -106,7 +106,7 @@ describe("fixture export", () => {
     const record = recordWith([
       READY,
       { type: "stt_output", turnId: "t1", transcript: "hi" },
-      { type: "metrics", turnId: "t1", sttMs: 200, ttsTTFBMs: 400 },
+      { type: "metrics", turnId: "t1", eouDelayMs: 200, ttsTtfbMs: 400 },
     ]);
     const turn = record.turns[0];
     if (!turn) throw new Error("no turn");
@@ -119,7 +119,7 @@ describe("fixture export", () => {
       truncated: false,
       capturedAtIso: AT,
     });
-    expect(fixture.sidecar.observedTimings).toMatchObject({ sttMs: 200, ttsTTFBMs: 400 });
+    expect(fixture.sidecar.observedTimings).toMatchObject({ eouDelayMs: 200, ttsTtfbMs: 400 });
   });
 
   it("round-trips as parseable JSON", () => {

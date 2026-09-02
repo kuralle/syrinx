@@ -21,7 +21,7 @@ const turnWith = (timings: TurnRecord["timings"]): TurnRecord => ({
 describe("turn timeline — segments", () => {
   it("derives consecutive segments from the marks", () => {
     const tl = buildTurnTimeline(
-      turnWith({ speechEndMs: 1000, textReadyMs: 1300, firstAudioByteMs: 2500, firstAudioPlayedMs: 2700, lastAudioPlayedMs: 6300, e2eMs: 5300 }),
+      turnWith({ speechEndMs: 1000, textReadyMs: 1300, firstAudioByteMs: 2500, firstAudioPlayedMs: 2700, lastAudioPlayedMs: 6300, ttfaMs: 5300 }),
     );
     expect(tl.segments.map((s) => [s.label, s.durationMs])).toEqual([
       ["Deciding you're done, transcribing, and thinking", 300],
@@ -64,7 +64,7 @@ describe("turn timeline — missing data is stated, not faked", () => {
   });
 
   it("reports insufficient-marks when only one mark arrived", () => {
-    const tl = buildTurnTimeline(turnWith({ speechEndMs: 100, e2eMs: 900 }));
+    const tl = buildTurnTimeline(turnWith({ speechEndMs: 100, ttfaMs: 900 }));
     expect(tl.unavailable).toBe("insufficient-marks");
     expect(tl.totalMs).toBe(900); // still report what is known
   });
@@ -88,17 +88,17 @@ describe("turn timeline — missing data is stated, not faked", () => {
 describe("turn timeline — the fast-turn floor", () => {
   it("flags an implausibly fast reply instead of celebrating it", () => {
     // 480ms is not "fast" — the endpointer fired while the caller was still talking.
-    const tl = buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 60, firstAudioByteMs: 400, e2eMs: 480 }));
+    const tl = buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 60, firstAudioByteMs: 400, ttfaMs: 480 }));
     expect(tl.suspiciouslyFast).toEqual({ totalMs: 480, floorMs: FAST_TURN_FLOOR_MS });
   });
 
   it("does not flag a normal turn", () => {
-    const tl = buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 }));
+    const tl = buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 }));
     expect(tl.suspiciouslyFast).toBeUndefined();
   });
 
   it("does not flag a turn with no measurable total", () => {
-    expect(buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 0, e2eMs: 0 })).suspiciouslyFast).toBeUndefined();
+    expect(buildTurnTimeline(turnWith({ speechEndMs: 0, textReadyMs: 0, ttfaMs: 0 })).suspiciouslyFast).toBeUndefined();
   });
 });
 
@@ -106,7 +106,7 @@ describe("turn timeline — from a real recorded session", () => {
   it("builds one lane per turn off a SessionRecord", () => {
     const rec = buildSessionRecord([
       { message: { type: "agent_chunk", turnId: "t1", text: "a" } as never, atMs: 0 },
-      { message: { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 200, firstAudioByteMs: 900, e2eMs: 1100 } as never, atMs: 1 },
+      { message: { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 200, firstAudioByteMs: 900, ttfaMs: 1100 } as never, atMs: 1 },
       { message: { type: "agent_chunk", turnId: "t2", text: "b" } as never, atMs: 2 },
     ]);
     const tls = buildTimelines(rec.turns);

@@ -8,8 +8,10 @@ import {
   encodeSyrinxAudioEnvelope,
   type Scheduler,
   type ScheduledCallback,
+  type ConversationMetricPacket,
   type UserAudioReceivedPacket,
   type VoiceAgentSession,
+  type VoiceAgentSessionEvents,
 } from "@kuralle-syrinx/core";
 import { pcm16SamplesToBytes } from "@kuralle-syrinx/core/audio";
 import type { ManagedSocket, SocketData } from "@kuralle-syrinx/ws";
@@ -80,11 +82,24 @@ class FakeSocket implements ManagedSocket {
   }
 }
 
-function fakeSession(received: UserAudioReceivedPacket[] = []): VoiceAgentSession {
+/**
+ * `fakeSession` swaps out the real session's internal state machine for raw bus
+ * pushes, so these tests exercise the edge transport in isolation. `metrics` now
+ * derives from the session's own `turn_latency` event rather than raw packets, so
+ * this fake also needs a real (if minimal) `on`/`off` pub-sub plus a way for a test
+ * to fire `turn_latency` itself — `fireTurnLatency` stands in for what the real
+ * session's `fireTurnLatency` would have computed for the packets it drove.
+ */
+interface FakeVoiceAgentSession extends VoiceAgentSession {
+  readonly fireTurnLatency: (event: Parameters<VoiceAgentSessionEvents["turn_latency"]>[0]) => void;
+}
+
+function fakeSession(received: UserAudioReceivedPacket[] = []): FakeVoiceAgentSession {
   const bus = new PipelineBusImpl();
   bus.on("user.audio_received", (pkt) => {
     received.push(pkt as UserAudioReceivedPacket);
   });
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
   return {
     bus,
     committedTranscript: () => [],
@@ -94,11 +109,19 @@ function fakeSession(received: UserAudioReceivedPacket[] = []): VoiceAgentSessio
     async close() {
       bus.stop();
     },
-    on() {},
-    off() {},
+    on(event: string, handler: (event: unknown) => void) {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event)!.add(handler);
+    },
+    off(event: string, handler: (event: unknown) => void) {
+      listeners.get(event)?.delete(handler);
+    },
     requestClientInterrupt() {},
     noteSessionStart() {},
-  } as unknown as VoiceAgentSession;
+    fireTurnLatency(event: unknown) {
+      for (const handler of listeners.get("turn_latency") ?? []) handler(event);
+    },
+  } as unknown as FakeVoiceAgentSession;
 }
 
 function runConnection(
@@ -605,7 +628,7 @@ describe("edge turn metrics (LDT-18 parity)", () => {
   it("emits a populated metrics message once client-reported playout completes", async () => {
     const socket = new FakeSocket();
     const scheduler = new ManualScheduler();
-    let capturedSession: VoiceAgentSession | undefined;
+    let capturedSession: FakeVoiceAgentSession | undefined;
     await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
       sessionStore: new InMemorySessionStore(),
       scheduler,
@@ -634,7 +657,7 @@ describe("edge turn metrics (LDT-18 parity)", () => {
       kind: "llm.delta",
       contextId: "metrics-turn",
       timestampMs: speechEndMs + 500,
-      text: "hi there",
+      text: "hi there.",
     });
     session.bus.push(Route.Media, {
       kind: "tts.audio",
@@ -642,6 +665,22 @@ describe("edge turn metrics (LDT-18 parity)", () => {
       timestampMs: speechEndMs + 700,
       audio: pcm16SamplesToBytes(new Int16Array(640).fill(1000)),
       sampleRateHz: 16000,
+    });
+    // fakeSession bypasses the real session's state machine, so it cannot compute its
+    // own turn_latency — stand in for what the real session would have derived from
+    // the packets above (see index.test.ts's equivalent Node-path assertion for the
+    // same numbers, driven through a real VoiceAgentSession).
+    session.fireTurnLatency({
+      tsMs: speechEndMs + 700,
+      turnId: "metrics-turn",
+      ttfaMs: 700,
+      anchor: "speech_end",
+      llmTtftMs: 500,
+      textAggregationMs: 0,
+      ttsTtfbMs: 200,
+      unattributedMs: 0,
+      fillerUsed: false,
+      backchannelUsed: false,
     });
 
     // Edge is client-paced: the browser reports playout position/completion over the
@@ -663,11 +702,10 @@ describe("edge turn metrics (LDT-18 parity)", () => {
       type: "metrics",
       turnId: "metrics-turn",
       correlationId: "metrics-turn",
-      sttMs: 200,
-      llmTTFTMs: 300,
-      ttsTTFBMs: 200,
+      llmTtftMs: 500,
+      ttsTtfbMs: 200,
     });
-    expect(typeof (metrics as { e2eMs?: number }).e2eMs).toBe("number");
+    expect(typeof (metrics as { ttfaMs?: number }).ttfaMs).toBe("number");
     // Measured from the client's first progress report, not omitted: a browser that
     // paces its own playout knows this, and Node reports it, so edge must too.
     expect((metrics as { firstAudioPlayedMs?: number }).firstAudioPlayedMs).toBeGreaterThan(0);
@@ -679,10 +717,10 @@ describe("edge turn metrics (LDT-18 parity)", () => {
     for (const field of CORE_METRICS_FIELDS) expect(metrics).toHaveProperty(field);
   });
 
-  it("falls back to a tts.end floor when the client never reports playout (e.g. a text-only turn, or a non-browser client)", async () => {
+  it("records metrics.unmeasured_turn instead of a zero-filled row for a text-only turn (tts.end floor, no turn_latency)", async () => {
     const socket = new FakeSocket();
     const scheduler = new ManualScheduler();
-    let capturedSession: VoiceAgentSession | undefined;
+    let capturedSession: FakeVoiceAgentSession | undefined;
     await runVoiceEdgeWebSocketConnection(socket, new Request("https://edge.test/ws?sessionId=s1"), {
       sessionStore: new InMemorySessionStore(),
       scheduler,
@@ -694,6 +732,17 @@ describe("edge turn metrics (LDT-18 parity)", () => {
     waitForReady(socket);
     const session = capturedSession!;
 
+    const unmeasured: unknown[] = [];
+    session.bus.on("metric.conversation", (pkt) => {
+      const metric = pkt as ConversationMetricPacket;
+      if (metric.name === "metrics.unmeasured_turn") unmeasured.push(metric);
+    });
+
+    // A text-injected turn: no vad.speech_ended / eos.turn_complete, so the real
+    // session never anchors a turn_latency for it (see voice-agent-session.ts
+    // fireTurnLatency) — this fake correctly emits nothing (no fireTurnLatency
+    // call), matching that. The tts.end floor still runs (client never reports
+    // playout) but finds no stored turn_latency to derive `metrics` from.
     const textReadyMs = Date.now();
     session.bus.push(Route.Main, {
       kind: "llm.delta",
@@ -715,19 +764,8 @@ describe("edge turn metrics (LDT-18 parity)", () => {
     });
     await new Promise((r) => setTimeout(r, 20));
 
-    const metrics = socket.json().find((m) => m.type === "metrics");
-    expect(metrics).toMatchObject({
-      type: "metrics",
-      turnId: "text-turn",
-      correlationId: "text-turn",
-      textReadyMs,
-      firstAudioByteMs: textReadyMs + 350,
-      ttsTTFBMs: 350,
-    });
-    // No speech/STT source on a text turn — omitted, not zeroed (positiveDelta contract).
-    expect(metrics).not.toHaveProperty("speechEndMs");
-    expect(metrics).not.toHaveProperty("sttMs");
-    expect(metrics).not.toHaveProperty("e2eMs");
+    expect(socket.json().find((m) => m.type === "metrics")).toBeUndefined();
+    expect(unmeasured).toMatchObject([{ contextId: "text-turn" }]);
   });
 });
 

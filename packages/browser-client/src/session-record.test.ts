@@ -88,7 +88,7 @@ describe("session record — turn assembly", () => {
       at({ type: "agent_end", turnId: "t1" }, 1400),
       at({ type: "tts_end", turnId: "t1" }, 1500),
       at({ type: "turn_complete", turnId: "t1", transcript: "what is the deadline" }, 1550),
-      at({ type: "metrics", turnId: "t1", speechEndMs: 100, llmTTFTMs: 900, ttsTTFBMs: 100, e2eMs: 1450 }, 1600),
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, llmTtftMs: 900, ttsTtfbMs: 100, ttfaMs: 1450 }, 1600),
     ]);
 
     const t = turnAt(r, 0);
@@ -99,7 +99,7 @@ describe("session record — turn assembly", () => {
     expect(t.agentText).toBe("The deadline is March 1."); // chunks concatenated in order
     expect(t.ttsAudioBytes).toBe(10_000);
     expect(t.complete).toBe(true);
-    expect(t.timings?.llmTTFTMs).toBe(900);
+    expect(t.timings?.llmTtftMs).toBe(900);
     expect(t.timings).not.toHaveProperty("turnId"); // envelope fields stripped
     expect(t.toolCalls).toHaveLength(1); // one call, not four — merged by id
     expect(toolAt(t, 0)).toMatchObject({ name: "lookup", result: "March 1", phase: "complete", afterMs: 800 });
@@ -191,7 +191,7 @@ describe("session record — purity", () => {
 describe("session record — endpointing decision", () => {
   it("folds the owner/reason from metrics onto the turn, not into timings", () => {
     const r = buildSessionRecord([
-      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" }, 0),
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, ttfaMs: 500, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" }, 0),
     ]);
     const t = turnAt(r, 0);
     expect(t.endpointingOwner).toBe("smart_turn");
@@ -203,7 +203,7 @@ describe("session record — endpointing decision", () => {
 
   it("omits the decision when metrics does not carry it (absent means absent)", () => {
     const r = buildSessionRecord([
-      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500 }, 0),
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, ttfaMs: 500 }, 0),
     ]);
     const t = turnAt(r, 0);
     expect(t.endpointingOwner).toBeUndefined();
@@ -212,7 +212,7 @@ describe("session record — endpointing decision", () => {
 
   it("carries a force-finalized reason onto the turn", () => {
     const r = buildSessionRecord([
-      at({ type: "metrics", turnId: "t1", speechEndMs: 100, e2eMs: 500, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" }, 0),
+      at({ type: "metrics", turnId: "t1", speechEndMs: 100, ttfaMs: 500, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" }, 0),
     ]);
     expect(turnAt(r, 0).endpointingReason).toBe("force_finalized");
   });

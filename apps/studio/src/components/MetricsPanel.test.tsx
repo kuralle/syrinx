@@ -26,8 +26,8 @@ describe("MetricsPanel", () => {
 
   it("renders a row per stage that has data", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", sttMs: 100, llmTTFTMs: 900, e2eMs: 1500 },
-      { type: "metrics", turnId: "t2", sttMs: 200, llmTTFTMs: 1100, e2eMs: 1900 },
+      { type: "metrics", turnId: "t1", eouDelayMs: 100, llmTtftMs: 900, ttfaMs: 1500 },
+      { type: "metrics", turnId: "t2", eouDelayMs: 200, llmTtftMs: 1100, ttfaMs: 1900 },
     ]);
     render(<MetricsPanel record={record} />);
     expect(screen.getByTestId("metrics-row-stt")).toBeInTheDocument();
@@ -37,7 +37,7 @@ describe("MetricsPanel", () => {
 
   it("discloses when aggregates cover only some turns", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", e2eMs: 1500 },
+      { type: "metrics", turnId: "t1", ttfaMs: 1500 },
       { type: "agent_chunk", turnId: "t2", text: "no metrics" },
     ]);
     render(<MetricsPanel record={record} />);
@@ -46,8 +46,8 @@ describe("MetricsPanel", () => {
 
   it("warns about implausibly fast turns instead of presenting them as good", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", e2eMs: 1500 },
-      { type: "metrics", turnId: "premature", e2eMs: 420 },
+      { type: "metrics", turnId: "t1", ttfaMs: 1500 },
+      { type: "metrics", turnId: "premature", ttfaMs: 420 },
     ]);
     render(<MetricsPanel record={record} />);
     const warn = screen.getByTestId("metrics-fast-warning");
@@ -58,12 +58,12 @@ describe("MetricsPanel", () => {
 
   it("counts a typed turn in the voice rows, because a typed turn is still spoken", () => {
     // The real wire shape for a typed turn, captured live against dev:server: the
-    // server OMITS the marks it never measured (no speechEndMs, sttMs or e2eMs) and
-    // sends genuine TTS numbers, because sending text runs the same pipeline and the
-    // reply really is synthesised. Dropping these would hide a real measurement.
+    // server OMITS the marks it never measured (no speechEndMs, eouDelayMs or ttfaMs)
+    // and sends genuine TTS numbers, because sending text runs the same pipeline and
+    // the reply really is synthesised. Dropping these would hide a real measurement.
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", sttMs: 200, llmTTFTMs: 1000, ttsTTFBMs: 300, e2eMs: 1800 },
-      { type: "metrics", turnId: "typed", ttsTTFBMs: 454 },
+      { type: "metrics", turnId: "t1", eouDelayMs: 200, llmTtftMs: 1000, ttsTtfbMs: 300, ttfaMs: 1800 },
+      { type: "metrics", turnId: "typed", ttsTtfbMs: 454 },
     ]);
     render(<MetricsPanel record={record} textTurnIds={new Set(["typed"])} />);
 
@@ -76,7 +76,7 @@ describe("MetricsPanel", () => {
   });
 
   it("omits the transcription row when no turn was ever transcribed", () => {
-    const record = recordFrom([{ type: "metrics", turnId: "typed", ttsTTFBMs: 454 }]);
+    const record = recordFrom([{ type: "metrics", turnId: "typed", ttsTtfbMs: 454 }]);
     render(<MetricsPanel record={record} textTurnIds={new Set(["typed"])} />);
 
     // Absent because it never ran — not a zero row claiming instant transcription.
@@ -85,7 +85,7 @@ describe("MetricsPanel", () => {
   });
 
   it("does not warn when every turn is above the floor", () => {
-    const record = recordFrom([{ type: "metrics", turnId: "t1", e2eMs: 1500 }]);
+    const record = recordFrom([{ type: "metrics", turnId: "t1", ttfaMs: 1500 }]);
     render(<MetricsPanel record={record} />);
     expect(screen.queryByTestId("metrics-fast-warning")).not.toBeInTheDocument();
   });

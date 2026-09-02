@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import {
+  Route,
   type ConversationMetricPacket,
   type EndOfSpeechPacket,
   type InterruptTtsPacket,
@@ -14,7 +15,12 @@ import {
   type TurnEndOwner,
   type TurnEndReason,
   type VadSpeechEndedPacket,
+  type VoiceAgentSession,
+  type VoiceAgentSessionEvents,
 } from "@kuralle-syrinx/core";
+
+/** The session's `turn_latency` event, verbatim except the top-level `tsMs`/`turnId`. */
+export type TurnLatencyEvent = Parameters<VoiceAgentSessionEvents["turn_latency"]>[0];
 
 export interface TurnTimestampState {
   speechEndMs: number;
@@ -31,21 +37,34 @@ export interface TurnTimestampState {
   endpointingReason?: TurnEndReason;
   /** Set when the STT force-finalize watchdog fired for this turn. */
   forceFinalized?: boolean;
+  /** The session's own turn_latency decomposition for this turn, once observed. */
+  turnLatency?: TurnLatencyEvent;
 }
 
 export interface BrowserMetricsMessage {
   readonly type: "metrics";
   readonly turnId: string;
   readonly correlationId: string;
+  // ---- copied from the session's turn_latency event, same names, same anchor ----
+  readonly ttfaMs: number;
+  readonly anchor: "speech_end" | "eos";
+  readonly unattributedMs: number;
+  readonly eouDelayMs?: number;
+  readonly llmTtftMs?: number;
+  readonly textAggregationMs?: number;
+  readonly ttsTtfbMs?: number;
+  readonly queuedMs?: number;
+  readonly llmCallCount?: number;
+  readonly fillerUsed?: boolean;
+  readonly backchannelUsed?: boolean;
+  // ---- transport-only: absolute marks and playout, which the session cannot see ----
   readonly speechEndMs?: number;
   readonly textReadyMs?: number;
   readonly firstAudioByteMs?: number;
   readonly firstAudioPlayedMs?: number;
   readonly lastAudioPlayedMs?: number;
-  readonly sttMs?: number;
-  readonly llmTTFTMs?: number;
-  readonly ttsTTFBMs?: number;
-  readonly e2eMs?: number;
+  /** anchor → first audio PLAYED, the number a caller experiences. Omitted when playout is not reported. */
+  readonly ttfaPlayedMs?: number;
   readonly eouBudgetMs?: {
     readonly vadStopHangoverMs?: number;
     readonly sttFinalDelayMs?: number;
@@ -72,13 +91,12 @@ export const CORE_METRICS_FIELDS = [
   "type",
   "turnId",
   "correlationId",
+  "ttfaMs",
+  "anchor",
+  "unattributedMs",
   "speechEndMs",
   "textReadyMs",
   "firstAudioByteMs",
-  "sttMs",
-  "llmTTFTMs",
-  "ttsTTFBMs",
-  "e2eMs",
   "eouBudgetMs",
 ] as const;
 
@@ -87,59 +105,83 @@ function positiveDelta(endMs: number, startMs: number): number | undefined {
   return endMs - startMs;
 }
 
+function buildEouBudgetMs(state: TurnTimestampState): BrowserMetricsMessage["eouBudgetMs"] {
+  const sttFinalDelayMs = positiveDelta(state.sttFinalMs, state.speechEndMs);
+  const endpointDelayMs = positiveDelta(state.eosMs, state.sttFinalMs);
+  const vadStopHangoverMs = state.vadStopHangoverMs > 0 ? state.vadStopHangoverMs : undefined;
+  const totalMs =
+    (vadStopHangoverMs ?? 0) +
+      (positiveDelta(state.eosMs, state.speechEndMs) ?? sttFinalDelayMs ?? 0) || undefined;
+
+  if (
+    vadStopHangoverMs === undefined &&
+    sttFinalDelayMs === undefined &&
+    endpointDelayMs === undefined &&
+    totalMs === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(vadStopHangoverMs !== undefined ? { vadStopHangoverMs } : {}),
+    ...(sttFinalDelayMs !== undefined ? { sttFinalDelayMs } : {}),
+    ...(endpointDelayMs !== undefined ? { endpointDelayMs } : {}),
+    ...(totalMs !== undefined ? { totalMs } : {}),
+  };
+}
+
+/** anchor → first audio PLAYED. Omitted when playout was never reported, or the anchor mark is missing. */
+function computeTtfaPlayedMs(turnLatency: TurnLatencyEvent, state: TurnTimestampState): number | undefined {
+  if (state.firstAudioPlayedMs <= 0) return undefined;
+  const anchorTimestampMs = turnLatency.anchor === "speech_end" ? state.speechEndMs : state.eosMs;
+  if (anchorTimestampMs <= 0) return undefined;
+  return state.firstAudioPlayedMs - anchorTimestampMs;
+}
+
+/**
+ * Builds the `metrics` wire message by copying the session's own `turn_latency`
+ * decomposition and layering transport-only marks (absolute timestamps, playout) on
+ * top — see the field-grouping comment on `BrowserMetricsMessage`. Returns
+ * `undefined` when the session never measured a voice TTFA for this turn (a
+ * text-injected turn, or a fallback turn) — the caller records
+ * `metrics.unmeasured_turn` instead of emitting a zero-filled row.
+ */
 export function buildBrowserMetricsMessage(
   turnId: string,
-  timestamps: TurnTimestampState,
-): BrowserMetricsMessage {
-  const sttMs = positiveDelta(timestamps.sttFinalMs, timestamps.speechEndMs);
-  const llmTTFTMs = positiveDelta(timestamps.textReadyMs, timestamps.sttFinalMs);
-  const ttsTTFBMs = positiveDelta(timestamps.firstAudioByteMs, timestamps.textReadyMs);
-  const e2eFromPlayout = positiveDelta(timestamps.firstAudioPlayedMs, timestamps.speechEndMs);
-  const e2eFromByte = positiveDelta(timestamps.firstAudioByteMs, timestamps.speechEndMs);
+  state: TurnTimestampState,
+): BrowserMetricsMessage | undefined {
+  const turnLatency = state.turnLatency;
+  if (!turnLatency) return undefined;
 
-  const sttFinalDelayMs = positiveDelta(timestamps.sttFinalMs, timestamps.speechEndMs);
-  const endpointDelayMs = positiveDelta(timestamps.eosMs, timestamps.sttFinalMs);
-  const vadStopHangoverMs =
-    timestamps.vadStopHangoverMs > 0 ? timestamps.vadStopHangoverMs : undefined;
-  const eouTotalMs =
-    (vadStopHangoverMs ?? 0) +
-      (positiveDelta(timestamps.eosMs, timestamps.speechEndMs) ?? sttFinalDelayMs ?? 0) ||
-    undefined;
-  const eouBudgetMs =
-    vadStopHangoverMs !== undefined ||
-    sttFinalDelayMs !== undefined ||
-    endpointDelayMs !== undefined ||
-    eouTotalMs !== undefined
-      ? {
-          ...(vadStopHangoverMs !== undefined ? { vadStopHangoverMs } : {}),
-          ...(sttFinalDelayMs !== undefined ? { sttFinalDelayMs } : {}),
-          ...(endpointDelayMs !== undefined ? { endpointDelayMs } : {}),
-          ...(eouTotalMs !== undefined ? { totalMs: eouTotalMs } : {}),
-        }
-      : undefined;
-
-  // The endpointing decision is a fact about the turn, not a timing measurement, so
-  // it is emitted whenever it is known — never coerced to a zero. A force-finalize
-  // watchdog firing overrides the emitter's reason: the STT plugin that produced the
-  // completing eos cannot know the watchdog fired, but this mark (stt.force_finalized)
-  // arrives independently on the bus, so the truth wins here regardless of emitter.
-  const endpointingOwner = timestamps.endpointingOwner;
-  const endpointingReason =
-    timestamps.forceFinalized === true ? "force_finalized" : timestamps.endpointingReason;
+  const endpointingOwner = state.endpointingOwner;
+  // A force-finalize watchdog firing overrides the emitter's reason: the STT plugin
+  // that produced the completing eos cannot know the watchdog fired, but this mark
+  // (stt.force_finalized) arrives independently on the bus, so the truth wins here
+  // regardless of emitter.
+  const endpointingReason = state.forceFinalized === true ? "force_finalized" : state.endpointingReason;
+  const eouBudgetMs = buildEouBudgetMs(state);
+  const ttfaPlayedMs = computeTtfaPlayedMs(turnLatency, state);
 
   return {
     type: "metrics",
     turnId,
     correlationId: turnId,
-    ...(timestamps.speechEndMs > 0 ? { speechEndMs: timestamps.speechEndMs } : {}),
-    ...(timestamps.textReadyMs > 0 ? { textReadyMs: timestamps.textReadyMs } : {}),
-    ...(timestamps.firstAudioByteMs > 0 ? { firstAudioByteMs: timestamps.firstAudioByteMs } : {}),
-    ...(timestamps.firstAudioPlayedMs > 0 ? { firstAudioPlayedMs: timestamps.firstAudioPlayedMs } : {}),
-    ...(timestamps.lastAudioPlayedMs > 0 ? { lastAudioPlayedMs: timestamps.lastAudioPlayedMs } : {}),
-    ...(sttMs !== undefined ? { sttMs } : {}),
-    ...(llmTTFTMs !== undefined ? { llmTTFTMs } : {}),
-    ...(ttsTTFBMs !== undefined ? { ttsTTFBMs } : {}),
-    ...(e2eFromPlayout !== undefined ? { e2eMs: e2eFromPlayout } : e2eFromByte !== undefined ? { e2eMs: e2eFromByte } : {}),
+    ttfaMs: turnLatency.ttfaMs,
+    anchor: turnLatency.anchor,
+    unattributedMs: turnLatency.unattributedMs,
+    ...(turnLatency.eouDelayMs !== undefined ? { eouDelayMs: turnLatency.eouDelayMs } : {}),
+    ...(turnLatency.llmTtftMs !== undefined ? { llmTtftMs: turnLatency.llmTtftMs } : {}),
+    ...(turnLatency.textAggregationMs !== undefined ? { textAggregationMs: turnLatency.textAggregationMs } : {}),
+    ...(turnLatency.ttsTtfbMs !== undefined ? { ttsTtfbMs: turnLatency.ttsTtfbMs } : {}),
+    ...(turnLatency.queuedMs !== undefined ? { queuedMs: turnLatency.queuedMs } : {}),
+    ...(turnLatency.llmCallCount !== undefined ? { llmCallCount: turnLatency.llmCallCount } : {}),
+    fillerUsed: turnLatency.fillerUsed,
+    backchannelUsed: turnLatency.backchannelUsed,
+    ...(state.speechEndMs > 0 ? { speechEndMs: state.speechEndMs } : {}),
+    ...(state.textReadyMs > 0 ? { textReadyMs: state.textReadyMs } : {}),
+    ...(state.firstAudioByteMs > 0 ? { firstAudioByteMs: state.firstAudioByteMs } : {}),
+    ...(state.firstAudioPlayedMs > 0 ? { firstAudioPlayedMs: state.firstAudioPlayedMs } : {}),
+    ...(state.lastAudioPlayedMs > 0 ? { lastAudioPlayedMs: state.lastAudioPlayedMs } : {}),
+    ...(ttfaPlayedMs !== undefined ? { ttfaPlayedMs } : {}),
     ...(eouBudgetMs !== undefined ? { eouBudgetMs } : {}),
     ...(endpointingOwner !== undefined ? { endpointingOwner } : {}),
     ...(endpointingReason !== undefined ? { endpointingReason } : {}),
@@ -177,18 +219,26 @@ export interface TurnMetricsTrackerOptions {
 }
 
 export class TurnMetricsTracker {
+  private readonly bus: PipelineBus;
   private readonly turns: Map<string, TurnTimestampState>;
 
   constructor(
-    private readonly bus: PipelineBus,
+    private readonly session: VoiceAgentSession,
     private readonly onEmit: (message: BrowserMetricsMessage) => void,
     persistedTurns?: Map<string, TurnTimestampState>,
     private readonly options: TurnMetricsTrackerOptions = {},
   ) {
+    this.bus = session.bus;
     this.turns = persistedTurns ?? new Map();
   }
 
   wire(disposers: Array<() => void>): void {
+    const onTurnLatency: VoiceAgentSessionEvents["turn_latency"] = (event) => {
+      this.turnState(event.turnId).turnLatency = event;
+    };
+    this.session.on("turn_latency", onTurnLatency);
+    disposers.push(() => this.session.off("turn_latency", onTurnLatency));
+
     disposers.push(
       this.bus.on("vad.speech_ended", (pkt) => {
         const ended = pkt as VadSpeechEndedPacket;
@@ -256,8 +306,7 @@ export class TurnMetricsTracker {
         if (state.firstAudioPlayedMs === 0) state.firstAudioPlayedMs = progress.timestampMs;
         if (progress.complete) {
           state.lastAudioPlayedMs = progress.timestampMs;
-          this.onEmit(buildBrowserMetricsMessage(progress.contextId, state));
-          this.turns.delete(progress.contextId);
+          this.finalizeTurn(progress.contextId, state);
         }
       }),
       this.bus.on("tts.end", (pkt) => {
@@ -268,20 +317,40 @@ export class TurnMetricsTracker {
         // `tts.end` means synthesis finished, which is EARLIER than playback finishing.
         // So if this client is pacing playout, firing here would emit a poorer message
         // and delete the turn before the real completion arrived — costing
-        // firstAudioPlayedMs, lastAudioPlayedMs, and downgrading e2eMs from
-        // "to first audio played" to "to first byte" on this runtime only. That is the
-        // exact runtime drift this tracker exists to prevent.
+        // firstAudioPlayedMs, lastAudioPlayedMs, and downgrading ttfaPlayedMs to
+        // absent on this runtime only. That is the exact runtime drift this tracker
+        // exists to prevent.
         //
         // A non-zero firstAudioPlayedMs means playout has been reported, so wait.
         // The floor is only for clients that never report at all.
         if (state.firstAudioPlayedMs !== 0) return;
-        this.onEmit(buildBrowserMetricsMessage(end.contextId, state));
-        this.turns.delete(end.contextId);
+        this.finalizeTurn(end.contextId, state);
       }),
       this.bus.on("interrupt.tts", (pkt) => {
         this.turns.delete((pkt as InterruptTtsPacket).contextId);
       }),
     );
+  }
+
+  /**
+   * Emits `metrics` from the stored turn_latency + marks, or — when the session
+   * never measured a voice TTFA for this turn — records `metrics.unmeasured_turn`
+   * instead of emitting a zero-filled row, so the gap is visible rather than silent.
+   */
+  private finalizeTurn(turnId: string, state: TurnTimestampState): void {
+    const message = buildBrowserMetricsMessage(turnId, state);
+    if (message) {
+      this.onEmit(message);
+    } else {
+      this.bus.push(Route.Background, {
+        kind: "metric.conversation",
+        contextId: turnId,
+        timestampMs: Date.now(),
+        name: "metrics.unmeasured_turn",
+        value: "1",
+      });
+    }
+    this.turns.delete(turnId);
   }
 
   private turnState(contextId: string): TurnTimestampState {

@@ -35,7 +35,8 @@ export interface BrowserJitterSmokeResult {
   readonly metricsEvents?: number;
   readonly lastMetrics?: {
     readonly turnId?: string;
-    readonly e2eMs?: number;
+    readonly ttfaMs?: number;
+    readonly ttfaPlayedMs?: number;
     readonly firstAudioPlayedMs?: number;
   };
   readonly minPlaybackLeadMs?: number;
@@ -71,8 +72,9 @@ export function evaluateBrowserJitterSmoke(input: BrowserJitterEvaluationInput):
     failures.push("browser did not receive metrics events");
   }
   if (!browser.lastMetrics?.turnId) failures.push("metrics missing turn correlation id");
-  if (typeof browser.lastMetrics?.e2eMs !== "number" || browser.lastMetrics.e2eMs <= 0) {
-    failures.push("metrics missing voice-to-voice e2eMs");
+  const voiceToVoiceMs = browser.lastMetrics?.ttfaPlayedMs ?? browser.lastMetrics?.ttfaMs;
+  if (typeof voiceToVoiceMs !== "number" || voiceToVoiceMs <= 0) {
+    failures.push("metrics missing voice-to-voice ttfaPlayedMs (or ttfaMs)");
   }
   if (input.networkProfile !== "clean" && input.proxyMaxUplinkGapMs <= 20) {
     failures.push(`${input.networkProfile} profile did not produce measurable uplink jitter`);

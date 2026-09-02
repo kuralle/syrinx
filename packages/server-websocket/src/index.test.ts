@@ -2038,8 +2038,12 @@ describe("createVoiceWebSocketServer", () => {
       kind: "llm.delta",
       contextId: "metrics-turn",
       timestampMs: speechEndMs + 500,
-      text: "hi there",
+      text: "hi there.",
     });
+    // Let the Main-route llm.delta (which sets the session's internal firstLlmDeltaMs/
+    // firstTtsTextMs) land before the Media-route tts.audio below — Media drains on
+    // its own loop and can otherwise race ahead of a same-tick Main backlog.
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const pcmFrame = pcm16SamplesToBytes(new Int16Array(640).fill(1000));
     session.bus.push(Route.Media, {
@@ -2059,12 +2063,11 @@ describe("createVoiceWebSocketServer", () => {
       type: "metrics",
       turnId: "metrics-turn",
       correlationId: "metrics-turn",
-      sttMs: 200,
-      llmTTFTMs: 300,
-      ttsTTFBMs: 200,
+      llmTtftMs: 500,
+      ttsTtfbMs: 200,
     });
     const metrics = await metricsMessage;
-    expect(typeof (metrics as { e2eMs?: number }).e2eMs).toBe("number");
+    expect(typeof (metrics as { ttfaMs?: number }).ttfaMs).toBe("number");
     expect((metrics as { firstAudioPlayedMs?: number }).firstAudioPlayedMs).toBeGreaterThan(0);
     expect((metrics as { lastAudioPlayedMs?: number }).lastAudioPlayedMs).toBeGreaterThan(0);
     // LDT-18 parity: the Workers/DO edge path must emit this same core field set —

@@ -32,12 +32,23 @@ export interface SessionMetrics {
   readonly unavailable: boolean;
 }
 
-const STAGES: readonly { readonly key: keyof TurnTimings; readonly stage: string; readonly label: string }[] = [
-  { key: "sttMs", stage: "stt", label: "Hearing you" },
-  { key: "llmTTFTMs", stage: "llm", label: "Thinking (to first word)" },
-  { key: "ttsTTFBMs", stage: "tts", label: "Voice (to first audio)" },
-  { key: "e2eMs", stage: "e2e", label: "End to end" },
+// "End to end" prefers ttfaPlayedMs (anchor -> audio actually PLAYED, what the caller
+// experienced) and falls back to ttfaMs (anchor -> first audio byte) when playout was
+// never reported for a turn.
+const STAGES: readonly { readonly keys: readonly (keyof TurnTimings)[]; readonly stage: string; readonly label: string }[] = [
+  { keys: ["eouDelayMs"], stage: "stt", label: "Hearing you" },
+  { keys: ["llmTtftMs"], stage: "llm", label: "Thinking (to first word)" },
+  { keys: ["ttsTtfbMs"], stage: "tts", label: "Voice (to first audio)" },
+  { keys: ["ttfaPlayedMs", "ttfaMs"], stage: "e2e", label: "End to end" },
 ];
+
+function firstDefined(timings: TurnTimings | undefined, keys: readonly (keyof TurnTimings)[]): number | undefined {
+  for (const key of keys) {
+    const value = timings?.[key];
+    if (typeof value === "number") return value;
+  }
+  return undefined;
+}
 
 /**
  * Nearest-rank percentile. Chosen over interpolation deliberately: every value
@@ -57,9 +68,9 @@ export function buildSessionMetrics(
 ): SessionMetrics {
   const measured = turns.filter((t) => t.timings !== undefined);
 
-  const stages = STAGES.map(({ key, stage, label }) => {
+  const stages = STAGES.map(({ keys, stage, label }) => {
     const values = measured
-      .map((t) => t.timings?.[key])
+      .map((t) => firstDefined(t.timings, keys))
       .filter((v): v is number => typeof v === "number")
       .sort((a, b) => a - b);
     return {
@@ -74,7 +85,7 @@ export function buildSessionMetrics(
 
   const suspiciouslyFastTurnIds = measured
     .filter((t) => {
-      const e2e = t.timings?.e2eMs;
+      const e2e = firstDefined(t.timings, ["ttfaPlayedMs", "ttfaMs"]);
       return typeof e2e === "number" && e2e > 0 && e2e < floorMs;
     })
     .map((t) => t.turnId);

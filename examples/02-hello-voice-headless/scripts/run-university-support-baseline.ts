@@ -284,8 +284,8 @@ async function main(): Promise<void> {
     latencyMs: {
       inputAudio: result.metrics.inputAudioMs,
       sttFinalAfterSpeechEnd: result.metrics.speechEndToFinalTranscriptMs,
-      llmTimeToFirstToken: result.metrics.llmTTFTMs,
-      ttsTimeToFirstAudio: result.metrics.ttsTTFBMs,
+      llmTimeToFirstToken: result.metrics.llmTtftMs,
+      ttsTimeToFirstAudio: result.metrics.ttsTtfbMs,
       speechEndToFirstAssistantAudio: result.metrics.speechEndToFirstAudioMs,
       feedStartToFirstAssistantAudio: result.metrics.e2eLatencyMs,
       feedStartToTtsEnd: result.durationMs,

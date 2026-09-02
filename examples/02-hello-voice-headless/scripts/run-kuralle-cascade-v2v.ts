@@ -82,8 +82,8 @@ async function measure(label: string, makeBridge: () => VoicePlugin): Promise<Re
   const out = {
     inputAudioMs: m("inputAudioMs"),
     stt_finalize: m("speechEndToFinalTranscriptMs"),
-    llm_ttft: m("llmTTFTMs"),
-    tts_ttfb: m("ttsTTFBMs"),
+    llm_ttft: m("llmTtftMs"),
+    tts_ttfb: m("ttsTtfbMs"),
     speechEnd_to_firstAudio: m("speechEndToFirstAudioMs"),
     e2e: m("e2eLatencyMs"),
   };

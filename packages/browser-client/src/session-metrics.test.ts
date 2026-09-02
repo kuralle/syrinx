@@ -44,8 +44,8 @@ describe("percentile — nearest-rank", () => {
 describe("session metrics — aggregates", () => {
   it("computes per-stage stats only for stages that have data", () => {
     const m = buildSessionMetrics([
-      turn("t1", { sttMs: 100, llmTTFTMs: 900, e2eMs: 1500 }),
-      turn("t2", { sttMs: 200, llmTTFTMs: 1100, e2eMs: 1900 }),
+      turn("t1", { eouDelayMs: 100, llmTtftMs: 900, ttfaMs: 1500 }),
+      turn("t2", { eouDelayMs: 200, llmTtftMs: 1100, ttfaMs: 1900 }),
     ]);
     expect(m.stages.map((s) => s.stage)).toEqual(["stt", "llm", "e2e"]); // no tts data → no tts row
     // Nearest-rank, not interpolated: p50 of [100, 200] is 100, a turn that
@@ -57,7 +57,7 @@ describe("session metrics — aggregates", () => {
 
   it("counts measured turns separately from total turns", () => {
     // The Workers path emits no metrics, so a session can have turns and no measurements.
-    const m = buildSessionMetrics([turn("t1", { e2eMs: 1200 }), turn("t2"), turn("t3")]);
+    const m = buildSessionMetrics([turn("t1", { ttfaMs: 1200 }), turn("t2"), turn("t3")]);
     expect(m.turnCount).toBe(3);
     expect(m.measuredTurnCount).toBe(1);
     expect(m.unavailable).toBe(false);
@@ -80,9 +80,9 @@ describe("session metrics — aggregates", () => {
 describe("session metrics — the floor, not just the ceiling", () => {
   it("flags turns that replied implausibly fast", () => {
     const m = buildSessionMetrics([
-      turn("slow", { e2eMs: 2000 }),
-      turn("premature", { e2eMs: 420 }),
-      turn("normal", { e2eMs: 1100 }),
+      turn("slow", { ttfaMs: 2000 }),
+      turn("premature", { ttfaMs: 420 }),
+      turn("normal", { ttfaMs: 1100 }),
     ]);
     // 420ms is not a win — the endpointer almost certainly cut the caller off.
     expect(m.suspiciouslyFastTurnIds).toEqual(["premature"]);
@@ -90,13 +90,20 @@ describe("session metrics — the floor, not just the ceiling", () => {
   });
 
   it("does not flag a zero or missing e2e as fast", () => {
-    const m = buildSessionMetrics([turn("a", { e2eMs: 0 }), turn("b", { sttMs: 50 })]);
+    const m = buildSessionMetrics([turn("a", { ttfaMs: 0 }), turn("b", { eouDelayMs: 50 })]);
     expect(m.suspiciouslyFastTurnIds).toEqual([]);
+  });
+
+  it("prefers ttfaPlayedMs over ttfaMs when both are present", () => {
+    // ttfaPlayedMs (to audio actually played) is the number the caller experienced;
+    // ttfaMs (to first byte) is a smaller/different number that must not shadow it.
+    const m = buildSessionMetrics([turn("t1", { ttfaMs: 2000, ttfaPlayedMs: 420 })]);
+    expect(m.suspiciouslyFastTurnIds).toEqual(["t1"]);
   });
 
   it("respects a caller-supplied floor", () => {
     // A triage agent talking to distressed callers wants a much higher floor.
-    const m = buildSessionMetrics([turn("t1", { e2eMs: 1500 })], 2000);
+    const m = buildSessionMetrics([turn("t1", { ttfaMs: 1500 })], 2000);
     expect(m.suspiciouslyFastTurnIds).toEqual(["t1"]);
   });
 });

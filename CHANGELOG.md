@@ -22,6 +22,12 @@ is unaffected. The old loose `{ concurrent: false }` also stops compiling, and a
 third-party implementation of the `PipelineBus` interface must adopt the new `on`
 signature. New exported type `DispatchMode`.
 
+### Changed — the `metrics` wire message now shares its field names with `turn_latency`
+
+The `metrics` websocket message (`server-websocket`) dropped `sttMs`/`llmTTFTMs`/`ttsTTFBMs`/`e2eMs` in favor of the `turn_latency` event's own names (`ttfaMs`, `anchor`, `llmTtftMs`, `ttsTtfbMs`, ...), copied verbatim instead of recomputed — a dashboard can now join the two messages on `turnId`.
+
+`syrinx turn`'s `metrics.json` output renamed `llmTTFTMs`/`ttsTTFBMs` to `llmTtftMs`/`ttsTtfbMs` to match.
+
 ## 4.6.3 — 2026-07-27
 
 ### Fixed — the Testing page told readers to install the internal fakes

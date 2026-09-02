@@ -146,7 +146,7 @@ describe("InMemorySessionStore", () => {
     await store.lease("session-a", async () => managed);
 
     const emitted: unknown[] = [];
-    const firstTracker = new TurnMetricsTracker(session.bus, (message) => emitted.push(message), managed.turnMetricsTurns);
+    const firstTracker = new TurnMetricsTracker(session, (message) => emitted.push(message), managed.turnMetricsTurns);
     const disposers: Array<() => void> = [];
     firstTracker.wire(disposers);
     void session.start();
@@ -163,19 +163,36 @@ describe("InMemorySessionStore", () => {
       text: "hello",
       confidence: 0.99,
     });
-    await waitForCondition(() => managed.turnMetricsTurns.has("turn-resume"));
+    session.bus.push(Route.Main, {
+      kind: "llm.delta",
+      contextId: "turn-resume",
+      timestampMs: 300,
+      text: "hi there.",
+    });
+    // Let the Main-route llm.delta land before the Media-route tts.audio below —
+    // Media drains on its own loop and can otherwise race ahead of a same-tick
+    // Main backlog, leaving the session's turn_latency short its llmTtftMs stage.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    session.bus.push(Route.Media, {
+      kind: "tts.audio",
+      contextId: "turn-resume",
+      timestampMs: 500,
+      audio: new Uint8Array(640),
+      sampleRateHz: 16000,
+    });
+    await waitForCondition(() => managed.turnMetricsTurns.get("turn-resume")?.turnLatency !== undefined);
 
     for (const dispose of disposers.splice(0)) dispose();
 
     const resumedEmitted: unknown[] = [];
-    const resumedTracker = new TurnMetricsTracker(session.bus, (message) => resumedEmitted.push(message), managed.turnMetricsTurns);
+    const resumedTracker = new TurnMetricsTracker(session, (message) => resumedEmitted.push(message), managed.turnMetricsTurns);
     const resumedDisposers: Array<() => void> = [];
     resumedTracker.wire(resumedDisposers);
 
     session.bus.push(Route.Main, {
       kind: "tts.playout_progress",
       contextId: "turn-resume",
-      timestampMs: 500,
+      timestampMs: 700,
       playedOutMs: 20,
       complete: true,
     });
@@ -184,7 +201,8 @@ describe("InMemorySessionStore", () => {
       type: "metrics",
       turnId: "turn-resume",
       speechEndMs: 100,
-      sttMs: 100,
+      llmTtftMs: 200,
+      ttsTtfbMs: 200,
     });
 
     for (const dispose of resumedDisposers.splice(0)) dispose();

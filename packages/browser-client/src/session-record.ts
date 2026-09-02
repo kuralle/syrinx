@@ -15,15 +15,23 @@ import type { SyrinxStudioMessage } from "./index.js";
 
 /** Per-turn latency decomposition, from the `metrics` message. */
 export interface TurnTimings {
+  readonly ttfaMs?: number;
+  readonly anchor?: "speech_end" | "eos";
+  readonly unattributedMs?: number;
+  readonly eouDelayMs?: number;
+  readonly llmTtftMs?: number;
+  readonly textAggregationMs?: number;
+  readonly ttsTtfbMs?: number;
+  readonly queuedMs?: number;
+  readonly llmCallCount?: number;
+  readonly fillerUsed?: boolean;
+  readonly backchannelUsed?: boolean;
   readonly speechEndMs?: number;
   readonly textReadyMs?: number;
   readonly firstAudioByteMs?: number;
   readonly firstAudioPlayedMs?: number;
   readonly lastAudioPlayedMs?: number;
-  readonly sttMs?: number;
-  readonly llmTTFTMs?: number;
-  readonly ttsTTFBMs?: number;
-  readonly e2eMs?: number;
+  readonly ttfaPlayedMs?: number;
 }
 
 /** Negotiated session parameters. Recorded so a replayed fixture cannot silently mislead. */

@@ -112,15 +112,25 @@ export type SyrinxStudioMessage =
       readonly type: "metrics";
       readonly turnId?: string;
       readonly correlationId?: string;
+      // ---- copied from the session's turn_latency event, same names, same anchor ----
+      readonly ttfaMs?: number;
+      readonly anchor?: "speech_end" | "eos";
+      readonly unattributedMs?: number;
+      readonly eouDelayMs?: number;
+      readonly llmTtftMs?: number;
+      readonly textAggregationMs?: number;
+      readonly ttsTtfbMs?: number;
+      readonly queuedMs?: number;
+      readonly llmCallCount?: number;
+      readonly fillerUsed?: boolean;
+      readonly backchannelUsed?: boolean;
+      // ---- transport-only: absolute marks and playout ----
       readonly speechEndMs?: number;
       readonly textReadyMs?: number;
       readonly firstAudioByteMs?: number;
       readonly firstAudioPlayedMs?: number;
       readonly lastAudioPlayedMs?: number;
-      readonly sttMs?: number;
-      readonly llmTTFTMs?: number;
-      readonly ttsTTFBMs?: number;
-      readonly e2eMs?: number;
+      readonly ttfaPlayedMs?: number;
       /** Which owner decided the turn ended. Omitted when the backend did not say. */
       readonly endpointingOwner?: TurnEndOwner;
       /** Why the turn ended. Omitted when the backend did not say. */
@@ -202,6 +212,7 @@ const KEEPALIVE_INTERVAL_MS = 10_000;
 // an unknown value (a newer backend) is ignored rather than dropping the message.
 const ENDPOINTING_OWNERS = new Set<string>(["provider_stt", "smart_turn", "timer", "text"]);
 const ENDPOINTING_REASONS = new Set<string>(["end_of_speech", "force_finalized", "typed"]);
+const ANCHORS = new Set<string>(["speech_end", "eos"]);
 
 export class SyrinxBrowserClient {
   private readonly transport: ClientTransport;
@@ -840,19 +851,28 @@ function parseStudioMessage(value: unknown): SyrinxStudioMessage {
       value.endpointingReason,
       ENDPOINTING_REASONS,
     );
+    const anchor = optionalEndpointingEnum<"speech_end" | "eos">(value.anchor, ANCHORS);
     return {
       type,
       turnId: optionalString(value.turnId, "metrics.turnId"),
       correlationId: optionalString(value.correlationId, "metrics.correlationId"),
+      ttfaMs: optionalNumber(value.ttfaMs, "metrics.ttfaMs"),
+      unattributedMs: optionalNumber(value.unattributedMs, "metrics.unattributedMs"),
+      eouDelayMs: optionalNumber(value.eouDelayMs, "metrics.eouDelayMs"),
+      llmTtftMs: optionalNumber(value.llmTtftMs, "metrics.llmTtftMs"),
+      textAggregationMs: optionalNumber(value.textAggregationMs, "metrics.textAggregationMs"),
+      ttsTtfbMs: optionalNumber(value.ttsTtfbMs, "metrics.ttsTtfbMs"),
+      queuedMs: optionalNumber(value.queuedMs, "metrics.queuedMs"),
+      llmCallCount: optionalNumber(value.llmCallCount, "metrics.llmCallCount"),
+      fillerUsed: optionalBoolean(value.fillerUsed, "metrics.fillerUsed"),
+      backchannelUsed: optionalBoolean(value.backchannelUsed, "metrics.backchannelUsed"),
       speechEndMs: optionalNumber(value.speechEndMs, "metrics.speechEndMs"),
       textReadyMs: optionalNumber(value.textReadyMs, "metrics.textReadyMs"),
       firstAudioByteMs: optionalNumber(value.firstAudioByteMs, "metrics.firstAudioByteMs"),
       firstAudioPlayedMs: optionalNumber(value.firstAudioPlayedMs, "metrics.firstAudioPlayedMs"),
       lastAudioPlayedMs: optionalNumber(value.lastAudioPlayedMs, "metrics.lastAudioPlayedMs"),
-      sttMs: optionalNumber(value.sttMs, "metrics.sttMs"),
-      llmTTFTMs: optionalNumber(value.llmTTFTMs, "metrics.llmTTFTMs"),
-      ttsTTFBMs: optionalNumber(value.ttsTTFBMs, "metrics.ttsTTFBMs"),
-      e2eMs: optionalNumber(value.e2eMs, "metrics.e2eMs"),
+      ttfaPlayedMs: optionalNumber(value.ttfaPlayedMs, "metrics.ttfaPlayedMs"),
+      ...(anchor !== undefined ? { anchor } : {}),
       ...(endpointingOwner !== undefined ? { endpointingOwner } : {}),
       ...(endpointingReason !== undefined ? { endpointingReason } : {}),
     };

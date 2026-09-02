@@ -15,8 +15,8 @@ describe("Timeline", () => {
 
   it("renders one lane per turn from a recorded session", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
-      { type: "metrics", turnId: "t2", speechEndMs: 0, textReadyMs: 200, firstAudioByteMs: 900, e2eMs: 1200 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 },
+      { type: "metrics", turnId: "t2", speechEndMs: 0, textReadyMs: 200, firstAudioByteMs: 900, ttfaMs: 1200 },
     ]);
     render(<Timeline record={record} />);
     expect(screen.getAllByTestId("timeline-lane")).toHaveLength(2);
@@ -24,7 +24,7 @@ describe("Timeline", () => {
 
   it("labels segments in plain language", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 },
     ]);
     render(<Timeline record={record} />);
     expect(screen.getByTitle(/deciding you're done/i)).toBeInTheDocument();
@@ -33,7 +33,7 @@ describe("Timeline", () => {
 
   it("warns on an implausibly fast turn instead of showing it as good", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 60, firstAudioByteMs: 400, e2eMs: 480 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 60, firstAudioByteMs: 400, ttfaMs: 480 },
     ]);
     render(<Timeline record={record} />);
     expect(screen.getByTestId("fast-turn-warning")).toHaveTextContent(/below the .* floor/i);
@@ -74,8 +74,8 @@ describe("Timeline", () => {
 
   it("keeps a spoken turn's audio stages when only some turns were typed", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
-      { type: "metrics", turnId: "t2", llmTTFTMs: 500, e2eMs: 900 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 },
+      { type: "metrics", turnId: "t2", llmTtftMs: 500, ttfaMs: 900 },
     ]);
     render(<Timeline record={record} textTurnIds={new Set(["t2"])} />);
 
@@ -86,7 +86,7 @@ describe("Timeline", () => {
 
   it("shows a turn with timings alongside one without", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 },
       { type: "agent_chunk", turnId: "t2", text: "no metrics here" },
     ]);
     render(<Timeline record={record} />);
@@ -96,7 +96,7 @@ describe("Timeline", () => {
 
   it("names the endpointing owner in plain language — speech-to-text provider", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "end_of_speech" },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "end_of_speech" },
     ]);
     render(<Timeline record={record} />);
     const marker = screen.getByTestId("timeline-endpointing");
@@ -109,7 +109,7 @@ describe("Timeline", () => {
 
   it("names the endpointing owner in plain language — Smart Turn", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000, endpointingOwner: "smart_turn", endpointingReason: "end_of_speech" },
     ]);
     render(<Timeline record={record} />);
     expect(screen.getByTestId("timeline-endpointing")).toHaveTextContent(/smart turn/i);
@@ -117,7 +117,7 @@ describe("Timeline", () => {
 
   it("calls out a force-finalized turn as a timeout, not a natural endpoint", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000, endpointingOwner: "provider_stt", endpointingReason: "force_finalized" },
     ]);
     render(<Timeline record={record} />);
     const marker = screen.getByTestId("timeline-endpointing");
@@ -130,7 +130,7 @@ describe("Timeline", () => {
     // No textTurnIds passed — the wire itself carries owner "text" on the metrics
     // message. The timeline must light up the typed note from that signal alone.
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", textReadyMs: 100, firstAudioByteMs: 600, e2eMs: 900, endpointingOwner: "text", endpointingReason: "typed" },
+      { type: "metrics", turnId: "t1", textReadyMs: 100, firstAudioByteMs: 600, ttfaMs: 900, endpointingOwner: "text", endpointingReason: "typed" },
     ]);
     render(<Timeline record={record} />);
     expect(screen.getByTestId("timeline-text-turn")).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("Timeline", () => {
 
   it("says the cause is unknown when the backend omits the owner, rather than guessing", () => {
     const record = recordFrom([
-      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, e2eMs: 2000 },
+      { type: "metrics", turnId: "t1", speechEndMs: 0, textReadyMs: 300, firstAudioByteMs: 1500, ttfaMs: 2000 },
     ]);
     render(<Timeline record={record} />);
     const marker = screen.getByTestId("timeline-endpointing");

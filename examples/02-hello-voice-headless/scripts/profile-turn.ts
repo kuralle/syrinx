@@ -153,8 +153,8 @@ async function main(): Promise<void> {
     busLegs: legs,
     engineMetrics: {
       speechEndToFinalTranscriptMs: r.metrics.speechEndToFinalTranscriptMs,
-      llmTTFTMs: r.metrics.llmTTFTMs,
-      ttsTTFBMs: r.metrics.ttsTTFBMs,
+      llmTtftMs: r.metrics.llmTtftMs,
+      ttsTtfbMs: r.metrics.ttsTtfbMs,
       speechEndToFirstAudioMs: r.metrics.speechEndToFirstAudioMs,
     },
     eventLoop: {

@@ -71,7 +71,7 @@ export function buildTurnTimeline(turn: TurnRecord): TurnTimeline {
   );
 
   if (points.length < 2) {
-    return { turnId: turn.turnId, segments: [], totalMs: t.e2eMs ?? 0, unavailable: "insufficient-marks" };
+    return { turnId: turn.turnId, segments: [], totalMs: t.ttfaPlayedMs ?? t.ttfaMs ?? 0, unavailable: "insufficient-marks" };
   }
 
   const origin = points[0]?.at ?? 0;
@@ -84,7 +84,7 @@ export function buildTurnTimeline(turn: TurnRecord): TurnTimeline {
   const longest = raw.reduce((max, s) => Math.max(max, s.durationMs), 0);
   const segments: TimelineSegment[] = raw.map((s) => ({ ...s, slowest: longest > 0 && s.durationMs === longest }));
 
-  const totalMs = t.e2eMs ?? (points[points.length - 1]?.at ?? origin) - origin;
+  const totalMs = t.ttfaPlayedMs ?? t.ttfaMs ?? (points[points.length - 1]?.at ?? origin) - origin;
   const suspiciouslyFast =
     totalMs > 0 && totalMs < FAST_TURN_FLOOR_MS ? { totalMs, floorMs: FAST_TURN_FLOOR_MS } : undefined;
 
