@@ -56,6 +56,10 @@ Goals: gemini-adapter-parity, withvoice-turn-observability, continuous-interacti
 - Cut 4.7.0 once a human has read the three Breaking entries.
 - Resolve the aria-flow re-entry decision to release the deferred-tools trio.
 
+## Measurement pass (after the cap, same night)
+
+Documented in `docs/outcomes/post-run-measurement-2026-09-03.md`. No framework regression measured: provider-free eos→first-delta 0.3 ms p50 on both trees, `unattributedMs` 0 on every decomposed live turn, edge `metrics` live with the unified names, dispatch-mode remedy holds on the deployed edge. Live cascade numbers are dominated by OpenAI first-token swings (0.8 s → 7 s within the hour on unchanged code) and by provider endpointing not firing on the fixture (`force_finalized` on every cascade turn, both hosts) — there is still no trustworthy cascade voice-to-voice baseline. New probes: `run-edge-metrics-probe.ts`, `bench-eos-to-delta.ts`. Filed: forward `turn_latency` on the edge wire.
+
 ## Suggested skills
 
 - `plandesk-standup` to reopen from this file; `plandesk-autonomy /plandesk-foreman all todo` to resume the frontier with a fresh dispatch budget.
